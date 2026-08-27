@@ -1,0 +1,22 @@
+{
+  "name": "bitos-native-platform",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "api": "node --experimental-strip-types services/platform/src/api.ts",
+    "indexer": "node --experimental-strip-types services/platform/src/indexer.ts",
+    "worker": "node --experimental-strip-types services/platform/src/worker.ts",
+    "test:services": "node --experimental-strip-types --test services/platform/test/*.test.ts",
+    "check:services": "tsc -p services/platform/tsconfig.json --noEmit",
+    "format:check": "prettier --check \"services/**/*.ts\" \"contracts/**/*.{json,yaml}\" \"infra/**/*.{yaml,yml}\" \".github/**/*.{yml,md}\" package.json prettier.config.mjs",
+    "format": "prettier --write \"services/**/*.ts\" \"contracts/**/*.{json,yaml}\" \"infra/**/*.{yaml,yml}\" \".github/**/*.{yml,md}\" package.json prettier.config.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.8.0",
+    "typescript": "^6.0.0"
+  }
+}

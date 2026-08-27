@@ -1,0 +1,36 @@
+name: Production feature
+description: Define a testable BitOS vertical slice
+title: '[Feature] '
+labels: [feature]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: User outcome and non-goals
+    validations:
+      required: true
+  - type: textarea
+    id: architecture
+    attributes:
+      label: Owning layers and contracts
+      description: Include iOS, Android, BusinessCore, MediaCore, backend, schema, and Nostr impact as applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Offline, cancellation, and recovery
+    validations:
+      required: true
+  - type: textarea
+    id: quality
+    attributes:
+      label: Accessibility, privacy, performance, and acceptance tests
+    validations:
+      required: true
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout, observability, and rollback
+    validations:
+      required: true

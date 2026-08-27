@@ -1,0 +1,18 @@
+[info]
+relay_url = "ws://localhost:7000/"
+name = "BitOS local development relay"
+description = "Disposable relay for local tests only"
+
+[database]
+data_directory = "/usr/src/app/db"
+
+[network]
+address = "0.0.0.0"
+port = 8080
+
+[limits]
+messages_per_sec = 20
+subscriptions_per_min = 120
+max_event_bytes = 65536
+max_ws_message_bytes = 131072
+max_ws_frame_bytes = 131072

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.bitos.space/studio/project-v1.schema.json",
+  "title": "BitOS Studio Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "projectId", "canvas", "durationUs", "tracks", "assets"],
+  "properties": {
+    "schema": { "const": "com.bitos.studio.project" },
+    "version": { "const": 1 },
+    "projectId": { "type": "string", "format": "uuid" },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "fpsNum", "fpsDen"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 64, "maximum": 4096 },
+        "height": { "type": "integer", "minimum": 64, "maximum": 4096 },
+        "fpsNum": { "type": "integer", "minimum": 1, "maximum": 240000 },
+        "fpsDen": { "type": "integer", "minimum": 1, "maximum": 1001 }
+      }
+    },
+    "durationUs": { "type": "integer", "minimum": 1000, "maximum": 300000000 },
+    "tracks": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/track" } },
+    "assets": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/asset" } }
+  },
+  "$defs": {
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "clips"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "type": { "enum": ["video", "audio", "text", "image", "drawing", "effect"] },
+        "clips": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/clip" } }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "assetId", "startUs", "durationUs", "sourceInUs", "rateNum", "rateDen"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "assetId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "startUs": { "type": "integer", "minimum": 0, "maximum": 300000000 },
+        "durationUs": { "type": "integer", "minimum": 1000, "maximum": 300000000 },
+        "sourceInUs": { "type": "integer", "minimum": 0, "maximum": 300000000 },
+        "rateNum": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "rateDen": { "type": "integer", "minimum": 1, "maximum": 16 }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "hash", "mimeType", "bytes"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "mimeType": { "type": "string", "maxLength": 128 },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 4294967296 }
+      }
+    }
+  }
+}

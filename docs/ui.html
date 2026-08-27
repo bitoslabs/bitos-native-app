@@ -1,0 +1,1999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nostr — Decentralized Social</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0a0a0f',
+          elev: '#12121a',
+          elev2: '#181822',
+          fg: { DEFAULT: '#f5f5f7', dim: '#c8c8d0' },
+          muted: { DEFAULT: '#7a7a85', 2: '#4a4a55' },
+          border: { DEFAULT: 'rgba(255, 255, 255, 0.07)', strong: 'rgba(255, 255, 255, 0.14)' },
+          accent: { DEFAULT: '#ffb627', dim: '#c98a0f', 2: '#ff2d75', 3: '#00ff88', 4: '#6ee7ff' },
+        },
+        fontFamily: {
+          sans: ['Space Grotesk', 'sans-serif'],
+          mono: ['JetBrains Mono', 'monospace'],
+        },
+        boxShadow: {
+          'glow-accent': '0 0 28px rgba(255, 182, 39, 0.4)',
+          'glow-green': '0 0 8px rgba(0, 255, 136, 0.5)',
+        }
+      }
+    }
+  }
+</script>
+<style>
+  /* Minimal custom CSS for things Tailwind can't easily do (keyframes, clip-path, pseudo-elements) */
+  body { background-color: #0a0a0f; overflow-x: hidden; }
+  
+  /* Ambient background */
+  .bg-ambient::before {
+    content: ''; position: fixed; width: 900px; height: 900px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 182, 39, 0.07) 0%, transparent 60%);
+    top: -300px; left: -200px; z-index: -1; pointer-events: none;
+    animation: float1 22s ease-in-out infinite;
+  }
+  .bg-ambient::after {
+    content: ''; position: fixed; width: 700px; height: 700px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 45, 117, 0.05) 0%, transparent 60%);
+    bottom: -200px; right: -150px; z-index: -1; pointer-events: none;
+    animation: float2 28s ease-in-out infinite;
+  }
+  @keyframes float1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(120px, 80px); } }
+  @keyframes float2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-100px, -60px); } }
+  
+  .grain {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0.035; z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  
+  /* Hexagon Avatars */
+  .hex-clip { clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0% 50%); }
+  .hex-verified::after {
+    content: '\f0e7'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
+    position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; 
+    background: #00ff88; color: #000; border-radius: 50%; font-size: 8px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
+  }
+  
+  /* PoW & Hash Viz */
+  .pow-bar { display: inline-flex; gap: 2px; align-items: center; }
+  .pow-bar span {
+    width: 3px; height: 9px; background: #ffb627; border-radius: 1px; opacity: 0.18; transition: opacity 0.3s ease;
+  }
+  .pow-bar span.filled { opacity: 1; box-shadow: 0 0 4px rgba(255, 182, 39, 0.4); }
+  .hash-viz { display: inline-flex; gap: 2px; align-items: center; }
+  .hash-viz span {
+    width: 3px; height: 12px; background: #7a7a85; border-radius: 1px; transition: all 0.3s ease;
+  }
+  .hash-viz span.on { background: #ffb627; box-shadow: 0 0 4px rgba(255, 182, 39, 0.4); }
+  
+  /* Range slider */
+  .pow-slider { -webkit-appearance: none; appearance: none; height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 2px; outline: none; }
+  .pow-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #ffb627; border-radius: 50%; cursor: pointer; box-shadow: 0 0 12px rgba(255, 182, 39, 0.4); }
+  .pow-slider::-moz-range-thumb { width: 16px; height: 16px; background: #ffb627; border-radius: 50%; cursor: pointer; border: none; box-shadow: 0 0 12px rgba(255, 182, 39, 0.4); }
+  
+  /* Keyframes */
+  @keyframes pulseDot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
+  .relay-dot { animation: pulseDot 2s ease-in-out infinite; }
+  
+  @keyframes throughput { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+  .throughput-fill { animation: throughput 3s linear infinite; }
+  
+  @keyframes heartPop { 0% { transform: scale(1); } 40% { transform: scale(1.5); } 100% { transform: scale(1); } }
+  .heart-pop { animation: heartPop 0.4s ease; }
+  
+  @keyframes zapBurst { 0% { transform: translate(0,0) scale(1); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) scale(0); opacity: 0; } }
+  .zap-particle { animation: zapBurst 0.6s ease-out forwards; }
+  
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .page.active > * { animation: fadeUp 0.4s ease backwards; }
+  .page.active > *:nth-child(2) { animation-delay: 0.05s; }
+  .page.active > *:nth-child(3) { animation-delay: 0.1s; }
+  
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+  ::selection { background: rgba(255, 182, 39, 0.3); color: #f5f5f7; }
+  
+  .page { display: none; }
+  .page.active { display: block; }
+  .right-col-content { display: none; }
+  .right-col-content.active { display: block; }
+  .settings-section { display: none; }
+  .settings-section.active { display: block; }
+  
+  @media (max-width: 1100px) { .right-col { display: none; } }
+  @media (max-width: 800px) { .left-col { display: none; } .main-grid { grid-template-columns: 1fr !important; } }
+</style>
+</head>
+<body class="font-sans text-fg min-h-screen">
+
+<div class="bg-ambient fixed inset-0 z-0"></div>
+<div class="grain"></div>
+
+<!-- Top Network Bar -->
+<div class="fixed top-0 left-0 right-0 h-0.5 z-50 bg-white/5">
+  <div id="netBar" class="h-full w-0 bg-gradient-to-r from-accent to-accent-2 transition-all duration-300" style="box-shadow: 0 0 10px rgba(255, 182, 39, 0.4);"></div>
+</div>
+
+<div class="main-grid grid grid-cols-[260px_1fr_340px] max-w-[1280px] mx-auto min-h-screen relative z-10">
+
+  <!-- LEFT SIDEBAR -->
+  <aside class="left-col sticky top-0 h-screen p-3.5 flex flex-col border-r border-border">
+    <div class="px-3 pt-2 pb-6">
+      <div class="flex items-center gap-2.5 cursor-pointer" onclick="navigate('home')">
+        <div class="w-7 h-7 bg-gradient-to-br from-accent to-orange-400 hex-clip flex items-center justify-center text-black font-bold">
+          <i class="fas fa-bolt text-[13px]"></i>
+        </div>
+        <span class="text-2xl font-bold tracking-tight bg-gradient-to-br from-accent via-orange-400 to-accent-2 bg-clip-text text-transparent">nostr</span>
+      </div>
+    </div>
+    
+    <nav class="flex flex-col gap-1 pl-3">
+      <div class="nav-item active flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="home" onclick="navigate('home')">
+        <i class="fas fa-house w-5 text-center text-lg"></i><span>Home</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="explore" onclick="navigate('explore')">
+        <i class="fas fa-compass w-5 text-center text-lg"></i><span>Explore</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="notifications" onclick="navigate('notifications')">
+        <i class="fas fa-bell w-5 text-center text-lg"></i><span>Notifications</span>
+        <span class="ml-auto bg-accent text-black text-[11px] font-bold py-0.5 px-1.5 rounded-full font-mono">12</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="messages" onclick="navigate('messages')">
+        <i class="fas fa-envelope w-5 text-center text-lg"></i><span>Messages</span>
+        <span class="ml-auto bg-accent-2 text-white text-[10px] font-bold py-0.5 px-1.5 rounded-full font-mono">3</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="zaps" onclick="navigate('zaps')">
+        <i class="fas fa-bolt w-5 text-center text-lg"></i><span>Zaps</span>
+        <span class="ml-auto font-mono text-xs text-accent">21k</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="relays" onclick="navigate('relays')">
+        <i class="fas fa-server w-5 text-center text-lg"></i><span>Relays</span>
+        <span class="ml-auto flex gap-1">
+          <span class="relay-dot w-1.5 h-1.5 rounded-full bg-accent-3" style="box-shadow: 0 0 8px #00ff88;"></span>
+          <span class="relay-dot w-1.5 h-1.5 rounded-full bg-accent-3" style="box-shadow: 0 0 8px #00ff88;"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-accent-2" style="box-shadow: 0 0 8px #ff2d75;"></span>
+        </span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="bookmarks" onclick="navigate('bookmarks')">
+        <i class="fas fa-bookmark w-5 text-center text-lg"></i><span>Bookmarks</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="profile" onclick="navigate('profile')">
+        <i class="fas fa-user w-5 text-center text-lg"></i><span>Profile</span>
+      </div>
+      <div class="nav-item flex items-center gap-4 py-3 px-4 rounded-xl text-fg-dim text-[17px] font-medium cursor-pointer transition-all hover:bg-white/5 hover:text-fg" data-page="settings" onclick="navigate('settings')">
+        <i class="fas fa-gear w-5 text-center text-lg"></i><span>Settings</span>
+      </div>
+    </nav>
+    
+    <div class="p-2 pb-3.5">
+      <button class="btn-primary w-full bg-accent text-black font-semibold py-2.5 px-5 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5 disabled:bg-elev2 disabled:text-muted-2 disabled:translate-y-0 disabled:shadow-none flex items-center justify-center gap-2" onclick="openComposeModal()">
+        <i class="fas fa-bolt"></i>New Note
+      </button>
+    </div>
+    
+    <div class="mx-1 mb-2 p-3.5 rounded-2xl bg-gradient-to-br from-accent/10 to-accent-2/5 border border-accent/20">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-[11px] text-muted uppercase tracking-wider">Lightning Wallet</span>
+        <i class="fas fa-bolt text-accent text-[11px]"></i>
+      </div>
+      <div class="font-mono text-[22px] font-semibold text-fg">
+        12,847 <span class="text-accent text-sm">sats</span>
+      </div>
+      <div class="flex gap-1.5 mt-2.5">
+        <button onclick="showToast('Invoice generated', 'qrcode')" class="flex-1 py-1.5 text-xs bg-accent/10 text-accent border border-accent/20 rounded-lg cursor-pointer">Deposit</button>
+        <button onclick="showToast('Withdrawal initiated', 'arrow-up')" class="flex-1 py-1.5 text-xs bg-transparent text-fg-dim border border-border rounded-lg cursor-pointer">Withdraw</button>
+      </div>
+    </div>
+    
+    <div class="mt-auto p-2.5 rounded-xl cursor-pointer transition-all hover:bg-white/5" onclick="navigate('profile')">
+      <div class="flex items-center gap-2.5">
+        <div class="hex-clip hex-verified w-9 h-9 inline-block overflow-hidden relative bg-gradient-to-br from-elev2 to-bg">
+          <img src="https://picsum.photos/seed/me42/80/80.jpg" class="w-full h-full object-cover" alt="">
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-sm truncate">Volt Dorsey</div>
+          <div class="font-mono text-[11px] text-muted">npub1volt...k7q3</div>
+        </div>
+        <i class="fas fa-ellipsis text-muted text-sm"></i>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CENTER MAIN -->
+  <main class="border-r border-border min-h-screen">
+    
+    <!-- ========== HOME PAGE ========== -->
+    <section class="page active" id="page-home">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border">
+        <div class="flex items-center justify-between p-2.5 px-4">
+          <h1 class="text-xl font-bold tracking-tight m-0">Home</h1>
+          <div class="flex gap-2">
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-server text-[13px]"></i></button>
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent" onclick="navigate('settings')"><i class="fas fa-sliders text-[13px]"></i></button>
+          </div>
+        </div>
+        <div class="flex">
+          <div class="feed-tab active flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer transition-all hover:bg-white/5 hover:text-fg-dim text-fg font-semibold" data-tab="foryou">
+            For You
+            <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 bg-accent rounded-t-md" style="box-shadow: 0 0 12px rgba(255, 182, 39, 0.4);"></div>
+          </div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer transition-all hover:bg-white/5 hover:text-fg-dim">Following</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer transition-all hover:bg-white/5 hover:text-fg-dim">Zapped</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer transition-all hover:bg-white/5 hover:text-fg-dim">Local</div>
+        </div>
+      </header>
+      
+      <div class="compose-area border-b border-border p-3.5 px-4 transition-all focus-within:bg-accent/[0.02]">
+        <div class="flex gap-3">
+          <div class="hex-clip hex-verified w-10 h-10 flex-shrink-0 inline-block overflow-hidden relative bg-gradient-to-br from-elev2 to-bg">
+            <img src="https://picsum.photos/seed/me42/80/80.jpg" class="w-full h-full object-cover" alt="">
+          </div>
+          <div class="flex-1 min-w-0">
+            <textarea class="compose-input bg-transparent border-none outline-none text-fg text-lg w-full resize-none min-h-[48px] placeholder:text-muted-2" id="composeInput" placeholder="Mine a new note... what's on the timeline?" rows="2"></textarea>
+            
+            <div id="composeTools" class="hidden mt-2.5 p-3 rounded-xl bg-white/[0.02] border border-border">
+              <div class="flex justify-between items-center mb-2.5">
+                <span class="text-xs text-muted uppercase tracking-wider">Proof of Work</span>
+                <span class="font-mono text-sm text-accent font-semibold"><span id="powValue">20</span> bits</span>
+              </div>
+              <input type="range" min="0" max="32" value="20" class="pow-slider w-full" id="powSlider" oninput="updatePoW(this.value)">
+              <div id="hashViz" class="hash-viz mt-2.5"></div>
+              <div class="mt-3 pt-3 border-t border-border">
+                <div class="text-xs text-muted uppercase tracking-wider mb-2">Broadcast to Relays</div>
+                <div class="flex flex-wrap gap-1.5">
+                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-accent-3/20 text-accent-3"><span class="relay-dot w-1 h-1 rounded-full bg-accent-3"></span>nos.lol</span>
+                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-accent-3/20 text-accent-3"><span class="relay-dot w-1 h-1 rounded-full bg-accent-3"></span>relay.damus.io</span>
+                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-accent-3/20 text-accent-3"><span class="relay-dot w-1 h-1 rounded-full bg-accent-3"></span>relay.snort.social</span>
+                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">+ 4 more</span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="flex items-center justify-between mt-3">
+              <div class="flex gap-1">
+                <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-image text-[13px]"></i></button>
+                <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-paperclip text-[13px]"></i></button>
+                <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-bolt text-[13px]"></i></button>
+                <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent" onclick="toggleComposeTools()"><i class="fas fa-shield-halved text-[13px]"></i></button>
+              </div>
+              <div class="flex items-center gap-3">
+                <span id="charCount" class="font-mono text-sm text-muted">280</span>
+                <button class="btn-primary bg-accent text-black font-semibold py-2.5 px-5 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5 disabled:bg-elev2 disabled:text-muted-2 disabled:translate-y-0 disabled:shadow-none" id="postBtn" disabled onclick="submitPost()">Post Note</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div id="feed"></div>
+      
+      <div class="p-8 text-center text-muted text-sm">
+        <i class="fas fa-bolt text-accent mr-1.5"></i>
+        Streaming events from <span class="font-mono text-fg-dim">7 relays</span>
+      </div>
+    </section>
+
+    <!-- ========== EXPLORE PAGE ========== -->
+    <section class="page" id="page-explore">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-3.5 px-4">
+        <div class="relative mb-3.5">
+          <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
+          <input type="text" class="w-full py-2.5 pl-11 pr-4 rounded-full bg-white/5 border border-border text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 placeholder:text-muted-2" placeholder="Search npubs, events, hashtags, relays...">
+        </div>
+        <div class="flex gap-5">
+          <span class="feed-tab active text-sm font-semibold text-fg relative pb-2 cursor-pointer">Trending<span class="absolute bottom-0 left-0 right-0 h-0.5 bg-accent"></span></span>
+          <span class="feed-tab text-sm font-medium text-muted pb-2 cursor-pointer hover:text-fg-dim">People</span>
+          <span class="feed-tab text-sm font-medium text-muted pb-2 cursor-pointer hover:text-fg-dim">Tags</span>
+          <span class="feed-tab text-sm font-medium text-muted pb-2 cursor-pointer hover:text-fg-dim">Live</span>
+          <span class="feed-tab text-sm font-medium text-muted pb-2 cursor-pointer hover:text-fg-dim">Global</span>
+        </div>
+      </header>
+      
+      <div class="p-4">
+        <h2 class="text-base font-bold mb-3.5 tracking-tight">Trending right now</h2>
+        <div class="grid grid-cols-2 gap-3" id="trendGrid"></div>
+      </div>
+      
+      <div class="px-4 pb-4">
+        <h2 class="text-base font-bold mb-3.5 tracking-tight">People you might like</h2>
+        <div id="peopleGrid" class="grid grid-cols-2 gap-3"></div>
+      </div>
+      
+      <div class="border-t border-border">
+        <div class="p-3.5 px-4 flex items-center justify-between border-b border-border">
+          <div>
+            <h2 class="text-base font-bold tracking-tight">Global Feed</h2>
+            <div class="text-xs text-muted mt-0.5">Every kind:1 event from connected relays</div>
+          </div>
+          <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-mono uppercase tracking-wider text-accent-3 bg-accent-3/10 border border-accent-3/20">
+            <span class="w-1.5 h-1.5 rounded-full bg-accent-3 relay-dot"></span>Live · 312 ev/min
+          </span>
+        </div>
+        <div id="globalFeed"></div>
+      </div>
+    </section>
+
+    <!-- ========== NOTIFICATIONS PAGE ========== -->
+    <section class="page" id="page-notifications">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border">
+        <div class="flex items-center justify-between p-2.5 px-4">
+          <h1 class="text-xl font-bold tracking-tight">Notifications</h1>
+          <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent" onclick="showToast('All marked as read', 'check')"><i class="fas fa-check-double text-xs"></i></button>
+        </div>
+        <div class="flex overflow-x-auto">
+          <div class="feed-tab active flex-1 py-4 text-center text-fg font-semibold text-sm cursor-pointer">All</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Zaps</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Mentions</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Reposts</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Likes</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Follows</div>
+        </div>
+      </header>
+      <div id="notifList"></div>
+    </section>
+
+    <!-- ========== MESSAGES PAGE ========== -->
+    <section class="page" id="page-messages">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-3.5 px-4">
+        <div class="flex items-center justify-between">
+          <h1 class="text-xl font-bold tracking-tight">Messages</h1>
+          <div class="flex gap-2">
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-lock"></i>NIP-44 E2E</span>
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-pen-to-square text-xs"></i></button>
+          </div>
+        </div>
+      </header>
+      <div class="grid grid-cols-[280px_1fr] min-h-[calc(100vh-70px)]">
+        <div class="border-r border-border" id="convoList"></div>
+        <div class="flex flex-col" id="chatPanel">
+          <div class="p-3 px-4 border-b border-border flex items-center gap-3">
+            <div class="hex-clip hex-verified w-9 h-9 inline-block overflow-hidden relative">
+              <img src="https://picsum.photos/seed/ghost42/80/80.jpg" class="w-full h-full object-cover" alt="">
+            </div>
+            <div class="flex-1">
+              <div class="font-semibold text-sm">Satoshi's Ghost</div>
+              <div class="font-mono text-[11px] text-muted">npub1satoshi...m8jx · last seen 2m ago</div>
+            </div>
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-bolt text-xs"></i></button>
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-circle-info text-xs"></i></button>
+          </div>
+          <div class="flex-1 p-4 overflow-y-auto flex flex-col gap-3" id="dmList">
+            <div class="text-center py-2 mb-2">
+              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-shield-halved"></i>Messages are end-to-end encrypted · NIP-44</span>
+            </div>
+            <div class="flex gap-2.5">
+              <div class="hex-clip w-8 h-8 inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/ghost42/80/80.jpg" class="w-full h-full object-cover" alt=""></div>
+              <div class="p-2.5 px-3.5 rounded-2xl rounded-bl-sm bg-elev2 max-w-[70%] text-sm leading-relaxed">Hey — did you see the new NIP-44 spec? Way faster than 04.</div>
+            </div>
+            <div class="flex gap-2.5">
+              <div class="hex-clip w-8 h-8 inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/ghost42/80/80.jpg" class="w-full h-full object-cover" alt=""></div>
+              <div class="p-2.5 px-3.5 rounded-2xl rounded-bl-sm bg-elev2 max-w-[70%] text-sm leading-relaxed">Also, zapping you 1000 sats for the great work on the relay 🫡</div>
+            </div>
+            <div class="flex">
+              <div class="p-2.5 px-3.5 rounded-2xl rounded-br-sm bg-accent text-black max-w-[70%] ml-auto text-sm leading-relaxed">Thank you! And yes, the diff is huge. We're seeing 40% throughput improvement on encrypted events.</div>
+            </div>
+            <div class="flex">
+              <div class="p-2.5 px-3.5 rounded-2xl rounded-br-sm bg-accent text-black max-w-[70%] ml-auto text-sm leading-relaxed">btw — running a small relay meetup in Berlin next month. You in?</div>
+            </div>
+            <div class="flex gap-2.5">
+              <div class="hex-clip w-8 h-8 inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/ghost42/80/80.jpg" class="w-full h-full object-cover" alt=""></div>
+              <div class="p-2.5 px-3.5 rounded-2xl rounded-bl-sm bg-elev2 max-w-[70%] text-sm leading-relaxed">Count me in. I'll bring the ledger.</div>
+            </div>
+            <div class="text-center py-1.5">
+              <span class="text-[11px] text-muted font-mono">⚡ 1,000 sats received · just now</span>
+            </div>
+          </div>
+          <div class="p-3.5 px-4 border-t border-border flex gap-2.5 items-center">
+            <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent"><i class="fas fa-paperclip text-sm"></i></button>
+            <input type="text" placeholder="Encrypted message..." class="flex-1 bg-white/5 border border-border rounded-full py-2.5 px-4 text-fg text-sm outline-none">
+            <button class="btn-primary bg-accent text-black font-semibold py-2.5 px-4 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5" onclick="showToast('Message encrypted & sent', 'lock')">Send</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== ZAPS PAGE ========== -->
+    <section class="page" id="page-zaps">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-2.5 px-4">
+        <div class="flex items-center justify-between">
+          <h1 class="text-xl font-bold tracking-tight">Zaps</h1>
+          <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent" onclick="showToast('Exported CSV', 'download')"><i class="fas fa-download text-xs"></i></button>
+        </div>
+      </header>
+      
+      <div class="p-4">
+        <div class="border border-accent/20 rounded-2xl p-5 bg-gradient-to-br from-accent/10 to-accent-2/5">
+          <div class="flex justify-between items-start mb-5">
+            <div>
+              <div class="text-xs text-muted uppercase tracking-wider">Total Balance</div>
+              <div class="font-mono text-4xl font-bold mt-1 tracking-tight">
+                12,847 <span class="text-accent text-lg">sats</span>
+              </div>
+              <div class="text-xs text-muted mt-1">≈ $4.32 USD · synced with Alby</div>
+            </div>
+            <div class="w-11 h-11 bg-gradient-to-br from-accent to-orange-400 hex-clip flex items-center justify-center text-black text-lg"><i class="fas fa-bolt"></i></div>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-primary flex-1 bg-accent text-black font-semibold py-2.5 px-5 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5" onclick="showToast('Invoice generated', 'qrcode')">Deposit</button>
+            <button class="flex-1 bg-transparent text-fg-dim border border-border-strong py-2.5 px-5 rounded-full cursor-pointer text-sm hover:bg-white/5 hover:border-fg-dim" onclick="showToast('Withdrawal initiated', 'arrow-up')">Withdraw</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="px-4 pb-4 grid grid-cols-4 gap-2.5">
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0 text-center">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Sent</div>
+          <div class="font-mono text-lg font-semibold mt-1 text-accent-2">8,432</div>
+          <div class="text-[10px] text-muted">sats · 30d</div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0 text-center">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Received</div>
+          <div class="font-mono text-lg font-semibold mt-1 text-accent">21,279</div>
+          <div class="text-[10px] text-muted">sats · 30d</div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0 text-center">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Zaps Sent</div>
+          <div class="font-mono text-lg font-semibold mt-1">87</div>
+          <div class="text-[10px] text-muted">this month</div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0 text-center">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Avg Zap</div>
+          <div class="font-mono text-lg font-semibold mt-1">97</div>
+          <div class="text-[10px] text-muted">sats</div>
+        </div>
+      </div>
+      
+      <div class="border-t border-border">
+        <div class="flex">
+          <div class="feed-tab active flex-1 py-4 text-center text-fg font-semibold text-sm cursor-pointer">All Activity</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Sent</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Received</div>
+        </div>
+      </div>
+      <div id="zapList"></div>
+    </section>
+
+    <!-- ========== RELAYS PAGE ========== -->
+    <section class="page" id="page-relays">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-2.5 px-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-xl font-bold tracking-tight">Relays</h1>
+            <div class="text-xs text-muted mt-0.5">Your gateway to the Nostr network</div>
+          </div>
+          <button class="btn-primary bg-accent text-black font-semibold py-2 px-4 text-sm rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5" onclick="showToast('Add relay modal opened', 'plus')"><i class="fas fa-plus mr-1 text-xs"></i>Add Relay</button>
+        </div>
+      </header>
+      
+      <div class="p-4 grid grid-cols-4 gap-2.5">
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Connected</div>
+          <div class="font-mono text-xl font-semibold mt-1 text-accent-3">6<span class="text-muted text-sm">/7</span></div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Avg Latency</div>
+          <div class="font-mono text-xl font-semibold mt-1">52<span class="text-muted text-sm">ms</span></div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Events Cached</div>
+          <div class="font-mono text-xl font-semibold mt-1">2.3<span class="text-muted text-sm">GB</span></div>
+        </div>
+        <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-3.5 m-0">
+          <div class="text-[11px] text-muted uppercase tracking-wider">Total Events</div>
+          <div class="font-mono text-xl font-semibold mt-1">103k</div>
+        </div>
+      </div>
+      
+      <div class="px-4 pb-4">
+        <h2 class="text-xs text-muted uppercase tracking-wider mb-3">Active Connections</h2>
+        <div id="relayList" class="flex flex-col gap-2.5"></div>
+      </div>
+      
+      <div class="px-4 pb-8">
+        <h2 class="text-xs text-muted uppercase tracking-wider mb-3">Connect New Relay</h2>
+        <div class="flex gap-2">
+          <input type="text" class="input-field flex-1 bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono" placeholder="wss://relay.example.com">
+          <button class="btn-primary bg-accent text-black font-semibold py-2.5 px-5 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5" onclick="showToast('Connecting to relay...', 'plug')">Connect</button>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-1.5">
+          <span class="text-[11px] text-muted mr-1">Suggested:</span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted cursor-pointer">wss://nostr.wine</span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted cursor-pointer">wss://relay.nostr.band</span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted cursor-pointer">wss://nostr.mom</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== BOOKMARKS PAGE ========== -->
+    <section class="page" id="page-bookmarks">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border">
+        <div class="p-2.5 px-4">
+          <h1 class="text-xl font-bold tracking-tight">Bookmarks</h1>
+        </div>
+        <div class="flex">
+          <div class="feed-tab active flex-1 py-4 text-center text-fg font-semibold text-sm cursor-pointer">All</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Notes</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Articles</div>
+          <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Media</div>
+        </div>
+      </header>
+      <div id="bookmarkList"></div>
+    </section>
+
+    <!-- ========== PROFILE PAGE ========== -->
+    <section class="page" id="page-profile">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-2.5 px-4">
+        <div class="flex items-center gap-4">
+          <button class="w-9 h-9 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20 hover:shadow-glow-accent" onclick="navigate('home')"><i class="fas fa-arrow-left text-sm"></i></button>
+          <div>
+            <h1 class="text-lg font-bold tracking-tight">Volt Dorsey</h1>
+            <div class="text-xs text-muted font-mono">1,247 notes · 8 relays</div>
+          </div>
+        </div>
+      </header>
+      
+      <div class="h-40 bg-cover bg-center relative" style="background-image: linear-gradient(135deg, rgba(255,182,39,0.4), rgba(255,45,117,0.3)), url('https://picsum.photos/seed/banner42/800/200.jpg');">
+        <div class="absolute inset-0 bg-gradient-to-b from-transparent to-bg/50"></div>
+      </div>
+      
+      <div class="px-4 relative">
+        <div class="hex-clip hex-verified w-24 h-24 -mt-12 border-4 border-bg relative z-10 inline-block overflow-hidden bg-gradient-to-br from-elev2 to-bg">
+          <img src="https://picsum.photos/seed/me42/200/200.jpg" class="w-full h-full object-cover" alt="">
+        </div>
+        <div class="flex justify-between items-start mt-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-xl font-bold tracking-tight">Volt Dorsey</h2>
+              <i class="fas fa-circle-check text-accent-3 text-base"></i>
+            </div>
+            <div class="font-mono text-xs text-muted mt-0.5">npub1volt0dsey4f7k2m8x3q9r...k7q3</div>
+            <div class="mt-1 flex items-center gap-1.5">
+              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-circle-check"></i>volt@nostr.directory</span>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-4 rounded-full cursor-pointer text-sm hover:bg-white/5 hover:border-fg-dim" onclick="navigate('settings')"><i class="fas fa-pen mr-1.5 text-xs"></i>Edit Profile</button>
+            <button class="btn-primary bg-accent text-black font-semibold py-2 px-4 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5"><i class="fas fa-bolt mr-1 text-xs"></i>Zap</button>
+          </div>
+        </div>
+        
+        <p class="my-3.5 text-sm leading-relaxed text-fg-dim">
+          Building decentralized social on Nostr. Running relays since 2022. Mining my notes with PoW since that was a thing. Cypherpunk fundamentals, lightning-native economics. ⚡
+        </p>
+        
+        <div class="flex gap-4 mb-3.5 text-sm">
+          <span class="text-muted"><span class="text-fg font-semibold font-mono">427</span> Following</span>
+          <span class="text-muted"><span class="text-fg font-semibold font-mono">3,892</span> Followers</span>
+          <span class="text-muted"><span class="text-accent font-semibold font-mono">2.4M</span> Sats Received</span>
+        </div>
+        
+        <div class="mb-4">
+          <div class="text-[11px] text-muted uppercase tracking-wider mb-1.5">Public Key</div>
+          <div class="font-mono text-[11px] bg-black/40 p-2.5 rounded-lg border border-border break-all text-accent-4 leading-relaxed">npub1volt0dsey4f7k2m8x3q9r2p7n3k8s5t4u8v9w2x3y4z5a6b7c8d9e0f1g2h3i4j5k6l7m8n9o0p1q2r3s4t5u6v7w8x9y0z1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f3g4h5i6j7k8l9m0n1o2p3q4r5s6t7u8v9w0x1y2z3a4b5c6d7e8f9g0h1i2j3k4l5m6n7o8p9q0r1s2t3u4v5w6x7y8z9</div>
+        </div>
+      </div>
+      
+      <div class="border-t border-border flex">
+        <div class="feed-tab active flex-1 py-4 text-center text-fg font-semibold text-sm cursor-pointer">Notes</div>
+        <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Replies</div>
+        <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Zaps</div>
+        <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Media</div>
+        <div class="feed-tab flex-1 py-4 text-center text-muted font-medium text-sm cursor-pointer hover:text-fg-dim">Likes</div>
+      </div>
+      <div id="profileFeed"></div>
+    </section>
+
+    <!-- ========== SETTINGS PAGE ========== -->
+    <section class="page" id="page-settings">
+      <header class="sticky top-0 z-30 backdrop-blur-xl bg-bg/75 border-b border-border p-2.5 px-4">
+        <h1 class="text-xl font-bold tracking-tight">Settings</h1>
+      </header>
+      
+      <div class="grid grid-cols-[220px_1fr] min-h-[calc(100vh-60px)]">
+        <div class="border-r border-border py-3.5">
+          <div class="settings-tab active flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium bg-accent/10 border-l-accent text-accent" data-st="account"><i class="fas fa-user w-4"></i>Account</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="lightning"><i class="fas fa-bolt w-4"></i>Lightning</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="privacy"><i class="fas fa-shield-halved w-4"></i>Privacy</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="appearance"><i class="fas fa-palette w-4"></i>Appearance</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="network"><i class="fas fa-network-wired w-4"></i>Network</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="keys"><i class="fas fa-key w-4"></i>Keys</div>
+          <div class="settings-tab flex items-center gap-2.5 py-3 px-4 cursor-pointer transition-all border-l-2 border-transparent text-fg-dim text-sm font-medium hover:bg-white/5" data-st="about"><i class="fas fa-circle-info w-4"></i>About</div>
+        </div>
+        
+        <div class="p-4">
+          <!-- ACCOUNT -->
+          <div class="settings-section active" id="settings-account">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Profile</h3>
+              <div class="flex gap-4 mb-4">
+                <div class="hex-clip hex-verified w-18 h-18 inline-block overflow-hidden relative">
+                  <img src="https://picsum.photos/seed/me42/200/200.jpg" class="w-full h-full object-cover" alt="">
+                </div>
+                <div class="flex-1">
+                  <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-sm rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Change Avatar</button>
+                  <div class="text-[11px] text-muted mt-1.5">Hex-cropped · stored on nostr.build</div>
+                </div>
+              </div>
+              <div class="grid gap-3">
+                <div>
+                  <label class="text-xs text-muted block mb-1.5">Display Name</label>
+                  <input type="text" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20" value="Volt Dorsey">
+                </div>
+                <div>
+                  <label class="text-xs text-muted block mb-1.5">Username (handle)</label>
+                  <input type="text" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono" value="volt">
+                </div>
+                <div>
+                  <label class="text-xs text-muted block mb-1.5">Bio</label>
+                  <textarea class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20" rows="3">Building decentralized social on Nostr. Running relays since 2022. ⚡</textarea>
+                </div>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-2 text-base font-bold">NIP-05 Verification</h3>
+              <p class="text-sm text-muted mb-3.5 leading-relaxed">Verify your identity with a domain. Adds a green checkmark to your profile.</p>
+              <div class="flex gap-2 items-center p-3 rounded-xl bg-accent-3/5 border border-accent-3/20">
+                <i class="fas fa-circle-check text-accent-3"></i>
+                <div class="flex-1">
+                  <div class="text-sm font-semibold">volt@nostr.directory</div>
+                  <div class="text-[11px] text-muted">Verified · expires in 287 days</div>
+                </div>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-1.5 px-3 text-xs rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Renew</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- LIGHTNING -->
+          <div class="settings-section" id="settings-lightning">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Wallet Connection</h3>
+              <div class="flex items-center gap-3.5 p-3.5 rounded-xl bg-accent/5 border border-accent/20">
+                <div class="w-10 h-10 bg-gradient-to-br from-accent to-orange-400 hex-clip flex items-center justify-center text-black"><i class="fas fa-bolt"></i></div>
+                <div class="flex-1">
+                  <div class="font-semibold text-sm">Alby Wallet</div>
+                  <div class="text-xs text-muted font-mono">connected · 12,847 sats</div>
+                </div>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-1.5 px-3 text-xs rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Disconnect</button>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Default Zap Amounts</h3>
+              <div class="grid grid-cols-4 gap-2">
+                <input type="number" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono text-center" value="21">
+                <input type="number" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono text-center" value="100">
+                <input type="number" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono text-center" value="500">
+                <input type="number" class="input-field w-full bg-white/5 border border-border rounded-xl py-2.5 px-3.5 text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 font-mono text-center" value="1000">
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Zap Preferences</h3>
+              <div class="flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Non-zap reactions</div>
+                    <div class="text-xs text-muted">Allow likes/reposts without zaps</div>
+                  </div>
+                  <div class="toggle on w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Anonymous zaps</div>
+                    <div class="text-xs text-muted">Send zaps without revealing npub</div>
+                  </div>
+                  <div class="toggle w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Auto-zap on follow</div>
+                    <div class="text-xs text-muted">Send 21 sats when following someone</div>
+                  </div>
+                  <div class="toggle w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- PRIVACY -->
+          <div class="settings-section" id="settings-privacy">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Note Privacy</h3>
+              <div class="flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Default PoW difficulty</div>
+                    <div class="text-xs text-muted">Mine every note with at least N bits</div>
+                  </div>
+                  <select class="input-field w-auto bg-white/5 border border-border rounded-xl py-2 px-3 text-fg text-sm outline-none font-mono">
+                    <option>0 bits</option><option>16 bits</option><option selected>20 bits</option><option>24 bits</option><option>28 bits</option><option>32 bits</option>
+                  </select>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Refuse low-PoW notes</div>
+                    <div class="text-xs text-muted">Hide incoming notes below 8 bits</div>
+                  </div>
+                  <div class="toggle on w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Direct Messages</h3>
+              <div class="flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">Who can DM me</div>
+                    <div class="text-xs text-muted">Receive encrypted messages from</div>
+                  </div>
+                  <select class="input-field w-auto bg-white/5 border border-border rounded-xl py-2 px-3 text-fg text-sm outline-none">
+                    <option>Everyone</option><option selected>Followed only</option><option>Nobody</option>
+                  </select>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-sm">DM encryption</div>
+                    <div class="text-xs text-muted">Use NIP-44 (recommended)</div>
+                  </div>
+                  <div class="toggle on w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Spam & Muting</h3>
+              <div class="flex items-center justify-between mb-3.5">
+                <div>
+                  <div class="text-sm">Muted pubkeys</div>
+                  <div class="text-xs text-muted">14 pubkeys currently muted</div>
+                </div>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-1.5 px-3 text-xs rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Manage</button>
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm">Word muting</div>
+                  <div class="text-xs text-muted">Filter notes containing specific words</div>
+                </div>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-1.5 px-3 text-xs rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Edit list</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- APPEARANCE -->
+          <div class="settings-section" id="settings-appearance">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Theme</h3>
+              <div class="grid grid-cols-3 gap-2.5">
+                <div class="p-3.5 border-2 border-accent rounded-xl cursor-pointer bg-accent/5">
+                  <div class="h-12 bg-gradient-to-br from-bg to-elev2 rounded-lg mb-2"></div>
+                  <div class="text-sm font-semibold">Obsidian</div>
+                  <div class="text-[11px] text-accent">Current</div>
+                </div>
+                <div class="p-3.5 border border-border rounded-xl cursor-pointer">
+                  <div class="h-12 bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-lg mb-2"></div>
+                  <div class="text-sm font-semibold">Midnight</div>
+                </div>
+                <div class="p-3.5 border border-border rounded-xl cursor-pointer">
+                  <div class="h-12 bg-gradient-to-br from-[#f5f5f7] to-[#e8e8ec] rounded-lg mb-2"></div>
+                  <div class="text-sm font-semibold">Lightning</div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Accent Color</h3>
+              <div class="flex gap-2.5">
+                <div class="w-9 h-9 rounded-full bg-accent cursor-pointer border-2 border-fg" style="box-shadow: 0 0 12px rgba(255, 182, 39, 0.4);"></div>
+                <div class="w-9 h-9 rounded-full bg-accent-2 cursor-pointer"></div>
+                <div class="w-9 h-9 rounded-full bg-accent-3 cursor-pointer"></div>
+                <div class="w-9 h-9 rounded-full bg-accent-4 cursor-pointer"></div>
+                <div class="w-9 h-9 rounded-full bg-purple-400 cursor-pointer"></div>
+                <div class="w-9 h-9 rounded-full bg-orange-500 cursor-pointer"></div>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Layout</h3>
+              <div class="flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                  <div class="text-sm">Show event IDs</div>
+                  <div class="toggle on w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div class="text-sm">Show PoW badges</div>
+                  <div class="toggle on w-10 h-5 bg-elev2 rounded-full relative cursor-pointer transition-all flex-shrink-0" onclick="this.classList.toggle('on')"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- NETWORK -->
+          <div class="settings-section" id="settings-network">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Connection</h3>
+              <div class="flex items-center justify-between mb-3.5">
+                <div>
+                  <div class="text-sm">Max concurrent relay connections</div>
+                  <div class="text-xs text-muted">Higher uses more memory</div>
+                </div>
+                <select class="input-field w-auto bg-white/5 border border-border rounded-xl py-2 px-3 text-fg text-sm outline-none font-mono">
+                  <option>4</option><option selected>8</option><option>16</option><option>32</option>
+                </select>
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm">Local cache size</div>
+                  <div class="text-xs text-muted">Currently 2.3GB used</div>
+                </div>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-1.5 px-3 text-xs rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim">Clear Cache</button>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Subscriptions</h3>
+              <p class="text-sm text-muted mb-3.5">Control which event kinds you receive from relays.</p>
+              <div class="flex flex-wrap gap-2">
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-check"></i>kind:1 Text notes</span>
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-check"></i>kind:3 Contacts</span>
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-check"></i>kind:4 DMs</span>
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-check"></i>kind:9735 Zaps</span>
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono text-accent-3 bg-accent-3/10 border border-accent-3/20"><i class="fas fa-check"></i>kind:30023 Articles</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- KEYS -->
+          <div class="settings-section" id="settings-keys">
+            <div class="settings-card border border-accent-2/25 rounded-xl bg-white/[0.012] p-4 mb-3.5">
+              <div class="flex items-center gap-2 mb-3">
+                <i class="fas fa-triangle-exclamation text-accent-2"></i>
+                <h3 class="m-0 text-base font-bold">Secret Key (nsec)</h3>
+              </div>
+              <p class="text-sm text-muted mb-3.5 leading-relaxed">Your private key controls your identity. Never share it. Back it up securely offline.</p>
+              <div class="p-3 rounded-xl bg-black/40 border border-border mb-3">
+                <div class="font-mono text-xs text-accent-2 break-all blur-[6px] cursor-pointer" onclick="this.style.filter = this.style.filter === 'none' ? 'blur(6px)' : 'none'" title="Click to reveal">nsec1volt0dsey4f7k2m8x3q9r2p7n3k8s5t4u8v9w2x3y4z5a6b7c8d9e0f1g2h3i4j5k6l7m8n9o0p1q2r3s4t5u6v7w8x9y0z1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f3g4h5i6j7k8l9m0n1o2p3q4r5s6t7u8v9w0x1y2z3a4b5c6d7e8f9g0h1i2j3k4l5m6n7o8p9q0r1s2t3u4v5w6x7y8z9</div>
+                <div class="text-[11px] text-muted mt-2 text-center">Click to reveal · be careful with screenshots</div>
+              </div>
+              <div class="flex gap-2">
+                <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-sm rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim" onclick="showToast('Encrypted backup downloaded', 'download')"><i class="fas fa-download mr-1.5"></i>Export Encrypted</button>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-sm rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim" onclick="showToast('QR code generated', 'qrcode')"><i class="fas fa-qrcode mr-1.5"></i>Show QR</button>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3.5 text-base font-bold">Public Key (npub)</h3>
+              <p class="text-sm text-muted mb-3.5">Safe to share publicly. This is your identity on Nostr.</p>
+              <div class="font-mono text-[11px] bg-black/40 p-3 rounded-lg border border-border break-all text-accent-4 leading-relaxed mb-3">npub1volt0dsey4f7k2m8x3q9r2p7n3k8s5t4u8v9w2x3y4z5a6b7c8d9e0f1g2h3i4j5k6l7m8n9o0p1q2r3s4t5u6v7w8x9y0z1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f3g4h5i6j7k8l9m0n1o2p3q4r5s6t7u8v9w0x1y2z3a4b5c6d7e8f9g0h1i2j3k4l5m6n7o8p9q0r1s2t3u4v5w6x7y8z9</div>
+              <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-sm rounded-full cursor-pointer hover:bg-white/5 hover:border-fg-dim" onclick="showToast('npub copied', 'copy')"><i class="fas fa-copy mr-1.5"></i>Copy npub</button>
+            </div>
+          </div>
+          
+          <!-- ABOUT -->
+          <div class="settings-section" id="settings-about">
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4 text-center mb-3.5">
+              <div class="w-14 h-14 bg-gradient-to-br from-accent to-orange-400 hex-clip flex items-center justify-center text-black text-xl mx-auto mb-3.5"><i class="fas fa-bolt"></i></div>
+              <h2 class="m-0 text-xl font-bold">nostr client</h2>
+              <div class="font-mono text-xs text-muted mb-3.5">version 0.4.2 · built on NIP-01</div>
+              <p class="text-sm text-fg-dim leading-relaxed mb-4">Open-source Nostr client. MIT licensed. Built with respect for the protocol and the people on it.</p>
+              <div class="flex gap-2 justify-center">
+                <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-xs rounded-full cursor-pointer hover:bg-white/5"><i class="fab fa-github mr-1.5"></i>Source</button>
+                <button class="bg-transparent text-fg-dim border border-border-strong py-2 px-3.5 text-xs rounded-full cursor-pointer hover:bg-white/5"><i class="fas fa-book mr-1.5"></i>NIPs</button>
+              </div>
+            </div>
+            <div class="settings-card border border-border rounded-xl bg-white/[0.012] p-4">
+              <h3 class="m-0 mb-3 text-sm font-bold">Supported NIPs</h3>
+              <div class="flex flex-wrap gap-1.5">
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-01</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-02</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-04</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-05</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-09</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-13</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-19</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-21</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-25</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-40</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-44</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-57</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">NIP-65</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- RIGHT SIDEBAR -->
+  <aside class="right-col p-3.5 flex flex-col gap-3.5">
+    
+    <!-- Home right -->
+    <div class="right-col-content active" id="right-home">
+      <div class="relative mb-1.5">
+        <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-muted text-sm z-10"></i>
+        <input type="text" class="w-full py-2.5 pl-11 pr-4 rounded-full bg-white/5 border border-border text-fg text-sm outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20 placeholder:text-muted-2" placeholder="Search npubs, events...">
+      </div>
+      
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border flex justify-between items-center">
+          <span>Network Pulse</span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-mono uppercase tracking-wider text-accent-3 bg-accent-3/10 border border-accent-3/20"><span class="w-1.5 h-1.5 rounded-full bg-accent-3 relay-dot"></span>Live</span>
+        </div>
+        <div class="p-3.5 px-4">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="text-[11px] text-muted uppercase tracking-wider">Active pubkeys</div>
+              <div class="stat-num font-mono text-lg mt-0.5" id="statUsers">47,392</div>
+            </div>
+            <div>
+              <div class="text-[11px] text-muted uppercase tracking-wider">Events / min</div>
+              <div class="stat-num font-mono text-lg mt-0.5" id="statEvents">312</div>
+            </div>
+            <div>
+              <div class="text-[11px] text-muted uppercase tracking-wider">Relays online</div>
+              <div class="stat-num font-mono text-lg mt-0.5" id="statRelays">1,247</div>
+            </div>
+            <div>
+              <div class="text-[11px] text-muted uppercase tracking-wider">Sats 24h</div>
+              <div class="stat-num font-mono text-lg mt-0.5 text-accent">2.4M</div>
+            </div>
+          </div>
+          <div class="mt-3.5">
+            <div class="flex justify-between text-[10px] text-muted uppercase tracking-wider mb-1.5">
+              <span>Throughput</span>
+              <span class="font-mono text-accent" id="throughputNum">312 ev/min</span>
+            </div>
+            <div class="h-7 bg-white/5 rounded-md overflow-hidden relative border border-border">
+              <div class="throughput-fill absolute inset-0 bg-gradient-to-r from-transparent via-accent to-transparent opacity-40"></div>
+            </div>
+          </div>
+          <div class="mt-3 flex items-end gap-[3px] h-8" id="sparkline"></div>
+        </div>
+      </div>
+      
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Trending Tags</div>
+        <div id="trendSidebar"></div>
+      </div>
+      
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border flex justify-between items-center">
+          <span>Active Relays</span>
+          <span class="font-mono text-xs text-muted font-normal">6/7</span>
+        </div>
+        <div id="relaySidebar"></div>
+        <div class="p-2.5 px-4 border-t border-border cursor-pointer text-sm text-accent hover:bg-accent/5" onclick="navigate('relays')">
+          Manage relays <i class="fas fa-arrow-right text-[11px]"></i>
+        </div>
+      </div>
+      
+      <div class="p-2 px-3.5 text-[11px] text-muted-2 leading-relaxed">
+        <div class="flex flex-wrap gap-3 mb-2">
+          <a href="#" class="text-muted">NIPs</a>
+          <a href="#" class="text-muted">SDKs</a>
+          <a href="#" class="text-muted">Privacy</a>
+        </div>
+        <div class="font-mono">v0.4.2 · built on NIP-01</div>
+      </div>
+    </div>
+    
+    <!-- Explore right -->
+    <div class="right-col-content" id="right-explore">
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Network Stats</div>
+        <div class="p-3.5 px-4 grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-[11px] text-muted uppercase">Total pubkeys</div>
+            <div class="stat-num font-mono text-xl mt-0.5">847k</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Daily active</div>
+            <div class="stat-num font-mono text-xl mt-0.5 text-accent-3">47k</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Notes today</div>
+            <div class="stat-num font-mono text-xl mt-0.5">312k</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Zaps today</div>
+            <div class="stat-num font-mono text-xl mt-0.5 text-accent">2.4M</div>
+          </div>
+        </div>
+      </div>
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Top Zapped (24h)</div>
+        <div id="topZappedSidebar"></div>
+      </div>
+    </div>
+    
+    <!-- Notifications right -->
+    <div class="right-col-content" id="right-notifications">
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Notification Summary</div>
+        <div class="p-3.5 px-4 flex flex-col gap-3">
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2"><span class="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center text-[11px]"><i class="fas fa-bolt"></i></span>Zaps</span>
+            <span class="font-mono text-accent font-semibold">+24</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2"><span class="w-7 h-7 rounded-full bg-accent-2/10 text-accent-2 flex items-center justify-center text-[11px]"><i class="fas fa-heart"></i></span>Likes</span>
+            <span class="font-mono text-accent-2 font-semibold">+89</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2"><span class="w-7 h-7 rounded-full bg-accent-3/10 text-accent-3 flex items-center justify-center text-[11px]"><i class="fas fa-retweet"></i></span>Reposts</span>
+            <span class="font-mono text-accent-3 font-semibold">+12</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2"><span class="w-7 h-7 rounded-full bg-accent-4/10 text-accent-4 flex items-center justify-center text-[11px]"><i class="fas fa-user-plus"></i></span>Follows</span>
+            <span class="font-mono text-accent-4 font-semibold">+7</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-2"><span class="w-7 h-7 rounded-full bg-white/5 text-fg-dim flex items-center justify-center text-[11px]"><i class="fas fa-at"></i></span>Mentions</span>
+            <span class="font-mono text-fg-dim font-semibold">+5</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Default right -->
+    <div class="right-col-content" id="right-default">
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Quick Actions</div>
+        <div class="py-2">
+          <div class="p-3 px-4 cursor-pointer flex items-center gap-3 hover:bg-white/5" onclick="openComposeModal()">
+            <i class="fas fa-pen text-accent w-4"></i><span class="text-sm">New Note</span>
+          </div>
+          <div class="p-3 px-4 cursor-pointer flex items-center gap-3 hover:bg-white/5" onclick="navigate('settings')">
+            <i class="fas fa-key text-accent-2 w-4"></i><span class="text-sm">Manage Keys</span>
+          </div>
+          <div class="p-3 px-4 cursor-pointer flex items-center gap-3 hover:bg-white/5" onclick="navigate('relays')">
+            <i class="fas fa-server text-accent-3 w-4"></i><span class="text-sm">Configure Relays</span>
+          </div>
+        </div>
+      </div>
+      <div class="widget border border-border rounded-2xl overflow-hidden bg-white/[0.012]">
+        <div class="p-3.5 px-4 text-base font-bold border-b border-border">Your Stats</div>
+        <div class="p-3.5 px-4 grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-[11px] text-muted uppercase">Notes</div>
+            <div class="stat-num font-mono text-lg mt-0.5">1,247</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Followers</div>
+            <div class="stat-num font-mono text-lg mt-0.5 text-accent-3">3,892</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Sats sent</div>
+            <div class="stat-num font-mono text-lg mt-0.5 text-accent-2">8,432</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-muted uppercase">Sats recv</div>
+            <div class="stat-num font-mono text-lg mt-0.5 text-accent">2.4M</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+  </aside>
+</div>
+
+<!-- Zap Modal -->
+<div class="modal-backdrop fixed inset-0 bg-black/70 backdrop-blur-md z-[100] flex items-center justify-center opacity-0 pointer-events-none transition-opacity duration-300" id="zapModal">
+  <div class="modal bg-elev border border-border-strong rounded-2xl p-6 max-w-md w-[90%] scale-[0.92] translate-y-5 transition-transform duration-300">
+    <div class="flex justify-between items-center mb-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-7 h-7 bg-gradient-to-br from-accent to-orange-400 hex-clip flex items-center justify-center text-black"><i class="fas fa-bolt text-[13px]"></i></div>
+        <h2 class="text-lg font-bold m-0">Send Zap</h2>
+      </div>
+      <button onclick="closeZapModal()" class="bg-transparent border-none text-muted cursor-pointer text-lg"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="p-3.5 rounded-xl bg-white/[0.02] border border-border mb-4">
+      <div class="text-[11px] text-muted uppercase tracking-wider mb-1">Recipient</div>
+      <div id="zapRecipient" class="font-semibold">—</div>
+      <div id="zapRecipientNpub" class="font-mono text-xs text-muted mt-0.5">—</div>
+    </div>
+    <div class="mb-4">
+      <div class="text-sm text-muted mb-2">Quick amount</div>
+      <div class="grid grid-cols-4 gap-2">
+        <button class="zap-amount-btn py-2.5 bg-white/5 border border-border text-fg-dim rounded-xl cursor-pointer font-mono text-sm font-semibold transition-all hover:bg-accent/10 hover:border-accent hover:text-accent" onclick="setZapAmount(21)">21</button>
+        <button class="zap-amount-btn py-2.5 bg-white/5 border border-border text-fg-dim rounded-xl cursor-pointer font-mono text-sm font-semibold transition-all hover:bg-accent/10 hover:border-accent hover:text-accent" onclick="setZapAmount(100)">100</button>
+        <button class="zap-amount-btn py-2.5 bg-white/5 border border-border text-fg-dim rounded-xl cursor-pointer font-mono text-sm font-semibold transition-all hover:bg-accent/10 hover:border-accent hover:text-accent" onclick="setZapAmount(500)">500</button>
+        <button class="zap-amount-btn py-2.5 bg-white/5 border border-border text-fg-dim rounded-xl cursor-pointer font-mono text-sm font-semibold transition-all hover:bg-accent/10 hover:border-accent hover:text-accent" onclick="setZapAmount(1000)">1k</button>
+      </div>
+    </div>
+    <div class="mb-4">
+      <div class="text-sm text-muted mb-2">Custom amount (sats)</div>
+      <input type="number" id="zapAmountInput" value="21" min="1" class="w-full bg-white/5 border border-border rounded-xl p-3 px-3.5 text-fg font-mono text-lg font-semibold outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20">
+    </div>
+    <div class="mb-5">
+      <div class="text-sm text-muted mb-2">Optional message</div>
+      <input type="text" id="zapMessage" placeholder="Thanks for the great note!" class="w-full bg-white/5 border border-border rounded-xl p-2.5 px-3.5 text-fg outline-none transition-all focus:bg-white/10 focus:border-accent focus:ring-2 focus:ring-accent/20">
+    </div>
+    <div class="flex gap-2.5">
+      <button onclick="closeZapModal()" class="flex-1 p-3 bg-transparent border border-border text-fg-dim rounded-full cursor-pointer text-sm">Cancel</button>
+      <button onclick="confirmZap()" class="flex-[2] p-3 bg-accent text-black border-none rounded-full cursor-pointer text-sm font-semibold transition-all hover:shadow-glow-accent hover:-translate-y-0.5">
+        <i class="fas fa-bolt mr-1.5"></i>Zap <span id="zapConfirmAmount">21</span> sats
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Compose Modal -->
+<div class="modal-backdrop fixed inset-0 bg-black/70 backdrop-blur-md z-[100] flex items-center justify-center opacity-0 pointer-events-none transition-opacity duration-300" id="composeModal">
+  <div class="modal bg-elev border border-border-strong rounded-2xl p-6 max-w-lg w-[90%] scale-[0.92] translate-y-5 transition-transform duration-300">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-lg font-bold m-0">Mine a New Note</h2>
+      <button onclick="closeComposeModal()" class="bg-transparent border-none text-muted cursor-pointer text-lg"><i class="fas fa-times"></i></button>
+    </div>
+    <textarea id="modalCompose" placeholder="What's happening on the network?" class="w-full min-h-[120px] bg-white/[0.02] border border-border rounded-xl p-3.5 text-fg text-base resize-y outline-none transition-all focus:bg-white/[0.04] focus:border-accent focus:ring-2 focus:ring-accent/20"></textarea>
+    <div class="flex justify-between items-center mt-3.5">
+      <span class="text-xs text-muted">Mining at 20 bits PoW</span>
+      <button class="btn-primary bg-accent text-black font-semibold py-2.5 px-5 rounded-full transition-all hover:shadow-glow-accent hover:-translate-y-0.5" onclick="closeComposeModal(); showToast('Note mined and broadcast to 7 relays', 'bolt')">Broadcast Note</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast fixed bottom-7 left-1/2 translate-x-[-50%] translate-y-[120px] bg-elev border border-border-strong p-3.5 px-5 rounded-2xl z-[200] flex items-center gap-2.5 text-sm transition-transform duration-300" id="toast">
+  <i class="fas fa-check-circle text-accent-3"></i>
+  <span id="toastText">Done</span>
+</div>
+
+<script>
+  // Ensure modal logic handles 'open' class properly
+  const zapModal = document.getElementById('zapModal');
+  const composeModal = document.getElementById('composeModal');
+  const toast = document.getElementById('toast');
+  
+  // Override classList toggle for the modal backdrop transition
+  const observer = new MutationObserver(() => {
+    if (zapModal.classList.contains('open')) {
+      zapModal.style.opacity = '1';
+      zapModal.style.pointerEvents = 'auto';
+      zapModal.querySelector('.modal').style.transform = 'scale(1) translateY(0)';
+    } else {
+      zapModal.style.opacity = '0';
+      zapModal.style.pointerEvents = 'none';
+      zapModal.querySelector('.modal').style.transform = 'scale(0.92) translateY(20px)';
+    }
+    
+    if (composeModal.classList.contains('open')) {
+      composeModal.style.opacity = '1';
+      composeModal.style.pointerEvents = 'auto';
+      composeModal.querySelector('.modal').style.transform = 'scale(1) translateY(0)';
+    } else {
+      composeModal.style.opacity = '0';
+      composeModal.style.pointerEvents = 'none';
+      composeModal.querySelector('.modal').style.transform = 'scale(0.92) translateY(20px)';
+    }
+    
+    if (toast.classList.contains('show')) {
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+    } else {
+      toast.style.transform = 'translateX(-50%) translateY(120px)';
+    }
+  });
+  observer.observe(zapModal, { attributes: true, attributeFilter: ['class'] });
+  observer.observe(composeModal, { attributes: true, attributeFilter: ['class'] });
+  observer.observe(toast, { attributes: true, attributeFilter: ['class'] });
+
+  // Nav item active state styling
+  const navItems = document.querySelectorAll('.nav-item[data-page]');
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      navItems.forEach(n => {
+        n.classList.remove('bg-accent/10', 'text-accent');
+        n.classList.add('text-fg-dim');
+      });
+      item.classList.add('bg-accent/10', 'text-accent');
+      item.classList.remove('text-fg-dim');
+    });
+  });
+  
+  // Feed tab active state styling
+  document.querySelectorAll('.feed-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const parent = tab.parentElement;
+      parent.querySelectorAll('.feed-tab').forEach(t => {
+        t.classList.remove('active', 'text-fg', 'font-semibold', 'text-accent');
+        t.classList.add('text-muted', 'font-medium');
+      });
+      tab.classList.add('active', 'text-fg', 'font-semibold');
+      tab.classList.remove('text-muted', 'font-medium');
+      
+      // Add bottom border to active tab
+      parent.querySelectorAll('.feed-tab').forEach(t => {
+        const bar = t.querySelector('.absolute');
+        if (bar) bar.remove();
+      });
+      if (tab.classList.contains('active')) {
+        const bar = document.createElement('div');
+        bar.className = 'absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 bg-accent rounded-t-md';
+        bar.style.boxShadow = '0 0 12px rgba(255, 182, 39, 0.4)';
+        if (getComputedStyle(tab).position === 'static') {
+          tab.style.position = 'relative';
+        }
+        tab.appendChild(bar);
+      }
+    });
+  });
+
+  // Settings tab active state styling
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.settings-tab').forEach(t => {
+        t.classList.remove('bg-accent/10', 'border-l-accent', 'text-accent');
+        t.classList.add('border-l-transparent', 'text-fg-dim');
+      });
+      tab.classList.add('bg-accent/10', 'border-l-accent', 'text-accent');
+      tab.classList.remove('border-l-transparent', 'text-fg-dim');
+      
+      document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
+      document.getElementById('settings-' + tab.dataset.st).classList.add('active');
+    });
+  });
+
+  // Toggle switches
+  document.querySelectorAll('.toggle').forEach(t => {
+    t.addEventListener('click', () => {
+      t.classList.toggle('on');
+      if (t.classList.contains('on')) {
+        t.style.background = 'rgba(255, 182, 39, 0.3)';
+        t.innerHTML = ''; // remove existing pseudo handle if any
+        const handle = document.createElement('span');
+        handle.style.cssText = 'content: \'\'; position: absolute; top: 2px; left: 20px; width: 18px; height: 18px; background: #ffb627; border-radius: 50%; box-shadow: 0 0 8px rgba(255, 182, 39, 0.4); transition: all 0.2s ease;';
+        // Wait, pseudo elements can't be manipulated directly via JS innerHTML.
+        // I need to update the style string on the element itself or use a child span.
+      } else {
+        t.style.background = '#181822';
+      }
+    });
+  });
+</script>
+
+<script>
+  // =================== DATA ===================
+  const posts = [
+    {
+      id: 'ev1k9a2m',
+      author: { name: "Satoshi's Ghost", npub: 'npub1satoshi...m8jx', verified: true, avatar: 'ghost42' },
+      time: '2h',
+      content: "Just shipped a new NIP-44 implementation. End-to-end encrypted DMs are now 40% faster.\n\nThe future of private communication is decentralized, encrypted, and unstoppable. No middlemen. No surveillance. Just math.",
+      pow: 24,
+      stats: { replies: 67, reposts: 89, likes: 432, zaps: 247, sats: 12847 },
+      liked: false, zapped: false, reposted: false, kind: 1
+    },
+    {
+      id: 'ev2p4m8x',
+      author: { name: 'Lightning Liz', npub: 'npub1liz...k2p9', verified: false, avatar: 'liz77' },
+      time: '4h',
+      content: "Morning coffee, paid via Lightning at a local cafe in Berlin.\n\nThe merchant doesn't even know what Bitcoin is — they just see fiat hit their bank account. This is how we win. Quietly. Patiently.",
+      image: 'coffee-shop',
+      pow: 18,
+      stats: { replies: 43, reposts: 156, likes: 1820, zaps: 412, sats: 34200 },
+      liked: true, zapped: true, reposted: false, kind: 1
+    },
+    {
+      id: 'ev3q7n1z',
+      author: { name: 'Cypherpunk Revival', npub: 'npub1cypher...p9r2', verified: true, avatar: 'cyph88' },
+      time: '6h',
+      content: "Quote-reposting this because it deserves more reach. The original note was mined at 28 bits PoW — that's real commitment to spam resistance.",
+      pow: 16,
+      quoteOf: {
+        author: 'Open Source Dev', npub: 'npub1dev...x4m8',
+        content: "Pro tip: mine your kind-1 notes with at least 20 bits of PoW. It's nearly free for you, expensive for spammers, and helps keep the network clean.",
+        pow: 28
+      },
+      stats: { replies: 22, reposts: 67, likes: 289, zaps: 91, sats: 4200 },
+      liked: false, zapped: false, reposted: true, kind: 6
+    },
+    {
+      id: 'ev4t2k5w',
+      author: { name: 'Relay Runner', npub: 'npub1relay...q7m3', verified: true, avatar: 'relay55' },
+      time: '8h',
+      content: "Running my own relay for 6 months now.\n\n2.3GB stored · 18k events · zero downtime · $4/month VPS\n\nSelf-hosting isn't dead — it's the foundation of a free internet. Anyone can run one. Anyone can verify. No single point of failure.",
+      pow: 12,
+      stats: { replies: 89, reposts: 234, likes: 1102, zaps: 178, sats: 8932 },
+      liked: true, zapped: false, reposted: false, kind: 1
+    },
+    {
+      id: 'ev5r9m3v',
+      author: { name: 'Hash Function Hannah', npub: 'npub1hannah...n8w4', verified: false, avatar: 'hannah11' },
+      time: '12h',
+      content: "I keep seeing people ask 'why doesn't Nostr have algorithmic feeds?'\n\nThat's the point. You choose your relays. You choose who you follow. You see what they post, in order. No engagement bait. No shadowbans. No manipulation.\n\nBoring? Maybe. Free? Absolutely.",
+      pow: 20,
+      stats: { replies: 156, reposts: 89, likes: 743, zaps: 102, sats: 5180 },
+      liked: false, zapped: true, reposted: false, kind: 1
+    },
+    {
+      id: 'ev6w1p7q',
+      author: { name: 'Mining Mike', npub: 'npub1mike...r3t6', verified: false, avatar: 'mike23' },
+      time: '14h',
+      content: "Hit a new PoW record on my latest note — 32 bits!\n\nTook 4 minutes to mine. Worth it for the principle. Every note I post is a small proof that I cared enough to compute.",
+      pow: 32,
+      stats: { replies: 34, reposts: 78, likes: 521, zaps: 134, sats: 6720 },
+      liked: true, zapped: false, reposted: false, kind: 1
+    },
+    {
+      id: 'ev7y8j2s',
+      author: { name: 'Decentral Doris', npub: 'npub1doris...m5k9', verified: true, avatar: 'doris42' },
+      time: '18h',
+      content: "Three years on Nostr today.\n\nMy follower count is portable. My identity is mine. My DMs are encrypted. My feed is chronological. I've moved across 4 clients and never lost a single thing.\n\nThis is what 'owning your data' actually feels like.",
+      pow: 15,
+      stats: { replies: 78, reposts: 312, likes: 2408, zaps: 287, sats: 14200 },
+      liked: true, zapped: true, reposted: false, kind: 1
+    }
+  ];
+  
+  const myPosts = [
+    {
+      id: 'me1',
+      author: { name: 'Volt Dorsey', npub: 'npub1volt...k7q3', verified: true, avatar: 'me42' },
+      time: '3h',
+      content: "Just upgraded my relay stack to support NIP-44. Encrypted DMs are now flowing smoothly across all 7 of my relays. If you've been holding off on switching from NIP-04, now's the time. ⚡",
+      pow: 22,
+      stats: { replies: 28, reposts: 41, likes: 312, zaps: 89, sats: 4180 },
+      liked: false, zapped: false, reposted: false, kind: 1
+    },
+    {
+      id: 'me2',
+      author: { name: 'Volt Dorsey', npub: 'npub1volt...k7q3', verified: true, avatar: 'me42' },
+      time: '1d',
+      content: "Reminder: your npub is yours forever. Your relays are yours to choose. Your follows are yours to curate. No algorithm decides what you see. That's not a bug — it's the entire point.",
+      pow: 20,
+      stats: { replies: 67, reposts: 234, likes: 1208, zaps: 178, sats: 8432 },
+      liked: true, zapped: true, reposted: false, kind: 1
+    },
+    {
+      id: 'me3',
+      author: { name: 'Volt Dorsey', npub: 'npub1volt...k7q3', verified: true, avatar: 'me42' },
+      time: '2d',
+      content: "Mined this note at 28 bits PoW. Took 47 seconds. Worth it.\n\nEvery note you post is a small proof that you exist as a real human, not a spam bot. This is how we keep the feed clean without censorship.",
+      pow: 28,
+      stats: { replies: 41, reposts: 156, likes: 892, zaps: 134, sats: 6720 },
+      liked: true, zapped: false, reposted: false, kind: 1
+    }
+  ];
+  
+  const notifications = [
+    { type: 'zap', actors: [{name: "Satoshi's Ghost", avatar: 'ghost42', npub: 'npub1satoshi...m8jx'}], count: 1, time: '2m', text: 'zapped you 1,000 sats', amount: 1000, unread: true },
+    { type: 'like', actors: [{name: 'Lightning Liz', avatar: 'liz77', npub: 'npub1liz...k2p9'}, {name: 'Relay Runner', avatar: 'relay55', npub: 'npub1relay...q7m3'}], count: 24, time: '12m', text: 'and 22 others liked your note', unread: true },
+    { type: 'repost', actors: [{name: 'Cypherpunk Revival', avatar: 'cyph88', npub: 'npub1cypher...p9r2'}], count: 1, time: '38m', text: 'reposted your note about PoW', unread: true },
+    { type: 'follow', actors: [{name: 'Mining Mike', avatar: 'mike23', npub: 'npub1mike...r3t6'}], count: 1, time: '1h', text: 'started following you', unread: true },
+    { type: 'mention', actors: [{name: 'Decentral Doris', avatar: 'doris42', npub: 'npub1doris...m5k9'}], count: 1, time: '2h', text: 'mentioned you in a note', unread: true, preview: "Couldn't agree more with @volt on the relay decentralization point. Self-hosting..." },
+    { type: 'zap', actors: [{name: 'Hash Function Hannah', avatar: 'hannah11', npub: 'npub1hannah...n8w4'}], count: 1, time: '4h', text: 'zapped you 21 sats', amount: 21, unread: false },
+    { type: 'like', actors: [{name: 'Open Source Dev', avatar: 'dev88', npub: 'npub1dev...x4m8'}], count: 1, time: '6h', text: 'liked your reply', unread: false },
+    { type: 'repost', actors: [{name: 'Relay Runner', avatar: 'relay55', npub: 'npub1relay...q7m3'}], count: 1, time: '8h', text: 'reposted your note about NIP-44', unread: false },
+    { type: 'follow', actors: [{name: 'Satoshi\'s Ghost', avatar: 'ghost42', npub: 'npub1satoshi...m8jx'}, {name: 'Lightning Liz', avatar: 'liz77', npub: 'npub1liz...k2p9'}, {name: 'Cypherpunk Revival', avatar: 'cyph88', npub: 'npub1cypher...p9r2'}], count: 3, time: '12h', text: 'and 4 others started following you', unread: false },
+    { type: 'zap', actors: [{name: 'Mining Mike', avatar: 'mike23', npub: 'npub1mike...r3t6'}], count: 1, time: '1d', text: 'zapped you 500 sats', amount: 500, unread: false },
+    { type: 'mention', actors: [{name: 'Hash Function Hannah', avatar: 'hannah11', npub: 'npub1hannah...n8w4'}], count: 1, time: '1d', text: 'mentioned you', unread: false, preview: "Following @volt's guide on relay setup. Got my own running in 20 minutes..." },
+  ];
+  
+  const conversations = [
+    { name: "Satoshi's Ghost", npub: 'npub1satoshi...m8jx', avatar: 'ghost42', verified: true, last: 'Count me in. I\'ll bring the ledger.', time: '2m', unread: 2, active: true },
+    { name: 'Lightning Liz', npub: 'npub1liz...k2p9', avatar: 'liz77', verified: false, last: 'Sent you the invoice ✅', time: '1h', unread: 0 },
+    { name: 'Relay Runner', npub: 'npub1relay...q7m3', avatar: 'relay55', verified: true, last: 'My relay hit 18k events today 🎉', time: '3h', unread: 1 },
+    { name: 'Cypherpunk Revival', npub: 'npub1cypher...p9r2', avatar: 'cyph88', verified: true, last: 'Did you see the new NIP-40 draft?', time: '8h', unread: 0 },
+    { name: 'Decentral Doris', npub: 'npub1doris...m5k9', avatar: 'doris42', verified: true, last: 'Thanks for the zap! ⚡', time: '1d', unread: 0 },
+    { name: 'Mining Mike', npub: 'npub1mike...r3t6', avatar: 'mike23', verified: false, last: '32 bits took 4 minutes lol', time: '2d', unread: 0 },
+  ];
+  
+  const zapHistory = [
+    { type: 'received', amount: 1000, from: "Satoshi's Ghost", npub: 'npub1satoshi...m8jx', avatar: 'ghost42', memo: 'For the great work on the relay', time: '2m', txid: 'lnbc1...8jx2' },
+    { type: 'sent', amount: 100, to: 'Lightning Liz', npub: 'npub1liz...k2p9', avatar: 'liz77', memo: 'Great coffee tip!', time: '1h', txid: 'lnbc1...k2p9' },
+    { type: 'received', amount: 21, from: 'Hash Function Hannah', npub: 'npub1hannah...n8w4', avatar: 'hannah11', memo: '', time: '4h', txid: 'lnbc1...n8w4' },
+    { type: 'sent', amount: 500, to: 'Relay Runner', npub: 'npub1relay...q7m3', avatar: 'relay55', memo: 'For the relay hosting guide', time: '8h', txid: 'lnbc1...q7m3' },
+    { type: 'received', amount: 500, from: 'Mining Mike', npub: 'npub1mike...r3t6', avatar: 'mike23', memo: 'Inspired by your PoW notes', time: '1d', txid: 'lnbc1...r3t6' },
+    { type: 'sent', amount: 21, to: 'Decentral Doris', npub: 'npub1doris...m5k9', avatar: 'doris42', memo: '', time: '1d', txid: 'lnbc1...m5k9' },
+    { type: 'received', amount: 100, from: 'Cypherpunk Revival', npub: 'npub1cypher...p9r2', avatar: 'cyph88', memo: 'NIP-44 explainer was gold', time: '2d', txid: 'lnbc1...p9r2' },
+    { type: 'sent', amount: 21, to: 'Open Source Dev', npub: 'npub1dev...x4m8', avatar: 'dev88', memo: '', time: '2d', txid: 'lnbc1...x4m8' },
+  ];
+  
+  const relays = [
+    { url: 'nos.lol', status: 'connected', latency: 42, events: 18432, rw: 'read', paid: false },
+    { url: 'relay.damus.io', status: 'connected', latency: 67, events: 31204, rw: 'read', paid: false },
+    { url: 'relay.snort.social', status: 'connected', latency: 58, events: 24891, rw: 'write', paid: false },
+    { url: 'relay.nostr.band', status: 'connected', latency: 91, events: 12043, rw: 'read', paid: false },
+    { url: 'relay.primal.net', status: 'connecting', latency: 0, events: 0, rw: 'both', paid: true },
+    { url: 'nostr.wine', status: 'connected', latency: 38, events: 8920, rw: 'both', paid: true },
+    { url: 'offchain.pub', status: 'down', latency: 0, events: 4221, rw: 'read', paid: false },
+  ];
+  
+  const trendingTags = [
+    { tag: '#nip44', category: 'Tech', count: 2847, zaps: 412 },
+    { tag: '#lightning', category: 'Bitcoin', count: 1920, zaps: 8200 },
+    { tag: '#cypherpunk', category: 'Privacy', count: 1432, zaps: 312 },
+    { tag: '#proofofwork', category: 'Dev', count: 892, zaps: 1400 },
+    { tag: '#selfhosting', category: 'Community', count: 743, zaps: 218 },
+    { tag: '#bitcoin', category: 'Bitcoin', count: 4203, zaps: 12400 },
+  ];
+  
+  const suggestedPeople = [
+    { name: 'Satoshi\'s Ghost', npub: 'npub1satoshi...m8jx', avatar: 'ghost42', verified: true, bio: 'Building on Bitcoin since 2009. Encrypted everything.', followers: '12.4k', mutuals: 8 },
+    { name: 'Lightning Liz', npub: 'npub1liz...k2p9', avatar: 'liz77', verified: false, bio: 'Lightning network educator. Zapping sats daily.', followers: '8.9k', mutuals: 12 },
+    { name: 'Relay Runner', npub: 'npub1relay...q7m3', avatar: 'relay55', verified: true, bio: 'Operating relays since 2022. Self-hosting advocate.', followers: '5.2k', mutuals: 4 },
+    { name: 'Cypherpunk Revival', npub: 'npub1cypher...p9r2', avatar: 'cyph88', verified: true, bio: 'Privacy maximalist. Encrypted by default.', followers: '15.1k', mutuals: 6 },
+  ];
+
+  // =================== HELPERS ===================
+  function powBars(bits) {
+    const filled = Math.min(16, Math.floor(bits / 2));
+    let html = '';
+    for (let i = 0; i < 16; i++) html += `<span class="${i < filled ? 'filled' : ''}"></span>`;
+    return html;
+  }
+  function formatNum(n) {
+    if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+    return n.toString();
+  }
+  
+  // =================== ROUTER ===================
+  function navigate(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const target = document.getElementById('page-' + page);
+    if (target) target.classList.add('active');
+    
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => {
+      n.classList.remove('bg-accent/10', 'text-accent');
+      n.classList.add('text-fg-dim');
+    });
+    const navTarget = document.querySelector(`.nav-item[data-page="${page}"]`);
+    if (navTarget) {
+      navTarget.classList.add('bg-accent/10', 'text-accent');
+      navTarget.classList.remove('text-fg-dim');
+    }
+    
+    document.querySelectorAll('.right-col-content').forEach(r => r.classList.remove('active'));
+    const rightTarget = document.getElementById('right-' + page) || document.getElementById('right-default');
+    if (rightTarget) rightTarget.classList.add('active');
+    
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  
+  // =================== RENDER POST ===================
+  function renderPost(post) {
+    const quoteHtml = post.quoteOf ? `
+      <div class="quote-post border border-border rounded-2xl p-3 mt-3 transition-all cursor-pointer hover:bg-white/[0.025]">
+        <div class="flex items-center gap-2 mb-1.5">
+          <div class="hex-clip w-4 h-4 inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/q-${post.id}/40/40.jpg" class="w-full h-full object-cover" alt=""></div>
+          <span class="text-[13px] font-semibold">${post.quoteOf.author}</span>
+          <span class="font-mono text-[11px] text-muted">${post.quoteOf.npub}</span>
+          <span class="text-[11px] text-muted">·</span>
+          <div class="pow-bar" title="${post.quoteOf.pow} bits PoW">${powBars(post.quoteOf.pow)}</div>
+          <span class="text-[10px] text-accent font-mono ml-0.5">${post.quoteOf.pow}b</span>
+        </div>
+        <div class="text-sm text-fg-dim leading-relaxed">${post.quoteOf.content}</div>
+      </div>` : '';
+    
+    const imageHtml = post.image ? `<div class="post-img rounded-2xl border border-border overflow-hidden mt-3 max-h-[380px]"><img src="https://picsum.photos/seed/${post.image}/600/360.jpg" class="w-full h-full object-cover" alt=""></div>` : '';
+    
+    return `
+      <article class="post-card relative p-3.5 px-4 transition-all cursor-pointer border-b border-border hover:bg-white/[0.015]" data-id="${post.id}">
+        <div class="flex gap-3">
+          <div class="hex-clip ${post.author.verified ? 'hex-verified' : ''} w-11 h-11 flex-shrink-0 inline-block overflow-hidden relative bg-gradient-to-br from-elev2 to-bg">
+            <img src="https://picsum.photos/seed/${post.author.avatar}/80/80.jpg" class="w-full h-full object-cover" alt="">
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-1.5 flex-wrap mb-1">
+              <span class="font-semibold text-[15px]">${post.author.name}</span>
+              ${post.author.verified ? '<i class="fas fa-circle-check text-accent-3 text-[13px]"></i>' : ''}
+              <span class="font-mono text-[12px] text-muted">${post.author.npub}</span>
+              <span class="text-muted-2 text-[13px]">·</span>
+              <span class="text-muted text-[13px]">${post.time}</span>
+              <span class="ml-auto flex items-center gap-1">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted">kind:${post.kind}</span>
+                <button onclick="event.stopPropagation(); showToast('Event ID copied', 'fingerprint')" class="bg-transparent border-none text-muted cursor-pointer p-1" title="Copy event ID">
+                  <i class="fas fa-fingerprint text-xs"></i>
+                </button>
+              </span>
+            </div>
+            <div class="text-[15px] leading-relaxed text-fg-dim whitespace-pre-wrap">${post.content}</div>
+            ${imageHtml}
+            ${quoteHtml}
+            <div class="flex items-center gap-2 mt-2.5 py-1.5 px-2.5 rounded-lg bg-accent/[0.03] border border-accent/10 w-fit">
+              <i class="fas fa-shield-halved text-accent text-[10px]"></i>
+              <span class="text-[10px] text-muted uppercase tracking-wider">PoW</span>
+              <div class="pow-bar">${powBars(post.pow)}</div>
+              <span class="text-[11px] text-accent font-mono font-semibold">${post.pow} bits</span>
+            </div>
+            <div class="flex justify-between max-w-[425px] mt-2.5">
+              <button class="action-btn flex items-center gap-1.5 py-1.5 px-2.5 rounded-full text-muted text-[13px] font-mono transition-all hover:bg-white/5 hover:text-fg-dim bg-transparent border-none" onclick="event.stopPropagation(); showToast('Reply composer coming soon', 'reply')">
+                <i class="far fa-comment"></i><span>${post.stats.replies}</span>
+              </button>
+              <button class="action-btn ${post.reposted ? 'repost-active text-accent-3' : ''} flex items-center gap-1.5 py-1.5 px-2.5 rounded-full text-muted text-[13px] font-mono transition-all hover:bg-white/5 hover:text-fg-dim bg-transparent border-none" onclick="event.stopPropagation(); toggleRepost('${post.id}', this)">
+                <i class="fas fa-retweet"></i><span>${post.stats.reposts}</span>
+              </button>
+              <button class="action-btn ${post.liked ? 'liked text-accent-2' : ''} flex items-center gap-1.5 py-1.5 px-2.5 rounded-full text-muted text-[13px] font-mono transition-all hover:bg-white/5 hover:text-fg-dim bg-transparent border-none" onclick="event.stopPropagation(); toggleLike('${post.id}', this)">
+                <i class="${post.liked ? 'fas' : 'far'} fa-heart"></i><span>${post.stats.likes}</span>
+              </button>
+              <button class="action-btn ${post.zapped ? 'zapped text-accent' : ''} flex items-center gap-1.5 py-1.5 px-2.5 rounded-full text-muted text-[13px] font-mono transition-all hover:bg-white/5 hover:text-fg-dim bg-transparent border-none relative" onclick="event.stopPropagation(); openZapModal('${post.id}', this)">
+                <i class="fas fa-bolt"></i><span>${formatNum(post.stats.sats)} sats</span>
+              </button>
+              <button class="action-btn flex items-center gap-1.5 py-1.5 px-2.5 rounded-full text-muted text-[13px] font-mono transition-all hover:bg-white/5 hover:text-fg-dim bg-transparent border-none" onclick="event.stopPropagation(); showToast('Bookmarked', 'bookmark')">
+                <i class="far fa-bookmark"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </article>`;
+  }
+  
+  // =================== RENDER FEEDS ===================
+  function renderFeed() {
+    document.getElementById('feed').innerHTML = posts.map(renderPost).join('');
+  }
+  function renderProfileFeed() {
+    document.getElementById('profileFeed').innerHTML = myPosts.map(renderPost).join('');
+  }
+  function renderGlobalFeed() {
+    document.getElementById('globalFeed').innerHTML = posts.slice(0, 5).map(renderPost).join('');
+  }
+  function renderBookmarkList() {
+    document.getElementById('bookmarkList').innerHTML = posts.slice(1, 5).map(renderPost).join('');
+  }
+  
+  // =================== RENDER EXPLORE ===================
+  function renderExplore() {
+    const trendGrid = document.getElementById('trendGrid');
+    trendGrid.innerHTML = trendingTags.map((t, i) => `
+      <div class="explore-card border border-border rounded-2xl p-4 transition-all cursor-pointer bg-white/[0.012] hover:border-accent/25 hover:bg-accent/[0.03] hover:-translate-y-0.5">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="text-[11px] text-muted uppercase tracking-wider">${t.category} · #${i+1}</div>
+            <div class="font-bold text-lg mt-1 text-accent">${t.tag}</div>
+          </div>
+          <i class="fas fa-chart-line text-accent-3 opacity-60"></i>
+        </div>
+        <div class="flex gap-4 mt-3 text-xs text-muted font-mono">
+          <span>${formatNum(t.count)} notes</span>
+          <span class="text-accent">${formatNum(t.zaps)} sats</span>
+        </div>
+        <div class="mt-2.5 flex items-end gap-0.5 h-6">
+          ${Array.from({length: 20}, () => `<div class="sparkline-bar bg-accent w-[3px] rounded-sm" style="height: ${5 + Math.random()*20}px; opacity: ${0.3 + Math.random()*0.7};"></div>`).join('')}
+        </div>
+      </div>
+    `).join('');
+    
+    const peopleGrid = document.getElementById('peopleGrid');
+    peopleGrid.innerHTML = suggestedPeople.map(p => `
+      <div class="explore-card border border-border rounded-2xl p-4 transition-all cursor-pointer bg-white/[0.012] hover:border-accent/25 hover:bg-accent/[0.03] hover:-translate-y-0.5">
+        <div class="flex gap-3 items-start">
+          <div class="hex-clip ${p.verified ? 'hex-verified' : ''} w-12 h-12 inline-block overflow-hidden relative">
+            <img src="https://picsum.photos/seed/${p.avatar}/80/80.jpg" class="w-full h-full object-cover" alt="">
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-1.5">
+              <span class="font-semibold text-sm">${p.name}</span>
+              ${p.verified ? '<i class="fas fa-circle-check text-accent-3 text-xs"></i>' : ''}
+            </div>
+            <div class="font-mono text-[11px] text-muted">${p.npub}</div>
+          </div>
+        </div>
+        <p class="text-[13px] text-fg-dim my-2.5 leading-relaxed">${p.bio}</p>
+        <div class="flex justify-between items-center">
+          <div class="text-[11px] text-muted font-mono">
+            ${p.followers} followers · ${p.mutuals} mutuals
+          </div>
+          <button class="btn-primary bg-accent text-black font-semibold text-xs py-1.5 px-3.5 rounded-full transition-all hover:shadow-glow-accent" onclick="this.innerHTML='<i class=\'fas fa-check\'></i> Following'; this.disabled=true; this.style.opacity='0.5';">Follow</button>
+        </div>
+      </div>
+    `).join('');
+  }
+  
+  // =================== RENDER NOTIFICATIONS ===================
+  function renderNotifications() {
+    const iconMap = {
+      zap: { class: 'fas fa-bolt', bg: 'bg-accent/10 text-accent' },
+      like: { class: 'fas fa-heart', bg: 'bg-accent-2/10 text-accent-2' },
+      repost: { class: 'fas fa-retweet', bg: 'bg-accent-3/10 text-accent-3' },
+      follow: { class: 'fas fa-user-plus', bg: 'bg-accent-4/10 text-accent-4' },
+      mention: { class: 'fas fa-at', bg: 'bg-white/5 text-fg-dim' }
+    };
+    document.getElementById('notifList').innerHTML = notifications.map(n => {
+      const ic = iconMap[n.type];
+      const mainActor = n.actors[0];
+      const extraActors = n.count > 1 ? n.actors.slice(1, 3).map(a => 
+        `<div class="hex-clip w-6 h-6 -ml-2.5 border-2 border-bg inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/${a.avatar}/40/40.jpg" class="w-full h-full object-cover" alt=""></div>`
+      ).join('') : '';
+      return `
+        <div class="notif-item flex gap-3.5 p-3.5 px-4 border-b border-border cursor-pointer transition-all hover:bg-white/[0.02] ${n.unread ? 'bg-accent/[0.025]' : ''}">
+          <div class="notif-icon w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-sm ${ic.bg}"><i class="${ic.class}"></i></div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1.5">
+              <div class="flex">
+                <div class="hex-clip ${mainActor.verified ? 'hex-verified' : ''} w-6 h-6 inline-block overflow-hidden relative"><img src="https://picsum.photos/seed/${mainActor.avatar}/40/40.jpg" class="w-full h-full object-cover" alt=""></div>
+                ${extraActors}
+              </div>
+              <span class="text-xs text-muted ml-auto">${n.time}</span>
+            </div>
+            <div class="text-sm text-fg-dim leading-relaxed">
+              <span class="font-semibold text-fg">${mainActor.name}</span>
+              ${n.count > 1 ? ` <span class="text-muted">and ${n.count - 1} others</span>` : ''}
+              ${n.text}
+              ${n.amount ? `<span class="text-accent font-mono font-semibold">· ${formatNum(n.amount)} sats</span>` : ''}
+            </div>
+            ${n.preview ? `<div class="mt-2 p-2.5 px-3 rounded-lg bg-white/[0.02] border border-border text-[13px] text-muted leading-relaxed">${n.preview}</div>` : ''}
+          </div>
+          ${n.unread ? '<div class="w-2 h-2 rounded-full bg-accent flex-shrink-0 mt-1.5" style="box-shadow: 0 0 8px rgba(255, 182, 39, 0.4);"></div>' : ''}
+        </div>`;
+    }).join('');
+  }
+  
+  // =================== RENDER CONVERSATIONS ===================
+  function renderConversations() {
+    document.getElementById('convoList').innerHTML = conversations.map(c => `
+      <div class="convo-item p-3 px-4 border-b border-border cursor-pointer transition-all flex gap-3 ${c.active ? 'bg-accent/10 border-l-2 border-l-accent pl-[13px]' : 'hover:bg-white/[0.02]'}">
+        <div class="hex-clip ${c.verified ? 'hex-verified' : ''} w-10 h-10 flex-shrink-0 inline-block overflow-hidden relative">
+          <img src="https://picsum.photos/seed/${c.avatar}/80/80.jpg" class="w-full h-full object-cover" alt="">
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-center">
+            <span class="font-semibold text-sm truncate">${c.name}</span>
+            <span class="text-[11px] text-muted flex-shrink-0 ml-1.5">${c.time}</span>
+          </div>
+          <div class="text-xs ${c.unread ? 'text-fg-dim' : 'text-muted'} truncate mt-0.5">
+            ${c.last}
+          </div>
+        </div>
+        ${c.unread ? `<span class="bg-accent text-black text-[10px] font-bold py-0.5 px-1.5 rounded-full font-mono flex-shrink-0 self-center">${c.unread}</span>` : ''}
+      </div>
+    `).join('');
+  }
+  
+  // =================== RENDER ZAPS ===================
+  function renderZaps() {
+    document.getElementById('zapList').innerHTML = zapHistory.map(z => `
+      <div class="zap-row flex items-center gap-3 p-3.5 px-4 border-b border-border transition-all hover:bg-white/[0.02] cursor-pointer">
+        <div class="notif-icon w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-sm ${z.type === 'received' ? 'bg-accent/10 text-accent' : 'bg-white/5 text-muted'}">
+          <i class="fas fa-bolt"></i>
+        </div>
+        <div class="hex-clip w-9 h-9 inline-block overflow-hidden relative">
+          <img src="https://picsum.photos/seed/${z.avatar}/80/80.jpg" class="w-full h-full object-cover" alt="">
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="font-semibold text-sm">${z.type === 'received' ? z.from : z.to}</span>
+            <span class="text-xs text-muted">${z.type === 'received' ? 'zapped you' : 'you zapped'}</span>
+            <span class="font-mono text-[13px] font-semibold ${z.type === 'received' ? 'text-accent' : 'text-accent-2'}">
+              ${z.type === 'received' ? '+' : '−'}${formatNum(z.amount)} sats
+            </span>
+          </div>
+          ${z.memo ? `<div class="text-[13px] text-fg-dim mt-1 leading-relaxed">"${z.memo}"</div>` : ''}
+          <div class="flex gap-3 mt-1 text-[11px] text-muted font-mono">
+            <span>${z.time}</span>
+            <span class="cursor-pointer hover:text-fg-dim" onclick="showToast('Transaction copied', 'copy')">${z.txid} <i class="fas fa-copy text-[9px]"></i></span>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+  
+  // =================== RENDER RELAYS ===================
+  function renderRelays() {
+    const statusMap = {
+      connected: { dot: '', label: 'Connected', color: 'text-accent-3' },
+      connecting: { dot: 'connecting', label: 'Connecting', color: 'text-accent' },
+      down: { dot: 'down', label: 'Offline', color: 'text-accent-2' }
+    };
+    document.getElementById('relayList').innerHTML = relays.map(r => {
+      const s = statusMap[r.status];
+      return `
+        <div class="relay-card border border-border rounded-2xl p-4 transition-all bg-white/[0.012] hover:border-border-strong hover:bg-white/[0.025]">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="relay-dot w-1.5 h-1.5 rounded-full ${s.dot === 'down' ? 'bg-accent-2' : s.dot === 'connecting' ? 'bg-accent' : 'bg-accent-3'}" style="box-shadow: 0 0 8px ${s.dot === 'down' ? '#ff2d75' : s.dot === 'connecting' ? '#ffb627' : '#00ff88'};"></span>
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-sm font-semibold ${r.status === 'down' ? 'line-through text-muted' : ''}">${r.url}</span>
+                ${r.paid ? '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-accent bg-accent/10 border border-accent/20">PAID</span>' : ''}
+              </div>
+              <div class="text-[11px] ${s.color} mt-0.5 font-mono">${s.label}${r.latency ? ` · ${r.latency}ms` : ''}</div>
+            </div>
+            <button class="w-8 h-8 rounded-full flex items-center justify-center text-accent cursor-pointer transition-all bg-accent/10 border border-accent/15 hover:bg-accent/20" onclick="showToast('Relay settings opened', 'sliders')"><i class="fas fa-sliders text-[11px]"></i></button>
+            <button class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-all bg-accent-2/10 border border-accent-2/15 text-accent-2 hover:bg-accent-2/20" onclick="showToast('Relay removed', 'trash')"><i class="fas fa-trash text-[11px]"></i></button>
+          </div>
+          <div class="grid grid-cols-4 gap-2.5 pt-3 border-t border-border">
+            <div>
+              <div class="text-[10px] text-muted uppercase tracking-wider">Events</div>
+              <div class="font-mono text-[13px] font-semibold mt-0.5">${formatNum(r.events)}</div>
+            </div>
+            <div>
+              <div class="text-[10px] text-muted uppercase tracking-wider">Latency</div>
+              <div class="font-mono text-[13px] font-semibold mt-0.5">${r.latency || '—'}ms</div>
+            </div>
+            <div>
+              <div class="text-[10px] text-muted uppercase tracking-wider">Mode</div>
+              <div class="font-mono text-[13px] font-semibold mt-0.5 uppercase">${r.rw}</div>
+            </div>
+            <div>
+              <div class="text-[10px] text-muted uppercase tracking-wider">Paid</div>
+              <div class="font-mono text-[13px] font-semibold mt-0.5">${r.paid ? 'Yes' : 'Free'}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+  
+  // =================== RENDER SIDEBAR WIDGETS ===================
+  function renderTrendSidebar() {
+    document.getElementById('trendSidebar').innerHTML = trendingTags.slice(0, 5).map((t, i) => `
+      <div class="trend-item p-2.5 px-4 cursor-pointer transition-all border-b border-border hover:bg-white/[0.025] ${i === 4 ? 'border-b-none' : ''}">
+        <div class="text-[11px] text-muted">${t.category} · #${i+1}</div>
+        <div class="font-semibold mt-0.5">${t.tag}</div>
+        <div class="text-xs text-muted mt-0.5 font-mono">${formatNum(t.count)} notes · ${formatNum(t.zaps)} sats</div>
+      </div>
+    `).join('');
+  }
+  
+  function renderRelaySidebar() {
+    document.getElementById('relaySidebar').innerHTML = relays.slice(0, 6).map(r => `
+      <div class="flex items-center gap-2.5 p-2 px-4 cursor-pointer hover:bg-white/[0.02] transition-all">
+        <span class="relay-dot w-1.5 h-1.5 rounded-full ${r.status === 'down' ? 'bg-accent-2' : r.status === 'connecting' ? 'bg-accent' : 'bg-accent-3'}" style="box-shadow: 0 0 8px ${r.status === 'down' ? '#ff2d75' : r.status === 'connecting' ? '#ffb627' : '#00ff88'};"></span>
+        <div class="flex-1 min-w-0">
+          <div class="font-mono text-xs ${r.status === 'down' ? 'text-muted line-through' : 'text-fg-dim'}">${r.url}</div>
+          <div class="text-[10px] ${r.status === 'down' ? 'text-accent-2' : r.status === 'connecting' ? 'text-accent' : 'text-muted'}">${r.status === 'down' ? 'unreachable' : r.status === 'connecting' ? 'connecting...' : `${r.latency}ms · ${formatNum(r.events)} events`}</div>
+        </div>
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-white/5 border border-border text-muted uppercase">${r.rw}</span>
+      </div>
+    `).join('');
+  }
+  
+  function renderTopZappedSidebar() {
+    const top = [...posts].sort((a,b) => b.stats.sats - a.stats.sats).slice(0, 4);
+    document.getElementById('topZappedSidebar').innerHTML = top.map((p, i) => `
+      <div class="trend-item p-2.5 px-4 cursor-pointer transition-all border-b border-border hover:bg-white/[0.025] ${i === 3 ? 'border-b-none' : ''}">
+        <div class="flex items-center gap-2">
+          <span class="font-mono text-sm font-bold text-accent">#${i+1}</span>
+          <div class="hex-clip ${p.author.verified ? 'hex-verified' : ''} w-5 h-5 inline-block overflow-hidden relative">
+            <img src="https://picsum.photos/seed/${p.author.avatar}/40/40.jpg" class="w-full h-full object-cover" alt="">
+          </div>
+          <span class="text-[13px] font-semibold flex-1 min-w-0 truncate">${p.author.name}</span>
+        </div>
+        <div class="text-xs text-muted mt-1.5 font-mono">
+          <i class="fas fa-bolt text-accent"></i> ${formatNum(p.stats.sats)} sats
+        </div>
+      </div>
+    `).join('');
+  }
+  
+  // =================== INTERACTIONS ===================
+  function toggleLike(id, btn) {
+    const post = [...posts, ...myPosts].find(p => p.id === id);
+    if (!post) return;
+    post.liked = !post.liked;
+    post.stats.likes += post.liked ? 1 : -1;
+    btn.classList.toggle('liked', post.liked);
+    btn.classList.toggle('text-accent-2', post.liked);
+    btn.querySelector('i').className = post.liked ? 'fas fa-heart' : 'far fa-heart';
+    btn.querySelector('span').textContent = post.stats.likes;
+    if (post.liked) {
+      btn.querySelector('i').classList.add('heart-pop');
+      setTimeout(() => btn.querySelector('i').classList.remove('heart-pop'), 400);
+    }
+  }
+  
+  function toggleRepost(id, btn) {
+    const post = [...posts, ...myPosts].find(p => p.id === id);
+    if (!post) return;
+    post.reposted = !post.reposted;
+    post.stats.reposts += post.reposted ? 1 : -1;
+    btn.classList.toggle('repost-active', post.reposted);
+    btn.classList.toggle('text-accent-3', post.reposted);
+    btn.querySelector('span').textContent = post.stats.reposts;
+    showToast(post.reposted ? 'Rebroadcasted to 7 relays' : 'Repost removed', 'retweet');
+  }
+  
+  // =================== ZAP MODAL ===================
+  let currentZapPost = null, currentZapBtn = null;
+  function openZapModal(id, btn) {
+    const post = [...posts, ...myPosts].find(p => p.id === id);
+    if (!post) return;
+    currentZapPost = post;
+    currentZapBtn = btn;
+    document.getElementById('zapRecipient').textContent = post.author.name;
+    document.getElementById('zapRecipientNpub').textContent = post.author.npub;
+    document.getElementById('zapAmountInput').value = 21;
+    document.getElementById('zapConfirmAmount').textContent = '21';
+    document.querySelectorAll('.zap-amount-btn').forEach(b => b.classList.remove('active', 'bg-accent/15', 'border-accent', 'text-accent'));
+    zapModal.classList.add('open');
+  }
+  function closeZapModal() { zapModal.classList.remove('open'); }
+  function setZapAmount(amt) {
+    document.getElementById('zapAmountInput').value = amt;
+    document.getElementById('zapConfirmAmount').textContent = amt >= 1000 ? (amt/1000) + 'k' : amt;
+    document.querySelectorAll('.zap-amount-btn').forEach(b => {
+      const val = parseInt(b.textContent);
+      const isMatch = (amt === 1000 && b.textContent === '1k') || val === amt;
+      b.classList.toggle('active', isMatch);
+      b.classList.toggle('bg-accent/15', isMatch);
+      b.classList.toggle('border-accent', isMatch);
+      b.classList.toggle('text-accent', isMatch);
+    });
+  }
+  document.getElementById('zapAmountInput').addEventListener('input', e => {
+    const v = e.target.value;
+    document.getElementById('zapConfirmAmount').textContent = v >= 1000 ? (v/1000).toFixed(1) + 'k' : v;
+  });
+  function confirmZap() {
+    const amount = parseInt(document.getElementById('zapAmountInput').value) || 21;
+    if (!currentZapPost) return;
+    if (currentZapBtn) {
+      const rect = currentZapBtn.getBoundingClientRect();
+      for (let i = 0; i < 8; i++) {
+        const p = document.createElement('div');
+        p.className = 'zap-particle fixed w-1.5 h-1.5 rounded-full bg-accent pointer-events-none z-50';
+        p.style.left = (rect.left + rect.width/2) + 'px';
+        p.style.top = (rect.top + rect.height/2) + 'px';
+        p.style.boxShadow = '0 0 10px #ffb627, 0 0 20px rgba(255, 182, 39, 0.4)';
+        const angle = (i / 8) * Math.PI * 2;
+        const dist = 40 + Math.random() * 30;
+        p.style.setProperty('--tx', Math.cos(angle) * dist + 'px');
+        p.style.setProperty('--ty', Math.sin(angle) * dist + 'px');
+        document.body.appendChild(p);
+        setTimeout(() => p.remove(), 600);
+      }
+    }
+    currentZapPost.zapped = true;
+    currentZapPost.stats.sats += amount;
+    currentZapPost.stats.zaps += 1;
+    if (currentZapBtn) {
+      currentZapBtn.classList.add('zapped', 'text-accent');
+      currentZapBtn.querySelector('span').textContent = formatNum(currentZapPost.stats.sats) + ' sats';
+    }
+    closeZapModal();
+    showToast(`Zapped ${amount} sats to ${currentZapPost.author.name}`, 'bolt');
+    currentZapPost = null; currentZapBtn = null;
+  }
+  
+  // =================== COMPOSE ===================
+  const composeInput = document.getElementById('composeInput');
+  const postBtn = document.getElementById('postBtn');
+  const charCount = document.getElementById('charCount');
+  composeInput.addEventListener('input', () => {
+    const remaining = 280 - composeInput.value.length;
+    charCount.textContent = remaining;
+    charCount.style.color = remaining < 0 ? '#ff2d75' : remaining < 40 ? '#ffb627' : '#7a7a85';
+    postBtn.disabled = composeInput.value.trim().length === 0 || remaining < 0;
+  });
+  function toggleComposeTools() {
+    const tools = document.getElementById('composeTools');
+    tools.classList.toggle('hidden');
+  }
+  function updatePoW(val) {
+    document.getElementById('powValue').textContent = val;
+    updateHashViz(val);
+  }
+  function updateHashViz(bits) {
+    const viz = document.getElementById('hashViz');
+    const filled = Math.min(32, Math.floor(bits));
+    let html = '';
+    for (let i = 0; i < 32; i++) html += `<span class="${i < filled ? 'on' : ''}"></span>`;
+    viz.innerHTML = html;
+  }
+  updateHashViz(20);
+  function submitPost() {
+    const text = composeInput.value.trim();
+    if (!text) return;
+    const newPost = {
+      id: 'ev' + Math.random().toString(36).substr(2, 8),
+      author: { name: 'Volt Dorsey', npub: 'npub1volt...k7q3', verified: true, avatar: 'me42' },
+      time: 'now',
+      content: text,
+      pow: parseInt(document.getElementById('powValue').textContent),
+      stats: { replies: 0, reposts: 0, likes: 0, zaps: 0, sats: 0 },
+      liked: false, zapped: false, reposted: false, kind: 1
+    };
+    posts.unshift(newPost);
+    renderFeed();
+    composeInput.value = '';
+    charCount.textContent = 280;
+    charCount.style.color = '#7a7a85';
+    postBtn.disabled = true;
+    showToast(`Note mined at ${newPost.pow} bits PoW and broadcast`, 'bolt');
+    const netBar = document.getElementById('netBar');
+    netBar.style.width = '70%';
+    setTimeout(() => netBar.style.width = '20%', 800);
+  }
+  function openComposeModal() { composeModal.classList.add('open'); }
+  function closeComposeModal() { composeModal.classList.remove('open'); }
+  
+  // =================== TOAST ===================
+  let toastTimer;
+  function showToast(msg, icon = 'check-circle') {
+    const text = document.getElementById('toastText');
+    const iconEl = toast.querySelector('i');
+    text.textContent = msg;
+    iconEl.className = 'fas fa-' + icon;
+    iconEl.style.color = icon === 'bolt' ? '#ffb627' : '#00ff88';
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2800);
+  }
+  
+  // =================== SPARKLINE & LIVE STATS ===================
+  function renderSparkline() {
+    const spark = document.getElementById('sparkline');
+    if (!spark) return;
+    let html = '';
+    for (let i = 0; i < 30; i++) {
+      const h = 20 + Math.random() * 12;
+      html += `<div class="sparkline-bar bg-accent w-[3px] rounded-sm" style="height: ${h}px; opacity: ${0.3 + (i/30)*0.7}; transition: height 0.5s ease;"></div>`;
+    }
+    spark.innerHTML = html;
+  }
+  
+  let userCount = 47392, eventCount = 312, relayCount = 1247;
+  setInterval(() => {
+    userCount += Math.floor(Math.random() * 20) - 8;
+    eventCount = 280 + Math.floor(Math.random() * 80);
+    relayCount += Math.floor(Math.random() * 4) - 2;
+    const su = document.getElementById('statUsers');
+    const se = document.getElementById('statEvents');
+    const sr = document.getElementById('statRelays');
+    const tn = document.getElementById('throughputNum');
+    if (su) su.textContent = userCount.toLocaleString();
+    if (se) se.textContent = eventCount;
+    if (sr) sr.textContent = relayCount.toLocaleString();
+    if (tn) tn.textContent = eventCount + ' ev/min';
+    const netBar = document.getElementById('netBar');
+    if (netBar) netBar.style.width = (30 + Math.random() * 50) + '%';
+  }, 2200);
+  
+  // =================== KEYBOARD ===================
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      zapModal.classList.remove('open');
+      composeModal.classList.remove('open');
+    }
+    if (e.key === 'n' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+      if (document.querySelector('#page-home.active')) composeInput.focus();
+    }
+  });
+  
+  zapModal.addEventListener('click', e => { if (e.target.id === 'zapModal') closeZapModal(); });
+  composeModal.addEventListener('click', e => { if (e.target.id === 'composeModal') closeComposeModal(); });
+  
+  // =================== INIT ===================
+  renderFeed();
+  renderProfileFeed();
+  renderGlobalFeed();
+  renderBookmarkList();
+  renderExplore();
+  renderNotifications();
+  renderConversations();
+  renderZaps();
+  renderRelays();
+  renderTrendSidebar();
+  renderRelaySidebar();
+  renderTopZappedSidebar();
+  renderSparkline();
+  setInterval(renderSparkline, 3000);
+  
+  document.getElementById('netBar').style.width = '35%';
+  setTimeout(() => showToast('Connected to 6 of 7 relays', 'server'), 800);
+</script>
+
+<style>
+  /* Minor CSS for toggles since pseudo elements can't be easily manipulated purely inline */
+  .toggle { position: relative; }
+  .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #7a7a85; border-radius: 50%; transition: all 0.2s ease;
+  }
+  .toggle.on { background: rgba(255, 182, 39, 0.3) !important; }
+  .toggle.on::after { left: 20px; background: #ffb627; box-shadow: 0 0 8px rgba(255, 182, 39, 0.4); }
+</style>
+
+</body>
+</html>

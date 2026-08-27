@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-and-services:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: ./scripts/validate-structure.sh
+      - run: npm run check:services
+      - run: npm run test:services
+      - run: npm run format:check
+      - run: docker compose -f infra/compose.yaml config --quiet
+
+  media-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build-native -DBITOS_BUILD_TESTS=ON
+      - run: cmake --build build-native --parallel
+      - run: ctest --test-dir build-native --output-on-failure
+
+  android-and-business-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :shared:business-core:testAndroidHostTest :apps:android:testDebugUnitTest
+
+  ios-and-business-core:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sudo xcode-select --switch /Applications/Xcode_26.4.app
+      - run: ./gradlew :shared:business-core:iosSimulatorArm64Test
+      - run: >-
+          xcodebuild
+          -project apps/ios/BitOS.xcodeproj
+          -scheme BitOS
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build

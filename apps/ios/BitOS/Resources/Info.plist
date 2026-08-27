@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>BitOS</string>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>NSCameraUsageDescription</key>
+    <string>BitOS uses the camera only when you choose to record a Bitz or MEM.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>BitOS uses the microphone only when you record audio, voice-over, or video.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>BitOS reads media you select for a project.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>BitOS saves an export only when you ask it to.</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+</dict>
+</plist>

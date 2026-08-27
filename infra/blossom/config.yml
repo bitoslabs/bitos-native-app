@@ -1,0 +1,29 @@
+port: 3000
+host: 0.0.0.0
+publicDomain: localhost:3000
+
+storage:
+  backend: s3
+  s3:
+    endpoint: http://object-store:9000
+    bucket: bitos-media
+    region: us-east-1
+    accessKey: '${S3_ACCESS_KEY}'
+    secretKey: '${S3_SECRET_KEY}'
+    forcePathStyle: true
+  rules:
+    - type: 'image/*'
+      expiration: 30 days
+    - type: 'video/*'
+      expiration: 30 days
+
+upload:
+  requireAuth: true
+delete:
+  requireAuth: true
+list:
+  enabled: true
+media:
+  enabled: false
+landing:
+  enabled: true

@@ -1,0 +1,46 @@
+.DS_Store
+QA.md
+/docs/source
+/docs/ui
+
+# IDE and local tooling
+.idea/
+.vscode/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.swiftpm/
+
+# Gradle / Kotlin
+.gradle/
+**/build/
+local.properties
+kotlin-js-store/
+
+# CMake / native
+build-native/
+CMakeUserPresets.json
+compile_commands.json
+
+# Node / services
+node_modules/
+coverage/
+dist/
+*.tsbuildinfo
+
+# Runtime and infrastructure
+.env
+.env.*
+!.env.example
+infra/data/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Secrets and signing
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+Secrets.xcconfig

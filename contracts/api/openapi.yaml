@@ -1,0 +1,40 @@
+openapi: 3.1.0
+info:
+  title: BitOS Derived API
+  version: 0.1.0
+servers:
+  - url: https://api.example.invalid
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, environment, status]
+                properties:
+                  service: { type: string }
+                  environment: { type: string }
+                  status: { const: ok }
+  /v1/capabilities:
+    get:
+      operationId: capabilities
+      responses:
+        '200':
+          description: Server feature flags; signed events remain canonical
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apiVersion, canonicalState, media, writeFeatures]
+                properties:
+                  apiVersion: { type: integer, minimum: 1 }
+                  canonicalState: { const: nostr }
+                  media: { const: blossom }
+                  writeFeatures:
+                    type: array
+                    items: { type: string }
