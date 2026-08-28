@@ -18,8 +18,17 @@ import space.bitos.core.feed.FeedNote
  *
  * Owned by the feed screen composition; releaseAll on dispose. Not a
  * service locator: exactly one pool exists per feed surface.
+ *
+ * APP-018 functional settings: [canAutoplay] applies the persisted media
+ * autoplay policy (always / unmetered-wifi / never) and [rateProvider] the
+ * persisted playback-rate step — both read live so a settings change takes
+ * effect on the next reconciliation without rebuilding the pool.
  */
-class VideoPlayerPool(private val context: Context) {
+class VideoPlayerPool(
+    private val context: Context,
+    private val canAutoplay: () -> Boolean = { true },
+    private val rateProvider: () -> Float = { 1f },
+) {
 
     private val players = LinkedHashMap<String, ExoPlayer>()
 
@@ -52,10 +61,15 @@ class VideoPlayerPool(private val context: Context) {
                 }
             }
         }
-        // Exactly the visible video plays.
+        // Exactly the visible video plays — gated by the autoplay policy.
+        val autoplay = canAutoplay()
+        val rate = rateProvider()
         val visibleId = notes[visibleIndex].id
         players.forEach { (id, player) ->
-            player.playWhenReady = id == visibleId
+            player.playWhenReady = id == visibleId && autoplay
+            if (player.playbackParameters.speed != rate) {
+                player.setPlaybackSpeed(rate)
+            }
         }
     }
 

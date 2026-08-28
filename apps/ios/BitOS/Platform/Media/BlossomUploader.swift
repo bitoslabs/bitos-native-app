@@ -49,7 +49,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         }
 
         // 2. Compose + sign the kind-24242 auth event with the challenge's expiration.
-        let expiration = (bridge.blossomChallengeExpiration(headerValue: challenge) as? KotlinInt)?.int64Value ?? (nowSeconds + 600)
+        let expiration = bridge.blossomChallengeExpiration(headerValue: challenge)?.int64Value ?? (nowSeconds + 600)
         guard let authId = bridge.composeUploadAuthEventId(
             authorPubkey: account.pubkeyHex,
             serverUrl: serverUrl,

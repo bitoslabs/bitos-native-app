@@ -64,8 +64,23 @@ class RelayManager(
         apply(_entries.value.map { if (it.url == url) RelayEntry(url, read, write) else it })
     }
 
-    /** Write-role relays (publish fan-out targets). */
-    fun writeRelays(): List<RelayUrl> = _entries.value.filter { it.write }.map { it.url }
+    /** Write-role relays (publish fan-out targets; the primary ⭐ leads). */
+    fun writeRelays(): List<RelayUrl> =
+        _entries.value.filter { it.write }
+            .sortedByDescending { it.primary }
+            .map { it.url }
+
+    /** Sets/clears the primary ⭐ (at most one; write relays only). */
+    fun setPrimary(url: RelayUrl, primary: Boolean) {
+        apply(
+            _entries.value.map { entry ->
+                when {
+                    entry.url == url && primary && entry.write -> entry.copy(primary = true)
+                    else -> entry.copy(primary = false)
+                }
+            },
+        )
+    }
 
     private fun apply(next: List<RelayEntry>) {
         val normalized = RelayListContract.normalize(next)

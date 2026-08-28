@@ -59,6 +59,7 @@ fun BitOSApp(
     homeViewModel: HomeViewModel,
     identityViewModel: space.bitos.app.identity.IdentityViewModel,
     notePublisher: space.bitos.app.data.publish.NotePublisher,
+    composerDraftStore: space.bitos.app.data.publish.ComposerDraftStore,
     mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel,
     notifications: space.bitos.app.data.feed.NotificationRepository,
     searchRepository: space.bitos.app.data.feed.SearchRepository,
@@ -75,6 +76,12 @@ fun BitOSApp(
 
     BitOSTheme {
         var destination by rememberSaveable { mutableStateOf(TopLevelDestination.HOME) }
+        // Preserve each tab's saveable UI state (notably Home list and Bitz
+        // pager positions) while still disposing hidden media players.
+        val tabStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+        // APP-017: the More hub opens from the feed apps-grid action.
+        var showMore by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+        var hubSettingsSection by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
         // APP-003/APP-004: re-tap on the active Home/Bitz tab scrolls the
         // feed to top; a re-tap while already at top refreshes it.
         var feedRetapTick by remember { mutableStateOf(0) }
@@ -82,6 +89,8 @@ fun BitOSApp(
         val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
         val sensitiveShowByDefault =
             settingsSnapshot.sensitiveMedia == space.bitos.core.settings.SensitiveMediaSetting.SHOW
+        // APP-008: the composer is a full page (legacy CreateView parity).
+        var showCreateNote by remember { mutableStateOf(false) }
         val identity by identityViewModel.state.collectAsStateWithLifecycle()
         val notificationsState by notifications.state.collectAsStateWithLifecycle()
         // Shell-level account wiring: the Activity badge needs the inbox
@@ -139,25 +148,68 @@ fun BitOSApp(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.TopStart,
             ) {
-                when (destination) {
-                    TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
-                    TopLevelDestination.BITZ -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = true, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
-                    TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(
-                        searchRepository,
-                        homeViewModel,
-                        identityViewModel,
-                        notePublisher,
+                // APP-008 composer page: full screen over the shell.
+                if (showCreateNote) {
+                    space.bitos.app.ui.create.CreateNoteScreen(
+                        identityViewModel = identityViewModel,
+                        notePublisher = notePublisher,
+                        homeViewModel = homeViewModel,
+                        draftStore = composerDraftStore,
+                        onClose = { showCreateNote = false },
                     )
-                    TopLevelDestination.CHATS -> space.bitos.app.ui.inbox.ChatsScreen()
-                    TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
-                        identityViewModel,
-                        notifications,
-                        homeViewModel,
-                        notePublisher,
-                        authorRepository,
-                        sensitiveShowByDefault = sensitiveShowByDefault,
+                } else if (showMore) {
+                    space.bitos.app.ui.more.MoreScreen(
+                        identityViewModel = identityViewModel,
+                        homeViewModel = homeViewModel,
+                        settingsStore = settingsStore,
+                        relayManager = relayManager,
+                        onOpenProfile = { showMore = false; destination = TopLevelDestination.YOU },
+                        onOpenDiscover = { showMore = false; destination = TopLevelDestination.DISCOVER },
+                        onOpenSettings = { showMore = false; hubSettingsSection = "about" },
+                        onOpenLightning = { showMore = false; hubSettingsSection = "lightning" },
+                        onClose = { showMore = false },
                     )
-                    TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs)
+                } else if (hubSettingsSection != null) {
+                    space.bitos.app.ui.settings.SettingsScreen(
+                        identityViewModel,
+                        store = settingsStore,
+                        feedRepository = feedRepository,
+                        relayManager = relayManager,
+                        notePublisher = notePublisher,
+                        notifications = notifications,
+                        algorithmStore = algorithmStore,
+                        homeViewModel = homeViewModel,
+                        privacyPrefs = privacyPrefs,
+                        initialSection = hubSettingsSection,
+                        onBack = { hubSettingsSection = null; showMore = true },
+                    )
+                }
+                else {
+                    // Overlay destinations are mutually exclusive with the
+                    // tab content. Rendering both was the source of the
+                    // More/Settings stacked-layout bug.
+                    tabStateHolder.SaveableStateProvider(destination.name) {
+                        when (destination) {
+                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenComposer = { showCreateNote = true }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
+                            TopLevelDestination.BITZ -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = true, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenComposer = { showCreateNote = true }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
+                            TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(
+                                searchRepository,
+                                homeViewModel,
+                                identityViewModel,
+                                notePublisher,
+                            )
+                            TopLevelDestination.CHATS -> space.bitos.app.ui.inbox.ChatsScreen()
+                            TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
+                                identityViewModel,
+                                notifications,
+                                homeViewModel,
+                                notePublisher,
+                                authorRepository,
+                                sensitiveShowByDefault = sensitiveShowByDefault,
+                            )
+                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs)
+                        }
+                    }
                 }
             }
         }

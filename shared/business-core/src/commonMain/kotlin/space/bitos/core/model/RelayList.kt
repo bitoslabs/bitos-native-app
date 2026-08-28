@@ -6,14 +6,21 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * One managed relay with its NIP-65 roles. An entry must carry at least one
- * role — a relay that is neither read nor write is not part of a relay list.
+ * One managed relay with its NIP-65 roles and the optional primary star
+ * (legacy parity: at most one preferred relay, first in write fan-out).
+ * An entry must carry at least one role.
  */
-data class RelayEntry(val url: RelayUrl, val read: Boolean, val write: Boolean)
+data class RelayEntry(
+    val url: RelayUrl,
+    val read: Boolean,
+    val write: Boolean,
+    val primary: Boolean = false,
+)
 
 /**
  * Versioned relay-list contract (APP-018 `relays` section, NIP-65 parity):
@@ -34,7 +41,7 @@ object RelayListContract {
     const val KIND = 10_002
 
     /** Persisted wire schema version. */
-    const val SCHEMA_VERSION = 1
+    const val SCHEMA_VERSION = 2
 
     /** Managed-set bound (legacy web manager parity; size-bounded stores). */
     const val MAX_RELAYS = 16
@@ -47,9 +54,18 @@ object RelayListContract {
     /** Parses, dedupes by url, drops role-less entries and caps the set. */
     fun normalize(entries: List<RelayEntry>): List<RelayEntry> {
         val seen = HashSet<RelayUrl>(entries.size)
+        var primaryTaken = false
         return entries.filter { it.read || it.write }
             .filter { entry -> seen.add(entry.url) }
             .take(MAX_RELAYS)
+            .map { entry ->
+                if (entry.primary && !primaryTaken && entry.write) {
+                    primaryTaken = true
+                    entry
+                } else {
+                    entry.copy(primary = false)
+                }
+            }
     }
 
     /** Encodes the normalized set as the versioned wire JSON. */
@@ -61,6 +77,7 @@ object RelayListContract {
                         put("u", entry.url.value)
                         put("r", entry.read)
                         put("w", entry.write)
+                        if (entry.primary) put("p", 1)
                     },
                 )
             }
@@ -83,7 +100,8 @@ object RelayListContract {
                     ?: return@mapNotNull null
                 val read = obj["r"]?.jsonPrimitive?.booleanOrNull ?: false
                 val write = obj["w"]?.jsonPrimitive?.booleanOrNull ?: false
-                RelayEntry(url, read, write)
+                val primary = (obj["p"]?.jsonPrimitive?.contentOrNull == "1") && write
+                RelayEntry(url, read, write, primary)
             }.let(::normalize)
         } catch (_: Exception) {
             emptyList()

@@ -21,11 +21,16 @@ final class PlayerPool {
         let looper: AVPlayerLooper
     }
 
+    /// APP-018 functional settings: [autoplayAllowed] applies the persisted
+    /// media autoplay policy (always / unmetered-wifi / never) and [rate] the
+    /// persisted playback-rate step — supplied per reconciliation so a
+    /// settings change applies without rebuilding the pool.
+
     /// Keyed by verified event id; bounded to three entries by update().
     private var slots: [String: Slot] = [:]
 
     /// Reconcile slots with the note at [visibleId] ± 1.
-    func update(visibleId: String?, notes: [FeedNote]) {
+    func update(visibleId: String?, notes: [FeedNote], autoplayAllowed: Bool = true, rate: Float = 1) {
         guard let visibleId,
               let visibleIndex = notes.firstIndex(where: { $0.id == visibleId }) else {
             slots.values.forEach { $0.player.pause() }
@@ -50,10 +55,18 @@ final class PlayerPool {
             let looper = AVPlayerLooper(player: player, templateItem: item)
             slots[id] = Slot(player: player, looper: looper)
         }
-        // Exactly the visible video plays.
+        // Exactly the visible video plays — gated by the autoplay policy,
+        // with the persisted playback rate as the default (looping keeps it).
+        let autoplay = autoplayAllowed
         for (id, slot) in slots {
+            slot.player.defaultRate = rate
             if id == visibleId {
-                slot.player.play()
+                if autoplay {
+                    if slot.player.timeControlStatus == .paused { slot.player.play() }
+                    slot.player.rate = rate == 0 ? 1 : rate
+                } else {
+                    slot.player.pause()
+                }
             } else {
                 slot.player.pause()
             }

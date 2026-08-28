@@ -103,11 +103,14 @@ fun PowCard(
     pubkeyHex: String,
     onMined: (PowOutcome?) -> Unit,
     modifier: Modifier = Modifier,
+    /** APP-008: mining template tags (nonce tag is prepended by the
+     * publisher; the template must byte-match the published event). */
+    baseTags: List<List<String>> = emptyList(),
 ) {
     var mining by remember { mutableStateOf(false) }
     var attempts by remember { mutableLongStateOf(0L) }
-    var outcome by remember(content, pubkeyHex, target) { mutableStateOf<PowOutcome?>(null) }
-    var exhausted by remember(content, pubkeyHex, target) { mutableStateOf(false) }
+    var outcome by remember(content, pubkeyHex, target, baseTags) { mutableStateOf<PowOutcome?>(null) }
+    var exhausted by remember(content, pubkeyHex, target, baseTags) { mutableStateOf(false) }
     var mineJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -137,7 +140,7 @@ fun PowCard(
             val createdAt = System.currentTimeMillis() / 1000
             // Template fixed for the whole session (createdAt included).
             val template: UnsignedNote = withContext(Dispatchers.Default) {
-                NoteComposer(clock = { createdAt }).composeTextNote(pubkeyHex, content)
+                NoteComposer(clock = { createdAt }).composeTextNote(pubkeyHex, content, baseTags)
             } ?: run {
                 mining = false
                 return@launch

@@ -45,6 +45,9 @@ class AlgorithmStore(
         }
     }
 
+    /** Author-clustering diversity pass per surface (origin parity). */
+    fun setDiversity(surface: AlgorithmSurface, enabled: Boolean) = update(surface) { it.copy(diversityEnabled = enabled) }
+
     fun setSignal(surface: AlgorithmSurface, signal: AlgorithmSignal, enabled: Boolean, weight: Double) =
         update(surface) { setting ->
             setting.copy(

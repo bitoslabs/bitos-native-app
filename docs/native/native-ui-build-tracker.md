@@ -56,16 +56,16 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
 | APP-006 | Stories §3.6 | W3 | ☐ | ☐ | ☐ | NIP-38/40 models + composer |
 | APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ◐ | player+rail live; explore grid, tabs, search overlay, comments sheet remain |
-| APP-008 | Note composer §3.8 | W1 | ◐ | ◐ | ◐ | publish+media live; mention field, GIF/poll/PoW/CW toolbar remain |
+| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation) + POLL sheet shipped (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision); PoW gated while picks pending; GIF picker + draft persistence remain |
 | APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ◐ | comments exist; X-style threading, naddr resolution, live deltas, reply-bar options remain |
 | APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
 | APP-011 | Messages/DMs §3.11 | W2 | ☐ | ☐ | ☐ | NIP-17/44 chat first; calls/groups W3 |
 | APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
-| APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | view+edit live; hero glass, stats sheets, tabs, completion card remain |
+| APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page upgraded (hero cover+avatar, name/npub/NIP-05/about, stats, Edit+Settings, Notes/Replies/Bitz/Reposts window tabs) + view+edit live; hero glass, stats sheets, tabs, completion card remain |
 | APP-014 | Zaps wallet §3.14 | W1 | ◐ | ◐ | ◐ | LNURL dialog live; ledger page, LUD-21 poll, tier presets remain; NWC W4 |
 | APP-015 | Bookmarks §3.15 | W1 | ◐ | ◐ | ✅ | optimistic toggle+publish live; list page remains |
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
-| APP-017 | More / You hub §3.17 | W1 | ☐ | ☐ | n/a | hero+QR+tiles+switcher |
+| APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero + multi-account switch row + Following/Relays stat tiles + tile groups (live surfaces only) + honest coming-soon tiles + meta rows; remains: QR dialog, wallet tile (APP-014), Communities/Meme tiles (W3/W4), bookmark page link (APP-015) |
 | APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), theme/font/accent application (APP-023), i18n strings (APP-024) |
 | APP-019 | Studio §3.19 | W4 | ◐ | ◐ | ◐ | camera/trim/publish live (CAP/PUB); editor W4 |
 | APP-020 | Static pages §3.20 | W1 | ☐ | ☐ | n/a | about/privacy/terms |
@@ -103,6 +103,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [ ] Inbox unread badge (DMs + activity, "9+" cap, privacy-gated)
 - [ ] Profile tab = own hex avatar, identity-aware
 - [x] Re-tap-to-top on Home + Bitz (X pattern: re-tap scrolls to top; at-top re-tap refreshes — feedRetapTick through both shells); player pause on tab hide (extends existing surface-visibility work)
+- [x] Shell performance/lifecycle: Android preserves per-tab scroll/pager state while releasing hidden players; iOS owns the shared Home/Bitz feed subscription at RootView so tab switches do not reconnect relays; Android process wiring starts from Application.onCreate (never constructor init). Runtime audit also fixed iOS Wi-Fi monitor lifetime, Zap bridge recursion, Blossom expiration interop, and hidden-media duplicate branching
 - [ ] Global overlay hosts: call panel placeholder, toast, confirm dialog, account switcher
 
 ### APP-004 — Home feed surface (spec §3.4)
@@ -158,16 +159,17 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-008 — Composer (spec §3.8)
 
 - [x] Text publish + staged media upload + progress + receipts (W0)
-- [ ] Publish button state (disabled/spinner) + published→thread
-- [ ] Author header; hint field
-- [ ] Mention field @autocomplete → nostr:npub + p-tags
-- [ ] Image grid removable; AttachmentPreviewRow 64×64 (GIF badge, ✕)
-- [ ] Content-warning field (NIP-36)
-- [ ] Toolbar: image, media-URL, GIF picker (trending/search 350 ms/recent 24 h), poll sheet (2–6/limits), hashtag, emoji 32
-- [x] PoW (PowCard: 0–30 slider, hash viz, chunked background mining + cancel/retry) — shipped in both note composers; last-difficulty memory (`PowPrefs`) still pending
-- [ ] Char counter 4,000/16,000
-- [ ] Draft persistence + discard confirm
-- [ ] TEST: poll wire format; PoW nonces verify; draft round-trip
+- [x] Publish button state (disabled/spinner) + published state (success → back to feed / new post) — Android composer page; shared `ComposerRules` is the rule source
+- [x] Author header (avatar + display name + “Now”) — Android page (profile from the feed store, npub fallback)
+- [x] Mention field @autocomplete → nostr:npub rewrite at publish (≤6 candidates, display-name filter; tracked picks rewrite via `ComposerRules.rewriteMentions`; p-tags derive from the rewritten content) — Android page; common tests
+- [x] Image grid removable ≤4 (gallery picks + validated image URLs, 96dp thumbs w/ ✕) — Android page; picks upload hash-verified through Blossom BEFORE signing (legacy order)
+- [x] Content-warning field (NIP-36 tag + optional reason) — Android page
+- [x] Toolbar: image, media-URL, hashtag insert, emoji 32 palette, PoW (badge), CW toggle, POLL sheet (2–6 choices ≤80, question ≤280, live counters; publishes kind-1 + `poll_option` tags + hashtag t-tags through the tags path — both platforms) — GIF picker remains (web service)
+- [x] PoW (PowCard: 0–30 slider, hash viz, chunked background mining + cancel/retry) — now tags-aware (template byte-matches the published event incl. derived tags); last-difficulty memory (`PowPrefs`) still pending
+- [x] Char counter 4,000/16,000 — shared `ComposerRules.counterState` (grouped label, target switch at soft limit, near/over states); Android ring UI (web parity)
+- [x] Draft persistence + discard confirm — shared `ComposerDraftContract` (versioned v1 wire: text ≤16k, ≤4 remote URLs, CW ≤120, ≤8 tracked mentions, pow 0–30; encode clamps, lenient decode → null on corrupt/oversize — 4 common tests incl. hostile clamp + round-trip); adapters: Android `ComposerDraftStore` (SharedPreferences `bitos_composer_draft`, autosave on change, restore on open, clear on publish/new post, BackHandler + close with "Discard draft?" confirm) / iOS UserDefaults via bridge `composerDraftEncode/Decode` (same behaviors, confirmationDialog); local picks are deliberately NOT persisted (ephemeral URIs)
+- [x] TEST: poll wire format (PollTest 5) + draft round-trip (ComposerDraftTest 4); PoW nonces verify (existing)
+- [x] iOS composer page (full-screen from FAB) + bridge surface — `ComposerScreen` (fullScreenCover; pbxproj registered) with the full parity set; bridge carries `composerCounter/insertHashtag/insertEmoji/mentionQuery/mentionSuggestions/rewriteMentions/composeContent/deriveTags/emojis` + tags-aware `composeTextNoteWithTagsEventId`/`textNoteWithTagsPublishMessage`/`mineTextNotePowWithTags`/`powTextNoteWithTags*`; NotePublisher grew `publishNote(tags:)`/`publishPowNote(tags:)`/`minePowChunkWithTags`; mention detection at end-of-text (SwiftUI TextEditor has no public cursor API — documented approximation)
 
 ### APP-009 — Thread (spec §3.9)
 
@@ -288,10 +290,10 @@ push toggles), relays live status dots, zap sats display.**
 | 1 | ✅ **Account switcher** (2026-08-28) — SHIPPED: shared `AccountRegistry` (bounded ≤8, secret-free wire) + Android `AccountRegistryStore`/`SecureKeyStore` pubkey-keyed slots + `IdentityViewModel.switchTo/signOut(deactivate)/removeRegisteredAccount` + iOS `IdentityStore` registry + `IdentityKeychain` slots; switcher card in Settings-account (hex avatar, name/npub, active check, Remove w/ confirm); sign-out now deactivates (slots survive) both platforms. Branded switch OVERLAY still pending (V1 swaps state directly) | done | registry + slots + switcher shipped; overlay + auth-screen one-tap rows remain |
 | 2 | ✅ **Privacy store** (2026-08-28) — SHIPPED: shared `PrivacyPrefsContract` (8 gate fields, per-field tolerant, enums validated; sensitive media stays the settings-contract key, push toggles stay the kind mutes — no duplication) + native stores + Account-privacy card (6 toggles) + Interactions card (message/comment permission pickers) both platforms; enforcement footnotes honest (W2 DMs) | done | — |
 | 3 | **Profile editor fields** — picture + banner (image_picker → crop → upload w/ progress + local preview), website URL field; optimistic metadata cache + kind-0 publish | name/display/about/nip05/lud16 only | extend ProfileEditSheet both platforms: website field (trivial), picture/banner pickers (needs CAP media path reuse: pick → Blossom upload → URL into kind-0) |
-| 4 | **Relays: primary star (⭐)** — one primary write relay, tap to set/clear + **recommended suggestions** in the add dialog (primal.net + defaults) | roles + dots + NIP-65 ✓ | SHARED: add `primary` flag to `RelayListContract` (schema 2; ≤1 per set, publishes as first write relay) → UI star toggle + suggestions sheet |
+| 4 | ✅ (2026-08-28) — SHIPPED: `RelayListContract` schema 2 `primary` flag (≤1, write-only, first in fan-out) + ⭐ toggle + add-dialog suggestion chips (primal/damus/nos) both platforms | done | — |
 | 5 | ✅ (2026-08-28, Android) `EventCache.clearAllCache` + `FeedRepository.clearEventCache`; clear-cache row wipes both. iOS EventStore wipe pending | mostly done | iOS row 5 remainder |
 | 6 | ✅ (2026-08-28, Android) presets 1/5/21/100/500/1000. iOS uses a stepper (equivalent). Ledger link → APP-014 | done | — |
-| 7 | **Algorithm page extras** — hero explainer + stat tiles (signal count/…), **diversity toggle** per surface, **reset** button, preset icons | presets/freshness/sliders/mix/master ✓ | SHARED: `diversityEnabled` per surface (engine needs the author-clustering diversity pass — origin `diversity.ts` port) + reset = restore preset; stat tiles + icons cosmetic |
+| 7 | ✅ (2026-08-28) — SHIPPED: `diversityEnabled` per surface (AlgorithmContract schema 2) + `FeedRanking.applyDiversity` (author-clustering requeue, ≤2 consecutive, guarded drain, never drops — origin diversity.ts parity, deterministic, tested) + Diverse-authors toggle + Reset-to-preset both platforms; stat tiles + preset icons remain cosmetic | done | cosmetic extras only |
 | 8 | **Appearance live preview** — sample widget rendering with the picked accent/theme | honest pending rows | ship with APP-023 theming (preview needs real token application to be meaningful) |
 | 9 | **Help cards** — Help center / Contact / Report a problem / Feature request (4 cards) + 4 popular articles | FAQ (7) + support/donate + links | static content, needs real destinations — fold into APP-020 static pages (links currently snackbar-only in old app → do NOT fake) |
 | 10 | **AboutPage sections** — hero CTAs (Get Started), feature-cards grid, open-source card, legal footer (Terms/Privacy links) | brand card + NIP chips + schema ✓ | APP-020 static pages (about/privacy/terms full text already specced §3.20) |
@@ -346,6 +348,48 @@ push toggles), relays live status dots, zap sats display.**
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-08-28 — APP-008 draft persistence + discard confirm (spec §3.8
+  item closed; persisted schema → shared core first per repo rules).
+  Shared: `ComposerDraftContract` — versioned v1 wire ({text, urls, cw,
+  mentions[{n,u}], pow}), bounds at encode (text ≤16k via ComposerRules,
+  ≤4 remote URLs ≤2k each, CW ≤120, ≤8 mentions, pow 0–30), lenient
+  decode (corrupt/oversized/wrong-version → null = empty draft;
+  over-long fields clamp) — 4 common tests (round-trip, hostile clamp,
+  corrupt wire). Local gallery picks are deliberately NOT persisted
+  (ephemeral URIs; the draft keeps remote URLs only). Bridge:
+  `composerDraftEncode`/`composerDraftDecode` (XCFramework rebuilt).
+  Android: `ComposerDraftStore` (SharedPreferences `bitos_composer_
+  draft`) wired through MainActivity → BitOSApp → CreateNoteScreen —
+  restore once on open, autosave on every field change, clear on
+  publish/new post, and both close paths (back + ✕) confirm
+  "Discard draft?" when content exists (BackHandler). iOS: same via
+  UserDefaults + bridge in ComposerScreen (confirmationDialog on close,
+  clear on publish/new post). Verified: shared androidHost + native
+  250/250, Android compile + 55/55, iOS Swift 6 typecheck 0 errors,
+  structure check. APP-008 remaining: GIF picker (web service),
+  mine-at-publish for picks+PoW, vote-format decision for live bars.
+
+- 2026-08-28 — APP-008 poll sheet + card display (shared-core first).
+  Studied the legacy Flutter app first: its poll wire is COMPOSE-ONLY —
+  kind-1 question + `["poll_option", <index>, <label>]` tags (web
+  `feed.postPoll` parity), bounds 2–6 options ≤80 / question ≤280; the
+  old app renders nothing and has NO vote wire, so voting/bars stay
+  follow-up pending a vote-format decision (NIP-1 1071 is the candidate).
+  Shared: `PollContract` (tolerant parse — kind check, ≥2 usable options,
+  dedupe-by-index first-wins, sorted, hostile display bound ≤16, label
+  trim; `pollTags` validates the compose bounds) + `NoteComposer
+  .composePoll` (poll tags + hashtag t-tags via ComposerRules) +
+  `FeedNote.poll` projection + bridge (`Note.pollOptions`, iOS
+  `composePollTags`) — 5 common tests (parse/sort/dedupe/bound/invalid
+  + composer round-trip; FeedNote now carries polls as cards). Both
+  platforms: poll button in the composer toolbar → PollComposerSheet
+  (question + 2–6 choice fields with live counters, add/remove) →
+  publishes through the tags path (`publishNoteWith`/`publishNote`); feed
+  cards render the poll (option rows, "Poll · N options" caption —
+  honest V1 display, no fake votes). Verified: shared androidHost +
+  native 246/246, Android compile + 55/55, iOS Swift 6 typecheck 0
+  errors, structure check.
+
 - NEXT SESSION (pick either; both scoped in this tracker):
   - **APP-018a audit rows 1–2** (user-named gaps): multi-account switcher
     (shared registry → native slots → switcher UI + overlay) and the
@@ -355,7 +399,35 @@ fixed, what's next.
     + reset.
   - APP-009 threading remainder: naddr/nevent root resolution, X-style
     flattened descendants, live deltas on replies.
-  - APP-010 results tabs (Posts/People/Hashtags) + trending mosaic.
+  - APP-010 results tabs (Posts/People/Hashtags) + trending mosaic.- 2026-08-28 — APP-008 composer page, legacy-parity port (studied the
+  old Flutter app `~/Desktop/bitos/bitos-nostr-flutter` `CreateView`/
+  `CreateController` line by line; every rule landed in shared core
+  first). Shared: new `ComposerRules` — 4,000-soft/16,000-hard counter
+  (grouped label + target switch + near/over states, `MAX_NOTE_LENGTH`
+  bumped 2,000→16,000, within codec 65,536 bound), cursor-preserving
+  hashtag/emoji inserts (leading-space rules), @-mention autocomplete
+  (query-at-cursor, ≤6 name-filtered suggestions with npub) + publish-time
+  `nostr:npub` rewrite, media content join, and `deriveTags` (distinct
+  lowercase hashtags, NIP-27 p/e + NEW naddr `a`-tag via the tokenizer's
+  coordinate support, NIP-36 CW tag) — 9 common tests (the suite caught
+  two of my own bad expectations: emoji BMP length + a fixture cursor);
+  `composeTextNote` gained a tags overload and `composeTextNoteWithPow`
+  mines/publishes over baseTags (nonce tag first). Android: NEW
+  `CreateNoteScreen` — a full PAGE (FAB routes through BitOSApp, replacing
+  the sheet): author header (feed profile), mention field with
+  autocomplete overlay + tracked picks, ≤4 image grid (gallery picker +
+  validated URL dialog, removable thumbs), CW field, upload-status strip
+  (Blossom upload-before-sign, per-file progress), toolbar (image/URL/
+  CW/hashtag/emoji-32/PoW-badge w/ active tint + count badges), char
+  ring, published state (back to feed / new post); PowCard grew
+  `baseTags`; NotePublisher grew `publishNoteWith`/`publishPowNoteWith`.
+  Verified: shared androidHost + native 239/239, Android compile + 55/55
+  unit tests, structure check. iOS composer page + its bridge surface
+  (counter/insert/mention/deriveTags + tags-aware publish) scoped as the
+  immediate next increment; GIF picker + poll sheet + draft persistence
+  remain. Also merged around the concurrent session's More-hub overlay
+  landing in BitOSApp mid-wire.
+
 - 2026-08-28 — APP-009 threading core (spec §3.9; every rule in
   shared/business-core first). Shared core: `EventRefs` (note1/nevent1/
   naddr1 → id or NIP-33 coordinate pointer, TLV author + bounded ≤4 relay
@@ -407,6 +479,72 @@ fixed, what's next.
   errors ✅, structure ✅. APP-005 remaining: polls [W+F] + compact variant
   (rides APP-010/015). Next: APP-009 threading remainder or APP-010
   results tabs.
+
+- 2026-08-28 — Multi-account visibility fixed + hub account widgets
+  (user report: no switch/add on More). Root cause: the hub switch row
+  rendered only when the registry was non-empty, and every pre-registry
+  account (legacy single-secret) had no row — so nothing showed and Add
+  didn't exist anywhere. Fixes (both platforms): (1) legacy backfill —
+  boot resolves the active identity and registers its row + seals its
+  slot when missing (Android loadExisting, iOS IdentityStore.init);
+  (2) More hub now always shows the legacy-parity compact row "Switch
+  account · N on this device" → switcher bottom sheet with hex-avatar
+  rows (short npub, Active badge, one-tap switch), **+ Add account**
+  (dialog/sheet: import nsec w/ error surfacing + create new key →
+  shared ConfirmIdentityDialog; extracted from ProfileScreen to
+  components) and "Manage accounts" → You tab; (3) confirm-copy updated
+  for multi-account (switching never wipes other sealed slots). Also
+  completed the user's concurrent ComposerDraftStore wiring
+  (CreateNoteScreen param). Verified: Android compile + 55 tests ✅,
+  shared 250 androidHost ✅, iOS full-app Swift 6 typecheck 0 errors ✅,
+  pbxproj lint ✅, structure ✅.
+
+- 2026-08-28 — Functional settings wired system-wide + APP-018a rows 4+7.
+  **Functional settings now drive real behavior** (both platforms):
+  media autoplay policy gates the video pools (ALWAYS/NEVER/unmetered-WIFI
+  via ConnectivityManager NET_CAPABILITY_NOT_METERED on Android /
+  NWPathMonitor isExpensive on iOS — "never" pauses the visible video for
+  tap-to-play), playback rate applies to every player (ExoPlayer
+  setPlaybackSpeed / AVQueuePlayer defaultRate+rate on each
+  reconciliation), the zap sheet opens on the persisted default amount,
+  and media-preview off collapses note media to an honest "N attachments"
+  caption. **Row 4 relays**: RelayListContract schema 2 `primary` flag
+  (≤1, write-only, leads the publish fan-out) + ⭐ toggle per write relay +
+  add-dialog suggestion chips (primal/damus/nos, legacy recommended-list
+  parity) — Android + iOS. **Row 7 algorithm**: AlgorithmContract schema 2
+  `diversityEnabled` + `FeedRanking.applyDiversity` (deterministic
+  author-clustering requeue — max 2 consecutive slots per author, guarded
+  drain, NEVER drops notes; caught two test-authoring bugs where the
+  fixture gave every note a unique author — the engine was right) +
+  Diverse-authors toggle + Reset-to-preset both platforms; normalize now
+  carries the diversity flag through round-trips (first run dropped it —
+  wire test caught it). Bridge: AlgoSurfaceWire/RelayEntryWire gained the
+  flags with compat constructors. Verified: shared 246/246 ×2 lanes ✅,
+  Android compile + 55 tests ✅, iOS full-app Swift 6 typecheck 0 errors ✅
+  (XCFramework rebuilt), pbxproj lint ✅, structure ✅.
+
+- 2026-08-28 — APP-017 More hub V1 + own-profile You page + hub account
+  switching (old-app functional parity: apps-grid → More, You tab → my
+  profile). Both platforms: (1) **More hub** opened from the feed
+  apps-grid action (Android overlay state in BitOSApp + hub-routed
+  settings deep-links incl. Lightning section via a new `initialSection`
+  param; iOS sheet from RootView with navigationDestination sections) —
+  guest card, profile hero with npub copy, **multi-account switch row**
+  (tap to switch, active dot — registry + sealed slots from the previous
+  session), Following/Relays live stat tiles, tile groups limited to LIVE
+  surfaces (Discover, Lightning, Profile, Settings) + honest coming-soon
+  tiles (Saved APP-015, Zap ledger APP-014) + About/Privacy meta rows.
+  (2) **You tab = own profile page** (legacy profile_view parity): gradient
+  cover + overlapping hex avatar, kind-0 display name, tap-to-copy npub
+  chip, NIP-05 + about, stats (Following/Notes/Bitz), Edit profile +
+  Settings actions, Notes/Replies/Bitz/Reposts tabs fed from the live feed
+  window filtered to the active pubkey (window-limited — honest footnote);
+  the old single-account panel is gone (switching/removal lives in Settings
+  + the hub). Folded in concurrent user edits (DiscoverScreen thread sheet,
+  bridge Note thread fields — Swift arg order completed). Verified:
+  Android compile + 55 tests ✅, shared 239 androidHost ✅, iOS full-app
+  Swift 6 typecheck 0 errors ✅, pbxproj lint ✅ (MoreView registered),
+  structure ✅.
 
 - 2026-08-28 — APP-018a rows 1+2+5+6 implemented (the user-named
   account-switch + privacy gaps). SHARED (+7 common tests, 230/230 both

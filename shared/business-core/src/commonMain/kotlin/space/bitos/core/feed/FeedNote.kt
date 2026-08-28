@@ -30,6 +30,8 @@ data class FeedNote(
     val repostedBy: String? = null,
     /** NIP-36 content warning (tag `content-warning` / label `content warning`). */
     val contentWarning: Boolean = false,
+    /** APP-008 poll projection (kind-1 + poll_option tags; null = not a poll). */
+    val poll: space.bitos.core.model.Poll? = null,
 ) {
     companion object {
         private val hashtagPattern = Regex("(?:^|\\s)#([\\p{L}\\p{N}_-]{2,60})")
@@ -69,6 +71,7 @@ data class FeedNote(
                 replyTo = replyTag?.getOrNull(1) ?: nip22Parent,
                 threadRootId = threadRootId,
                 threadParentId = threadParentId,
+                poll = space.bitos.core.model.PollContract.poll(event),
                 hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
                 mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
                 mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))

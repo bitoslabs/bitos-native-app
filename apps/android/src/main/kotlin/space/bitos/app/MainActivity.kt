@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
                 homeViewModel = viewModel,
                 identityViewModel = identity,
                 notePublisher = publisher,
+                composerDraftStore = application.composerDraftStore,
                 mediaPublishViewModel = mediaPublish,
                 notifications = notificationRepository,
                 searchRepository = searchRepository,

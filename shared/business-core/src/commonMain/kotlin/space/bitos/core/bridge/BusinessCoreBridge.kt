@@ -75,6 +75,8 @@ class BusinessCoreBridge {
         /** APP-009 NIP-10 thread anchors (root / immediate parent). */
         val threadRootId: String? = null,
         val threadParentId: String? = null,
+        /** APP-008 poll labels (index order; empty = not a poll). */
+        val pollOptions: List<String> = emptyList(),
     )
 
     /**
@@ -193,6 +195,7 @@ class BusinessCoreBridge {
             contentWarning = note.contentWarning,
             threadRootId = note.threadRootId,
             threadParentId = note.threadParentId,
+            pollOptions = note.poll?.options?.map { it.label } ?: emptyList(),
         )
     }
 
@@ -443,9 +446,246 @@ class BusinessCoreBridge {
     // ------------------------------------------------------------------
     // Publish seam (PUB-001 note path): compose, encode, parse receipts.
     // ------------------------------------------------------------------
+    // APP-008 composer-page surface (shared `ComposerRules` for iOS;
+    // tagsJson uses the `TagsCodec` wire form `[["t","…"],…]`).
+    // ------------------------------------------------------------------
+
+    /** Counter presentation rule: {label, ratio, remaining, near, over}. */
+    fun composerCounter(length: Int): Map<String, Any> {
+        val state = space.bitos.core.publish.ComposerRules.counterState(length)
+        return mapOf(
+            "label" to state.label,
+            "ratio" to state.ratio.toDouble(),
+            "remaining" to state.remaining,
+            "near" to state.near,
+            "over" to state.over,
+        )
+    }
+
+    /** Cursor-preserving toolbar inserts: {text, cursor}. */
+    fun composerInsertHashtag(text: String, cursor: Int): Map<String, Any> {
+        val (next, at) = space.bitos.core.publish.ComposerRules.insertHashtag(text, cursor)
+        return mapOf("text" to next, "cursor" to at)
+    }
+
+    fun composerInsertEmoji(text: String, cursor: Int, emoji: String): Map<String, Any> {
+        val (next, at) = space.bitos.core.publish.ComposerRules.insertEmoji(text, cursor, emoji)
+        return mapOf("text" to next, "cursor" to at)
+    }
+
+    /** Trailing @query at the cursor; empty string = none. */
+    fun composerMentionQuery(text: String, cursor: Int): String =
+        space.bitos.core.publish.ComposerRules.mentionQueryAt(text, cursor) ?: ""
+
+    /**
+     * Mention suggestions. Input `profilesJson`: [{pubkey, name,
+     * displayName, picture?}]. Output (stable JSON, bridge-test locked):
+     * [{"name":…,"pubkey":…,"npub":…,"picture":…}].
+     */
+    fun composerMentionSuggestions(query: String, profilesJson: String): String {
+        val profiles = try {
+            Json.parseToJsonElement(profilesJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                space.bitos.core.model.ProfileMetadata(
+                    pubkey = space.bitos.core.model.Pubkey.parse(obj.getValue("pubkey").jsonPrimitive.content) ?: return@mapNotNull null,
+                    name = obj["name"]?.jsonPrimitive?.content,
+                    displayName = obj["displayName"]?.jsonPrimitive?.content,
+                    about = null,
+                    picture = obj["picture"]?.jsonPrimitive?.content,
+                    nip05 = null,
+                    lud16 = null,
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.ComposerRules.mentionSuggestions(query, profiles).joinToString(prefix = "[", separator = ",", postfix = "]") { s ->
+            buildJsonObject {
+                put("name", s.name)
+                put("pubkey", s.pubkeyHex)
+                put("npub", s.npub)
+                put("picture", s.pictureUrl ?: "")
+            }.toString()
+        }
+    }
+
+    /** Publish-time mention rewrite; `trackedJson`: [{name, npub}]. */
+    fun composerRewriteMentions(content: String, trackedJson: String): String {
+        val tracked = try {
+            Json.parseToJsonElement(trackedJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                (obj["name"]?.jsonPrimitive?.content) to (obj["npub"]?.jsonPrimitive?.content)
+            }.filter { it.first != null && it.second != null }.map { it.first!! to it.second!! }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.ComposerRules.rewriteMentions(content, tracked)
+    }
+
+    /** Media content join; `urlsJson`: ["https://…", …]. */
+    fun composerComposeContent(text: String, urlsJson: String): String {
+        val urls = try {
+            Json.parseToJsonElement(urlsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.ComposerRules.composeContent(text, urls)
+    }
+
+    /** Derived tags as the TagsCodec wire JSON (empty string when none). */
+    fun composerDeriveTags(content: String, contentWarningReason: String?): String {
+        val tags = space.bitos.core.publish.ComposerRules.deriveTags(content, contentWarningReason)
+        return space.bitos.core.store.TagsCodec.encode(tags)
+    }
+
+    /** Quick-emoji palette (32, legacy parity). */
+    fun composerEmojis(): List<String> = space.bitos.core.publish.ComposerRules.COMPOSER_EMOJIS
+
+    /**
+     * APP-008 composer-draft persistence seam: encode the draft wire
+     * (urlsJson = ["https://…"], trackedJson = [{"n":…,"u":…}]).
+     */
+    fun composerDraftEncode(
+        text: String,
+        urlsJson: String,
+        cwReason: String,
+        trackedJson: String,
+        powTarget: Int,
+    ): String {
+        val urls = try {
+            Json.parseToJsonElement(urlsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val tracked = try {
+            Json.parseToJsonElement(trackedJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                val name = (obj["n"]?.jsonPrimitive)?.content ?: return@mapNotNull null
+                val npub = (obj["u"]?.jsonPrimitive)?.content ?: return@mapNotNull null
+                name to npub
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.ComposerDraftContract.encode(
+            space.bitos.core.publish.ComposerDraft(
+                text = text,
+                remoteUrls = urls,
+                contentWarningReason = cwReason.ifBlank { null },
+                trackedMentions = tracked,
+                powTarget = powTarget,
+            ),
+        )
+    }
+
+    /** Draft decode: {text, urls:[…], cw, mentions:[{n,u}], pow}; null when
+     * the wire is corrupt/oversized (callers start from an empty draft). */
+    fun composerDraftDecode(json: String): Map<String, Any>? {
+        val draft = space.bitos.core.publish.ComposerDraftContract.decode(json) ?: return null
+        return mapOf(
+            "text" to draft.text,
+            "urls" to draft.remoteUrls,
+            "cw" to (draft.contentWarningReason ?: ""),
+            "mentions" to draft.trackedMentions.map { (name, npub) -> mapOf("n" to name, "u" to npub) },
+            "pow" to draft.powTarget,
+        )
+    }
+
+    /**
+     * APP-008 poll tags for the composer (validated 2–6/280/80 legacy
+     * bounds) as TagsCodec JSON incl. hashtag t-tags from the question;
+     * null when invalid.
+     */
+    fun composePollTags(question: String, optionsJson: String): String? {
+        val options = try {
+            Json.parseToJsonElement(optionsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            return null
+        }
+        val pollTags = space.bitos.core.model.PollContract.pollTags(question, options) ?: return null
+        val hashtagTags = space.bitos.core.publish.ComposerRules.deriveTags(question.trim())
+            .filter { it.firstOrNull() == "t" }
+        return space.bitos.core.store.TagsCodec.encode(pollTags + hashtagTags)
+    }
+
+    /** APP-008 tags-aware kind-1 compose/publish path. */
+    fun composeTextNoteWithTagsEventId(content: String, pubkeyHex: String, nowSeconds: Long, tagsJson: String): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeTextNote(pubkeyHex, content, tags)?.idHex
+    }
+
+    fun textNoteWithTagsPublishMessage(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val note = composer.composeTextNote(pubkeyHex, content, tags) ?: return null
+        return composer.publishMessage(note, signatureHex)
+    }
+
+    /** APP-008 tags-aware PoW: same `nonce:id` output contract as
+     * [mineTextNotePow] but the template carries [tagsJson]. */
+    fun mineTextNotePowWithTags(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        targetDifficulty: Int,
+        startNonce: Long,
+        maxAttempts: Long,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val base = composer.composeTextNote(pubkeyHex, content, tags) ?: return null
+        return space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex,
+            base.createdAtSeconds,
+            base.kind,
+            base.tags,
+            base.content,
+            targetDifficulty,
+            startNonce,
+            maxAttempts,
+        )?.let { "${'$'}{it.nonce}:${'$'}{it.idHex}" }
+    }
+
+    fun powTextNoteWithTagsEventId(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        return composer.composeTextNoteWithPow(pubkeyHex, content, nonce, targetDifficulty, createdAtSeconds, tags)?.idHex
+    }
+
+    fun powTextNoteWithTagsPublishMessage(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        signatureHex: String,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val note = composer.composeTextNoteWithPow(pubkeyHex, content, nonce, targetDifficulty, createdAtSeconds, tags) ?: return null
+        return composer.publishMessage(note, signatureHex)
+    }
 
     /** Composes the unsigned kind-1 note and returns its canonical id. */
     fun composeEventId(content: String, pubkeyHex: String, nowSeconds: Long): String? {
+
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
         return composer.composeTextNote(pubkeyHex, content)?.idHex
     }
@@ -699,12 +939,14 @@ class BusinessCoreBridge {
     // ── Relay manager (APP-018 §3.18, NIP-65) ──────────────────────
 
     /** Managed-relay wire row for the bridge ([RelayListContract] JSON in/out). */
-    class RelayEntryWire(val url: String, val read: Boolean, val write: Boolean)
+    class RelayEntryWire(val url: String, val read: Boolean, val write: Boolean, val primary: Boolean) {
+        constructor(url: String, read: Boolean, write: Boolean) : this(url, read, write, false)
+    }
 
     /** Lenient decode of the persisted managed set; corruption yields []. */
     fun relayListDecode(json: String): List<RelayEntryWire> =
         space.bitos.core.model.RelayListContract.decode(json).map {
-            RelayEntryWire(url = it.url.value, read = it.read, write = it.write)
+            RelayEntryWire(url = it.url.value, read = it.read, write = it.write, primary = it.primary)
         }
 
     /** Normalizes + encodes the managed set to the versioned wire JSON. */
@@ -712,7 +954,7 @@ class BusinessCoreBridge {
         space.bitos.core.model.RelayListContract.encode(
             entries.mapNotNull { wire ->
                 space.bitos.core.model.RelayUrl.parse(wire.url)
-                    ?.let { space.bitos.core.model.RelayEntry(it, wire.read, wire.write) }
+                    ?.let { space.bitos.core.model.RelayEntry(it, wire.read, wire.write, wire.primary) }
             },
         )
 
@@ -763,7 +1005,10 @@ class BusinessCoreBridge {
 
     /** Algorithm wire types (surface/signal keys are the shared wire names). */
     class AlgoSignalWire(val enabled: Boolean, val weight: Double)
-    class AlgoSurfaceWire(val enabled: Boolean, val signals: Map<String, AlgoSignalWire>)
+    class AlgoSurfaceWire(val enabled: Boolean, val diversityEnabled: Boolean, val signals: Map<String, AlgoSignalWire>) {
+        constructor(enabled: Boolean, signals: Map<String, AlgoSignalWire>) :
+            this(enabled, true, signals)
+    }
     class AlgoSnapshotWire(val freshnessHours: Long, val surfaces: Map<String, AlgoSurfaceWire>)
 
     fun algorithmFreshnessSteps(): List<Long> =
@@ -848,6 +1093,7 @@ class BusinessCoreBridge {
     private fun surfaceToWire(surface: space.bitos.core.feed.AlgorithmSurface, setting: space.bitos.core.feed.SurfaceSetting) =
         AlgoSurfaceWire(
             enabled = setting.enabled,
+            diversityEnabled = setting.diversityEnabled,
             signals = setting.signals.entries.associate { (signal, s) ->
                 signal.wire to AlgoSignalWire(s.enabled, s.weight)
             },

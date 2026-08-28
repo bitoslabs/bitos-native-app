@@ -94,9 +94,10 @@ fun SettingsScreen(
     algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
     privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
+    initialSection: String? = null,
     onBack: () -> Unit = {},
 ) {
-    var openSection by remember { mutableStateOf<String?>(null) }
+    var openSection by remember { mutableStateOf<String?>(initialSection) }
 
     BackHandler(enabled = openSection != null) { openSection = null }
 
@@ -503,6 +504,11 @@ private fun AlgorithmDetail(
                 "Ranked ${surface.name.lowercase()}",
                 setting.enabled,
             ) { algorithmStore.setEnabled(surface, it) }
+            if (setting.enabled) {
+                PrefRow("Diverse authors", setting.diversityEnabled) { enabled ->
+                    algorithmStore.setDiversity(surface, enabled)
+                }
+            }
             if (!setting.enabled) {
                 Footnote("Off = strict reverse-chronological — never hidden.")
             }
@@ -559,6 +565,12 @@ private fun AlgorithmDetail(
             }
         }
         Footnote("Weights re-balance live — turning a signal off instantly re-normalizes the mix. Topics & Web-of-trust contribute once their data feeds land (W2).")
+    TextButton(
+        onClick = { algorithmStore.setPreset(surface, preset) },
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        Text("Reset to preset", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+    }
     }
 }
 
@@ -1124,6 +1136,7 @@ private fun RelaysDetail(
                 onRemove = { relayManager.remove(entry.url) },
                 onToggleRead = { relayManager.setRoles(entry.url, !entry.read, entry.write) },
                 onToggleWrite = { relayManager.setRoles(entry.url, entry.read, !entry.write) },
+                onTogglePrimary = { relayManager.setPrimary(entry.url, !entry.primary) },
             )
         }
     }
@@ -1142,6 +1155,23 @@ private fun RelaysDetail(
             )
             if (addError != null) {
                 Text(addError!!, fontSize = 12.sp, color = BitOSColors.error)
+            }
+            val suggestions = listOf("wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol")
+                .filterNot { url -> entries.any { it.url.value == url } }
+            if (suggestions.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    for (url in suggestions) {
+                        Text(
+                            url.removePrefix("wss://").removePrefix("relay."),
+                            fontSize = 11.sp, color = BitOSColors.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(BitOSColors.primaryContainer)
+                                .clickable { addInput = url; addError = null }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
             }
             Row {
                 TextButton(
@@ -1208,6 +1238,7 @@ private fun RelayRow(
     onRemove: () -> Unit,
     onToggleRead: () -> Unit,
     onToggleWrite: () -> Unit,
+    onTogglePrimary: () -> Unit,
 ) {
     Column(
         Modifier
@@ -1227,6 +1258,15 @@ private fun RelayRow(
                 fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textPrimary,
                 modifier = Modifier.weight(1f),
             )
+            if (entry.write) {
+                TextButton(onClick = onTogglePrimary) {
+                    Text(
+                        if (entry.primary) "★" else "☆",
+                        fontSize = 16.sp,
+                        color = if (entry.primary) BitOSColors.warning else BitOSColors.textTertiary,
+                    )
+                }
+            }
             TextButton(onClick = onRemove) {
                 Icon(
                     androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_trash_linear),

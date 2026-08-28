@@ -4,6 +4,9 @@
 
 Code is clean when another engineer can predict where behavior lives, understand its invariants, test it without the whole system and change one concern without breaking unrelated concerns.
 
+For native rendering, feed lifecycle, relay metadata batching and measurable
+performance gates, also follow [`native-performance.md`](./native-performance.md).
+
 ## 2. SOLID for this repository
 
 ### Single Responsibility
@@ -111,4 +114,3 @@ No owner/issue means it is not a durable TODO.
 - Are accessibility and localization preserved?
 - Do tests exercise invariants rather than implementation trivia?
 - Is the change smaller/simpler than the problem warrants?
-

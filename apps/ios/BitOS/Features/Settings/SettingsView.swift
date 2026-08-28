@@ -377,6 +377,11 @@ private struct AlgorithmSection: View {
                 Toggle("Ranked \(surface)", isOn: Binding(
                     get: { algorithm.surfaces[surface]?.enabled ?? false },
                     set: { algorithm.setEnabled(surface: surface, enabled: $0) }))
+                if algorithm.surfaces[surface]?.enabled == true {
+                    Toggle("Diverse authors", isOn: Binding(
+                        get: { algorithm.surfaces[surface]?.diversityEnabled ?? true },
+                        set: { algorithm.setDiversity(surface: surface, enabled: $0) }))
+                }
                 if !(algorithm.surfaces[surface]?.enabled ?? false) {
                     Text("Off = strict reverse-chronological \u{2014} never hidden.")
                         .font(.system(size: 12))
@@ -421,6 +426,11 @@ private struct AlgorithmSection: View {
                     Text("Signals")
                 } footer: {
                     Text("Weights re-balance live \u{2014} turning a signal off re-normalizes the mix. Topics & Web-of-trust contribute once their data feeds land (W2).")
+                }
+                Section {
+                    Button("Reset to preset") {
+                        algorithm.resetToPreset(surface: surface)
+                    }
                 }
             }
         }
@@ -1026,7 +1036,8 @@ private struct RelaysSection: View {
                         state: relays.connectionStates[relay.url],
                         onRemove: { relays.remove(url: relay.url) },
                         onToggleRead: { relays.setRoles(url: relay.url, read: !relay.read, write: relay.write) },
-                        onToggleWrite: { relays.setRoles(url: relay.url, read: relay.read, write: !relay.write) }
+                        onToggleWrite: { relays.setRoles(url: relay.url, read: relay.read, write: !relay.write) },
+                        onTogglePrimary: { relays.setPrimary(url: relay.url, primary: !relay.primary) }
                     )
                 }
             } header: {
@@ -1035,6 +1046,25 @@ private struct RelaysSection: View {
                 Text("Roles follow NIP-65: read relays serve your feeds; write relays receive your events. A relay needs at least one role.")
             }
             Section {
+                let suggestions = ["wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"]
+                    .filter { url in !relays.relays.contains { $0.url == url } }
+                if !suggestions.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(suggestions, id: \.self) { url in
+                            Button {
+                                addInput = url
+                                addError = nil
+                            } label: {
+                                Text(url.replacingOccurrences(of: "wss://", with: "").replacingOccurrences(of: "relay.", with: ""))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(BitOSTheme.accent)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(BitOSTheme.accent.opacity(0.15), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
                 HStack {
                     TextField("wss://relay.example.com", text: $addInput)
                         .font(.system(size: 13, design: .monospaced))
@@ -1113,6 +1143,7 @@ private struct RelayManagerRow: View {
     let onRemove: () -> Void
     let onToggleRead: () -> Void
     let onToggleWrite: () -> Void
+    let onTogglePrimary: () -> Void
 
     private var dotColor: Color {
         switch state {
@@ -1137,6 +1168,14 @@ private struct RelayManagerRow: View {
                 }
             }
             Spacer()
+            if relay.write {
+                Button(action: onTogglePrimary) {
+                    Text(relay.primary ? "\u{2605}" : "\u{2606}")
+                        .font(.system(size: 16))
+                        .foregroundStyle(relay.primary ? BitOSTheme.warning : BitOSTheme.textTertiary)
+                }
+                .accessibilityLabel("Toggle primary relay")
+            }
             Button(role: .destructive, action: onRemove) {
                 AppIcons.image(for: AppIcons.delete)
                     .font(.system(size: 15, weight: .medium))
@@ -1173,12 +1212,12 @@ private struct PublishStatusLine: View {
     private var statusText: String? {
         if publisher.result == nil, publisher.inFlightId != nil { return "Publishing…" }
         switch publisher.result {
-        case .published: "Published ✓"
-        case .rejected(let detail): "Rejected: \(detail ?? "relay declined")"
-        case .timeout: "No relay receipt before timeout."
-        case .signingRefused: "No account key available."
-        case .invalid: "Relay list invalid — nothing sent."
-        case nil: nil as String?
+        case .published: return "Published ✓"
+        case .rejected(let detail): return "Rejected: \(detail ?? "relay declined")"
+        case .timeout: return "No relay receipt before timeout."
+        case .signingRefused: return "No account key available."
+        case .invalid: return "Relay list invalid — nothing sent."
+        case nil: return nil
         }
     }
 

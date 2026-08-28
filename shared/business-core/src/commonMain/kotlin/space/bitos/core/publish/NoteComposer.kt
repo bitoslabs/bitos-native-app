@@ -44,10 +44,28 @@ class NoteComposer(
 ) {
 
     /** Builds the unsigned kind-1 note; null when content is out of bounds. */
-    fun composeTextNote(pubkeyHex: String, content: String): UnsignedNote? {
+    fun composeTextNote(pubkeyHex: String, content: String): UnsignedNote? =
+        composeTextNote(pubkeyHex, content, emptyList())
+
+    /** APP-008: kind-1 with explicit tags (composer derives them via
+     * `ComposerRules.deriveTags` — hashtags, NIP-27 entities, NIP-36). */
+    fun composeTextNote(pubkeyHex: String, content: String, tags: List<List<String>>): UnsignedNote? {
         val trimmed = content.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_NOTE_LENGTH) return null
-        return compose(pubkeyHex, NostrKinds.SHORT_TEXT_NOTE, emptyList(), trimmed)
+        if (tags.size > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
+        return compose(pubkeyHex, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
+    }
+
+    /**
+     * APP-008 poll (legacy wire: kind-1 question + `poll_option` tags +
+     * hashtag t-tags from the question — web `feed.postPoll` parity).
+     */
+    fun composePoll(pubkeyHex: String, question: String, options: List<String>): UnsignedNote? {
+        val pollTags = space.bitos.core.model.PollContract.pollTags(question, options) ?: return null
+        val trimmed = question.trim()
+        val hashtagTags = space.bitos.core.publish.ComposerRules.deriveTags(trimmed)
+            .filter { it.firstOrNull() == "t" }
+        return compose(pubkeyHex, NostrKinds.SHORT_TEXT_NOTE, pollTags + hashtagTags, trimmed)
     }
 
     /** Builds the unsigned kind-7 reaction (NIP-25) targeting an event. */
@@ -355,11 +373,15 @@ class NoteComposer(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
+        baseTags: List<List<String>> = emptyList(),
     ): UnsignedNote? {
         if (createdAtSeconds <= 0) return null
         val trimmed = content.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_NOTE_LENGTH) return null
-        val tags = listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty))
+        if (baseTags.size + 1 > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
+        // The nonce tag leads; the mining template must byte-match (PowCard
+        // mines over the same baseTags).
+        val tags = listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)) + baseTags
         val id = NostrEventCodec.computeId(hasher, pubkeyHex, createdAtSeconds, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
         return UnsignedNote(id, pubkeyHex, createdAtSeconds, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
     }
@@ -388,7 +410,7 @@ class NoteComposer(
 
     companion object {
         /** UI-side bound, deliberately far below the protocol limit. */
-        const val MAX_NOTE_LENGTH: Int = 2_000
+        const val MAX_NOTE_LENGTH: Int = 16_000
 
         /**
          * Parses `["OK", <eventId>, <bool>, <message>]`; null for anything

@@ -37,6 +37,8 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     /// APP-009 NIP-10 thread anchors (root / immediate parent). */
     var threadRootId: String? = nil
     var threadParentId: String? = nil
+    /** APP-008 poll labels (index order; empty = not a poll). */
+    var pollOptions: [String] = []
 }
 
 /// Display-oriented media attachment (mirror of the shared `MediaMetadata`).
@@ -193,7 +195,8 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
             },
             contentWarning: note.contentWarning,
             threadRootId: note.threadRootId,
-            threadParentId: note.threadParentId
+            threadParentId: note.threadParentId,
+            pollOptions: note.pollOptions.map { $0 as String }
         )
     }
 
@@ -311,7 +314,8 @@ private extension FeedNote {
             videoHeight: video?.height.map { KotlinInt(value: Int32(truncatingIfNeeded: $0)) },
             contentWarning: contentWarning,
             threadRootId: threadRootId,
-            threadParentId: threadParentId
+            threadParentId: threadParentId,
+            pollOptions: pollOptions
         )
     }
 }

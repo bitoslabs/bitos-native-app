@@ -56,8 +56,18 @@ final class IdentityStore {
         loadRegistry()
         let activeSecret = activeRegistryPubkey.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) }
             ?? IdentityKeychain.loadSecret()
-        if let secret = activeSecret {
-            account = identity(forSecret: secret)
+        if let secret = activeSecret, let identity = identity(forSecret: secret) {
+            account = identity
+            // Legacy migration: an account created before the registry ships
+            // backfills its row so the switcher shows it (and Add works).
+            if !registeredAccounts.contains(where: { $0.pubkeyHex == identity.pubkeyHex }) {
+                IdentityKeychain.save(secretHex: secret, slotPubkey: identity.pubkeyHex)
+                registeredAccounts.append(
+                    RegisteredAccountRow(pubkeyHex: identity.pubkeyHex, npub: identity.npub, displayName: nil)
+                )
+                persistRegistry()
+                if activeRegistryPubkey == nil { setActive(identity.pubkeyHex) }
+            }
         }
     }
 

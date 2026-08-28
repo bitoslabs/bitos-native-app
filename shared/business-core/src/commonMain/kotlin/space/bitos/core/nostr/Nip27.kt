@@ -23,6 +23,8 @@ sealed interface RichToken {
         val entity: Entity,
         /** Decoded hex pubkey/event id when the type-0 value is 32 bytes. */
         val hex: String?,
+        /** APP-008 NIP-33 coordinate (`kind:pubkey:d`) for naddr entities. */
+        val coordinate: String? = null,
     ) : RichToken
 
     enum class Entity { PROFILE, NOTE, ADDRESS }
@@ -79,7 +81,7 @@ object Nip27 {
             "nprofile" -> RichToken.Nostr(raw, RichToken.Entity.PROFILE, tlvType0Hex(bytes))
             "note" -> RichToken.Nostr(raw, RichToken.Entity.NOTE, bytesToHex(bytes))
             "nevent" -> RichToken.Nostr(raw, RichToken.Entity.NOTE, tlvType0Hex(bytes))
-            "naddr" -> RichToken.Nostr(raw, RichToken.Entity.ADDRESS, null)
+            "naddr" -> RichToken.Nostr(raw, RichToken.Entity.ADDRESS, null, tlvType0Coordinate(bytes))
             else -> RichToken.Text(candidate)
         }
     }
@@ -231,6 +233,28 @@ object Nip27 {
             index += 3
             if (index + length > bytes.size) return null
             if (type == 0 && length == 32) return bytesToHex(bytes.copyOfRange(index, index + 32))
+            index += length
+        }
+        return null
+    }
+
+    /** APP-008: naddr type-0 payload is the ASCII `kind:pubkey:d` coordinate. */
+    private fun tlvType0Coordinate(bytes: ByteArray): String? {
+        var index = 0
+        while (index + 3 <= bytes.size) {
+            val type = bytes[index].toInt() and 0xff
+            val length = ((bytes[index + 1].toInt() and 0xff) shl 8) or (bytes[index + 2].toInt() and 0xff)
+            index += 3
+            if (index + length > bytes.size) return null
+            if (type == 0 && length in 3..256) {
+                val text = bytes.copyOfRange(index, index + length).decodeToString()
+                val parts = text.split(':')
+                if (parts.size == 3 && parts[0].toIntOrNull() != null &&
+                    parts[1].length == 64 && parts[2].isNotEmpty()
+                ) {
+                    return text
+                }
+            }
             index += length
         }
         return null

@@ -10,6 +10,7 @@ struct ProfileView: View {
     @State private var showEdit = false
     @State private var showSettings = false
     @Environment(AppEnvironment.self) private var environment
+    @Environment(SettingsStore.self) private var settings
 
     init(store: IdentityStore) {
         _store = State(initialValue: store)
@@ -63,53 +64,115 @@ struct ProfileView: View {
         }
     }
 
+    @State private var ownTab = 0
+
     private func accountPanel(_ account: AccountIdentity) -> some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            HStack(spacing: BitOSTheme.Spacing.md) {
-                PubkeyAvatarView(pubkey: account.pubkeyHex, size: 48)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Local identity active")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Secret sealed in the Keychain")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
+        let feed = environment.feedStore
+        let profile = feed.profiles[account.pubkeyHex]
+        let own = feed.notes.filter { $0.pubkey == account.pubkeyHex || $0.repostedBy == account.pubkeyHex }
+        let tabs: [(String, [FeedNote])] = [
+            ("Notes", own.filter { $0.replyTo == nil && $0.repostedBy == nil }),
+            ("Replies", own.filter { $0.replyTo != nil && $0.repostedBy == nil }),
+            ("Bitz", own.filter { $0.video != nil }),
+            ("Reposts", own.filter { $0.repostedBy == account.pubkeyHex }),
+        ]
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            // Hero: gradient cover + overlapping hex avatar (web 160/104 parity).
+            ZStack(alignment: .bottomLeading) {
+                LinearGradient(
+                    colors: [BitOSTheme.accent.opacity(0.35), BitOSTheme.reply.opacity(0.25)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                .frame(height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                PubkeyAvatarView(pubkey: account.pubkeyHex, size: 84)
+                    .offset(y: 42)
+            }
+            .padding(.bottom, 42)
+            VStack(alignment: .leading, spacing: 4) {
+                Text((profile?.displayName ?? profile?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Your account")
+                    .font(.title2.weight(.bold))
+                Button {
+                    UIPasteboard.general.string = account.npub
+                } label: {
+                    Text(settings.shortNpub(account.npub))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(BitOSTheme.accent)
+                }
+                .buttonStyle(.plain)
+                if let nip05 = profile?.nip05, !nip05.isEmpty {
+                    Text("\u{2713} \(nip05)").font(.caption).foregroundStyle(BitOSTheme.success)
+                }
+                if let about = profile?.about, !about.isEmpty {
+                    Text(about).font(.footnote).foregroundStyle(BitOSTheme.textSecondary).lineLimit(4)
                 }
             }
-            Text(account.npub)
-                .font(.caption.monospaced())
-                .foregroundStyle(BitOSTheme.textSecondary)
-                .textSelection(.enabled)
+            HStack(spacing: 20) {
+                stat("Following", "\(feed.following.count)")
+                stat("Notes", "\(tabs[0].1.count)")
+                stat("Bitz", "\(tabs[2].1.count)")
+            }
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 Button { showEdit = true } label: {
                     Label { Text("Edit profile") } icon: { AppIcons.image(for: AppIcons.pen) }
                 }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BitOSTheme.accent)
-                Button("Copy npub") {
-                    UIPasteboard.general.string = account.npub
-                }
-                .buttonStyle(.bordered)
-                Button("Remove", role: .destructive) {
-                    confirmRemove = true
+                .buttonStyle(.borderedProminent)
+                .tint(BitOSTheme.accent)
+                Button { showSettings = true } label: {
+                    Label { Text("Settings") } icon: { AppIcons.image(for: AppIcons.settings) }
                 }
                 .buttonStyle(.bordered)
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(BitOSTheme.Spacing.base)
-        .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.lg).fill(BitOSTheme.surface))
-        .confirmationDialog(
-            "Remove identity?",
-            isPresented: $confirmRemove,
-            titleVisibility: .visible
-        ) {
-            Button("Remove identity permanently", role: .destructive) {
-                store.removeAccount()
+            HStack(spacing: 8) {
+                ForEach(Array(tabs.enumerated()), id: \.offset) { index, entry in
+                    let selected = ownTab == index
+                    Button {
+                        ownTab = index
+                    } label: {
+                        Text(entry.0)
+                            .font(.system(size: 13, weight: selected ? .bold : .medium))
+                            .foregroundStyle(selected ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(
+                                selected ? BitOSTheme.accent.opacity(0.15) : BitOSTheme.surfaceOverlay.opacity(0.5),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            Button("Keep", role: .cancel) {}
-        } message: {
-            Text("The sealed secret is deleted from this device. Without a backup you lose the account. This cannot be undone.")
+            let content = tabs[ownTab].1
+            if content.isEmpty {
+                Text("Nothing here yet \u{2014} this tab shows your notes currently in the live feed window.")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            } else {
+                ForEach(content.prefix(20), id: \.id) { note in
+                    ownNoteRow(note)
+                }
+            }
         }
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.headline.monospaced())
+            Text(label).font(.caption2).foregroundStyle(BitOSTheme.textTertiary)
+        }
+    }
+
+    private func ownNoteRow(_ note: FeedNote) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(note.video != nil ? BitOSTheme.reply : BitOSTheme.accent)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+            Text(note.content.isEmpty ? "(media)" : String(note.content.prefix(120)))
+                .font(.footnote)
+                .lineLimit(2)
+                .foregroundStyle(BitOSTheme.textPrimary)
+        }
+        .padding(.vertical, 2)
     }
 
     private var browsePanel: some View {

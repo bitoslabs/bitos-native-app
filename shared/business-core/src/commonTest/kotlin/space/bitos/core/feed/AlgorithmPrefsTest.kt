@@ -2,6 +2,7 @@ package space.bitos.core.feed
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -161,4 +162,45 @@ class FeedRankingConfigTest {
             )),
     )
 
+    @Test
+    fun diversityPassRequeuesButNeverDrops() {
+        // Engagement-only mix: the spam author owns the four top slots.
+        fun n(id: String, createdAt: Long, pk: String) = note(id, createdAt, pubkey = pk)
+        val ctx = RankingContext(
+            nowSeconds = 10_000,
+            reactionCounts = mapOf("s1" to 30, "s2" to 25, "s3" to 20, "s4" to 15, "o1" to 10, "o2" to 5),
+        )
+        val notes = listOf(
+            n("s1", 100, "spam"), n("s2", 99, "spam"), n("s3", 98, "spam"),
+            n("s4", 97, "spam"), n("o1", 96, "other1"), n("o2", 95, "other2"),
+        )
+        val diverse = FeedRanking.rank(notes, AlgorithmSurface.FEED, singleSignal(AlgorithmSignal.ENGAGEMENT), ctx)
+        // Nothing dropped; no 3 consecutive slots share an author; the two
+        // overflow spam notes interleave after the different-author pair.
+        assertEquals(notes.size, diverse.size)
+        diverse.windowed(3).forEach { window ->
+            assertFalse(window.map { it.pubkey }.distinct().size == 1, "3 consecutive same-author slots")
+        }
+        assertEquals(listOf("s1", "s2", "o1", "o2", "s3", "s4"), diverse.map { it.id })
+
+        // Diversity off → pure rank order (the spam block stays together).
+        val off = AlgorithmSnapshot(
+            surfaces = singleSignal(AlgorithmSignal.ENGAGEMENT).surfaces.mapValues { (_, v) ->
+                v.copy(diversityEnabled = false)
+            },
+        )
+        val plain = FeedRanking.rank(notes, AlgorithmSurface.FEED, off, ctx)
+        assertEquals(listOf("s1", "s2", "s3", "s4", "o1", "o2"), plain.map { it.id })
+    }
+
+    @Test
+    fun wireV2RoundTripsDiversityFlag() {
+        val snapshot = AlgorithmSnapshot(
+            surfaces = AlgorithmSnapshot().surfaces.mapValues { (_, v) -> v.copy(diversityEnabled = false) },
+        )
+        assertEquals(false, AlgorithmContract.decode(AlgorithmContract.encode(snapshot)).surfaces[AlgorithmSurface.FEED]!!.diversityEnabled)
+        // v1 wire (no "d" key) defaults diversity ON.
+        val v1 = AlgorithmContract.decode("{\"v\":1,\"f\":6,\"s\":{\"feed\":{\"e\":1,\"g\":{}}}}")
+        assertEquals(true, v1.surfaces[AlgorithmSurface.FEED]!!.diversityEnabled)
+    }
 }

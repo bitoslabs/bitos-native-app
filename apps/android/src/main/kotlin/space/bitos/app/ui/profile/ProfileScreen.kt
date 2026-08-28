@@ -1,9 +1,18 @@
 package space.bitos.app.ui.profile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.outlined.Edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.ui.components.ConfirmIdentityDialog
 import space.bitos.app.ui.components.PubkeyAvatar
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.ui.res.painterResource
@@ -111,23 +121,126 @@ fun ProfileScreen(
             }
         }
 
-        if (state.account != null) {
-            AccountPanel(
-                npub = state.account!!.npub,
-                onCopy = { clipboard.setText(AnnotatedString(state.account!!.npub)) },
-                onRemove = identityViewModel::removeAccount,
-            )
-            // Edit profile: opens the kind-0 publish flow.
-            androidx.compose.material3.OutlinedButton(
-                onClick = { showEdit = true },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                androidx.compose.material3.Icon(
-                    painterResource(R.drawable.solar_pen_linear),
-                    contentDescription = null,
+        val account = state.account
+        if (account != null) {
+            // ── Own profile page (legacy Flutter profile_view parity) ──
+            val feedState by homeViewModel.state.collectAsStateWithLifecycle()
+            val profile = feedState.profiles[account.pubkeyHex]
+            var tab by remember { mutableStateOf(0) }
+
+            // Hero: gradient cover + overlapping hex avatar (web 160/104 parity).
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(96.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.linearGradient(
+                                listOf(BitOSColors.primary.copy(alpha = 0.35f), BitOSColors.accent.copy(alpha = 0.25f)),
+                            ),
+                        ),
+                ) {}
+                PubkeyAvatar(
+                    pubkey = account.pubkeyHex,
+                    size = 84,
+                    modifier = Modifier
+                        .padding(start = 16.dp)
+                        .offset(y = 54.dp),
                 )
-                Spacer(Modifier.width(BitOSSpacing.sm))
-                Text("Edit profile")
+            }
+            Spacer(Modifier.height(46.dp))
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    profile?.bestDisplayName?.ifEmpty { "Your account" } ?: "Your account",
+                    style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.W800,
+                    color = BitOSColors.textPrimary,
+                )
+                TextButton(
+                    onClick = { clipboard.setText(AnnotatedString(account.npub)) },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                ) {
+                    Text(
+                        settingsStore.shortNpub(account.npub),
+                        fontSize = 12.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = BitOSColors.primary,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        painterResource(R.drawable.solar_pen_linear),
+                        contentDescription = "Copy npub", tint = BitOSColors.primary,
+                        modifier = Modifier.width(14.dp),
+                    )
+                }
+                profile?.nip05?.takeIf { it.isNotEmpty() }?.let {
+                    Text("✓ $it", fontSize = 12.sp, color = BitOSColors.success)
+                }
+                profile?.about?.takeIf { it.isNotEmpty() }?.let {
+                    Text(it, fontSize = 13.sp, color = BitOSColors.textSecondary, maxLines = 4)
+                }
+            }
+
+            // Stats (legacy `_FollowStats` parity, live window data).
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                val ownNotes = feedState.notes.filter { it.pubkey == account.pubkeyHex }
+                StatPill("Following", "${feedState.following.size}")
+                StatPill("Notes", "${ownNotes.count { it.replyTo == null }}")
+                StatPill("Bitz", "${ownNotes.count { it.video != null }}")
+            }
+
+            // Actions (own: Edit + Settings).
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                androidx.compose.material3.OutlinedButton(onClick = { showEdit = true }, modifier = Modifier.weight(1f)) {
+                    Icon(painterResource(R.drawable.solar_pen_linear), contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Edit profile")
+                }
+                androidx.compose.material3.OutlinedButton(onClick = { showSettings = true }, modifier = Modifier.weight(1f)) {
+                    Icon(painterResource(R.drawable.solar_settings_linear), contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Settings")
+                }
+            }
+
+            // Tabs (legacy ProfileTab parity): own window content.
+            val tabs = listOf("Notes", "Replies", "Bitz", "Reposts")
+            val own = feedState.notes.filter { it.pubkey == account.pubkeyHex || it.repostedBy == account.pubkeyHex }
+            val tabNotes = own.filter { it.replyTo == null && it.repostedBy == null }
+            val tabReplies = own.filter { it.replyTo != null && it.repostedBy == null }
+            val tabBitz = own.filter { it.video != null }
+            val tabReposts = own.filter { it.repostedBy == account.pubkeyHex }
+            val content = listOf(tabNotes, tabReplies, tabBitz, tabReposts)[tab]
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                tabs.forEachIndexed { index, label ->
+                    val selected = tab == index
+                    Text(
+                        label,
+                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.W700 else FontWeight.W500,
+                        color = if (selected) BitOSColors.primary else BitOSColors.textSecondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(if (selected) BitOSColors.primaryContainer else BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
+                            .clickable { tab = index }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            if (content.isEmpty()) {
+                Text(
+                    "Nothing here yet — this tab shows your notes currently in the live feed window.",
+                    fontSize = 12.sp, color = BitOSColors.textTertiary,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            } else {
+                content.take(20).forEach { note ->
+                    OwnNoteRow(note = note, shortNpub = settingsStore::shortNpub)
+                }
             }
         } else {
             BrowseOnlyPanel(
@@ -255,44 +368,42 @@ private fun ImportPanel(onSubmit: (String) -> Unit, error: String?) {
     }
 }
 
+
+// ── Own-profile helpers (legacy parity) ────────────────────────────────
+
 @Composable
-private fun ConfirmIdentityDialog(
-    npub: String,
-    replacesExisting: Boolean,
-    busy: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (replacesExisting) "Replace identity?" else "Confirm your identity") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-                Text(
-                    if (replacesExisting) {
-                        "This REPLACES the identity currently stored on this device. Its secret is overwritten."
-                    } else {
-                        "This is the public identity derived from your key. Verify it before continuing."
-                    },
-                )
-                Surface(shape = RoundedCornerShape(10.dp), color = BitOSColors.surfaceElevated) {
-                    Text(
-                        npub,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = BitOSColors.primary,
-                        modifier = Modifier.padding(BitOSSpacing.sm),
-                    )
-                }
-                Text(
-                    "Backup warning: if this is a new key, write the secret down now — it cannot be recovered from this device.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BitOSColors.warning,
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) { Text(if (busy) "Storing…" else "Use this identity") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+private fun StatPill(label: String, value: String) {
+    Column {
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.W800, fontFamily = FontFamily.Monospace, color = BitOSColors.textPrimary)
+        Text(label, fontSize = 11.sp, color = BitOSColors.textTertiary)
+    }
+}
+
+@Composable
+private fun OwnNoteRow(note: space.bitos.core.feed.FeedNote, shortNpub: (String) -> String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (note.video != null) BitOSColors.accent else BitOSColors.primary),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                note.content.take(120).ifEmpty { "(media)" },
+                fontSize = 13.sp, color = BitOSColors.textPrimary, maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Text(
+                shortNpub("npub1" + note.pubkey.take(10)),
+                fontSize = 10.sp, color = BitOSColors.textTertiary,
+            )
+        }
+    }
 }

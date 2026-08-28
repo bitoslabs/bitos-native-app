@@ -7,6 +7,7 @@ struct ManagedRelay: Equatable, Identifiable {
     let url: String
     var read: Bool
     var write: Bool
+    var primary: Bool = false
     var id: String { url }
 }
 
@@ -63,6 +64,17 @@ final class RelayManagerStore {
         apply(next)
     }
 
+    /// Sets/clears the primary ⭐ (at most one; write relays only).
+    func setPrimary(url: String, primary: Bool) {
+        apply(relays.map { relay in
+            if relay.url == url && primary && relay.write {
+                ManagedRelay(url: relay.url, read: relay.read, write: relay.write, primary: true)
+            } else {
+                ManagedRelay(url: relay.url, read: relay.read, write: relay.write, primary: false)
+            }
+        })
+    }
+
     /// Sets a relay's roles; an entry would lose both roles → no-op.
     func setRoles(url: String, read: Bool, write: Bool) {
         guard read || write else { return }
@@ -74,13 +86,15 @@ final class RelayManagerStore {
     /// Wire JSON for the NIP-65 publish path (NotePublisher).
     func encode() -> String {
         bridge.relayListEncode(
-            entries: relays.map { BusinessCoreBridge.RelayEntryWire(url: $0.url, read: $0.read, write: $0.write) }
+            entries: relays.map { BusinessCoreBridge.RelayEntryWire(url: $0.url, read: $0.read, write: $0.write, primary: $0.primary) }
         )
     }
 
     /// Write-role relays (publish fan-out targets).
     func writeUrls() -> [RelayURL] {
-        relays.filter(\.write).compactMap { RelayURL.parse($0.url) }
+        relays.filter(\.write)
+            .sorted { $0.primary && !$1.primary }
+            .compactMap { RelayURL.parse($0.url) }
     }
 
     /// Refreshes the live per-relay connection states (status dots).
@@ -117,7 +131,7 @@ final class RelayManagerStore {
         if let wire = defaults.string(forKey: storageKey) {
             let decoded = bridge.relayListDecode(json: wire)
             if !decoded.isEmpty {
-                return decoded.map { ManagedRelay(url: $0.url, read: $0.read, write: $0.write) }
+                return decoded.map { ManagedRelay(url: $0.url, read: $0.read, write: $0.write, primary: $0.primary) }
             }
         }
         return DefaultRelays.urls.map { url in

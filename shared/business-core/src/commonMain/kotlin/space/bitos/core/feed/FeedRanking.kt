@@ -76,7 +76,7 @@ object FeedRanking {
         val maxEngagement = (ctx.reactionCounts.values.sumOf { it }
             + ctx.replyCounts.values.sumOf { it }).coerceAtLeast(1)
 
-        return notes
+        val ranked = notes
             .map { note ->
                 var score = 0.0
                 for ((signal, config) in setting.signals) {
@@ -98,6 +98,50 @@ object FeedRanking {
                     .thenBy { it.first.id },
             )
             .map { it.first }
+        return if (setting.diversityEnabled) applyDiversity(ranked) else ranked
+    }
+
+    /**
+     * Origin `diversity.ts` parity: a post-scoring author-clustering pass —
+     * no author holds more than [MAX_CONSECUTIVE] adjacent slots; overflow
+     * notes are REQUEUED (never dropped), so the set is only reordered.
+     * Deterministic: same input → same output.
+     */
+    private const val MAX_CONSECUTIVE = 2
+
+    private fun applyDiversity(ranked: List<FeedNote>): List<FeedNote> {
+        val output = ArrayList<FeedNote>(ranked.size)
+        val requeued = ArrayDeque<FeedNote>()
+        var currentAuthor: String? = null
+        var consecutive = 0
+
+        fun push(note: FeedNote) {
+            if (note.pubkey == currentAuthor && consecutive >= MAX_CONSECUTIVE) {
+                requeued.addLast(note)
+                return
+            }
+            if (note.pubkey != currentAuthor) {
+                currentAuthor = note.pubkey
+                consecutive = 1
+            } else {
+                consecutive++
+            }
+            output.add(note)
+        }
+
+        for (note in ranked) push(note)
+        // Guarded drain: an author-heavy tail interleaves as far as possible;
+        // whatever remains (pure same-author runs) appends in rank order —
+        // notes are never dropped, and the loop can never cycle forever.
+        var guard = 0
+        val drainLimit = ranked.size * 2
+        while (requeued.isNotEmpty() && guard < drainLimit) {
+            push(requeued.removeFirst())
+            guard++
+        }
+        output.addAll(requeued)
+        requeued.clear()
+        return output
     }
 
     private fun chronological(notes: List<FeedNote>): List<FeedNote> =

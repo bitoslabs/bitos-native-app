@@ -72,6 +72,19 @@ class IdentityViewModel(
                     ?: store.loadSecret()
             } ?: return@launch
             val identity = identityFor(secret) ?: return@launch
+            // Legacy migration: an account created before the registry ships
+            // backfills its row so the switcher shows it (and Add works).
+            if (registry.accounts.value.none { it.pubkeyHex == identity.pubkeyHex }) {
+                withContext(Dispatchers.IO) { store.storeSecret(secret, slotPubkey = identity.pubkeyHex) }
+                registry.register(
+                    space.bitos.core.identity.RegisteredAccount(
+                        pubkeyHex = identity.pubkeyHex,
+                        npub = identity.npub,
+                        addedAtSeconds = System.currentTimeMillis() / 1_000,
+                    ),
+                    makeActive = registry.activePubkey.value == null,
+                )
+            }
             mutableState.value = mutableState.value.copy(account = identity)
         }
     }

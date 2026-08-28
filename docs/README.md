@@ -18,6 +18,7 @@ Start with [Native Platform Blueprint](./native/README.md).
 - [Toolchain and version policy](./engineering/toolchains.md)
 - [Repository and code architecture](./engineering/architecture.md)
 - [Clean code and SRP rules](./engineering/clean-code.md)
+- [Native performance and maintainability guide](./engineering/native-performance.md)
 - [Development and release workflow](./engineering/development-workflow.md)
 - [Testing strategy and quality gates](./engineering/testing.md)
 - [Architecture decision records](./adr/README.md)

@@ -27,8 +27,16 @@ enum class AlgorithmSignal(val wire: String) {
 /** One signal's user configuration: enabled + weight on a 0..1 slider. */
 data class SignalSetting(val enabled: Boolean, val weight: Double)
 
-/** One surface's configuration: master switch (off = chronological). */
-data class SurfaceSetting(val enabled: Boolean, val signals: Map<AlgorithmSignal, SignalSetting>)
+/** One surface's configuration: master switch (off = chronological) + the
+ *  author-clustering diversity pass (post-scoring requeue, never drop). */
+data class SurfaceSetting(
+    val enabled: Boolean,
+    val diversityEnabled: Boolean = true,
+    val signals: Map<AlgorithmSignal, SignalSetting> = emptyMap(),
+) {
+    constructor(enabled: Boolean, signals: Map<AlgorithmSignal, SignalSetting>) :
+        this(enabled, diversityEnabled = true, signals = signals)
+}
 
 /** Immutable algorithm snapshot — the whole persisted preference state. */
 data class AlgorithmSnapshot(
@@ -49,7 +57,7 @@ enum class AlgorithmPresetId { LATEST, BALANCED, TRENDING, TRUSTED, CUSTOM }
  * stores decode to defaults — a broken store must never crash settings.
  */
 object AlgorithmContract {
-    const val SCHEMA_VERSION = 1
+    const val SCHEMA_VERSION = 2
     const val MAX_WIRE_LENGTH = 2_048
 
     /** Freshness steps: Live 1h · Balanced 6h · Relaxed 24h · Chill 3d. */
@@ -96,6 +104,7 @@ object AlgorithmContract {
     /** Canonicalizes weights (0..1 in [WEIGHT_STEP] increments, FP-stable) and fills gaps. */
     fun normalize(setting: SurfaceSetting): SurfaceSetting = SurfaceSetting(
         enabled = setting.enabled,
+        diversityEnabled = setting.diversityEnabled,
         signals = AlgorithmSignal.entries.associateWith { signal ->
             val raw = setting.signals[signal] ?: SignalSetting(enabled = false, weight = 0.0)
             // Integer-cent step math keeps round-trips stable (double
@@ -122,6 +131,7 @@ object AlgorithmContract {
                 val setting = normalize(snapshot).surfaces[surface]!!
                 put(surface.wire, buildJsonObject {
                     put("e", if (setting.enabled) 1 else 0)
+                    put("d", if (setting.diversityEnabled) 1 else 0)
                     put("g", buildJsonObject {
                         setting.signals.forEach { (signal, s) ->
                             put(signal.wire, buildJsonObject {
@@ -148,13 +158,14 @@ object AlgorithmContract {
                 ?: FRESHNESS_DEFAULT_HOURS
             val surfaces = AlgorithmSurface.entries.mapNotNull { surface ->
                 val obj = root["s"]?.jsonObject?.get(surface.wire)?.jsonObject ?: return@mapNotNull null
+                val diversity = obj["d"]?.jsonPrimitive?.content != "0"
                 val signals = AlgorithmSignal.entries.mapNotNull { signal ->
                     val s = obj["g"]?.jsonObject?.get(signal.wire)?.jsonObject ?: return@mapNotNull null
                     val enabled = s["e"]?.jsonPrimitive?.content == "1"
                     val weight = s["w"]?.jsonPrimitive?.doubleOrNull ?: 0.0
                     signal to SignalSetting(enabled, weight)
                 }.toMap()
-                surface to SurfaceSetting(obj["e"]?.jsonPrimitive?.content == "1", signals)
+                surface to SurfaceSetting(obj["e"]?.jsonPrimitive?.content == "1", diversity, signals)
             }.toMap()
             normalize(AlgorithmSnapshot(freshness, surfaces))
         } catch (_: Exception) {

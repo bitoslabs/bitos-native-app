@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.HowToVote
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.People
@@ -81,6 +82,7 @@ object AppIcons {
 
     // ── Moderation / safety (spec §3.5 card menus) ───────────────────
     val Mute = Icons.Rounded.VolumeOff
+    val Poll = Icons.Rounded.HowToVote             // poll composer (legacy parity)
     val ReportSpam = Icons.Rounded.Warning
     val ReportIllicit = Icons.Rounded.ErrorOutline
     val ReportHarassment = Icons.Rounded.PanTool

@@ -15,6 +15,7 @@ enum AppDestination: Hashable {
 struct RootView: View {
     @State private var destination: AppDestination = .home
     @State private var showDiscover = false
+    @State private var showMore = false
     @Environment(AppEnvironment.self) private var environment
     @Environment(SettingsStore.self) private var settings
 
@@ -23,14 +24,14 @@ struct RootView: View {
             HomeView(store: environment.feedStore,
                      onOpenDiscover: { showDiscover = true },
                      onOpenProfile: { destination = .you },
-                     onOpenHub: { destination = .you })
+                     onOpenHub: { showMore = true })
                 .tag(AppDestination.home)
                 .tabItem { Label { Text("Home") } icon: { AppIcons.image(for: AppIcons.home) } }
 
             HomeView(store: environment.feedStore, videoOnly: true,
                      onOpenDiscover: { showDiscover = true },
                      onOpenProfile: { destination = .you },
-                     onOpenHub: { destination = .you })
+                     onOpenHub: { showMore = true })
                 .tag(AppDestination.bitz)
                 .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
 
@@ -52,10 +53,27 @@ struct RootView: View {
         // (SettingsStore) will drive this once light surfaces exist.
         .preferredColorScheme(.dark)
         .environment(environment.identityStore)
+        // One shared feed store backs Home and Bitz. Own its relay lifecycle
+        // at the shell so switching tabs never closes and reopens the same
+        // subscription.
+        .task {
+            await environment.feedStore.start()
+        }
         // Shell-level account wiring: the Activity badge needs the inbox
         // subscription alive from app start, not only while the tab is open.
         .task(id: environment.identityStore.account?.pubkeyHex) {
+            environment.feedStore.setAccount(environment.identityStore.account?.pubkeyHex)
             environment.inboxStore.setAccount(environment.identityStore.account?.pubkeyHex)
+        }
+        .sheet(isPresented: $showMore) {
+            MoreView(
+                onOpenProfile: { showMore = false; destination = .you },
+                onOpenDiscover: { showMore = false; showDiscover = true }
+            )
+            .environment(environment)
+            .environment(settings)
+            .environment(environment.relayManager)
+            .environment(environment.privacyPrefs)
         }
         .sheet(isPresented: $showDiscover) {
             NavigationStack {

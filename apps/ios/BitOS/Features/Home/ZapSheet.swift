@@ -20,18 +20,26 @@ struct ZapUiState: Sendable, Equatable {
 struct ZapSheet: View {
     let note: FeedNote
     let profiles: [String: ProfileMetadata]
+    let initialAmountSats: Int
     let onClose: () -> Void
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
-    @State private var state = ZapUiState()
+    @State private var state: ZapUiState
+    private let bridge = BusinessCoreBridge()
 
     private static let presets = [21, 100, 1_000, 10_000]
 
-    private var lud16: String? { profiles[note.pubkey]?.lud16 }
-
-    private var bridge: BusinessCoreBridge {
-        bridge ?? BusinessCoreBridge()
+    /// APP-018 functional setting: opens on the persisted default zap amount.
+    init(note: FeedNote, profiles: [String: ProfileMetadata],
+         initialAmountSats: Int = 21, onClose: @escaping () -> Void) {
+        self.note = note
+        self.profiles = profiles
+        self.initialAmountSats = initialAmountSats
+        self.onClose = onClose
+        _state = State(initialValue: ZapUiState(amountSats: initialAmountSats))
     }
+
+    private var lud16: String? { profiles[note.pubkey]?.lud16 }
 
     var body: some View {
         NavigationStack {

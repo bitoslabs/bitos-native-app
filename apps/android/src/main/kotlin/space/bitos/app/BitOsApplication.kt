@@ -22,14 +22,6 @@ class BitOsApplication : Application() {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    init {
-        // Algorithm preferences drive the For-You ranking for the process
-        // lifetime (collect from start so boot reads the persisted snapshot).
-        applicationScope.launch {
-            algorithmStore.snapshot.collect { feedRepository.setAlgorithm(it) }
-        }
-    }
-
     /** Interaction-gate store (APP-018a row 2 — origin parity). */
     val privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore by lazy {
         space.bitos.app.data.settings.PrivacyPrefsStore(this)
@@ -77,6 +69,10 @@ class BitOsApplication : Application() {
         space.bitos.app.data.publish.NotePublisher(applicationScope, relayPool)
     }
 
+    val composerDraftStore: space.bitos.app.data.publish.ComposerDraftStore by lazy {
+        space.bitos.app.data.publish.ComposerDraftStore(this)
+    }
+
     val notifications: space.bitos.app.data.feed.NotificationRepository by lazy {
         space.bitos.app.data.feed.NotificationRepository(
             scope = applicationScope,
@@ -101,6 +97,16 @@ class BitOsApplication : Application() {
 
     val muteStore: space.bitos.app.data.feed.MuteStore by lazy {
         space.bitos.app.data.feed.MuteStore(this)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Application properties are now fully initialized. Starting this in
+        // `init` can dereference the later lazy delegates while Android is
+        // still constructing the Application and crash before MainActivity.
+        applicationScope.launch {
+            algorithmStore.snapshot.collect { feedRepository.setAlgorithm(it) }
+        }
     }
 
     override fun onTerminate() {

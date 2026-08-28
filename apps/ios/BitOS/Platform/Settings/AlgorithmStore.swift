@@ -30,6 +30,7 @@ final class AlgorithmStore {
 
     struct SurfaceState: Equatable {
         var enabled: Bool
+        var diversityEnabled: Bool = true
         var signals: [String: SignalState]
     }
 
@@ -56,6 +57,18 @@ final class AlgorithmStore {
         let presetWire = bridge.algorithmPresetWire(surfaceWire: surface, presetWire: preset)
         surfaces[surface] = algoSurfaceToState(presetWire)
         persist()
+    }
+
+    func setDiversity(surface: String, enabled: Bool) {
+        guard var state = surfaces[surface] else { return }
+        state.diversityEnabled = enabled
+        surfaces[surface] = state
+        persist()
+    }
+
+    /// Reset: re-applies the detected preset (clears custom weight tweaks).
+    func resetToPreset(surface: String) {
+        setPreset(surface: surface, preset: detectPreset(surface: surface))
     }
 
     func setSignal(surface: String, signal: String, enabled: Bool, weight: Double) {
@@ -100,6 +113,7 @@ final class AlgorithmStore {
 private func algoStateToSurface(_ state: AlgorithmStore.SurfaceState) -> BusinessCoreBridge.AlgoSurfaceWire {
     BusinessCoreBridge.AlgoSurfaceWire(
         enabled: state.enabled,
+        diversityEnabled: state.diversityEnabled,
         signals: state.signals.mapValues {
             BusinessCoreBridge.AlgoSignalWire(enabled: $0.enabled, weight: $0.weight)
         }

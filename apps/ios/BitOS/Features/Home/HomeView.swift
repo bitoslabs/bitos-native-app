@@ -1,4 +1,5 @@
 import AVKit
+import Network
 import SwiftUI
 import UIKit
 
@@ -9,6 +10,9 @@ struct HomeView: View {
     @State private var store: FeedStore
     @State private var topId: String?
     @State private var pool = PlayerPool()
+    /// Unmetered (wifi) connectivity for the autoplay policy.
+    @State private var wifiUnmetered = true
+    @State private var pathMonitor: NWPathMonitor?
     @State private var showComposer = false
     @State private var commentTarget: FeedNote?
     @State private var zapTarget: FeedNote?
@@ -28,6 +32,30 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
     @Environment(SettingsStore.self) private var settings
+
+    /// APP-018: persisted autoplay policy → can the visible video start?
+    private func autoplayAllowed() -> Bool {
+        switch settings.state.mediaAutoPlay {
+        case .always: true
+        case .never: false
+        case .wifi: wifiUnmetered
+        }
+    }
+
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { path in
+            Task { @MainActor in wifiUnmetered = !path.isExpensive }
+        }
+        monitor.start(queue: DispatchQueue(label: "bitos.autoplay-path"))
+        pathMonitor = monitor
+    }
+
+    private func stopPathMonitor() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+    }
 
     init(store: FeedStore, videoOnly: Bool = false, onOpenDiscover: @escaping () -> Void = {}, onOpenProfile: @escaping () -> Void = {}, onOpenHub: @escaping () -> Void = {}, retapTick: Int = 0) {
         _store = State(initialValue: store)
@@ -216,12 +244,8 @@ struct HomeView: View {
         content
             .background(BitOSTheme.background)
             .navigationBarTitleDisplayMode(.inline)
-            .task { await store.start() }
-            .onChange(of: environment.identityStore.account) { _, account in
-                store.setAccount(account?.pubkeyHex)
-            }
             .onAppear {
-                store.setAccount(environment.identityStore.account?.pubkeyHex)
+                startPathMonitor()
                 store.holdNewNotes(false)
             }
             // APP-004: arrivals hold while scrolled into the pager;
@@ -231,7 +255,7 @@ struct HomeView: View {
                 store.holdNewNotes(!atTop)
             }
             .onDisappear {
-                store.stop()
+                stopPathMonitor()
                 pool.releaseAll()
             }
             // APP-003/APP-004: re-tap on the active shell tab scrolls to
@@ -289,6 +313,7 @@ struct HomeView: View {
                 ZapSheet(
                     note: target,
                     profiles: store.profiles,
+                    initialAmountSats: settings.state.defaultZapAmount,
                     onClose: { zapTarget = nil }
                 )
                 .environment(identity)
@@ -304,12 +329,13 @@ struct HomeView: View {
                 .environment(identity)
                 .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showComposer) {
-                ComposerSheet(publisher: environment.notePublisher) {
+            .fullScreenCover(isPresented: $showComposer) {
+                // APP-008: the composer is a full PAGE (legacy CreateView
+                // parity) — shared ComposerRules through the bridge.
+                ComposerScreen {
                     environment.notePublisher.dismiss()
                     showComposer = false
                 }
-                .presentationDetents([.medium, .large])
             }
     }
 
@@ -524,10 +550,18 @@ struct HomeView: View {
             if topId == nil { topId = notes.first?.id }
         }
         .onChange(of: topId) { _, newValue in
-            pool.update(visibleId: newValue, notes: notes)
+            pool.update(
+                visibleId: newValue, notes: notes,
+                autoplayAllowed: autoplayAllowed(),
+                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1)
+            )
         }
         .onChange(of: notes.count) { _, _ in
-            pool.update(visibleId: topId, notes: notes)
+            pool.update(
+                visibleId: topId, notes: notes,
+                autoplayAllowed: autoplayAllowed(),
+                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1)
+            )
         }
         .refreshable { store.refresh() }
     }
@@ -636,6 +670,38 @@ private extension FeedStore {
     var state: FeedState {
         if !notes.isEmpty { return .ready }
         return hasLoadedAnyEvent ? .empty : .loading
+    }
+}
+
+/// APP-008 poll display (V1): option rows; voting/bars land with the
+/// response-format decision (legacy is compose-only).
+private struct PollOptionsView: View {
+    let options: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, label in
+                HStack(spacing: 10) {
+                    Circle()
+                        .strokeBorder(BitOSTheme.textTertiary, lineWidth: 1.5)
+                        .frame(width: 18, height: 18)
+                    Text(label)
+                        .font(.system(size: 14))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(BitOSTheme.surface)
+                )
+            }
+            Text("Poll · \(options.count) options")
+                .font(.system(size: 11))
+                .foregroundStyle(BitOSTheme.textTertiary)
+        }
     }
 }
 
@@ -794,7 +860,18 @@ private struct NoteCardRow: View {
             } else {
                 // APP-005: font-scale-safe clamp — Show more/less beyond 8 lines.
                 ExpandableRichText(json: richJson, onOpenProfile: { _ in onAuthor() })
-                MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                if !note.pollOptions.isEmpty {
+                    PollOptionsView(options: note.pollOptions)
+                }
+                if !note.mediaUrls.isEmpty {
+                    if settings.state.mediaPreview {
+                        MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                    } else {
+                        Text("\(note.mediaUrls.count) attachment(s) \u{2014} previews off")
+                            .font(.system(size: 12))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                    }
+                }
             }
             HStack(spacing: BitOSTheme.Spacing.base) {
                 cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
@@ -1157,7 +1234,15 @@ private struct TextNotePage: View {
                     // APP-005: NIP-27 rich body (entities, links, hashtags)
                     // + image grid with lightbox.
                     RichTextView(json: richJson, onOpenProfile: { _ in onAuthor() }, onOpenHashtag: nil)
-                    MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                    if !note.mediaUrls.isEmpty {
+                        if settings.state.mediaPreview {
+                            MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                        } else {
+                            Text("\(note.mediaUrls.count) attachment(s) \u{2014} previews off")
+                                .font(.system(size: 12))
+                                .foregroundStyle(BitOSTheme.textTertiary)
+                        }
+                    }
                 }
                 Spacer()
             }

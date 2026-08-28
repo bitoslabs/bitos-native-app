@@ -84,6 +84,60 @@ class NotePublisher(
     }
 
     /**
+     * APP-008 composer page: kind-1 with derived tags (hashtags, NIP-27
+     * entities, NIP-36 CW) — `ComposerRules.deriveTags` output.
+     */
+    fun publishNoteWith(
+        content: String,
+        tags: List<List<String>>,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeTextNote(signer.publicKeyHex(), content, tags)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
+     * APP-008 composer page PoW path: pre-mined nonce + derived tags (the
+     * mining template included the same tags — PowCard `baseTags`).
+     */
+    fun publishPowNoteWith(
+        content: String,
+        tags: List<List<String>>,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeTextNoteWithPow(
+                signer.publicKeyHex(), content, nonce, targetDifficulty, createdAtSeconds, tags,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
      * Kind-1 note with a pre-mined NIP-13 nonce tag (APP-008 PowCard path):
      * `nonce`/`targetDifficulty`/`createdAtSeconds` come from the mining
      * session over the same content — publish reuses the mined timestamp.

@@ -111,11 +111,14 @@ fun FeedScreen(
     notePublisher: NotePublisher,
     mediaPublishViewModel: MediaPublishViewModel,
     authorRepository: space.bitos.app.data.feed.AuthorRepository,
+    settingsStore: space.bitos.app.data.settings.SettingsStore,
     videoOnly: Boolean = false,
     sensitiveShowByDefault: Boolean = false,
     onOpenProfile: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
     onOpenHub: () -> Unit = {},
+    /** APP-008: opens the full-page composer (legacy CreateView parity). */
+    onOpenComposer: () -> Unit = {},
     /** APP-003/APP-004: bumped when the user re-taps the ACTIVE shell tab
      * (Home/Bitz) — scrolls to top, or refreshes when already at top. */
     retapTick: Int = 0,
@@ -132,7 +135,18 @@ fun FeedScreen(
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
     val zapState by viewModel.zapState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val pool = androidx.compose.runtime.remember { VideoPlayerPool(context) }
+    // APP-018 functional settings: autoplay policy + playback rate drive the
+    // pool live (closure reads the current snapshot on every reconciliation).
+    val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
+    val currentSettings = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(settingsSnapshot) }
+    currentSettings.value = settingsSnapshot
+    val pool = androidx.compose.runtime.remember {
+        VideoPlayerPool(
+            context = context,
+            canAutoplay = { autoplayAllowed(context, currentSettings.value.mediaAutoPlay) },
+            rateProvider = { currentSettings.value.videoPlaybackRate.rate.toFloat() },
+        )
+    }
     // Shell split (user decision): Home tab = text notes; Bitz tab = reels.
     val feedNotes = remember(state.notes, videoOnly) {
         if (videoOnly) state.notes.filter { it.video != null } else state.notes.filter { it.video == null }
@@ -241,17 +255,18 @@ fun FeedScreen(
                                 onLike = viewModel::toggleLike, onBookmark = viewModel::toggleBookmark,
                                 onComment = { showCommentsFor = it }, onRepost = viewModel::repost,
                                 onFollow = viewModel::toggleFollow,
-                                onZap = { viewModel.loadZaps(it.id); zapTarget = it },
+                                onZap = { viewModel.loadZaps(it.id); viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
                                 onAuthor = { authorTarget = it }, isMuted = viewModel.isMuted(feedNotes[page].pubkey),
                                 onMuteToggle = { viewModel.toggleMute(feedNotes[page].pubkey) },
                                 onReport = { reason -> viewModel.report(feedNotes[page], reason) },
                             )
                         } else NotesList(
                             notes = feedNotes, state = state, actions = actions, viewModel = viewModel,
-                            listState = listState, onComment = { showCommentsFor = it }, onZap = { zapTarget = it },
+                            listState = listState, onComment = { showCommentsFor = it }, onZap = { viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
                             onAuthor = { authorTarget = it }, onLike = viewModel::toggleLike,
                             onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
                             sensitiveShowByDefault = sensitiveShowByDefault,
+                            mediaPreview = settingsSnapshot.mediaPreview,
                         )
                     }
                 }
@@ -273,7 +288,7 @@ fun FeedScreen(
 
         // APP-004: New-note extended FAB (spec §3.4).
         androidx.compose.material3.ExtendedFloatingActionButton(
-            onClick = { showComposer = true },
+            onClick = onOpenComposer,
             icon = {
                 Icon(
                     painter = androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_pen_linear),
@@ -393,6 +408,20 @@ private fun FeedPage(
     } else {
         TextNotePage(note, state, actions, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor)
     }
+}
+
+/** APP-018: persisted autoplay policy → can the visible video start? */
+private fun autoplayAllowed(
+    context: android.content.Context,
+    policy: space.bitos.core.settings.MediaAutoPlaySetting,
+): Boolean = when (policy) {
+    space.bitos.core.settings.MediaAutoPlaySetting.ALWAYS -> true
+    space.bitos.core.settings.MediaAutoPlaySetting.NEVER -> false
+    space.bitos.core.settings.MediaAutoPlaySetting.WIFI -> runCatching {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }.getOrDefault(false)
 }
 
 // ---------------------------------------------------------------------
@@ -805,6 +834,7 @@ private fun NotesList(
     notes: List<FeedNote>,
     state: FeedUiState,
     sensitiveShowByDefault: Boolean = false,
+    mediaPreview: Boolean = true,
     actions: LocalActions,
     viewModel: HomeViewModel,
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -831,6 +861,7 @@ private fun NotesList(
                 onMuteToggle = { viewModel.toggleMute(note.pubkey) },
                 onReport = { reason -> viewModel.report(note, reason) },
                 sensitiveShowByDefault = sensitiveShowByDefault,
+                mediaPreview = mediaPreview,
             )
         }
         // APP-004 pagination: footer spinner while an older page loads.
@@ -859,6 +890,7 @@ private fun NoteCardRow(
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
     sensitiveShowByDefault: Boolean = false,
+    mediaPreview: Boolean = true,
 ) {
     val profile = state.profiles[note.pubkey]
     val bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked
@@ -924,7 +956,15 @@ private fun NoteCardRow(
                     )
                 }
             }
-            MediaRow(urls = note.mediaUrls, onOpen = { lightboxUrl = it })
+            note.poll?.let { poll -> PollOptions(poll) }
+            if (mediaPreview) {
+                MediaRow(urls = note.mediaUrls, onOpen = { lightboxUrl = it })
+            } else {
+                Text(
+                    if (note.mediaUrls.size == 1) "1 attachment (previews off)" else "${note.mediaUrls.size} attachments (previews off)",
+                    fontSize = 12.sp, color = BitOSColors.textTertiary,
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
             CardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
@@ -945,6 +985,44 @@ private fun NoteCardRow(
 /** APP-005: bodies collapse beyond 8 lines (line-based, so font scaling
  * cannot break the clamp); full-screen card pages never clamp. */
 private const val NOTE_COLLAPSE_LINES = 8
+
+/** APP-008 poll display (V1): question + option rows; voting/bars land
+ * with the response-format decision (legacy is compose-only). */
+@Composable
+private fun PollOptions(poll: space.bitos.core.model.Poll) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        poll.options.forEach { option ->
+            Surface(shape = RoundedCornerShape(8.dp), color = BitOSColors.surface) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .border(1.5.dp, BitOSColors.textTertiary, androidx.compose.foundation.shape.CircleShape),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        option.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BitOSColors.textPrimary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Text(
+            "Poll · ${poll.totalOptions} options",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textTertiary,
+        )
+    }
+}
 
 @Composable
 private fun CardAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
