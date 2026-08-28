@@ -324,7 +324,8 @@ push toggles), relays live status dots, zap sats display.**
 - [x] Icon token layer: AppIcons.* semantic tokens both platforms (backing SF Symbols / Material Rounded; Solar/Lucide provenance in comments — swap-in-place if brand demands)
 - [x] PowCard/PowBadge (NIP-13 slider 0–30 + hash viz + chunked background mining + cancel/retry; adopted in both note composers; shared-core Pow with parity tests)
 - [ ] AttachmentPreviewRow; MediaGrid; ImageViewer lightbox; BitzVideoCover
-- [ ] BrandQrCode; Nip05Badge; RelayStatusDot
+- [x] BrandQrCode (2026-08-28): shared pure `QrCode` encoder (byte mode, ECC-M, V1–6, 8 masks w/ penalty; identity payloads) + branded renderer both platforms (white card, gray-900 modules, orange hex-bolt cover — legacy parity) + identity-QR dialogs from the You profile npub row AND the More hub hero (scan-to-follow + copy); bridge `qrMatrix` (bit-packed rows). Invoice QRs use the user's zxing path (payment-grade, long payloads). 5 common tests
+- [ ] Nip05Badge; RelayStatusDot
 - [ ] AccountSwitchOverlay/Sheet; BootSplash; ErrorRetryWidget; skeletons; empty-state widget
 - [ ] GlassContainer; LikeButton animation; AppAvatar size set
 
@@ -347,6 +348,54 @@ push toggles), relays live status dots, zap sats display.**
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-08-28 — Full-code parity audit of both native apps vs the unified
+  spec and BOTH legacy apps (Flutter GetX app + web SvelteKit app,
+  explored read-only). Results recorded as new **spec §9** (audit
+  snapshot: route status, per-surface progress, settings field gaps,
+  integrity findings, prioritized next-task queue). Score: 4/24 surfaces
+  complete, 13 partial, 7 not started; platforms are at parity with each
+  other nearly everywhere. Corrections to this ledger found by the audit:
+  APP-019 camera/trim/publish is currently UNREACHABLE (CreateScreen
+  orphaned on both platforms by the composer-FAB rework; iOS import sheet
+  still reachable, Android's is not); APP-003 iOS re-tap-to-top is
+  dormant (HomeView.retapTick never passed by RootView); APP-009 iOS
+  assembles the thread tree but renders the flat list; Android
+  ProfileEditSheet never prefills nip05/lud16 (callers pass empty
+  strings); Share buttons on both video rails are no-ops; inbound
+  nostr:/lightning: deep links absent on both platforms; Discover renders
+  as a sheet/hidden destination, not the sixth tab of spec §1.1 (user
+  decision needed). Also logged: which legacy "features" were stubs
+  (Flutter communities NIP-29 TODO, dead language picker, stub help
+  cards; web toast-only clear-cache, unenforced private-account) so they
+  are not blind-ported. No code changed — audit + docs only
+  (developer-guide.md also gained a stale-build troubleshooting section
+  from today's crash-fix session).
+
+- 2026-08-28 — APP-014 zap sheet rebuilt to legacy parity (studied the
+  old Flutter `zap_dialog.dart` line by line; every rule in shared core
+  first). Shared: `ZapFormat` (presets 21/100/500/1000, YakiHonne tiers
+  ⚡≤50/💜≤250/🔥≤750/🚀, compact K/M sats format) + `Bolt11.expirySeconds`
+  (bech32 data-part TLV walk: timestamp + expiry, default 3600 — the
+  countdown is now real, not decorative) — 6 common tests (synthetic
+  invoices built with the internal bech32 encoder); bridge: `zapEmoji`,
+  `zapFormatSats`, `bolt11ExpirySeconds`. Both platforms rebuilt the sheet:
+  recipient header (avatar + name + copy-LN-address + close) → amount step
+  (4 emoji tiles, custom sats ≤8 digits, comment ≤200, anonymous toggle /
+  signed-out note, zap-colored CTA "⚡ Zap 21 sats") → invoice card (QR —
+  zxing on Android, CoreImage on iOS; live mm:ss countdown turning amber
+  <2 min; Open wallet deep link with copy fallback; short invoice; expired
+  → New invoice) → paid (green ✓, amount+name, comment quote, countdown
+  bar + 2.4 s auto-close; first signal = a verified 9735 for the note
+  landing after the invoice — count-based, request-id match rides the
+  ledger work, noted). Signed-out/anonymous skips the 9734 signature.
+  Also rescued the concurrent session's new shared `QrCode` (GF(256)
+  reduction bug xors 0x11D post-mask producing >255 values — fixed to
+  0x1D; common-Kotlin `System.arraycopy` → loop; `toByteArray(Charsets)`
+  → `encodeToByteArray`) — their QrCodeTest 5/5; payment QRs deliberately
+  stay on zxing/CoreImage until the shared encoder's matrix tests hold.
+  Verified: shared androidHost + native 261/261, Android compile + 55/55,
+  iOS Swift 6 typecheck 0 errors, structure check.
 
 - 2026-08-28 — APP-008 draft persistence + discard confirm (spec §3.8
   item closed; persisted schema → shared core first per repo rules).
@@ -479,6 +528,27 @@ fixed, what's next.
   errors ✅, structure ✅. APP-005 remaining: polls [W+F] + compact variant
   (rides APP-010/015). Next: APP-009 threading remainder or APP-010
   results tabs.
+
+- 2026-08-28 — Identity QR shipped (user-named "show QR" gap). Shared
+  core: pure `QrCode` encoder (APP-022) — byte mode, ECC level M, versions
+  1–6 (identity payloads: npub/nostr: links), GF(256) Reed–Solomon with the
+  reduction-order bug caught by tests (mask before xor 0x11D kept bit 8 →
+  index 285 AIOOBE), all 8 masks with N1/N2/N4 penalty scoring,
+  deterministic; format-area reservation initially ate the (8,6)/(6,8)
+  timing modules and the always-dark module sat coordinate-swapped — both
+  caught by structural tests, fixed. Bridge `qrMatrix` (bit-packed Long
+  rows). UI (legacy BrandQrCode parity, both platforms): white card,
+  gray-900 modules, bitcoin-orange hex-bolt center cover; identity-QR
+  dialog/sheet from the You profile npub row and the More hub hero
+  ("Scan with any Nostr app to follow …" + Copy npub). Profile (You) page
+  is single-scroll on both platforms (cover → hero → identity+QR → stats →
+  actions → tabs → window content). Invoice QRs: user's zxing payment path
+  (long payloads, beyond the shared V1–6 table) — completed their in-flight
+  edits (Uri fix, hasIdentity read, imports). Remaining polish for the next
+  pass: profile-picture avatars in switcher rows (kind-0 of other accounts
+  needs per-account profile fetch), branded switch overlay animation.
+  Verified: shared 261/261 ×2 ✅, Android 55/55 ✅, iOS full-app Swift 6
+  typecheck 0 errors ✅ (XCFramework rebuilt), pbxproj lint ✅, structure ✅.
 
 - 2026-08-28 — Multi-account visibility fixed + hub account widgets
   (user report: no switch/add on More). Root cause: the hub switch row

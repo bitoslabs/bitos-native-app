@@ -134,6 +134,7 @@ fun FeedScreen(
     var authorTarget by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
     val zapState by viewModel.zapState.collectAsStateWithLifecycle()
+    val identityState by identityViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     // APP-018 functional settings: autoplay policy + playback rate drive the
     // pool live (closure reads the current snapshot on every reconciliation).
@@ -322,8 +323,14 @@ fun FeedScreen(
                 note = target,
                 lud16 = state.profiles[target.pubkey]?.lud16,
                 state = zapState,
+                profileName = state.profiles[target.pubkey]?.bestDisplayName,
+                hasIdentity = identityViewModel.state.value.account != null,
+                zapCount = state.zapCounts[target.id] ?: 0,
                 onAmountSelected = viewModel::selectZapAmount,
-                onZap = { viewModel.zap(target) },
+                onZap = { sats, comment, anonymous ->
+                    viewModel.selectZapAmount(sats)
+                    viewModel.zap(target, comment, anonymous)
+                },
                 onClose = { viewModel.dismissZap(); zapTarget = null },
             )
         }

@@ -133,7 +133,7 @@ class HomeViewModel(
     }
 
     /** LNURL flow: params → signed 9734 → invoice. Failures surface; never crashes UI. */
-    fun zap(note: space.bitos.core.feed.FeedNote) {
+    fun zap(note: space.bitos.core.feed.FeedNote, comment: String = "", anonymous: Boolean = false) {
         val profile = repository.state.value.profiles[note.pubkey]
         val lud16 = profile?.lud16 ?: run {
             mutableZap.value = mutableZap.value.copy(
@@ -147,7 +147,7 @@ class HomeViewModel(
         viewModelScope.launch {
             try {
                 val payRequest = lnurlClient.fetchPayRequest(lud16)
-                val nostrJson = signedZapRequest(payRequest, amountSats, lud16, note)
+                val nostrJson = if (anonymous) null else signedZapRequest(payRequest, amountSats, lud16, note, comment)
                 val invoice = lnurlClient.fetchInvoice(payRequest, amountSats * 1000, nostrJson, lud16)
                 mutableZap.value = mutableZap.value.copy(
                     phase = space.bitos.app.ui.feed.ZapPhase.INVOICE,
@@ -169,6 +169,7 @@ class HomeViewModel(
         amountSats: Long,
         lud16: String,
         note: space.bitos.core.feed.FeedNote,
+        comment: String = "",
     ): String? {
         val signer = identityViewModel?.createSigner() ?: return null
         val composer = space.bitos.core.publish.NoteComposer(clock = { System.currentTimeMillis() / 1000 })
@@ -177,7 +178,7 @@ class HomeViewModel(
             amountMillisats = amountSats * 1000,
             relays = space.bitos.app.data.feed.DefaultRelays.urls.map { it.value },
             lnurlHint = lud16,
-            comment = "",
+            comment = comment,
             authorPubkey = signer.publicKeyHex(),
             targetEventId = note.id,
         ) ?: return null

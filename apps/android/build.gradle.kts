@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.work.runtime)
     implementation(libs.okhttp)
+    implementation(libs.zxing.core)
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

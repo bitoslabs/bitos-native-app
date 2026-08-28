@@ -51,6 +51,25 @@ object ZapReceipt {
         if (!targetsRecipient) return null
         return request.pubkey.value
     }
+
+    /**
+     * APP-014 paid-matching key: the embedded 9734's canonical event id
+     * (verified through the same client gate as [senderPubkey]). The zap
+     * sheet compares this against its own request id — an exact match is
+     * our receipt, not another user's zap to the same note.
+     */
+    fun embeddedRequestId(event: NostrEvent): String? {
+        if (event.kind != RECEIPT_KIND) return null
+        val description = event.tags.firstOrNull { it.firstOrNull() == "description" }?.getOrNull(1) ?: return null
+        val frame = "[\"EVENT\",$description]"
+        return try {
+            space.bitos.core.nostr.NostrEventCodec.decodeClientEventFrame(
+                space.bitos.core.nostr.Sha256EventHasher, frame, null,
+            ).takeIf { it.kind == REQUEST_KIND }?.id?.value
+        } catch (_: space.bitos.core.nostr.NostrEventCodec.Rejected) {
+            null
+        }
+    }
 }
 
 /**
@@ -62,6 +81,70 @@ object ZapReceipt {
 object Bolt11 {
     private const val MAX_INVOICE_LENGTH = 4_096
     private const val MAX_MILLISATS = 1_000_000_000_000_000L // 10,000 BTC in msat
+
+    /**
+     * APP-014 invoice expiry (epoch seconds) from the data-part TLV:
+     * timestamp (type 3) + expiry (type 6, default 3600 s). Null when the
+     * invoice does not parse. Bounded and overflow-safe.
+     */
+    fun expirySeconds(invoice: String): Long? {
+        if (invoice.length !in 20..MAX_INVOICE_LENGTH) return null
+        val separator = invoice.lastIndexOf('1')
+        if (separator < 4 || separator == invoice.length - 7) return null
+        if (!invoice.substring(0, 4).equals("lnbc", ignoreCase = true)) return null
+        val dataPart = invoice.substring(separator + 1).dropLast(6) // strip checksum
+        if (dataPart.isEmpty()) return null
+        val hasLower = dataPart.any { it in 'a'..'z' }
+        val hasUpper = dataPart.any { it in 'A'..'Z' }
+        if (hasLower && hasUpper) return null
+        val charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+        val words = IntArray(dataPart.length) { index ->
+            charset.indexOf(dataPart[index].lowercaseChar()).takeIf { it >= 0 } ?: return null
+        }
+        // 5-bit words → bytes (regroup; trailing bits must be zero-padding).
+        val totalBits = words.size * 5
+        val bytes = ByteArray(totalBits / 8)
+        for (index in bytes.indices) {
+            var value = 0
+            for (offset in 0..7) {
+                val bitIndex = index * 8 + offset
+                val word = words[bitIndex / 5]
+                val bitInWord = 4 - (bitIndex % 5)
+                value = (value shl 1) or ((word shr bitInWord) and 1)
+            }
+            bytes[index] = value.toByte()
+        }
+        // TLV walk: [type][len][value]… with the BOLT-11 types we need.
+        var index = 0
+        var timestamp = 0L
+        var expiry = 3_600L
+        while (index + 1 < bytes.size) {
+            val type = bytes[index].toInt() and 0xff
+            val length = bytes[index + 1].toInt() and 0xff
+            if (length < 0 || index + 2 + length > bytes.size) return null
+            when (type) {
+                3 -> {
+                    if (length > 7) return null
+                    var value = 0L
+                    for (byteIndex in 0 until length) {
+                        value = (value shl 8) or (bytes[index + 2 + byteIndex].toLong() and 0xff)
+                    }
+                    timestamp = value
+                }
+                6 -> {
+                    if (length > 7) return null
+                    var value = 0L
+                    for (byteIndex in 0 until length) {
+                        value = (value shl 8) or (bytes[index + 2 + byteIndex].toLong() and 0xff)
+                    }
+                    expiry = value
+                }
+            }
+            index += 2 + length
+        }
+        if (timestamp <= 0) return null
+        return timestamp + expiry
+    }
 
     /** msat per unit for each BOLT-11 multiplier (and whole BTC). */
     private val unitMillisats = mapOf(

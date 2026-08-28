@@ -9,6 +9,7 @@ struct ProfileView: View {
     @State private var confirmRemove = false
     @State private var showEdit = false
     @State private var showSettings = false
+    @State private var showQr = false
     @Environment(AppEnvironment.self) private var environment
     @Environment(SettingsStore.self) private var settings
 
@@ -45,6 +46,26 @@ struct ProfileView: View {
                 NavigationStack { SettingsView() }
                     .environment(environment)
             }
+        }
+        .sheet(isPresented: $showQr) {
+            VStack(spacing: BitOSTheme.Spacing.base) {
+                Text("Your identity QR")
+                    .font(.system(size: 18, weight: .bold))
+                if let account = store.account {
+                    BrandQrCodeView(value: account.npub, size: 224)
+                    Text("Scan with any Nostr app to follow \(settings.shortNpub(account.npub))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                    Button("Copy npub") {
+                        UIPasteboard.general.string = account.npub
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(BitOSTheme.accent)
+                }
+            }
+            .padding(BitOSTheme.Spacing.base)
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showEdit) {
             ProfileEditSheet(
@@ -92,14 +113,24 @@ struct ProfileView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text((profile?.displayName ?? profile?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Your account")
                     .font(.title2.weight(.bold))
-                Button {
-                    UIPasteboard.general.string = account.npub
-                } label: {
-                    Text(settings.shortNpub(account.npub))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(BitOSTheme.accent)
+                HStack(spacing: 8) {
+                    Button {
+                        UIPasteboard.general.string = account.npub
+                    } label: {
+                        Text(settings.shortNpub(account.npub))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(BitOSTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        showQr = true
+                    } label: {
+                        Text("QR")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(BitOSTheme.accent)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 if let nip05 = profile?.nip05, !nip05.isEmpty {
                     Text("\u{2713} \(nip05)").font(.caption).foregroundStyle(BitOSTheme.success)
                 }

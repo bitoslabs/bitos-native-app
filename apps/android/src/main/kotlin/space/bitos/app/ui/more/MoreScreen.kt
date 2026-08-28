@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -81,6 +82,7 @@ fun MoreScreen(
     val account = identity.account
     var showSwitcher by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var showAddAccount by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showQr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var importInput by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     var importError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
@@ -142,6 +144,9 @@ fun MoreScreen(
                                 fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.primary,
                             )
                         }
+                    }
+                    TextButton(onClick = { showQr = true }) {
+                        Text("QR", color = BitOSColors.primary, fontWeight = FontWeight.W600)
                     }
                     TextButton(onClick = onOpenProfile) {
                         Text("Profile", color = BitOSColors.primary, fontWeight = FontWeight.W600)
@@ -231,34 +236,99 @@ fun MoreScreen(
                 } else {
                     for (acct in registered) {
                         val isActive = acct.pubkeyHex == (activePubkey ?: account?.pubkeyHex)
+                        // Legacy `_AccountRow` parity: rounded card row —
+                        // active tint + border; badges from the account's
+                        // kind-0 when the feed has seen it.
+                        val profile = feedState.profiles[acct.pubkeyHex]
+                        val name = acct.displayName
+                            ?: profile?.bestDisplayName?.takeIf { it.isNotBlank() }
+                            ?: "Account"
+                        val nip05 = profile?.nip05?.takeIf { it.isNotEmpty() }
+                        val hasLightning = profile?.lud16.orEmpty().isNotEmpty()
                         Row(
                             Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isActive) BitOSColors.primary.copy(alpha = 0.06f)
+                                    else BitOSColors.surface.copy(alpha = 0.4f),
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isActive) BitOSColors.primary.copy(alpha = 0.25f)
+                                    else BitOSColors.border.copy(alpha = 0.35f),
+                                    RoundedCornerShape(14.dp),
+                                )
                                 .clickable(enabled = !isActive && !identity.busy) {
                                     identityViewModel.switchTo(acct.pubkeyHex)
-                                    showSwitcher = false
                                 }
-                                .padding(vertical = 10.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            PubkeyAvatar(pubkey = acct.pubkeyHex, size = 40)
+                            Box {
+                                PubkeyAvatar(pubkey = acct.pubkeyHex, size = 40)
+                                if (hasLightning) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .size(14.dp)
+                                            .clip(androidx.compose.foundation.shape.CircleShape)
+                                            .background(BitOSColors.zap)
+                                            .border(1.dp, BitOSColors.background, androidx.compose.foundation.shape.CircleShape),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text("⚡", fontSize = 7.sp)
+                                    }
+                                }
+                            }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    acct.displayName ?: "Account",
-                                    fontSize = 15.sp,
-                                    fontWeight = if (isActive) FontWeight.W700 else FontWeight.W500,
-                                    color = BitOSColors.textPrimary,
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.W700,
+                                        color = BitOSColors.textPrimary,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    if (nip05 != null) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(
+                                            Icons.Outlined.Check,
+                                            contentDescription = null,
+                                            tint = BitOSColors.success,
+                                            modifier = Modifier.size(11.dp),
+                                        )
+                                    }
+                                }
                                 Text(
                                     settingsStore.shortNpub(acct.npub),
                                     fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textSecondary,
                                 )
+                                if (nip05 != null) {
+                                    Text(nip05, fontSize = 10.sp, color = BitOSColors.success, maxLines = 1)
+                                }
                             }
-                            if (isActive) {
-                                Text("Active", fontSize = 11.sp, fontWeight = FontWeight.W700, color = BitOSColors.primary)
+                            when {
+                                identity.busy && !isActive -> androidx.compose.material3.CircularProgressIndicator(
+                                    strokeWidth = 2.dp, modifier = Modifier.size(18.dp), color = BitOSColors.primary,
+                                )
+                                isActive -> Icon(
+                                    Icons.Outlined.Check,
+                                    contentDescription = "Active account",
+                                    tint = BitOSColors.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                else -> Icon(
+                                    Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = BitOSColors.textTertiary,
+                                )
                             }
                         }
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
                 androidx.compose.material3.HorizontalDivider(color = BitOSColors.border.copy(alpha = 0.4f))
@@ -309,6 +379,29 @@ fun MoreScreen(
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showAddAccount = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showQr && account != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showQr = false },
+            title = { Text("Your identity QR") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    space.bitos.app.ui.components.BrandQrCode(value = account.npub, sizeDp = 224)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Scan with any Nostr app to follow " + settingsStore.shortNpub(account.npub),
+                        fontSize = 12.sp, color = BitOSColors.textSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(account.npub)); showQr = false }) {
+                    Text("Copy npub", color = BitOSColors.primary)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },
         )
     }
 

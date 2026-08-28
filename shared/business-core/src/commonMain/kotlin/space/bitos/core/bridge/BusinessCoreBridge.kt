@@ -541,6 +541,15 @@ class BusinessCoreBridge {
     /** Quick-emoji palette (32, legacy parity). */
     fun composerEmojis(): List<String> = space.bitos.core.publish.ComposerRules.COMPOSER_EMOJIS
 
+    /** APP-014 zap-sheet presentation rules (shared `ZapFormat`). */
+    fun zapEmoji(sats: Long): String = space.bitos.core.model.ZapFormat.emoji(sats)
+
+    fun zapFormatSats(sats: Long): String = space.bitos.core.model.ZapFormat.sats(sats)
+
+    /** APP-014 invoice expiry (epoch seconds); 0 when unparseable. */
+    fun bolt11ExpirySeconds(invoice: String): Long =
+        space.bitos.core.model.Bolt11.expirySeconds(invoice) ?: 0L
+
     /**
      * APP-008 composer-draft persistence seam: encode the draft wire
      * (urlsJson = ["https://…"], trackedJson = [{"n":…,"u":…}]).
@@ -957,6 +966,14 @@ class BusinessCoreBridge {
                     ?.let { space.bitos.core.model.RelayEntry(it, wire.read, wire.write, wire.primary) }
             },
         )
+
+    /** QR matrix rows as bit-packed Longs (bit i = module i, true = dark); empty when unencodable. */
+    fun qrMatrix(text: String): List<Long> =
+        space.bitos.core.nostr.QrCode.encode(text)?.map { row ->
+            var bits = 0L
+            row.forEachIndexed { i, dark -> if (dark) bits = bits or (1L shl i) }
+            bits
+        } ?: emptyList()
 
     /** Canonical url for a valid add-field input, or null (validation rule). */
     fun relayUrlNormalize(raw: String): String? =

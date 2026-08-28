@@ -131,3 +131,49 @@ make check            # every locally available lane
 - `services` and `infra`: derived backend projections and local/production operations.
 
 Keep UI and platform APIs native. BusinessCore and MediaCore communicate only through their native adapters and versioned contracts; neither core imports the other. The fuller boundary rules are in [architecture.md](architecture.md).
+
+## 8. Troubleshooting builds
+
+### App installs but crashes on launch
+
+**Symptom.** `./gradlew :apps:android:installDebug` succeeds, but the app
+crashes on launch with `java.lang.NoSuchMethodError` (for example a
+`BitOSApp(...)` parameter mismatch) or `java.lang.NoClassDefFoundError`
+(for example a missing `space.bitos.core.model.RelayUrl`).
+
+**Cause.** Stale incremental-compilation and dexing state — typically after
+an interrupted build or a branch switch that changed Kotlin/Compose
+signatures. The corruption can span two layers at once: the app module's dex
+archive (call sites compiled against old signatures, seen 2026-08-28 after
+commit `b4d1544` added the `composerDraftStore` parameter) and
+`shared/business-core` intermediates (the dex pipeline packaging zero shared
+classes even though its compile/runtime jars are complete).
+
+**Fix.** Clean the whole repository. A module-scoped `:apps:android:clean`
+only re-dexes the app; it does not touch the shared module's stale
+artifacts, which is why the second failure only appears after the first is
+fixed:
+
+```sh
+./gradlew clean :apps:android:installDebug
+```
+
+**Verify.** Launch the app and watch for fatal exceptions (no output = clean):
+
+```sh
+adb shell am start -n space.bitos.app.debug/space.bitos.app.MainActivity
+adb logcat AndroidRuntime:E '*:S'
+```
+
+When a `NoClassDefFoundError` names a `space.bitos.core.*` class, the APK
+itself is missing the shared classes. Confirm before reinstalling by
+counting shared class definitions in the packaged dex files — a healthy
+build reports hundreds; zero means the stale state is back:
+
+```sh
+cd $(mktemp -d) && unzip -q "$REPO/apps/android/build/outputs/apk/debug/android-debug.apk" 'classes*.dex'
+for d in classes*.dex; do
+  "$HOME/Library/Android/sdk/build-tools/36.0.0/dexdump" "$d" 2>/dev/null |
+    grep -c "Class descriptor.*'Lspace/bitos/core/"
+done
+```

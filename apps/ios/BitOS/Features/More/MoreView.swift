@@ -18,6 +18,7 @@ struct MoreView: View {
 
     @State private var showSettingsSection: String?
     @State private var showSwitcher = false
+    @State private var showQr = false
     @State private var showAddAccount = false
     @State private var importText = ""
     @State private var importError: String?
@@ -46,6 +47,14 @@ struct MoreView: View {
                                 .buttonStyle(.plain)
                             }
                             Spacer()
+                            Button {
+                                showQr = true
+                            } label: {
+                                Text("QR")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.accent)
+                            }
+                            .buttonStyle(.plain)
                         }
                         .padding(.vertical, 2)
                     }
@@ -125,6 +134,26 @@ struct MoreView: View {
                 set: { if !$0 { showSettingsSection = nil } }
             )) {
                 SettingsSectionView(sectionKey: showSettingsSection ?? "about")
+            }
+            .sheet(isPresented: $showQr) {
+                VStack(spacing: BitOSTheme.Spacing.base) {
+                    Text("Your identity QR")
+                        .font(.system(size: 18, weight: .bold))
+                    if let account = identity.account {
+                        BrandQrCodeView(value: account.npub, size: 224)
+                        Text("Scan with any Nostr app to follow \(settings.shortNpub(account.npub))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                            .multilineTextAlignment(.center)
+                        Button("Copy npub") {
+                            UIPasteboard.general.string = account.npub
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BitOSTheme.accent)
+                    }
+                }
+                .padding(BitOSTheme.Spacing.base)
+                .presentationDetents([.medium])
             }
             .sheet(isPresented: $showSwitcher) {
                 AccountSwitcherSheet(

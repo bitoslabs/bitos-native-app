@@ -96,6 +96,7 @@ fun ProfileScreen(
     val clipboard = LocalClipboardManager.current
 
     var showEdit by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showQr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val profileEditState by identityViewModel.profileEditState.collectAsStateWithLifecycle()
 
     Column(
@@ -155,21 +156,29 @@ fun ProfileScreen(
                     style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.W800,
                     color = BitOSColors.textPrimary,
                 )
-                TextButton(
-                    onClick = { clipboard.setText(AnnotatedString(account.npub)) },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
-                ) {
-                    Text(
-                        settingsStore.shortNpub(account.npub),
-                        fontSize = 12.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = BitOSColors.primary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        painterResource(R.drawable.solar_pen_linear),
-                        contentDescription = "Copy npub", tint = BitOSColors.primary,
-                        modifier = Modifier.width(14.dp),
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { clipboard.setText(AnnotatedString(account.npub)) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                    ) {
+                        Text(
+                            settingsStore.shortNpub(account.npub),
+                            fontSize = 12.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = BitOSColors.primary,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            painterResource(R.drawable.solar_pen_linear),
+                            contentDescription = "Copy npub", tint = BitOSColors.primary,
+                            modifier = Modifier.width(14.dp),
+                        )
+                    }
+                    TextButton(
+                        onClick = { showQr = true },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp),
+                    ) {
+                        Text("QR", fontSize = 12.sp, fontWeight = FontWeight.W700, color = BitOSColors.primary)
+                    }
                 }
                 profile?.nip05?.takeIf { it.isNotEmpty() }?.let {
                     Text("✓ $it", fontSize = 12.sp, color = BitOSColors.success)
@@ -249,6 +258,29 @@ fun ProfileScreen(
             )
             ImportPanel(onSubmit = identityViewModel::importNsecPreview, error = state.importError)
         }
+    }
+
+    if (showQr && state.account != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showQr = false },
+            title = { Text("Your identity QR") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    space.bitos.app.ui.components.BrandQrCode(value = state.account!!.npub, sizeDp = 224)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Scan with any Nostr app to follow " + settingsStore.shortNpub(state.account!!.npub),
+                        fontSize = 12.sp, color = BitOSColors.textSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(state.account!!.npub)); showQr = false }) {
+                    Text("Copy npub", color = BitOSColors.primary)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },
+        )
     }
 
     if (showEdit) {

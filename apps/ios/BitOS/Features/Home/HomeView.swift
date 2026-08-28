@@ -314,6 +314,7 @@ struct HomeView: View {
                     note: target,
                     profiles: store.profiles,
                     initialAmountSats: settings.state.defaultZapAmount,
+                    zapCount: store.zapCounts[target.id] ?? 0,
                     onClose: { zapTarget = nil }
                 )
                 .environment(identity)

@@ -890,6 +890,236 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 
 ---
 
+## 9. Native implementation audit (snapshot 2026-08-28)
+
+> **What this section is:** a code-level audit of `apps/ios` + `apps/android`
+> as actually shipped on 2026-08-28, checked against this spec and both
+> legacy apps (`~/Desktop/bitos/bitos-nostr-flutter` GetX app, 26 routes;
+> `~/Desktop/bitos/bitos-nostr-web` SvelteKit app, 21 routes). It records
+> per-surface progress, the settings field-level gap list, integrity
+> findings (dead code, dormant wiring, spec drift), and the next-task queue
+> for everything missing or incomplete. This is a planning snapshot — the
+> live ledger remains
+> [`native-ui-build-tracker.md`](./native-ui-build-tracker.md).
+>
+> **Score at snapshot:** of the 24 tracked surfaces — 4 complete (APP-004,
+> 008, 012, 018), 13 partial, 7 not started. Both platforms are at parity
+> with each other on nearly every surface (the shell, composer, feed,
+> inbox, settings catalog all match); the gaps below are almost all
+> "both platforms missing X", not platform drift.
+
+### 9.1 Route / destination status (spec §1.2 vs shipped code)
+
+| # | Destination (spec §) | Status | Gap summary |
+|:--|:--|:--|:--|
+| 1 | Auth gate §3.1 | ◐ both | Browse-first; create/import + npub confirm live. Missing: dedicated backup-reveal flow post-generate (warning card, nsec/npub copy rows, identity QR), branded switcher overlay, guest entry as first-class action |
+| 2 | Onboarding §3.2 | ☐ both | No carousel, no `hasOnboarded` gate |
+| 3 | Shell §3.3 | ◐ both | 5 visible tabs — **Discover is filtered out of the nav bar** (Android `BitOSApp.kt:106` `filterNot`, iOS 5-case enum + Discover as sheet). See drift finding 9.4-1 |
+| 4 | Home notes feed §3.4 | ✅ both | W2 items only (banners, hashtag chips, ZapLiveStrip, rank chips) |
+| 5 | Bitz §3.7 | ◐ both | Snap player + rail live; explore grid, glass top bar/mode pills, search overlay, comments sheet, video controls (scrubber/±10 s/mute memory) missing |
+| 6 | Composer §3.8 | ✅ both | GIF picker missing; poll voting render-only (decision pending) |
+| 7 | Thread §3.9 | ◐ both | Sheet-based; tree assembled by shared `ThreadAssembly` but **iOS renders the flat list**; root action row, live deltas, reply-bar options missing |
+| 8 | Discover §3.10 | ◐ both | NIP-50 search + chips + npub resolve live; results tabs (Posts/People/Hashtags), trending mosaic, fullscreen image viewer missing. Reached via Home search icon + hub only |
+| 9 | Messages/DMs §3.11 | ☐ both | Honest placeholder; no NIP-17/NIP-04 code |
+| 10 | Notifications §3.12 | ✅ both | No push delivery (FCM/APNs) — later wave |
+| 11 | Profile §3.13 | ◐ both | Own page + author sheet live; stats/tabs derive from the **live feed window only** (no dedicated author REQ); no banner/picture editing, no follower counts/sheets, no completion card; Android avatars are identicons (no remote pictures) |
+| 12 | Zaps §3.14 | ◐ both | LNURL dialog complete (tiers/comment/QR/expiry/lightning:); ledger page + LUD-21 verify poll + 9734 relays-tag policy missing; NWC absent |
+| 13 | Bookmarks §3.15 | ◐ both | Toggle + kind-30003 publish live; saved-list page missing (More tile disabled) |
+| 14 | Communities §3.16 | ☐ both | Nothing (legacy Flutter also never wired NIP-29 — see 9.5) |
+| 15 | More/You hub §3.17 | ◐ both | Hub live (hero, QR, switcher, tiles, honest coming-soon); wallet tile + communities/sounds tiles pend their surfaces |
+| 16 | Settings §3.18 | ✅ both | All 12 sections live; field-level application gaps in 9.3 |
+| 17 | Studio §3.19 | ◐ both | **Capture pipeline coded but unreachable** (see 9.4-2); editor absent |
+| 18 | Trending sounds §3.21 | ☐ both | Nothing (web is the only legacy source) |
+| 19 | Static pages §3.20 | ☐ both | About exists as a settings section only; privacy-policy/terms pages missing; More "About/Privacy" rows just deep-link settings-about |
+| 20 | `/pulse` | rejected | Correctly absent |
+| — | Deep links (`nostr:`/`lightning:` inbound) | ☐ both | No Android VIEW intent-filters; no iOS `CFBundleURLTypes`/`onOpenURL` |
+
+### 9.2 Per-surface progress (audit view; tracker remains the ledger)
+
+| ID | Surface | Audit status | Corrections vs tracker |
+|:--|:--|:--|:--|
+| APP-001 | Boot/Auth/Identity | ◐ | as tracked; backup-reveal + overlay remain |
+| APP-002 | Onboarding | ☐ | as tracked |
+| APP-003 | Shell | ◐ | **iOS re-tap-to-top dormant** — `HomeView.retapTick` never passed by `RootView` (tracker says shipped) |
+| APP-004 | Home feed | ✅ | confirmed |
+| APP-005 | NoteCard | ◐ | polls render-only; compact variant missing — as tracked |
+| APP-006 | Stories | ☐ | confirmed absent |
+| APP-007 | Bitz | ◐ | confirmed; add **no-op Share button** on the video rail (both) |
+| APP-008 | Composer | ✅ | confirmed; GIF picker absent as tracked |
+| APP-009 | Thread | ◐ | **iOS assembles the tree (`ThreadDisplayItem`) but renders flat** — ship the render pass |
+| APP-010 | Discover | ◐ | confirmed |
+| APP-011 | DMs | ☐ | confirmed placeholder |
+| APP-012 | Notifications | ✅ | confirmed; no push (legacy also local-only) |
+| APP-013 | Profile | ◐ | new gaps: no website field, no banner/picture pickers, no follower counts, **Android edit sheet never prefills nip05/lud16** |
+| APP-014 | Zaps | ◐ | confirmed (dialog ✅, ledger/NWC ☐) |
+| APP-015 | Bookmarks | ◐ | confirmed (page ☐) |
+| APP-016 | Communities | ☐ | confirmed |
+| APP-017 | More hub | ◐ | hub complete for live surfaces |
+| APP-018 | Settings | ✅ | sections confirmed; consumption gaps in 9.3 |
+| APP-019 | Studio | ◐ | **camera/trim/publish unreachable** — `CreateScreen` orphaned on both platforms by the composer-FAB rework (tracker said "live" from W0) |
+| APP-020 | Static pages | ☐ | confirmed |
+| APP-021 | Sounds | ☐ | confirmed |
+| APP-022 | Components | ◐ | AppMenu/PowCard/hex/QR live; several components exist inline (MediaRow/Lightbox) but aren't factored as the shared library |
+| APP-023 | Theming | ◐ | app hard-coded dark; theme/accent/font/compact **persisted but not applied** |
+| APP-024 | i18n | ☐ | en hard-coded; lo picker exists but no strings |
+
+### 9.3 Settings field-level audit (legacy union vs native)
+
+Native has all 12 hub sections; the gaps are fields and *application*
+(fields persisted but never consumed). "F"/"W" = legacy source.
+
+| # | Field / behavior | Legacy | Native today | Action |
+|:--|:--|:--|:--|:--|
+| 1 | Profile picture picker → crop → upload → kind-0 | F+W | text URLs only (iOS picture field read-only) | APP-018a row 3 — reuse Blossom path |
+| 2 | Banner picker | F+W | gradient placeholder only | with row 3 |
+| 3 | Website field in profile editor | F+W | missing | trivial add, both platforms |
+| 4 | Profile editor prefill | — | Android callers pass `initialNip05=""/initialLud16=""` — never prefills | bug fix |
+| 5 | Default zap presets 1/5/21/100/500/1000 | F | ✅ Android chips; iOS stepper only | cosmetic: iOS preset chips |
+| 6 | Zap prefs: non-zap reactions, anonymous-by-default, auto-zap-on-follow + amount | W | missing | APP-014 wave |
+| 7 | Wallet connect (NWC NIP-47: balance, deposit/withdraw invoices) | W | none (WebLN rejected natively per parity audit) | APP-014 W4 |
+| 8 | Theme / accent / font size / compact applied | F+W | persisted, app forced dark | APP-023 |
+| 9 | Reduced-motion + high-contrast toggles | W | missing (only OS-level respect targeted) | with APP-023 (§2.6) |
+| 10 | Algorithm: relay-discovery toggles ×3, smooth ranking, clear learned interests, WoT refresh | F+W | missing (presets/freshness/signals/diversity/reset ✅) | W2 queue |
+| 11 | Interaction-profile reset | F | missing | W2 queue |
+| 12 | Encrypted settings sync backup/restore | W (NIP-04 app-data) | missing (native plan = kind 30078) | W2 queue |
+| 13 | Relay latency + checked-at + "Test all" | W | live status dots + primary ⭐ + suggestions ✅ | add latency/test |
+| 14 | Video quality Auto/High/Low | F+W | picker persists; **no pipeline consumer** | wire to player or annotate |
+| 15 | Timezone picker (Auto/UTC/PST/EST/JST) | F | read-only "Automatic" row | low: add picker |
+| 16 | Date format MDY/DMY/YMD | F+W | persisted; feed timestamps don't consume it | wire into time-ago/format |
+| 17 | Sound / haptics toggles | F | persisted; no consumer (haptic exists on like only) | wire with notification service |
+| 18 | Language: Lao strings actually applied | F | picker only (Flutter's picker was **dead** — locale pinned en) | APP-024 — must apply, not repeat legacy bug |
+| 19 | Media providers Cloudinary/S3 config | W | honest Blossom-only row | deferred [W] — correct per spec |
+| 20 | Push notifications (FCM/APNs) | neither legacy had it | none | later wave (APP-012) |
+| 21 | Multi-account branded switch overlay | F | sheets (functional) | polish with APP-001 |
+| 22 | Clear cache wipes real data | F (web's was a **toast stub**) | Android wipes event cache ✅; iOS EventStore wipe pending | finish iOS |
+| 23 | Help cards (4 cards + articles) | F+W (both **snackbar/toast stubs**) | FAQ + support/donate live (ahead) | skip — do not port stubs |
+
+### 9.4 Integrity findings (dead code, dormant wiring, drift)
+
+1. **Tab-count drift:** spec §1.1 (user decision 2026-08-28) = six tabs incl.
+   Discover; both apps render five and hide Discover behind the search icon
+   + hub. Legacy itself disagreed (Flutter 5 tabs without Discover; web
+   mobile bar had Discover). **Decision needed:** restore the sixth tab per
+   §1.1 or amend §1.1 to the 5-tab + search-entry model.
+2. **Unreachable capture pipeline (both):** `CreateScreen`/`CreateView` is
+   never instantiated (Android imports it unused; iOS orphaned), so
+   `CameraScreen` + `VideoPreviewScreen` — a complete CameraX/AVCapture
+   record → trim → export path — cannot be reached. Android's
+   `ImportMediaSheet` is only reachable through that dead screen; iOS
+   reaches import via the app-bar camera icon (entry-point inconsistency).
+3. **No-op Share buttons** on the video action rail — Android
+   `FeedScreen.kt:611`, iOS `HomeView.swift:1132` (empty action).
+4. **iOS re-tap-to-top dormant** — `retapTick` implemented but never passed
+   by `RootView` (tracker believed shipped; verify + fix).
+5. **iOS thread tree computed but unrendered** — `FeedStore.threads`
+   produces `ThreadDisplayItem`s; `CommentSheet` still renders the flat
+   list.
+6. **Android ProfileEditSheet prefill bug** (see 9.3-4).
+7. **Android avatars are identicons only** — kind-0 pictures never load
+   (iOS has `RemoteImageView`); unify through the media pipeline.
+8. **Inbound deep links absent on both platforms** (manifest/Info.plist
+   have no URL entries) while spec §1.2 requires `nostr:`/`lightning:`.
+9. **Persist-only settings** (both, tracked to their waves): theme,
+   accent, font size, compact, video quality, language, date format,
+   timezone, sound, haptics.
+10. **Orphaned legacy composers** — `ComposerSheet.kt` / `ComposerSheet.swift`
+    superseded by the full-page composers; delete after confirming parity
+    (drafts/polls/PoW all ported).
+11. **Polls render-only** — voting/bars await the vote-format decision
+    (NIP-1 kind-1071 candidate); known, do not fake.
+
+### 9.5 Legacy features that were already broken — do not blind-port
+
+- Flutter: NIP-29 communities `TODO(nip29)` (UI-only join); language
+  picker dead (locale pinned `en_US`); all help cards + articles are
+  snackbar stubs; compact mode has no toggle UI; static-page external
+  links copy instead of opening; media provider tiles "coming soon"
+  (only server-fallback uploads worked); no FCM/APNs; group calls
+  web-only.
+- Web: language/region selects decorative (not persisted); help stubs;
+  **"Clear cache" is a toast that clears nothing**; "Private account"
+  toggle stored but unenforced; video EXIF stripping admitted incomplete;
+  `/pulse` is a fake showcase (already rejected by this spec);
+  `docs/ui-gap-audit.md` is stale (claims the wallet is missing — NWC
+  exists in web code).
+- Consequences already taken: native Clear-cache actually wipes (9.3-22),
+  native FAQ is real (9.3-23), and APP-024 must *apply* Lao, not just
+  persist a picker (9.3-18).
+
+### 9.6 Next-task queue (missing / not complete — build top-down)
+
+Everything below follows the standing rules: deterministic rules land in
+`shared/business-core` first with common tests; native adapters get
+contract tests; i18n keys not hardcoded copy; views never touch
+relays/DB/signers directly.
+
+**Tier P0 — wire what is already built (small, high value):**
+
+- [ ] T1 · APP-003/004 — pass `retapTick` through iOS `RootView`; verify
+      Android re-tap path end-to-end.
+- [ ] T2 · APP-005/007 — real Share actions (system share sheet) on note
+      menus + video rails, both platforms.
+- [ ] T3 · APP-013/018 — fix Android ProfileEdit prefill; add website
+      field to the editor on both platforms.
+- [ ] T4 · APP-019/CAP — re-expose capture: "Record Bitz" entry (Bitz
+      header + Create hub row) → CameraScreen → trim → publish; make the
+      import-media entry point consistent (Android app-bar icon like iOS).
+- [ ] T5 · cleanup — delete orphaned ComposerSheets; refresh stale
+      `PendingSection`/`PendingDetail` copy; remove Android's never-true
+      `showImportMedia` flag in FeedScreen.
+- [ ] T6 · 9.4-1 — tab decision: restore Discover as the sixth tab per
+      §1.1 or amend the spec (user decision required).
+
+**Tier P1 — close V1 page gaps (Wave 1 completion):**
+
+- [ ] T7 · APP-015 — Bookmarks page (compact cards, unbookmark, empty,
+      re-fetch on open) + enable the More "Saved" tile.
+- [ ] T8 · APP-014 — Zap ledger page (stat tiles, All/Received/Sent tabs,
+      rows with peer/time/comment/note link) + LUD-21 verify polling +
+      9734 relays-tag policy; enable the More "Zap ledger" tile.
+- [ ] T9 · APP-010 — Discover results tabs (Posts/People/Hashtags +
+      follow toggles), trending mosaic grid, fullscreen image viewer.
+- [ ] T10 · APP-009 — thread completion: render the assembled tree on
+      iOS; root action row (counts, share, ⋯ raw/delete-own); reply-bar
+      options (media chips, PoW); live deltas from kind-9735.
+- [ ] T11 · APP-007 — Bitz chrome: glass top bar + Explore/Following/For
+      you pills, 3-col explore grid with sensitive covers, search overlay
+      (local instant + NIP-50 debounced), comments sheet on the shared
+      thread engine, video controls (scrubber, ±10 s, mute memory).
+- [ ] T12 · APP-020 — static About/Privacy(12 §)/Terms(11 §) pages
+      (copy source: Flutter `modules/static/static_pages.dart`); point the
+      More meta rows here.
+- [ ] T13 · APP-002 — onboarding carousel (4 pages + dots + skip) and the
+      `hasOnboarded` boot gate.
+- [ ] T14 · APP-001 — backup-reveal flow post-generate (warning card,
+      npub/nsec copy→check rows, identity QR, confirm-backed-up), guest
+      entry polish, branded account-switch overlay.
+- [ ] T15 · APP-008 — GIF picker (decide the source service first:
+      keyed Giphy vs relay-served; trending + search + Recent + 24 h
+      cache per §3.8).
+- [ ] T16 · APP-013 — profile depth: banner/picture pickers (crop +
+      Blossom upload), follower/following counts + sheet lists, stats
+      sheets, completion card; Android remote avatars through the media
+      pipeline; author pages fed by dedicated author REQs instead of the
+      feed window.
+- [ ] T17 · deep links — Android intent-filters + iOS URL types:
+      `nostr:` npub/note/nevent/naddr → profile/thread/discover,
+      `lightning:` → zap invoice sheet.
+
+**Tier P2 — Wave 2 (specced, next major):** APP-011 DMs (NIP-17 gift-wrap
++ NIP-44 + NIP-04 fallback, delivery states, reactions) · APP-023 theming
+application (light mode, accent runtime swap, font scale, reduced-motion +
+high-contrast) · algorithm extras (relay discovery, smooth ranking, clear
+interests, interaction reset) · settings sync (kind 30078) · APP-024 i18n
+(lo applied for real) · video-quality consumer · push service (FCM/APNs).
+
+**Tier P3 — Waves 3–4:** APP-006 stories · APP-011 calls (post SOC-010
+threat review) · APP-016 communities (web is the only working NIP-29 wire
+reference) · APP-021 trending sounds (web-only legacy surface) · APP-019
+quick MEM editor → bitz composer → V2 studio suite · APP-014 NWC wallet.
+
+---
+
 *Merge sources: `docs/app-flutter-feature.md` (54 KB Flutter audit),
 `docs/app-web-feature.md` (53 KB web audit), `docs/DESIGN_SYSTEM.md`
 (tokens). Legacy apps remain at `../bitos-nostr-flutter` and the web repo
