@@ -18,11 +18,12 @@ scripts                  Reproducible developer checks
 
 ## Start here
 
-1. Read [the native blueprint](docs/native/README.md).
-2. Read [repository architecture](docs/engineering/architecture.md).
-3. Read [clean-code rules](docs/engineering/clean-code.md).
-4. Read [UX/UI flows](docs/product/ux-ui-flows.md).
-5. Read [Studio mass production](docs/product/studio-mass-production.md).
+1. Follow the [Developer Guide](docs/engineering/developer-guide.md) to install prerequisites, open the Android/iOS projects, run the local stack, and validate changes.
+2. Read [the native blueprint](docs/native/README.md).
+3. Read [repository architecture](docs/engineering/architecture.md).
+4. Read [clean-code rules](docs/engineering/clean-code.md).
+5. Read [UX/UI flows](docs/product/ux-ui-flows.md).
+6. Read [Studio mass production](docs/product/studio-mass-production.md).
 
 Run `make doctor` to see installed prerequisites and `make check` for every locally available validation.
 

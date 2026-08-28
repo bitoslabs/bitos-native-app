@@ -5,7 +5,12 @@
     <key>CFBundleDisplayName</key>
     <string>BitOS</string>
     <key>UILaunchScreen</key>
-    <dict/>
+    <dict>
+        <key>UIColorName</key>
+        <string>SplashBackground</string>
+        <key>UIImageName</key>
+        <string>SplashLogo</string>
+    </dict>
     <key>NSCameraUsageDescription</key>
     <string>BitOS uses the camera only when you choose to record a Bitz or MEM.</string>
     <key>NSMicrophoneUsageDescription</key>

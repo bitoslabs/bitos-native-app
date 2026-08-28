@@ -16,6 +16,13 @@ kotlin {
 
     iosArm64()
     iosSimulatorArm64()
+    // Intel-simulator slice so the XCFramework links for x86_64 destinations
+    // (Rosetta simulators, Intel CI runners).
+    iosX64()
+
+    // Native Apple test lane (SBC-019): the machine this repo builds on has
+    // no iOS simulator runtime, so common tests execute natively on macOS.
+    macosArm64()
 
     targets.withType<KotlinNativeTarget>().configureEach {
         binaries.framework {

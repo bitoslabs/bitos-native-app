@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ system splash (legacy values-v31 LaunchTheme parity):
+         vector bolt mark (circle-mask safe) + wordmark branding strip on
+         the brand splash colors. -->
+    <style name="Theme.BitOS.Launch">
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/bitos_splash_mark</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/bitos_splash_branding</item>
+    </style>
+</resources>

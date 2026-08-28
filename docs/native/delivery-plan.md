@@ -1,5 +1,199 @@
 # BitOS Native Delivery Plan and Task Ledger
 
+## Progress log
+
+- 2026-08-27 — Foundation slice: NIP-01 codec + ID verification, bounded
+  decode, feed normalization/aggregation, relay pools and five-tab UI on
+  both apps; verified read-only feed.
+- 2026-08-27 — SBC-001/SBC-002 done: `BusinessCore.xcframework` (device +
+  universal simulator) built by `scripts/ios-build.sh`, linked into the iOS
+  app; Swift mirror deleted, `BusinessCoreClient` facade is the seam.
+  SBC-019 partial: `macosArm64Test` native lane runs the common suite on
+  Apple; public-API dump/binary-compatibility gates still pending.
+- 2026-08-27 — SBC-006 done (spike complete): pure-Kotlin BIP-340 Schnorr
+  verification in `shared/business-core` (`crypto/Fp256.kt`, `Secp256k1.kt`,
+  `SchnorrVerification.kt`); enforced in both platform display paths.
+  PRO-001 done: 9-vector fixture set (valid across two keys; wrong-sig,
+  tampered-sig, s=n, r=0, off-curve pubkey) generated deterministically by
+  `scripts/generate-verification-vectors.mjs` with nostr-tools/@noble and
+  reference-verified; suites run on JVM host and native macOS. Signing
+  stays out of shared code (ID epic owns it); audited/native-accelerated
+  verifier swap is an optimization behind the same vectors.
+
+- 2026-08-27 — SBC-006 done (spike complete): pure-Kotlin BIP-340 Schnorr
+  verification in `shared/business-core` (`crypto/Fp256.kt`, `Secp256k1.kt`,
+  `SchnorrVerification.kt`); enforced in both platform display paths.
+  PRO-001 done: 9-vector fixture set (valid across two keys; wrong-sig,
+  tampered-sig, s=n, r=0, off-curve pubkey) generated deterministically by
+  `scripts/generate-verification-vectors.mjs` with nostr-tools/@noble and
+  reference-verified; suites run on JVM host and native macOS. Signing
+  stays out of shared code (ID epic owns it); audited/native-accelerated
+  verifier swap is an optimization behind the same vectors.
+- 2026-08-27 — DAT-001/003 done, DAT-002 partial: versioned event-store
+  contract in the shared core (DDL, bounds, migrations, tags codec);
+  Android `SqliteEventCache` (SQLiteOpenHelper) and iOS `EventStore`
+  (sqlite3, DDL via bridge) execute the same schema; both apps persist
+  verified events and hydrate the feed on cold start (repo contract test
+  proves restart hydration; iOS store host-verified on macOS). Room
+  deferred: no KSP release for Kotlin 2.4.x — documented deviation, swap
+  isolated behind the `EventCache` port.
+
+- 2026-08-27 — DAT-001/003 done, DAT-002 partial: versioned event-store
+  contract in the shared core (DDL, bounds, migrations, tags codec);
+  Android `SqliteEventCache` (SQLiteOpenHelper) and iOS `EventStore`
+  (sqlite3, DDL via bridge) execute the same schema; both apps persist
+  verified events and hydrate the feed on cold start (repo contract test
+  proves restart hydration; iOS store host-verified on macOS). Room
+  deferred: no KSP release for Kotlin 2.4.x — documented deviation, swap
+  isolated behind the `EventCache` port.
+- 2026-08-27 — FED-001/002 foundation, FED-003 partial: shared kind-22
+  media parsing (imeta / url+m / legacy links, bounded) on `FeedNote.video`;
+  feed subscriptions now include kind 22. Home is a vertical pager on both
+  apps with three-slot playback pools (AVQueuePlayer / Media3 ExoPlayer),
+  only-settled-page playback, id-keyed slot lifetimes, caption overlay +
+  action rail, minimal poster loading. Rendition policy, player cache
+  bounds and codec fallbacks (FED-004/005) remain open.
+
+- 2026-08-27 — FED-001/002 foundation, FED-003 partial: shared kind-22
+  media parsing (imeta / url+m / legacy links, bounded) on `FeedNote.video`;
+  feed subscriptions now include kind 22. Home is a vertical pager on both
+  apps with three-slot playback pools (AVQueuePlayer / Media3 ExoPlayer),
+  only-settled-page playback, id-keyed slot lifetimes, caption overlay +
+  action rail, minimal poster loading. Rendition policy, player cache
+  bounds and codec fallbacks (FED-004/005) remain open.
+- 2026-08-27 — ID-001–ID-004 foundation: BIP-340 signing + NIP-19 codecs in
+  the shared core (66-test suite incl. @noble-locked signing and bech32
+  vectors on JVM + native macOS); `IdentitySigner` port with secrets
+  confined to function arguments; Android Keystore-sealed `SecureKeyStore`
+  + Keychain on iOS; create/import flows with visible-npub confirmation
+  and replace warnings on both apps. Found+fixed an infinite loop in mod-n
+  reduction (carry limb never cleared) exposed by the signing tests.
+
+- 2026-08-27 — ID-001–ID-004 foundation: BIP-340 signing + NIP-19 codecs in
+  the shared core (66-test suite incl. @noble-locked signing and bech32
+  vectors on JVM + native macOS); `IdentitySigner` port with secrets
+  confined to function arguments; Android Keystore-sealed `SecureKeyStore`
+  + Keychain on iOS; create/import flows with visible-npub confirmation
+  and replace warnings on both apps. Found+fixed an infinite loop in mod-n
+  reduction (carry limb never cleared) exposed by the signing tests.
+- 2026-08-27 — PUB-001/007/008 note path: shared `NoteComposer` + client
+  EVENT-frame decode in the codec (own frames pass the verified gate);
+  Android `NotePublisher` + composer sheet, iOS `NotePublisher` + sheet;
+  write-relay targeting, per-relay receipts, first-acceptance semantics,
+  signer-refusal and rejection surfacing. Publisher/repo contract tests
+  run on JVM. Found+fixed a structural race in the Android relay pool
+  (no-replay merged flow dropped frames between launch and subscription —
+  now a 32-frame replay window, harmless because consumers dedupe by id)
+  and a corrupted pbxproj children line (extra-zero IDs orphaning two
+  source files).
+
+- 2026-08-27 — SOC-001/003 partial: `ContactList` (kind-3) + `composeReaction`
+  (NIP-25 kind-7) in the shared core; `UnsignedNote` generalized to
+  kind+tags so reactions reuse the exact publish machinery (own frames pass
+  the verified gate, incl. tag serialization). Following timeline live on
+  both apps (kind-3 → authors-targeted window); like buttons publish real
+  reactions for signed accounts. Kind-3 fixture added to the vector set
+  (reference-verified). Repository/publisher contract tests cover the
+  contact→follow→fan-in flow and the kind-7 publish round trip.
+
+- 2026-08-27 — SOC-002 partial: `composeReply` (NIP-10 `e`+reply marker,
+  `p` tag) + tagged `#e` comment REQ in the shared core; comment threads
+  (bounded) in both repositories/stores; comment sheets on both apps with
+  identity-gated reply publishing through the receipt machine. Contract
+  tests: reply composition/frame round-trip (common), comment loading +
+  grouping + fan-in (Android repo), reply publish (publisher suite). Found
+  +fixed a test race (state committed before sendTo — tests now wait for
+  the transport write, not the state flip) and a client-frame vs
+  relay-echo shape mismatch in the comment test.
+
+- 2026-08-27 — SOC-001 write path + SOC-003 reposts: `composeFollowList`
+  (kind-3, deduped, self-follow filtered, ContactList-bounded) and
+  `composeRepost` (kind-6 NIP-18) in the shared core with frame round-trip
+  tests; `applyFollowChange` optimistic deltas on both repositories/stores
+  returning the new set for the kind-3 publish; follow chips + repost rail
+  buttons on both apps. Follow-delta contract test on Android (optimistic
+  flip, restore, no-account no-op).
+
+- 2026-08-27 — SOC bookmarks (NIP-51): `BookmarkList` + `composeBookmarkList`
+  (kind-30003, empty `d` coordinate, bounded/deduped) in the shared core;
+  relay-backed bookmark state on both apps (optimistic flip + publish,
+  newer verified head reconciles; signed-out stays local). Bookmark-delta
+  contract test on Android.
+
+- 2026-08-27 — SOC-008 client path: `composeZapRequest` (NIP-57 9734) +
+  `LnurlPay` pure parsing/building in the shared core (5 new tests: tag
+  shape/ID recompute, input rejection, pay-request parse, callback URL +
+  invoice, receipt target); `LnurlPayClient` (Android, OkHttp) + zap flow in
+  the ViewModel; zap sheets on both apps; kind-9735 counting via `#e` REQs
+  (repo contract test: two signed receipts → count 2). Found+fixed a range
+  check hole in the bridge callback builder (fake PayRequest bypassed
+  min/max — now takes the real bounds explicitly).
+
+- 2026-08-27 — PUB media path infrastructure: Blossom BUD-02 (kind-24242
+  upload auth, challenge parsing, percent-encoding) + `UploadedMedia`/
+  `imeta`/kind-22 composition in the shared core (5 new tests: auth tags +
+  frame round-trip, input rejection incl. expiration window, kind-22 imeta
+  round-trip through MediaMetadata, descriptor bounds, challenge/encoding);
+  Android `BlossomUploader` with hash-mismatch blocking verified against a
+  hand-rolled JDK HTTP server (2 tests). Bridge media seam for iOS.
+  Capture/import UI (CAP) feeds it next.
+
+- 2026-08-27 — CAP-005 + PUB media path end-to-end: import → publish sheets
+  on both apps (GetContent / PhotosPicker, bounded reads, caption, staged
+  progress); `publishMediaNote` on both publishers; kind-22 round-trip
+  contract test (frame decodes with imeta and parses back through
+  MediaMetadata). iOS BlossomUploader mirrors the Android flow with the
+  same hash-mismatch blocking rule.
+
+- 2026-08-27 — CAP-001/002 foundation: camera screens on both apps
+  (CameraX Recorder / AVCaptureMovieFileOutput) feeding the tested publish
+  pipeline; Create tab Record/Import fast paths now action; shared
+  MediaPublishViewModel on Android unifies Home import + Create flows;
+  iOS camera hands takes to the import sheet state. Permission denied
+  states truthful; import path always available.
+
+- 2026-08-27 — SOC-005 partial: `NotificationExtractor` (shared, 4 new
+  tests) + `NotificationRepository` (Android) / `InboxStore` (iOS); `#p`
+  tagged subscriptions over kinds 1/7/6/9735; kind-badged inbox rows with
+  author + time; identity-gated with truthful empty/connecting states.
+  Contract test: signed reply → REPLY notification with author + summary.
+
+- 2026-08-27 — SOC-004: `SearchRepository` (Android) / `SearchStore` (iOS)
+  with NIP-50 filters + npub resolution through the bridge; Discover
+  reworked with real search + topic chips on both apps. `escape` made
+  public in the codec (protocol surface used by adapters). Contract test:
+  search REQ issued + result fans in verified; npub query issues the
+  targeted profile REQ and resolves.
+
+- 2026-08-27 — Author profiles (SOC-001/004): `AuthorRepository` (Android) /
+  `AuthorStore` (iOS) with targeted profile+notes REQs through the bridge;
+  profile sheets with follow/unfollow inline; author taps on video
+  captions on both apps.
+
+- 2026-08-27 — ID-008 partial: `composeProfileMetadata` (kind 0, 3 new
+  tests: JSON escaping + round-trip through ProfileMetadata, minimal
+  empty profile, field validation) + edit sheets on both apps; profile
+  publish through the receipt machine with settle states.
+
+- 2026-08-27 — SOC-003 repost display: `RepostParser` (embedded event
+  extraction + verification, 3 new tests) + `FeedNote.repostedBy`;
+  kind 6 in feed subscriptions; ↻ "Reposted" attribution on both apps.
+
+- 2026-08-27 — SOC-001 moderation: `composeReport` (NIP-56 kind 1984,
+  3 tests) + bridge + publisher on both apps; `MuteStore` (Android) and
+  UserDefaults-backed mute set (iOS) filtering all feed windows; more
+  options dialogs (mute/unmute + report reasons) on both platforms.
+
+- 2026-08-27 — CAP-003 partial (take preview): `VideoPreviewScreen` on
+  both apps between camera capture and the publish pipeline; looping
+  playback with Use/Retake; bytes unchanged on Use.
+
+- 2026-08-27 — CAP-004 trim: start/end sliders on the take preview on
+  both apps; Media3 Transformer clipping export (Android) /
+  AVAssetExportSession timeRange export (iOS); fallback to original on
+  export failure. Quick-edit path complete: record → preview → trim →
+  publish.
+
 ## 1. Delivery model
 
 Build vertical slices, not two disconnected UI projects followed by a late integration. Every phase ends with the same user journey working on real iOS and Android devices against local/staging Nostr and media infrastructure.

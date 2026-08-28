@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ splash icon.
+
+  The OS masks this drawable to a circle of Ø = 2/3 · 108dp = 72dp, centered
+  on the viewport. The previous version drew the 664-wide bolt across the
+  full viewport, so the bolt tips were clipped by the mask.
+
+  This version places the bolt at 60dp × 26.8dp, dead-center:
+    scale      = 60 / 664           = 0.0904
+    translateX = (108 - 60)   / 2   = 24
+    translateY = (108 - 26.8) / 2   ≈ 40.6
+  giving ~6dp clearance from the circle edge on every side.
+
+  Fill uses the official yellow→Bitcoin-orange bolt gradient
+  (aapt gradient is fine here: v31 styles only load on API 31+).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="24"
+        android:translateY="40.6"
+        android:scaleX="0.0904"
+        android:scaleY="0.0904">
+        <path android:fillType="evenOdd"
+            android:pathData="M 0,296 C 37,254 69,222 99,195 C 135,163 168,139 199,121 L 313,51 C 317,49 320,52 318,57 L 306,119 C 370,81 429,55 484,36 C 547,14 606,3 664,0 C 619,14 580,29 548,45 C 508,65 472,83 441,99 C 397,122 354,149 312,180 L 231,243 C 227,246 228,241 229,236 L 241,160 C 195,184 148,211 101,241 C 65,264 31,282 0,296 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="664"
+                    android:endY="297">
+                    <item android:offset="0.0" android:color="#FFFFD83D" />
+                    <item android:offset="0.5" android:color="#FFFFB51B" />
+                    <item android:offset="1.0" android:color="#FFF7931A" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>
+

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ system splash, dark mode (legacy values-night-v31 parity). -->
+    <style name="Theme.BitOS.Launch">
+        <item name="android:windowSplashScreenBackground">@color/splash_background_dark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/splash_background_dark</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/bitos_splash_mark</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/bitos_splash_branding</item>
+    </style>
+</resources>

@@ -4,6 +4,8 @@
 
 Start with [Native Platform Blueprint](./native/README.md).
 
+- **[Unified app feature spec — single merged source for iOS + Android UI](./native/app-unified-feature-spec.md)** (APP epic: every surface, field, widget, state, model; union of the legacy web + Flutter feature docs)
+- **[Native UI build tracker — APP epic task ledger and progress log](./native/native-ui-build-tracker.md)** (update in the same change as UI code)
 - [Product system and full feature scope](./native/product-system.md)
 - [Current web-to-native parity audit](./native/web-parity-audit.md)
 - [Shared Kotlin Multiplatform business core](./native/shared-business-core.md)

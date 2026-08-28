@@ -1,0 +1,381 @@
+import BusinessCore
+import Foundation
+import Observation
+
+/// One relay's receipt for the in-flight publish (PUB-008).
+struct PublishReceipt: Sendable, Equatable, Identifiable {
+    let relayHost: String
+    var accepted: Bool?
+    var detail: String?
+    var id: String { relayHost }
+}
+
+enum PublishResult: Sendable, Equatable {
+    case published
+    case rejected(detail: String?)
+    case timeout
+    case signingRefused
+    case invalid
+}
+
+@MainActor
+@Observable
+final class NotePublisher {
+    private(set) var inFlightId: String?
+    private(set) var receipts: [PublishReceipt] = []
+    private(set) var result: PublishResult?
+    private(set) var busy = false
+
+    private let pool: RelayPool
+    private let bridge: BusinessCoreBridge
+    private let identity: IdentityStore
+    private var watchTask: Task<Void, Never>?
+
+    init(pool: RelayPool, identity: IdentityStore, bridge: BusinessCoreBridge = BusinessCoreBridge()) {
+        self.pool = pool
+        self.identity = identity
+        self.bridge = bridge
+    }
+
+    /// Compose → sign (refusal fails without sending) → targeted fan-out →
+    /// first acceptance completes; rejection-only timeouts surface reasons.
+    func publish(content: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeEventId(content: content, pubkeyHex: account.pubkeyHex, nowSeconds: now),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.publishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = frameFailure(for: content, account: account, now: now)
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// One bounded mining window for a kind-1 PoW note (NIP-13, APP-008),
+    /// off the main actor. `createdAt` must stay fixed for the session and
+    /// be reused by `publishPow`. Returns nil when the window is exhausted
+    /// (resume at `startNonce + attempts`).
+    func minePowChunk(
+        content: String,
+        targetDifficulty: Int32,
+        createdAt: Int64,
+        startNonce: Int64,
+        attempts: Int64
+    ) async -> (nonce: Int64, idHex: String)? {
+        guard let account = identity.account else { return nil }
+        let bridge = self.bridge
+        let raw = await Task.detached(priority: .userInitiated) {
+            bridge.mineTextNotePow(
+                content: content,
+                pubkeyHex: account.pubkeyHex,
+                createdAtSeconds: createdAt,
+                targetDifficulty: targetDifficulty,
+                startNonce: startNonce,
+                maxAttempts: attempts
+            )
+        }.value
+        guard let raw, let separator = raw.firstIndex(of: ":") else { return nil }
+        let nonce = Int64(raw[raw.startIndex..<separator])
+        guard let nonce else { return nil }
+        return (nonce, String(raw[raw.index(after: separator)...]))
+    }
+
+    /// Kind-1 note with a pre-mined NIP-13 nonce tag (APP-008 PowCard).
+    /// `nonce`/`targetDifficulty`/`createdAt` come from the mining session
+    /// — publish must reuse the mined timestamp.
+    func publishPow(content: String, nonce: Int64, targetDifficulty: Int32, createdAt: Int64) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        guard let eventId = bridge.powTextNoteEventId(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.powTextNotePublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signature
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-7 reaction through the same machine (SOC-003). One at a time.
+    func publishReaction(targetEventId: String, targetPubkey: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeReactionEventId(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey, authorPubkey: account.pubkeyHex, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.reactionPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey, authorPubkey: account.pubkeyHex,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-1 reply (NIP-10) through the same machine (SOC-002).
+    func publishReply(content: String, targetEventId: String, targetPubkey: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeReplyEventId(
+                  content: content, targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, relayHint: "", nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.replyPublishMessage(
+                  content: content, targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, relayHint: "",
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-3 follow-list publish (SOC-001 write path).
+    func publishFollowList(follows: [String]) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeFollowListEventId(
+                  authorPubkey: account.pubkeyHex, follows: follows, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.followListPublishMessage(
+                  authorPubkey: account.pubkeyHex, follows: follows,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-6 repost (NIP-18) through the same machine.
+    func publishRepost(targetEventId: String, targetPubkey: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeRepostEventId(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.repostPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-30003 bookmark-list publish (NIP-51, addressable head).
+    func publishBookmarkList(eventIds: [String]) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeBookmarkListEventId(
+                  authorPubkey: account.pubkeyHex, eventIds: eventIds, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.bookmarkListPublishMessage(
+                  authorPubkey: account.pubkeyHex, eventIds: eventIds,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-22 media note from a verified upload (PUB media path).
+    func publishMediaNote(
+        caption: String,
+        url: String, hash: String, mime: String, size: Int,
+        width: Int? = nil, height: Int? = nil, durationMs: Int64? = nil
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeMediaNoteEventId(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
+                  width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
+                  nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.mediaNotePublishMessage(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
+                  width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-0 profile metadata publish through the receipt machine.
+    func publishProfile(name: String, displayName: String, about: String, picture: String, nip05: String, lud16: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeProfileEventId(
+                  authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
+                  about: about, picture: picture, nip05: nip05, lud16: lud16, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.profilePublishMessage(
+                  authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
+                  about: about, picture: picture, nip05: nip05, lud16: lud16,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-1984 report publish through the receipt machine (NIP-56).
+    func publishReport(targetEventId: String?, targetPubkey: String, reason: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeReportEventId(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, reason: reason, relayHint: "", nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.reportPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, reason: reason, relayHint: "",
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    private func frameFailure(for content: String, account: AccountIdentity, now: Int64) -> PublishResult {
+        _ = content; _ = account; _ = now
+        return .invalid
+    }
+
+    private func send(eventId: String, frame: String) async {
+        inFlightId = eventId
+        receipts = DefaultRelays.writeHosts.map { PublishReceipt(relayHost: $0) }
+
+        let stream = await pool.frames()
+        watchTask = Task { [weak self] in
+            for await frame in stream {
+                guard let self, !Task.isCancelled else { return }
+                self.absorbFrame(frame)
+            }
+        }
+
+        await pool.broadcast(frame, to: DefaultRelays.writeUrls)
+
+        // First acceptance anywhere completes; otherwise surface reasons on timeout.
+        let deadline = ContinuousClock.now + .seconds(10)
+        var sawReceipt = false
+        while ContinuousClock.now < deadline {
+            if receipts.contains(where: { $0.accepted == true }) { break }
+            sawReceipt = sawReceipt || receipts.contains(where: { $0.accepted == false })
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        watchTask?.cancel()
+
+        if receipts.contains(where: { $0.accepted == true }) {
+            result = .published
+        } else if sawReceipt {
+            result = .rejected(detail: receipts.first(where: { $0.accepted == false })?.detail)
+        } else {
+            result = .timeout
+        }
+    }
+
+    private func absorbFrame(_ frame: RelayFrame) {
+        guard bridge.okEventId(message: frame.message) == inFlightId else { return }
+        let accepted = (bridge.parseOkAccepted(message: frame.message) as? Bool) ?? false
+        let detail = bridge.okDetail(message: frame.message) as String?
+        if let index = receipts.firstIndex(where: { $0.relayHost == frame.relay.host }) {
+            receipts[index].accepted = accepted
+            receipts[index].detail = detail
+        }
+    }
+
+    func dismiss() {
+        watchTask?.cancel()
+        inFlightId = nil
+        receipts = []
+        result = nil
+    }
+}
+
