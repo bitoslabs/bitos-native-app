@@ -150,7 +150,7 @@ struct SettingsView: View {
             isPresented: $showSignOutConfirm,
             titleVisibility: .visible
         ) {
-            Button("Sign out", role: .destructive) { identity.removeAccount() }
+            Button("Sign out", role: .destructive) { identity.signOut() }
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -212,6 +212,7 @@ struct SettingsSectionView: View {
 
 private struct NotificationsSection: View {
     @Environment(SettingsStore.self) private var settings
+    @Environment(AppEnvironment.self) private var environment
 
     var body: some View {
         List {
@@ -229,8 +230,38 @@ private struct NotificationsSection: View {
             } footer: {
                 Text("Push delivery arrives with the notification service (APP-012).")
             }
+            Section {
+                ForEach(Array(NotificationKind.allCases), id: \.name) { kind in
+                    Toggle(notificationTypeLabel(kind), isOn: Binding(
+                        get: { !environment.inboxStore.mutedKinds.contains(kind) },
+                        set: { enabled in
+                            var muted = environment.inboxStore.mutedKinds
+                            if enabled {
+                                muted.remove(kind)
+                            } else {
+                                muted.insert(kind)
+                            }
+                            environment.inboxStore.setMutedKinds(muted)
+                        }))
+                }
+            } header: {
+                Text("Notify me about")
+            } footer: {
+                Text("Muted types drop from the inbox, unread counts and the Activity badge (same mutes as the inbox header menu).")
+            }
         }
         .tint(BitOSTheme.accent)
+    }
+
+    private func notificationTypeLabel(_ kind: NotificationKind) -> String {
+        switch kind {
+        case .reply: "Replies"
+        case .mention: "Mentions"
+        case .reaction: "Likes"
+        case .repost: "Reposts"
+        case .zap: "Zaps"
+        case .follow: "New follows"
+        }
     }
 }
 
@@ -289,6 +320,11 @@ private struct AppearanceSection: View {
 
 private struct AlgorithmSection: View {
     @Environment(SettingsStore.self) private var settings
+    @Environment(AlgorithmStore.self) private var algorithm
+    @State private var surface = "feed"
+
+    private static let surfaceKeys = ["feed", "reels", "discover"]
+    private static let signalKeys = ["recency", "engagement", "zaps", "affinity", "topics", "wot"]
 
     var body: some View {
         List {
@@ -314,8 +350,177 @@ private struct AlgorithmSection: View {
             } footer: {
                 Text("Protocol notes show raw kind events (reposts, reactions) in the timeline — web feedPreferences parity.")
             }
+
+            Section {
+                Picker("Recency half-life", selection: Binding(
+                    get: { algorithm.freshnessHours },
+                    set: { algorithm.setFreshness(hours: $0) })) {
+                    Text("Live \u{00B7} 1h").tag(1)
+                    Text("Balanced \u{00B7} 6h").tag(6)
+                    Text("Relaxed \u{00B7} 24h").tag(24)
+                    Text("Chill \u{00B7} 3d").tag(72)
+                }
+                .pickerStyle(.menu)
+            } header: {
+                Text("Freshness")
+            } footer: {
+                Text("Freshness retunes the recency signal everywhere \u{2014} older notes survive longer at higher steps.")
+            }
+
+            Section {
+                Picker("Surface", selection: $surface) {
+                    ForEach(Self.surfaceKeys, id: \.self) { key in
+                        Text(key.capitalized).tag(key)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Ranked \(surface)", isOn: Binding(
+                    get: { algorithm.surfaces[surface]?.enabled ?? false },
+                    set: { algorithm.setEnabled(surface: surface, enabled: $0) }))
+                if !(algorithm.surfaces[surface]?.enabled ?? false) {
+                    Text("Off = strict reverse-chronological \u{2014} never hidden.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            } header: {
+                Text("Surfaces")
+            }
+
+            if algorithm.surfaces[surface]?.enabled == true {
+                Section {
+                    let preset = algorithm.detectPreset(surface: surface)
+                    HStack(spacing: 8) {
+                        ForEach([("LATEST", "Latest"), ("BALANCED", "Balanced"), ("TRENDING", "Trending"), ("TRUSTED", "Trusted")], id: \.0) { id, label in
+                            presetPill(label, id: id, active: preset == id) {
+                                algorithm.setPreset(surface: surface, preset: id)
+                            }
+                        }
+                        if preset == "CUSTOM" {
+                            Text("Custom")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(BitOSTheme.accent)
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(BitOSTheme.accent.opacity(0.15), in: Capsule())
+                        }
+                    }
+                } header: {
+                    Text("Preset")
+                }
+                Section {
+                    AlgorithmMixBar(algorithm: algorithm, surface: surface)
+                    ForEach(Self.signalKeys, id: \.self) { signal in
+                        AlgorithmSignalRow(
+                            signal: signal,
+                            state: algorithm.signalState(surface: surface, signal: signal),
+                            totalWeight: activeWeight(algorithm: algorithm, surface: surface)
+                        ) { enabled, weight in
+                            algorithm.setSignal(surface: surface, signal: signal, enabled: enabled, weight: weight)
+                        }
+                    }
+                } header: {
+                    Text("Signals")
+                } footer: {
+                    Text("Weights re-balance live \u{2014} turning a signal off re-normalizes the mix. Topics & Web-of-trust contribute once their data feeds land (W2).")
+                }
+            }
         }
         .tint(BitOSTheme.accent)
+    }
+
+    private func presetPill(_ label: String, id: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: active ? .bold : .medium))
+                .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(
+                    active ? BitOSTheme.accent.opacity(0.15) : BitOSTheme.surfaceOverlay.opacity(0.5),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func activeWeight(algorithm: AlgorithmStore, surface: String) -> Double {
+        (algorithm.surfaces[surface]?.signals ?? [:])
+            .values.filter { $0.enabled && $0.weight > 0 }.reduce(0) { $0 + $1.weight }
+    }
+}
+
+private func signalColor(_ signal: String) -> Color {
+    switch signal {
+    case "recency": BitOSTheme.accent
+    case "engagement": BitOSTheme.like
+    case "zaps": BitOSTheme.zap
+    case "affinity": BitOSTheme.reply
+    case "topics": Color(hex: 0x06B6D4)
+    case "wot": BitOSTheme.success
+    default: BitOSTheme.textTertiary
+    }
+}
+
+/// Live weight-mix bar (origin parity): stacked shares of the enabled mix.
+private struct AlgorithmMixBar: View {
+    let algorithm: AlgorithmStore
+    let surface: String
+
+    var body: some View {
+        let active = (algorithm.surfaces[surface]?.signals ?? [:])
+            .filter { $0.value.enabled && $0.value.weight > 0 }
+            .sorted { $0.key < $1.key }
+        if !active.isEmpty {
+            let total = active.reduce(0.0) { $0 + $1.value.weight }
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(active, id: \.key) { key, state in
+                        Rectangle()
+                            .fill(signalColor(key))
+                            .frame(width: proxy.size.width * (state.weight / total))
+                    }
+                }
+            }
+            .frame(height: 8)
+            .clipShape(Capsule())
+            .accessibilityLabel("Weight mix")
+        }
+    }
+}
+
+private struct AlgorithmSignalRow: View {
+    let signal: String
+    let state: AlgorithmStore.SignalState
+    let totalWeight: Double
+    let onChange: (Bool, Double) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Circle().fill(signalColor(signal)).frame(width: 10, height: 10)
+                Text(signal.capitalized)
+                    .font(.system(size: 14))
+                    .foregroundStyle(state.enabled ? BitOSTheme.textPrimary : BitOSTheme.textTertiary)
+                Spacer()
+                Text(state.enabled && totalWeight > 0
+                     ? "\(Int(state.weight / totalWeight * 100))%"
+                     : "\u{2014}")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                Toggle("", isOn: Binding(
+                    get: { state.enabled },
+                    set: { onChange($0, state.weight) }))
+                    .labelsHidden()
+            }
+            if state.enabled {
+                Slider(
+                    value: Binding(
+                        get: { state.weight },
+                        set: { onChange(true, $0) }),
+                    in: 0.05...1,
+                    step: 0.05
+                )
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -388,6 +593,13 @@ private struct MediaSection: View {
                 Text("Playback")
             } footer: {
                 Text("Autoplay honors the network policy above; downloads stay hash-verified (Blossom).")
+            }
+            Section {
+                LabeledRow(label: "Provider", value: "Blossom (default)")
+            } header: {
+                Text("Uploads")
+            } footer: {
+                Text("Hash-verified Blossom uploads before signing; S3/Cloudinary fallbacks arrive with the media wave.")
             }
         }
         .tint(BitOSTheme.accent)
@@ -474,6 +686,44 @@ private struct AccountSection: View {
                         Label("Edit profile", systemImage: AppIcons.pen)
                     }
                 }
+                Section {
+                    if identity.registeredAccounts.isEmpty {
+                        Text("No saved accounts \u{2014} create or import a key on the You tab.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    } else {
+                        ForEach(identity.registeredAccounts) { acct in
+                            let isActive = acct.pubkeyHex == (identity.activeRegistryPubkey ?? identity.account?.pubkeyHex)
+                            HStack(spacing: 10) {
+                                PubkeyAvatarView(pubkey: acct.pubkeyHex, size: 36)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(acct.displayName ?? "Account")
+                                        .font(.system(size: 14, weight: isActive ? .bold : .medium))
+                                        .foregroundStyle(BitOSTheme.textPrimary)
+                                    Text(settings.shortNpub(acct.npub))
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(BitOSTheme.textSecondary)
+                                }
+                                Spacer()
+                                if isActive {
+                                    Image(systemName: AppIcons.check)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(BitOSTheme.accent)
+                                }
+                                Button("Remove", role: .destructive) {
+                                    identity.removeRegisteredAccount(pubkeyHex: acct.pubkeyHex)
+                                }
+                                .font(.system(size: 13))
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture { if !isActive { identity.switchTo(pubkeyHex: acct.pubkeyHex) } }
+                        }
+                    }
+                } header: {
+                    Text("Accounts on this device")
+                } footer: {
+                    Text("Switching keeps every account sealed on this device \u{2014} one tap back. Remove wipes that account's key (back it up first).")
+                }
                 Section("Storage") {
                     HStack {
                         Text("Settings cache")
@@ -534,7 +784,8 @@ private struct SecuritySection: View {
                             titleVisibility: .visible
                         ) {
                             Button("Reveal", role: .destructive) {
-                                if let secret = IdentityKeychain.loadSecret() {
+                                let secret = identity.activeRegistryPubkey.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) } ?? IdentityKeychain.loadSecret()
+                                if let secret {
                                     nsec = BusinessCoreBridge().nsecEncode(secretHex: secret)
                                 }
                             }
@@ -623,6 +874,10 @@ private struct LightningSection: View {
 
 private struct PrivacySection: View {
     @Environment(SettingsStore.self) private var settings
+    @Environment(PrivacyPrefsStore.self) private var privacy
+    @Environment(AppEnvironment.self) private var environment
+    @Environment(IdentityStore.self) private var identity
+    @Environment(RelayManagerStore.self) private var relays
 
     var body: some View {
         List {
@@ -637,21 +892,119 @@ private struct PrivacySection: View {
                 Toggle("Protocol notes in feed", isOn: Binding(
                     get: { settings.state.showProtocolNotes },
                     set: { settings.setShowProtocolNotes($0) }))
+                Picker("Sensitive media", selection: Binding(
+                    get: { settings.state.sensitiveMedia },
+                    set: { settings.set($0) })) {
+                    ForEach(SettingsSensitiveMedia.allCases) { m in
+                        Text(m.label).tag(m)
+                    }
+                }
             } header: {
                 Text("Content")
             } footer: {
-                Text("DM/mention gates, read receipts and blocked-user management arrive with the trust wave.")
+                Text("Cover keeps NIP-36 flagged notes behind a tap-to-reveal; Show renders them directly. Device-local choice.")
+            }
+            Section {
+                Toggle("Private account", isOn: Binding(
+                    get: { privacy.state.privateAccount },
+                    set: { newValue in privacy.update { $0.privateAccount = newValue } }))
+                Toggle("Include client tag", isOn: Binding(
+                    get: { privacy.state.includeClientTag },
+                    set: { newValue in privacy.update { $0.includeClientTag = newValue } }))
+                Toggle("Activity visible to others", isOn: Binding(
+                    get: { privacy.state.activityVisible },
+                    set: { newValue in privacy.update { $0.activityVisible = newValue } }))
+                Toggle("Read receipts", isOn: Binding(
+                    get: { privacy.state.readReceipts },
+                    set: { newValue in privacy.update { $0.readReceipts = newValue } }))
+                Toggle("Show sensitive-content reason", isOn: Binding(
+                    get: { privacy.state.sensitiveReason },
+                    set: { newValue in privacy.update { $0.sensitiveReason = newValue } }))
+                Toggle("Allow story sharing", isOn: Binding(
+                    get: { privacy.state.storyShare },
+                    set: { newValue in privacy.update { $0.storyShare = newValue } }))
+            } header: {
+                Text("Account privacy")
+            } footer: {
+                Text("Read receipts and story sharing take effect when DMs and stories ship (W2); the choices persist now \u{2014} legacy parity.")
+            }
+            Section {
+                Picker("Who can message me", selection: Binding(
+                    get: { privacy.state.messagePermission },
+                    set: { newValue in privacy.update { $0.messagePermission = newValue } })) {
+                    Text("Everyone").tag("everyone")
+                    Text("Followers").tag("followers")
+                    Text("No one").tag("none")
+                }
+                Picker("Who can comment", selection: Binding(
+                    get: { privacy.state.commentPermission },
+                    set: { newValue in privacy.update { $0.commentPermission = newValue } })) {
+                    Text("Everyone").tag("everyone")
+                    Text("Followers").tag("followers")
+                    Text("Friends").tag("friends")
+                }
+            } header: {
+                Text("Interactions")
+            } footer: {
+                Text("Gates apply to incoming interactions (W2 DMs/comments enforcement; persisted now \u{2014} legacy parity).")
+            }
+            Section {
+                let blocked = environment.feedStore.blocked
+                if blocked.isEmpty {
+                    Text("No blocked authors on this account's kind-10004 list.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                } else {
+                    ForEach(Array(blocked.sorted().prefix(50)), id: \.self) { pubkey in
+                        HStack {
+                            PubkeyAvatarView(pubkey: pubkey, size: 28)
+                            Text(shortBlocked(pubkey))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                            Spacer()
+                            Button("Unblock") {
+                                Task {
+                                    environment.notePublisher.dismiss()
+                                    await environment.notePublisher.publishBlockList(
+                                        blocked: blocked.filter { $0 != pubkey },
+                                        writeUrls: relays.writeUrls()
+                                    )
+                                }
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                        }
+                    }
+                    if blocked.count > 50 {
+                        Text("Showing first 50 of \(blocked.count) blocked authors.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                    }
+                    PublishStatusLine(publisher: environment.notePublisher)
+                }
+            } header: {
+                Text("Blocked users")
+            } footer: {
+                Text("Blocked authors are filtered from feeds and the inbox (NIP-51). Unblock publishes a new kind-10004 head to your write relays. DM/mention gates and read receipts arrive with the DM wave.")
             }
         }
         .tint(BitOSTheme.accent)
     }
+
+    private func shortBlocked(_ pubkey: String) -> String {
+        BusinessCoreBridge().npubEncode(pubkeyHex: pubkey).map(settings.shortNpub) ?? pubkey
+    }
 }
 
-// MARK: - Relays (configured set + live health; CRUD pending)
+// MARK: - Relays manager (APP-018 §3.18: CRUD, roles, status dots, NIP-65)
 
 private struct RelaysSection: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(RelayManagerStore.self) private var relays
+    @Environment(IdentityStore.self) private var identity
     @State private var health = RelayHealth(connected: 0, total: DefaultRelays.urls.count)
+    @State private var addInput = ""
+    @State private var addError: String?
+    @FocusState private var addFocused: Bool
 
     var body: some View {
         List {
@@ -664,43 +1017,177 @@ private struct RelaysSection: View {
                         .foregroundStyle(health.isLive ? BitOSTheme.success : BitOSTheme.textTertiary)
                 }
             } footer: {
-                Text("Adding, removing and per-relay read/write toggles arrive with the relay wave (NIP-65 publish).")
+                Text("Edits connect and disconnect sockets immediately and persist on this device.")
             }
-            Section("Configured relays") {
-                ForEach(DefaultRelays.urls, id: \.self) { url in
-                    relayRow(url: url.value)
+            Section {
+                ForEach(relays.relays) { relay in
+                    RelayManagerRow(
+                        relay: relay,
+                        state: relays.connectionStates[relay.url],
+                        onRemove: { relays.remove(url: relay.url) },
+                        onToggleRead: { relays.setRoles(url: relay.url, read: !relay.read, write: relay.write) },
+                        onToggleWrite: { relays.setRoles(url: relay.url, read: relay.read, write: !relay.write) }
+                    )
                 }
+            } header: {
+                Text("Configured relays")
+            } footer: {
+                Text("Roles follow NIP-65: read relays serve your feeds; write relays receive your events. A relay needs at least one role.")
+            }
+            Section {
+                HStack {
+                    TextField("wss://relay.example.com", text: $addInput)
+                        .font(.system(size: 13, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .focused($addFocused)
+                        .onSubmit(addRelay)
+                    Button(action: addRelay) {
+                        AppIcons.image(for: AppIcons.add)
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .disabled(addInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Add relay")
+                }
+                if let addError {
+                    Text(addError)
+                        .font(.system(size: 12))
+                        .foregroundStyle(BitOSTheme.error)
+                }
+            } header: {
+                Text("Add relay")
+            }
+            Section {
+                if identity.account == nil {
+                    Text("Publishing the relay list (kind 10002) needs an account — create or import a key first.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                } else {
+                    Button {
+                        Task {
+                            environment.notePublisher.dismiss()
+                            await environment.notePublisher.publishRelayList(
+                                relayListJson: relays.encode(),
+                                writeUrls: relays.writeUrls()
+                            )
+                        }
+                    } label: {
+                        Label("Publish relay list (NIP-65)", image: "SolarBoltLinear")
+                    }
+                    PublishStatusLine(publisher: environment.notePublisher)
+                }
+            } header: {
+                Text("Publish")
+            } footer: {
+                Text("The published kind-10002 event advertises your relays to other clients (NIP-65).")
             }
         }
         .tint(BitOSTheme.accent)
         .task {
-            health = await environment.relayPool.health()
+            // Status dots + header count poll while the section is visible.
+            while !Task.isCancelled {
+                await relays.refreshConnectionStates()
+                health = await relays.health()
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
     }
 
-    private func relayRow(url: String) -> some View {
-        let writeRelay = DefaultRelays.writeUrls.contains { $0.value == url }
-        return HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(url)
+    private func addRelay() {
+        if relays.add(rawUrl: addInput) {
+            addInput = ""
+            addError = nil
+            addFocused = false
+        } else {
+            addError = relays.relays.contains { $0.url == addInput.trimmingCharacters(in: .whitespacesAndNewlines) }
+                ? "Already in your relay set."
+                : "Enter a valid wss:// relay URL."
+        }
+    }
+}
+
+private struct RelayManagerRow: View {
+    let relay: ManagedRelay
+    let state: String?
+    let onRemove: () -> Void
+    let onToggleRead: () -> Void
+    let onToggleWrite: () -> Void
+
+    private var dotColor: Color {
+        switch state {
+        case "connected": BitOSTheme.success
+        case "connecting": BitOSTheme.warning
+        default: BitOSTheme.textTertiary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(relay.url)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(BitOSTheme.textPrimary)
                 HStack(spacing: 6) {
-                    roleChip("read", color: BitOSTheme.accent)
-                    if writeRelay { roleChip("write", color: BitOSTheme.success) }
+                    roleChip("read", active: relay.read, action: onToggleRead)
+                    roleChip("write", active: relay.write, action: onToggleWrite)
                 }
             }
             Spacer()
+            Button(role: .destructive, action: onRemove) {
+                AppIcons.image(for: AppIcons.delete)
+                    .font(.system(size: 15, weight: .medium))
+            }
+            .accessibilityLabel("Remove relay")
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func roleChip(_ label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    (active ? BitOSTheme.accent : BitOSTheme.textTertiary).opacity(0.15),
+                    in: Capsule()
+                )
+                .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Toggle \(label) role")
+    }
+}
+
+private struct PublishStatusLine: View {
+    private let publisher: NotePublisher
+
+    init(publisher: NotePublisher) {
+        self.publisher = publisher
+    }
+
+    private var statusText: String? {
+        if publisher.result == nil, publisher.inFlightId != nil { return "Publishing…" }
+        switch publisher.result {
+        case .published: "Published ✓"
+        case .rejected(let detail): "Rejected: \(detail ?? "relay declined")"
+        case .timeout: "No relay receipt before timeout."
+        case .signingRefused: "No account key available."
+        case .invalid: "Relay list invalid — nothing sent."
+        case nil: nil as String?
         }
     }
 
-    private func roleChip(_ label: String, color: Color) -> some View {
-        Text(label)
-            .font(.system(size: 10, weight: .semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+    var body: some View {
+        if let text = statusText {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(publisher.result == .published ? BitOSTheme.success : BitOSTheme.textSecondary)
+        }
     }
 }
 
@@ -708,24 +1195,42 @@ private struct RelaysSection: View {
 
 private struct HelpSection: View {
     @State private var expanded: Set<String> = []
+    private let bridge = BusinessCoreBridge()
 
-    private let faq: [(String, String)] = [
-        ("What is BitOS?",
-         "A Nostr client for short notes, Bitz clips and zaps. Your identity is a key pair you own — no email, no server account."),
-        ("Where is my data stored?",
-         "Notes are canonical signed events on relays. This device keeps a bounded cache; nothing is stored on a BitOS server."),
-        ("How do I back up my account?",
-         "Settings → Security → Reveal secret key. The nsec is the only recovery method — store it offline and never share it."),
-        ("Why do some posts not load?",
-         "Relays are independent servers. A post is only visible if at least one of your relays carries it."),
-        ("How do zaps work?",
-         "You can set a default amount and create an LNURL zap invoice. Wallet pairing and in-app settlement are not available yet, so pay the invoice in an external wallet."),
-        ("What works today?",
-         "Browsing verified relay notes, composing notes/replies/reposts/reactions, local bookmarks and follows, media upload verification, profile editing, relay status, and the listed settings preferences are available. Wallet pairing, relay editing, biometric app lock, full theming, and translations are still pending."),
-    ]
+    private var faq: [(String, String)] {
+        bridge.appFactsFaq().map { ($0.question, $0.answer) }
+    }
 
     var body: some View {
+        let facts = bridge.appFacts()
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(facts.contributeNote)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    if !facts.supportLud16.isEmpty {
+                        Text("Zap the team · \(facts.supportLud16)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                        HStack(spacing: 8) {
+                            ForEach(facts.supportTiersSats, id: \.self) { tier in
+                                Text("\(tier) \u{26A1}")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.accent)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(BitOSTheme.accent.opacity(0.15), in: Capsule())
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Support the project")
+            } footer: {
+                Text("Support tiers activate when the project lightning address is configured.")
+            }
             Section("FAQ") {
                 ForEach(faq, id: \.0) { question, answer in
                     VStack(alignment: .leading, spacing: 6) {
@@ -756,25 +1261,123 @@ private struct HelpSection: View {
                     .padding(.vertical, 4)
                 }
             }
+            Section("Links") {
+                factLink("Nostr Improvement Possibilities", url: facts.linkNips)
+                factLink("What is Nostr?", url: facts.linkNostr)
+                if !facts.linkSource.isEmpty {
+                    factLink("Source code", url: facts.linkSource)
+                }
+            }
         }
         .tint(BitOSTheme.accent)
     }
+
+    private func factLink(_ label: String, url: String) -> some View {
+        Link(destination: URL(string: url)!) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 15))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                Spacer()
+                Text(url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "www.", with: ""))
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+                    .lineLimit(1)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+        }
+    }
 }
 
+// MARK: - About (legacy AboutPage hero parity)
+
 private struct AboutSection: View {
+    private let bridge = BusinessCoreBridge()
+
     var body: some View {
+        let facts = bridge.appFacts()
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         List {
             Section {
-                LabeledRow(label: "Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-                LabeledRow(label: "Settings schema", value: "v\(BusinessCoreBridge().settingsSchemaVersion())")
-                LabeledRow(label: "Event store schema", value: "v\(BusinessCoreBridge().eventStoreSchemaVersion())")
+                VStack(spacing: 8) {
+                    HexIcon(
+                        systemName: AppIcons.zap,
+                        size: 56,
+                        background: BitOSTheme.accent.opacity(0.15),
+                        foreground: BitOSTheme.accent
+                    )
+                    Text(facts.appName)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text("version \(version) \u{00B7} built on \(facts.builtOn) \u{00B7} \(facts.license)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                    Text(facts.tagline)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
             }
             Section {
-                Text("BitOS — sovereign identity on Nostr. Notes are canonical signed events; this app is a projection of them.")
+                FlowChips(items: facts.supportedNips.map { String(format: "NIP-%02lld", $0) })
+            } header: {
+                Text("Supported NIPs")
+            } footer: {
+                Text("Only NIPs live in this client are listed \u{2014} the list grows with each shipped wave.")
+            }
+            Section {
+                LabeledRow(label: "Version", value: version)
+                LabeledRow(label: "Settings schema", value: "v\(bridge.settingsSchemaVersion())")
+                LabeledRow(label: "Event store schema", value: "v\(bridge.eventStoreSchemaVersion())")
+            }
+            Section {
+                Text("BitOS \u{2014} sovereign identity on Nostr. Notes are canonical signed events; this app is a projection of them.")
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.textSecondary)
             }
         }
+    }
+}
+
+/// Wrapping monospace chips (legacy NIP badge parity).
+private struct FlowChips: View {
+    let items: [String]
+
+    private let rows: [[String]]
+    init(items: [String]) {
+        var built: [[String]] = []
+        var current: [String] = []
+        for item in items {
+            current.append(item)
+            if current.count == 5 {
+                built.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { built.append(current) }
+        rows = built
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 6) {
+                    ForEach(row, id: \.self) { item in
+                        Text(item)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(BitOSTheme.surfaceOverlay.opacity(0.5), in: Capsule())
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

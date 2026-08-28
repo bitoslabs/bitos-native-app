@@ -189,6 +189,57 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// Kind-10002 relay-list publish (NIP-65, APP-018 relays manager):
+    /// composes from the managed-set wire JSON and fans out to the set's
+    /// write-role relays through the same receipt machine.
+    func publishRelayList(relayListJson: String, writeUrls: [RelayURL]) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeRelayListEventId(
+                  authorPubkey: account.pubkeyHex, relayListJson: relayListJson, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.relayListPublishMessage(
+                  authorPubkey: account.pubkeyHex, relayListJson: relayListJson,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame, writeUrls: writeUrls.isEmpty ? DefaultRelays.writeUrls : writeUrls)
+    }
+
+    /// Kind-10004 block-list publish (NIP-51, APP-018 privacy): replaces
+    /// the head with the given set (unblock = publish without).
+    func publishBlockList(blocked: [String], writeUrls: [RelayURL]) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeBlockListEventId(
+                  authorPubkey: account.pubkeyHex, blocked: blocked, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.blockListPublishMessage(
+                  authorPubkey: account.pubkeyHex, blocked: blocked,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame, writeUrls: writeUrls.isEmpty ? DefaultRelays.writeUrls : writeUrls)
+    }
+
     /// Kind-6 repost (NIP-18) through the same machine.
     func publishRepost(targetEventId: String, targetPubkey: String) async {
         guard result == nil, inFlightId == nil, !busy else { return }
@@ -328,9 +379,9 @@ final class NotePublisher {
         return .invalid
     }
 
-    private func send(eventId: String, frame: String) async {
+    private func send(eventId: String, frame: String, writeUrls: [RelayURL] = DefaultRelays.writeUrls) async {
         inFlightId = eventId
-        receipts = DefaultRelays.writeHosts.map { PublishReceipt(relayHost: $0) }
+        receipts = writeUrls.map { PublishReceipt(relayHost: $0.host) }
 
         let stream = await pool.frames()
         watchTask = Task { [weak self] in
@@ -340,7 +391,7 @@ final class NotePublisher {
             }
         }
 
-        await pool.broadcast(frame, to: DefaultRelays.writeUrls)
+        await pool.broadcast(frame, to: writeUrls)
 
         // First acceptance anywhere completes; otherwise surface reasons on timeout.
         let deadline = ContinuousClock.now + .seconds(10)

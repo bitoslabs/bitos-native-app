@@ -67,6 +67,11 @@ class HomeViewModel(
         repository.retryNow()
     }
 
+    /** APP-004: infinite-scroll pagination — one older page at a time. */
+    fun loadOlder() {
+        repository.loadOlder()
+    }
+
     fun toggleLike(note: space.bitos.core.feed.FeedNote) {
         val turningOn = note.id !in mutableLocalActions.value.liked
         mutableLocalActions.value = mutableLocalActions.value.copy(liked = toggle(mutableLocalActions.value.liked, note.id))

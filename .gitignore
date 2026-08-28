@@ -6,16 +6,28 @@ QA.md
 # IDE and local tooling
 .idea/
 .vscode/
+.fleet/
+.zed/
 *.xcuserstate
 xcuserdata/
 DerivedData/
 .swiftpm/
+.build/
+*.xccheckout
+*.xcscmblueprint
 
 # Gradle / Kotlin
 .gradle/
+.kotlin/
 **/build/
 local.properties
 kotlin-js-store/
+*.hprof
+
+# Android generated files
+.cxx/
+.externalNativeBuild/
+captures/
 
 # CMake / native
 build-native/
@@ -27,11 +39,19 @@ node_modules/
 coverage/
 dist/
 *.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.wrangler/
 
 # Runtime and infrastructure
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 infra/data/
 *.tfstate
 *.tfstate.*
@@ -44,3 +64,5 @@ infra/data/
 *.p12
 *.mobileprovision
 Secrets.xcconfig
+
+.log

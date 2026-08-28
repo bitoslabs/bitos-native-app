@@ -27,6 +27,12 @@ class SqliteEventCache(
     databaseName: String = "bitos-events.sqlite3",
 ) : SQLiteOpenHelper(context.applicationContext, databaseName, null, EventStoreContract.SCHEMA_VERSION), EventCache {
 
+    override suspend fun clearAllCache() {
+        withContext(Dispatchers.IO) {
+            writableDatabase.delete(EventStoreContract.TABLE_EVENTS, null, null)
+        }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         EventStoreContract.ddl.forEach(db::execSQL)
     }

@@ -17,7 +17,7 @@ package space.bitos.core.settings
  * fall back to defaults.
  */
 object SettingsContract {
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 3
 
     // ── Storage keys (legacy bitos_* names) ────────────────────────────
     const val KEY_THEME_MODE = "bitos_theme_mode"
@@ -38,6 +38,7 @@ object SettingsContract {
     const val KEY_DEFAULT_ZAP_AMOUNT = "bitos_default_zap_amount"
     const val KEY_TIME_ZONE = "bitos_time_zone"
     const val KEY_DATE_FORMAT = "bitos_date_format"
+    const val KEY_SENSITIVE_MEDIA = "bitos_sensitive_media"
 
     /** Max stored string length (size-bounded persistence rule). */
     const val MAX_VALUE_LENGTH = 64
@@ -179,6 +180,20 @@ enum class DateFormatSetting(val wire: String) {
 }
 
 /**
+ * Sensitive-media default (APP-018 privacy): `cover` keeps NIP-36 notes
+ * behind the per-session reveal; `show` renders them directly.
+ */
+enum class SensitiveMediaSetting(val wire: String) {
+    COVER("cover"), SHOW("show");
+
+    companion object {
+        val DEFAULT = COVER
+        fun parse(raw: String?): SensitiveMediaSetting =
+            entries.firstOrNull { it.wire == raw } ?: DEFAULT
+    }
+}
+
+/**
  * Fully decoded settings state. Snapshots are immutable; adapters apply a
  * change by producing the next snapshot and persisting the normalized wire
  * value through [SettingsRules].
@@ -203,6 +218,7 @@ data class SettingsSnapshot(
     /** 'auto' or a bounded IANA zone id (≤ [SettingsContract.MAX_VALUE_LENGTH]). */
     val timeZone: String = "auto",
     val dateFormat: DateFormatSetting = DateFormatSetting.DEFAULT,
+    val sensitiveMedia: SensitiveMediaSetting = SensitiveMediaSetting.DEFAULT,
 )
 
 /**
@@ -234,6 +250,7 @@ object SettingsCodec {
         defaultZapAmount = zap(kv[SettingsContract.KEY_DEFAULT_ZAP_AMOUNT]),
         timeZone = bounded(kv[SettingsContract.KEY_TIME_ZONE])?.takeIf { it.isNotBlank() } ?: "auto",
         dateFormat = DateFormatSetting.parse(bounded(kv[SettingsContract.KEY_DATE_FORMAT])),
+        sensitiveMedia = SensitiveMediaSetting.parse(bounded(kv[SettingsContract.KEY_SENSITIVE_MEDIA])),
     )
 
     /** Canonical wire value for a typed snapshot field, by storage key. */
@@ -256,6 +273,7 @@ object SettingsCodec {
         SettingsContract.KEY_DEFAULT_ZAP_AMOUNT -> snapshot.defaultZapAmount.toString()
         SettingsContract.KEY_TIME_ZONE -> snapshot.timeZone
         SettingsContract.KEY_DATE_FORMAT -> snapshot.dateFormat.wire
+        SettingsContract.KEY_SENSITIVE_MEDIA -> snapshot.sensitiveMedia.wire
         else -> null
     }
 
@@ -307,6 +325,8 @@ object SettingsRules {
                 VideoPlaybackRateSetting.parse(rawValue).wire
             SettingsContract.KEY_DATE_FORMAT ->
                 DateFormatSetting.parse(rawValue).wire
+            SettingsContract.KEY_SENSITIVE_MEDIA ->
+                SensitiveMediaSetting.parse(rawValue).wire
             SettingsContract.KEY_NOTIFICATIONS_ENABLED,
             SettingsContract.KEY_SOUND_ENABLED,
             SettingsContract.KEY_HAPTIC_ENABLED,

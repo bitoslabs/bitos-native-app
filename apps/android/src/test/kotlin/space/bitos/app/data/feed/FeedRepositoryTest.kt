@@ -129,6 +129,32 @@ class FeedRepositoryTest {
         }
     }
 
+    /**
+     * APP-004 pagination: loadOlder issues an `until` REQ pinned to the
+     * window's oldest note; an in-flight page blocks duplicate REQs.
+     */
+    @Test
+    fun loadOlderRequestsUntilOldestAndDedupesInFlight(): Unit = runBlocking {
+        repository.start()
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
+
+        repository.loadOlder()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-older-1") && it.contains("\"until\":1710000000") }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
+        assertTrue(repository.state.value.isLoadingOlder)
+
+        // In-flight guard: a second call must not issue another REQ.
+        val olderReqs = transport.sent.count { it.contains("bitos-older") }
+        repository.loadOlder()
+        kotlinx.coroutines.delay(200)
+        assertEquals(olderReqs, transport.sent.count { it.contains("bitos-older") })
+    }
+
     @Test
     fun dropsSignatureUnverifiedAndUnsignedEvents() = runBlocking {
         val unsigned = """["EVENT","sub1",{"id":"${"0".repeat(64)}","pubkey":"${"aa".repeat(32)}","created_at":1710000900,"kind":1,"tags":[],"content":"unsigned"}]"""
@@ -330,6 +356,8 @@ class FeedRepositoryTest {
                 override fun save(readIds: Set<String>) = Unit
                 override fun mutedKinds(): Set<String> = emptySet()
                 override fun saveMutedKinds(kinds: Set<String>) = Unit
+                override fun cursorSeconds(): Long = -1L
+                override fun saveCursorSeconds(seconds: Long) = Unit
             },
         )
 
@@ -399,6 +427,10 @@ class FeedRepositoryTest {
                 kotlinx.coroutines.delay(10)
             }
         }
+        val request = transport.sent.first { it.startsWith("""["REQ","bitos-profiles-""") }
+        assertTrue(request.contains(""""kinds":[0]"""), request)
+        assertTrue(request.contains(""""limit":1"""), request)
+        assertTrue(request.contains("2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"), request)
     }
 }
 
@@ -442,6 +474,10 @@ private class RecordingEventCache : space.bitos.app.data.feed.EventCache {
 
     override suspend fun recentEvents(limit: Int): List<space.bitos.core.model.NostrEvent> =
         stored.take(limit)
+
+    override suspend fun clearAllCache() {
+        stored.clear()
+    }
 
     override suspend fun pruneToLimit(maxRows: Int) {
         while (stored.size > maxRows) stored.removeAt(stored.lastIndex)

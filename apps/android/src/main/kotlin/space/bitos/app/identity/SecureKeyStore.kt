@@ -45,14 +45,44 @@ class SecureKeyStore(context: Context) {
 
     /** @param secretHex hex64 secret to seal. */
     fun storeSecret(secretHex: String) {
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
-        val sealed = cipher.iv + cipher.doFinal(secretHex.toByteArray(Charsets.UTF_8))
-        prefs.edit().putString(BLOB_KEY, Base64.encodeToString(sealed, Base64.NO_WRAP)).apply()
+        seal(BLOB_KEY, secretHex)
     }
 
     /** @return hex64 secret, or null when absent/unsealable. */
-    fun loadSecret(): String? = runCatching {
-        val blob = Base64.decode(prefs.getString(BLOB_KEY, null) ?: return null, Base64.NO_WRAP)
+    fun loadSecret(): String? = unseal(BLOB_KEY)
+
+    // ── Multi-account slots (APP-018a row 1) ───────────────────────
+
+    /** Seals a secret under its pubkey-keyed slot (`identity_blob_<pk>`). */
+    fun storeSecret(secretHex: String, slotPubkey: String) {
+        seal(blobKey(slotPubkey), secretHex)
+    }
+
+    /** Slot secret by pubkey, or null when absent/unsealable. */
+    fun loadSecret(slotPubkey: String): String? = unseal(blobKey(slotPubkey))
+
+    /** Pubkeys that currently have a sealed slot (legacy active slot excluded). */
+    fun slotPubkeys(): List<String> =
+        prefs.all.keys
+            .filter { it.startsWith(SLOT_PREFIX) }
+            .map { it.removePrefix(SLOT_PREFIX) }
+            .filter { it.length == 64 }
+
+    /** Destructively wipes one account slot (registry row removed by caller). */
+    fun removeSecret(slotPubkey: String) {
+        prefs.edit().remove(blobKey(slotPubkey)).apply()
+    }
+
+    private fun blobKey(slotPubkey: String): String = SLOT_PREFIX + slotPubkey
+
+    private fun seal(key: String, secretHex: String) {
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val sealed = cipher.iv + cipher.doFinal(secretHex.toByteArray(Charsets.UTF_8))
+        prefs.edit().putString(key, Base64.encodeToString(sealed, Base64.NO_WRAP)).apply()
+    }
+
+    private fun unseal(key: String): String? = runCatching {
+        val blob = Base64.decode(prefs.getString(key, null) ?: return null, Base64.NO_WRAP)
         if (blob.size <= IV_LENGTH) return null
         val iv = blob.copyOfRange(0, IV_LENGTH)
         val ciphertext = blob.copyOfRange(IV_LENGTH, blob.size)
@@ -77,6 +107,7 @@ class SecureKeyStore(context: Context) {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "bitos_identity_aes"
         const val BLOB_KEY = "identity_blob"
+        const val SLOT_PREFIX = "identity_blob_"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val IV_LENGTH = 12
     }

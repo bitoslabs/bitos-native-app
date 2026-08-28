@@ -9,11 +9,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.core.feed.AlgorithmSnapshot
+import space.bitos.core.feed.AlgorithmSurface
 import space.bitos.core.feed.EmptyFeedRetry
 import space.bitos.core.feed.FeedAggregator
 import space.bitos.core.feed.FeedFilter
 import space.bitos.core.feed.FeedFilters
 import space.bitos.core.feed.FeedNote
+import space.bitos.core.feed.FeedRanking
+import space.bitos.core.feed.RankingContext
+import space.bitos.core.bridge.BusinessCoreBridge
 import space.bitos.core.model.ContactList
 import space.bitos.core.model.NostrEvent
 import space.bitos.core.model.NostrKinds
@@ -41,6 +46,10 @@ data class FeedUiState(
      * protocol payload hidden — what each tab shows under the All filter. */
     val forYouCount: Int = 0,
     val followingCount: Int = 0,
+    /** APP-004 pagination: an older-notes REQ is in flight (footer spinner). */
+    val isLoadingOlder: Boolean = false,
+    /** True once an older-notes REQ made no progress — hidden until refresh. */
+    val noMoreOlder: Boolean = false,
     val profiles: Map<String, ProfileMetadata> = emptyMap(),
     val relayHealth: RelayHealth = RelayHealth(0, 0),
     val isLoading: Boolean = false,
@@ -52,6 +61,8 @@ data class FeedUiState(
     val followingResolved: Boolean = false,
     /** Verified replies grouped by target event id (bounded). */
     val comments: Map<String, List<FeedNote>> = emptyMap(),
+    /** APP-009 X-style display list per thread (shared assembly rule). */
+    val threads: Map<String, List<space.bitos.core.feed.ThreadItem>> = emptyMap(),
     /** Current optimistic + relay-reconciled follow set. */
     val following: Set<String> = emptySet(),
     /** Saved event ids from the account's NIP-51 list (optimistic + relay). */
@@ -60,6 +71,8 @@ data class FeedUiState(
     val zapCounts: Map<String, Int> = emptyMap(),
     /** Muted authors' notes are filtered from all windows (device-local). */
     val muted: Set<String> = emptySet(),
+    /** Blocked authors (NIP-51 10004 head) — filtered like mutes, relay-derived. */
+    val blocked: Set<String> = emptySet(),
 )
 
 /**
@@ -84,6 +97,10 @@ class FeedRepository(
     private val followingAuthors = mutableSetOf<String>()
     private var accountPubkey: String? = null
     private var mutedPubkeys: Set<String> = emptySet()
+
+    /** Blocked authors (NIP-51 kind 10004 head) — APP-012/APP-018 privacy. */
+    private var blockedPubkeys: Set<String> = emptySet()
+    private val blockCandidates = mutableListOf<NostrEvent>()
     private var followingSubscribed = false
     private val commentThreads = mutableMapOf<String, LinkedHashMap<String, FeedNote>>()
     private val bookmarkCandidates = mutableListOf<NostrEvent>()
@@ -93,6 +110,9 @@ class FeedRepository(
     private val profileQueue = ArrayDeque<String>()
     private val requestedProfiles = mutableSetOf<String>()
     private var profileDrainJob: Job? = null
+    private val profileFallbackJobs = mutableSetOf<Job>()
+    private var profileRequestCounter = 0
+    private val bridge = BusinessCoreBridge()
 
     private val mutableState = MutableStateFlow(FeedUiState())
     val state: StateFlow<FeedUiState> = mutableState.asStateFlow()
@@ -101,6 +121,8 @@ class FeedRepository(
     private var retryJob: Job? = null
     private var retryAttempt = 0
     private var subscriptionCounter = 0
+    private var olderCounter = 0
+    private var oldestLoadedAt: Long? = null
 
     fun start() {
         if (collectJob != null) return
@@ -117,6 +139,7 @@ class FeedRepository(
                 when {
                     event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
                     event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
+                    event.kind == space.bitos.core.model.BlockList.KIND -> absorbBlockList(event)
                     event.kind == space.bitos.core.model.ZapReceipt.RECEIPT_KIND -> absorbZapReceipt(event)
                     event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
                     event.kind == space.bitos.core.model.NostrKinds.REPOST -> absorbNote(event)
@@ -149,9 +172,24 @@ class FeedRepository(
         collectJob = null
         retryJob?.cancel()
         retryJob = null
+        profileDrainJob?.cancel()
+        profileFallbackJobs.forEach(Job::cancel)
+        profileFallbackJobs.clear()
     }
 
     /** Muted authors are filtered from all feed windows (device-local). */
+    /**
+     * Algorithm preferences (APP-018 §3.18): null or a disabled FEED
+     * surface keeps the For-You window strictly chronological; the
+     * Following timeline is ALWAYS chronological (origin rule).
+     */
+    fun setAlgorithm(snapshot: AlgorithmSnapshot?) {
+        algorithm = snapshot
+        publishState()
+    }
+
+    private var algorithm: AlgorithmSnapshot? = null
+
     fun setMuted(muted: Set<String>) {
         mutedPubkeys = muted
         publishState()
@@ -163,7 +201,10 @@ class FeedRepository(
     }
 
     fun refresh() {
-        mutableState.value = mutableState.value.copy(isLoading = true)
+        // Fresh subscription re-opens the timeline head; older pages may
+        // exist again after new arrivals push the window deeper.
+        mutableState.value = mutableState.value.copy(isLoading = true, noMoreOlder = false)
+        oldestLoadedAt = null
         subscribe()
     }
 
@@ -171,7 +212,47 @@ class FeedRepository(
      * backoff so the next auto-retry is 2 s away, then re-issues the REQ. */
     fun retryNow() {
         retryAttempt = 0
+        mutableState.value = mutableState.value.copy(noMoreOlder = false)
+        oldestLoadedAt = null
         subscribe()
+    }
+
+    /**
+     * APP-004 pagination: request one page older than the window's oldest
+     * note (`until` exclusive by relay convention). One in-flight REQ at a
+     * time; a watchdog marks the feed exhausted ([noMoreOlder]) when a page
+     * brings nothing new, so the surface stops triggering until a refresh.
+     */
+    fun loadOlder() {
+        if (mutableState.value.isLoadingOlder || mutableState.value.noMoreOlder) return
+        val snapshot = aggregator.snapshot()
+        if (snapshot.isEmpty()) return
+        if (snapshot.size >= OLDER_WINDOW_MAX) {
+            mutableState.value = mutableState.value.copy(noMoreOlder = true)
+            return
+        }
+        val oldest = snapshot.minOf { it.createdAt }
+        if (oldest == oldestLoadedAt) return // same page requested already
+        oldestLoadedAt = oldest
+        mutableState.value = mutableState.value.copy(isLoadingOlder = true)
+        olderCounter += 1
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                "bitos-older-$olderCounter",
+                OLDER_FEED_PREFIX + oldest + OLDER_FEED_SUFFIX,
+            ),
+        )
+        scope.launch {
+            delay(OLDER_WATCHDOG_MS)
+            // No progress by deadline: exhausted until the next refresh.
+            if (mutableState.value.isLoadingOlder) {
+                val exhausted = aggregator.snapshot().minOfOrNull { it.createdAt } == oldest
+                mutableState.value = mutableState.value.copy(
+                    isLoadingOlder = false,
+                    noMoreOlder = exhausted,
+                )
+            }
+        }
     }
 
     /** ALL-window size of the For You timeline (mutes + protocol payload hidden). */
@@ -241,6 +322,24 @@ class FeedRepository(
         publishState()
     }
 
+    /** Blocked-author head (APP-012/018 privacy): newest verified 10004 wins. */
+    private fun absorbBlockList(event: NostrEvent) {
+        val account = accountPubkey ?: return
+        if (event.pubkey.value != account) return
+        blockCandidates.add(event)
+        val newest = space.bitos.core.model.BlockList.newest(blockCandidates) ?: return
+        blockedPubkeys = space.bitos.core.model.BlockList.blockedPubkeys(newest) ?: blockedPubkeys
+        publishState()
+    }
+
+    /** Current blocked set (privacy settings + unblock publish input). */
+    fun blockedAuthors(): Set<String> = blockedPubkeys
+
+    /** Wipes the local event cache (clear-cache, APP-018a row 5). */
+    suspend fun clearEventCache() {
+        cache.clearAllCache()
+    }
+
     /** Loads the reply thread for one note (NIP-01 tagged #e filter). */
     fun loadComments(targetEventId: String) {
         if (commentThreads.containsKey(targetEventId)) {
@@ -263,6 +362,8 @@ class FeedRepository(
         contactCandidates.clear()
         bookmarkCandidates.clear()
         bookmarked.clear()
+        blockCandidates.clear()
+        blockedPubkeys = emptySet()
         followingSubscribed = false
         mutableState.value = mutableState.value.copy(
             accountPubkey = pubkey,
@@ -280,6 +381,8 @@ class FeedRepository(
                     BOOKMARK_FILTER_PREFIX + pubkey + BOOKMARK_FILTER_SUFFIX,
                 ),
             )
+            // Blocked-author head (NIP-51 kind 10004): newest verified wins.
+            NostrEventCodec.encodeBlockListRequest("bitos-blocks", pubkey)?.let(pool::broadcast)
         }
         publishState()
     }
@@ -439,43 +542,79 @@ class FeedRepository(
         }
         if (batch.isEmpty()) return
         requestedProfiles.addAll(batch)
-        val filter = PROFILE_FILTER_PREFIX +
-            batch.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-profiles-${requestedProfiles.size}", filter))
+        profileRequestCounter += 1
+        val primary = pool.primaryRelay()
+        val request = bridge.profileRequest("bitos-profiles-$profileRequestCounter", batch)
+        if (primary == null) pool.broadcast(request) else pool.sendTo(listOf(primary), request)
+
+        val fallback = scope.launch {
+            delay(PROFILE_FALLBACK_DELAY_MS)
+            val unresolved = batch.filterNot(profiles::containsKey)
+            val relays = pool.fallbackRelays(primary)
+            if (unresolved.isNotEmpty() && relays.isNotEmpty()) {
+                profileRequestCounter += 1
+                pool.sendTo(relays, bridge.profileRequest("bitos-profiles-fallback-$profileRequestCounter", unresolved))
+            }
+        }
+        profileFallbackJobs += fallback
     }
 
     private fun publishState() {
         val relayStates = pool.states
-        val mutedSet = mutedPubkeys
+        val hiddenSet = mutedPubkeys + blockedPubkeys
         val filter = mutableState.value.filter
         val ownPubkey = accountPubkey
         val liked = likedIds
         val forYouWindow = aggregator.snapshot()
+        val rankedForYou = algorithm?.let { snapshot ->
+            FeedRanking.rank(
+                notes = forYouWindow,
+                surface = AlgorithmSurface.FEED,
+                snapshot = snapshot,
+                ctx = RankingContext(
+                    nowSeconds = System.currentTimeMillis() / 1_000,
+                    following = followingAuthors,
+                    zapCounts = zapCounts.toMap(),
+                    replyCounts = commentThreads.mapValues { it.value.size },
+                ),
+            )
+        } ?: forYouWindow
         val followingSnapshot = followingWindow.snapshot()
         val allWindow: (List<FeedNote>) -> Int = { window ->
-            window.count { it.pubkey !in mutedSet && !it.isProtocolPayload }
+            window.count { it.pubkey !in hiddenSet && !it.isProtocolPayload }
         }
         mutableState.value = mutableState.value.copy(
             notes = (if (mutableState.value.timeline == FeedTimeline.FOLLOWING) {
                 followingSnapshot
             } else {
-                forYouWindow
-            }).filter { it.pubkey !in mutedSet && FeedFilters.passes(it, filter, ownPubkey, liked) },
+                rankedForYou
+            }).filter { it.pubkey !in hiddenSet && FeedFilters.passes(it, filter, ownPubkey, liked) },
             pendingNotes = pendingNotes.toList(),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
             profiles = profiles.toMap(),
             comments = commentThreads.mapValues { it.value.values.toList() },
+            threads = commentThreads.mapValues { (rootId, replies) ->
+                space.bitos.core.feed.ThreadAssembly.assemble(rootId, replies.values.toList())
+            },
             following = followingAuthors.toSet(),
             bookmarkedIds = bookmarked.toSet(),
             zapCounts = zapCounts.toMap(),
             muted = mutedPubkeys,
+            blocked = blockedPubkeys,
             relayHealth = RelayHealth(
                 connected = relayStates.values.count { it == RelayConnectionState.CONNECTED },
                 total = relayStates.size,
             ),
             isLoading = false,
             hasLoadedAnyEvent = true,
+            // Older page arrived when the window's oldest note moved back.
+            isLoadingOlder = run {
+                val loadedAt = oldestLoadedAt
+                val oldestNow = aggregator.snapshot().minOfOrNull { it.createdAt }
+                if (mutableState.value.isLoadingOlder && loadedAt != null && oldestNow != null && oldestNow < loadedAt) false
+                else mutableState.value.isLoadingOlder
+            },
         )
     }
 
@@ -483,13 +622,17 @@ class FeedRepository(
         const val PENDING_MAX = 50
         const val PROFILE_BATCH = 48
         const val PROFILE_DRAIN_DELAY_MS = 250L
+        const val PROFILE_FALLBACK_DELAY_MS = 900L
+        const val OLDER_WINDOW_MAX = 200
+        const val OLDER_WATCHDOG_MS = 8_000L
         const val FEED_FILTER =
             """{"kinds":[1,22,0],"limit":80}"""
+        const val OLDER_FEED_PREFIX = """{"kinds":[1,22],"limit":40,"until":"""
+        const val OLDER_FEED_SUFFIX = """}"""
         const val CONTACT_FILTER_PREFIX = """{"kinds":[3],"authors":["""
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
         const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,22],"authors":["""
         const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
-        const val PROFILE_FILTER_PREFIX = """{"kinds":[0],"authors":"""
         const val COMMENT_FILTER_PREFIX = """{"kinds":[1],"#e":["""
         const val BOOKMARK_FILTER_PREFIX = """{"kinds":[30003],"authors":["""
         const val BOOKMARK_FILTER_SUFFIX = """],"#d":[""],"limit":1}"""

@@ -30,6 +30,9 @@ interface NotificationPrefs {
     fun save(readIds: Set<String>)
     fun mutedKinds(): Set<String>
     fun saveMutedKinds(kinds: Set<String>)
+    /** Read cursor (newest seen created-at second); -1 when none persisted. */
+    fun cursorSeconds(): Long
+    fun saveCursorSeconds(seconds: Long)
 }
 
 data class NotificationUiState(
@@ -45,6 +48,8 @@ data class NotificationUiState(
     val origins: Map<String, OriginNoteState> = emptyMap(),
     /** Per-type mutes (kind names); muted kinds never reach items or counts. */
     val mutedKinds: Set<NotificationKind> = emptySet(),
+    /** Blocked authors' pubkeys (kind-10004 head) — rows evicted, badge-safe. */
+    val blockedPubkeys: Set<String> = emptySet(),
 )
 
 /**
@@ -66,6 +71,9 @@ class NotificationRepository(
     private val origins = LinkedHashMap<String, OriginNoteState>()
     private val readIds = LinkedHashSet<String>()
     private var mutedKinds = LinkedHashSet<NotificationKind>()
+    private val blocked = LinkedHashSet<String>()
+    private var blockHeadAt: Long? = null
+    private var cursorSeconds: Long = -1
     private var accountPubkey: String? = null
     private var collectJob: Job? = null
     private var requested = false
@@ -88,14 +96,18 @@ class NotificationRepository(
         origins.clear()
         readIds.clear()
         readIds.addAll(prefs.readIds())
+        blocked.clear()
+        blockHeadAt = null
+        cursorSeconds = prefs.cursorSeconds()
         mutedKinds.clear()
         mutedKinds.addAll(prefs.mutedKinds().mapNotNull { kindName ->
             NotificationKind.entries.firstOrNull { it.name == kindName }
         })
         mutableState.value = NotificationUiState(
             hasAccount = pubkey != null,
-            readIds = readIds.toSet(),
+            readIds = effectiveReadIds(),
             mutedKinds = mutedKinds.toSet(),
+            blockedPubkeys = blocked.toSet(),
         )
         if (pubkey != null) {
             start()
@@ -117,15 +129,29 @@ class NotificationRepository(
         publishState()
     }
 
-    /** Marks one notification (or one aggregated group's ids) read. */
+    /** Marks one notification (or one aggregated group's ids) read; the
+     * cursor advances to the newest marked item so relay redelivery of
+     * that history never re-rings the badge (spec §3.12). */
     fun markRead(ids: List<String>) {
         if (ids.isEmpty()) return
         readIds.addAll(ids)
+        advanceCursor(items.values.filter { it.id in ids }.maxOfOrNull { it.createdAt })
         persistReadState()
         publishState()
     }
 
-    fun markAllRead() = markRead(items.keys.toList())
+    fun markAllRead() {
+        advanceCursor(items.values.maxOfOrNull { it.createdAt })
+        markRead(items.keys.toList())
+    }
+
+    private fun advanceCursor(newestMarkedAt: Long?) {
+        if (newestMarkedAt == null) return
+        if (newestMarkedAt > cursorSeconds) {
+            cursorSeconds = newestMarkedAt
+            prefs.saveCursorSeconds(cursorSeconds)
+        }
+    }
 
     private fun persistReadState() {
         // Bounded: keep the newest 500 read ids.
@@ -168,6 +194,7 @@ class NotificationRepository(
                     NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
                 }.getOrNull() ?: return@collect
                 if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+                absorbBlockList(event)
                 absorbOrigin(event, frame.message)
                 absorbNotification(event, frame.message)
             }
@@ -183,10 +210,25 @@ class NotificationRepository(
         }
     }
 
+    /** APP-012 blocked-author filter: newest verified kind-10004 head wins;
+     * arriving heads also evict already-collected rows. */
+    private fun absorbBlockList(event: space.bitos.core.model.NostrEvent) {
+        val account = accountPubkey ?: return
+        if (event.kind != space.bitos.core.model.BlockList.KIND || event.pubkey.value != account) return
+        if (event.createdAt < (blockHeadAt ?: Long.MIN_VALUE)) return
+        val next = space.bitos.core.model.BlockList.blockedPubkeys(event) ?: return
+        blockHeadAt = event.createdAt
+        blocked.clear()
+        blocked.addAll(next)
+        items.values.removeAll { NotificationFilters.blockedEvicted(it, blocked) }
+        publishState()
+    }
+
     private fun absorbNotification(event: space.bitos.core.model.NostrEvent, rawMessage: String) {
         val account = accountPubkey ?: return
         val notification = NotificationExtractor.extract(event, account) ?: return
         if (notification.kind in mutedKinds) return
+        if (NotificationFilters.blockedEvicted(notification, blocked)) return
         if (items.containsKey(notification.id)) return
         if (!NotificationFilters.shouldKeep(items.values.toList(), notification)) return
         items[notification.id] = notification
@@ -202,6 +244,24 @@ class NotificationRepository(
         val account = accountPubkey ?: return
         val filter = """{"kinds":[1,7,6,9735,3],"#p":["$account"],"limit":50}"""
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-notifications", filter))
+        // Blocked-author set (kind-10004 head) rides the same subscription round.
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                "bitos-blocks",
+                """{"kinds":[${space.bitos.core.model.BlockList.KIND}],"authors":["$account"],"limit":1}""",
+            ),
+        )
+    }
+
+    /** Explicit ids + everything at/below the persisted cursor (shared rule). */
+    private fun effectiveReadIds(): Set<String> {
+        val effective = HashSet(readIds)
+        if (cursorSeconds >= 0) {
+            items.values
+                .filter { NotificationFilters.isRead(it, cursorSeconds, emptySet()) }
+                .forEach { effective.add(it.id) }
+        }
+        return effective
     }
 
     private fun publishState() {
@@ -209,10 +269,11 @@ class NotificationRepository(
             items = items.values.sortedByDescending { it.createdAt },
             loaded = items.isNotEmpty() || requested,
             hasAccount = accountPubkey != null,
-            readIds = readIds.toSet(),
+            readIds = effectiveReadIds(),
             rawEvents = rawEvents.toMap(),
             origins = origins.toMap(),
             mutedKinds = mutedKinds.toSet(),
+            blockedPubkeys = blocked.toSet(),
         )
     }
 

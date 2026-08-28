@@ -1,8 +1,13 @@
 package space.bitos.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -98,22 +103,52 @@ class HexShape : Shape {
  * profile pictures load through the media pipeline later; the identicon is
  * the stable fallback so feed rows never shift layout. */
 @Composable
-fun HexAvatar(pubkey: String, modifier: Modifier = Modifier, size: Int = 40) {
+fun HexAvatar(
+    pubkey: String,
+    modifier: Modifier = Modifier,
+    size: Int = 40,
+    label: String? = null,
+    hasLightning: Boolean = false,
+) {
     val colors = HexIdentity.identityColors(pubkey)
-    val initials = pubkey.take(2).uppercase()
+    val initials = avatarInitials(label ?: pubkey)
     Box(
         modifier = modifier
             .size(size.dp)
-            .clip(HexShape())
-            .background(Brush.linearGradient(listOf(colors.start, colors.end)))
             .semantics { contentDescription = "Avatar $initials" },
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            initials,
-            color = Color.White,
-            fontSize = (size / 3).sp,
-            fontWeight = FontWeight.W700,
-        )
+        Box(
+            modifier = Modifier
+                .size(size.dp)
+                .clip(HexShape())
+                .background(Brush.linearGradient(listOf(colors.start, colors.end))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initials, color = Color.White, fontSize = (size / 3).sp, fontWeight = FontWeight.W700)
+        }
+        if (hasLightning) {
+            Icon(
+                Icons.Rounded.Bolt,
+                contentDescription = "Lightning enabled",
+                tint = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size((size * 0.36f).coerceIn(10f, 18f).dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(Brush.linearGradient(listOf(Color(0xFFFFB51B), Color(0xFFF7931A))))
+                    .border(1.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
+                    .padding(2.dp),
+            )
+        }
+    }
+}
+
+private fun avatarInitials(label: String): String {
+    val words = label.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+    return when (words.size) {
+        0 -> "?"
+        1 -> words.first().take(2).uppercase()
+        else -> "${words.first().first()}${words.last().first()}".uppercase()
     }
 }

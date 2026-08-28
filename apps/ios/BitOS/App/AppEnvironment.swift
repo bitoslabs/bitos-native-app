@@ -1,3 +1,4 @@
+import BusinessCore
 import Foundation
 import Observation
 
@@ -14,9 +15,12 @@ final class AppEnvironment {
     let inboxStore: InboxStore
     let searchStore: SearchStore
     let authorStore: AuthorStore
+    let relayManager: RelayManagerStore
+    let algorithmStore: AlgorithmStore
+    let privacyPrefs: PrivacyPrefsStore
 
     init(
-        relayPool: RelayPool = RelayPool(urls: DefaultRelays.urls),
+        relayPool: RelayPool = AppEnvironment.bootRelayPool(),
         businessCore: any BusinessCoreClient = FrameworkBusinessCoreClient(),
         eventStore: EventStore? = AppEnvironment.defaultEventStore(client: FrameworkBusinessCoreClient())
     ) {
@@ -28,10 +32,30 @@ final class AppEnvironment {
         self.inboxStore = InboxStore(pool: relayPool)
         self.searchStore = SearchStore(pool: relayPool, client: businessCore)
         self.authorStore = AuthorStore(pool: relayPool, client: businessCore)
+        self.relayManager = RelayManagerStore(pool: relayPool)
+        let algorithm = AlgorithmStore()
+        self.algorithmStore = algorithm
+        self.privacyPrefs = PrivacyPrefsStore()
+        // Algorithm wire drives the For-You ranking for the process lifetime.
+        algorithm.sink = { [weak feedStore] json in
+            feedStore?.setAlgorithm(snapshotJson: json)
+        }
     }
 
     static func live() -> AppEnvironment {
         AppEnvironment()
+    }
+
+    /// Cold-start pool: the persisted managed relay set, or the defaults.
+    private static func bootRelayPool() -> RelayPool {
+        let bridge = BusinessCoreBridge()
+        if let defaults = UserDefaults(suiteName: "bitos.settings"),
+           let wire = defaults.string(forKey: RelayManagerStore.storageKey) {
+            let decoded = bridge.relayListDecode(json: wire)
+            let urls = decoded.compactMap { RelayURL.parse($0.url) }
+            if !urls.isEmpty { return RelayPool(urls: urls) }
+        }
+        return RelayPool(urls: DefaultRelays.urls)
     }
 
     /// Opens the on-disk event store using the shared versioned DDL contract.

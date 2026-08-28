@@ -15,17 +15,27 @@ struct HomeView: View {
     @State private var showMediaImport = false
     @State private var authorTarget: String?
     @State private var menu: AppMenuPresentation?
+    /// List-surface scroll anchors (hold/reveal + re-tap-to-top).
+    @State private var listAtTop = true
+    @State private var listScrollToTopTick = 0
     var videoOnly: Bool = false
     var onOpenDiscover: () -> Void = {}
     var onOpenProfile: () -> Void = {}
+    var onOpenHub: () -> Void = {}
+    /** APP-003/APP-004: bumped when the user re-taps the ACTIVE shell tab
+     * (Home/Bitz) — scrolls to top, or refreshes when already at top. */
+    var retapTick: Int = 0
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
+    @Environment(SettingsStore.self) private var settings
 
-    init(store: FeedStore, videoOnly: Bool = false, onOpenDiscover: @escaping () -> Void = {}, onOpenProfile: @escaping () -> Void = {}) {
+    init(store: FeedStore, videoOnly: Bool = false, onOpenDiscover: @escaping () -> Void = {}, onOpenProfile: @escaping () -> Void = {}, onOpenHub: @escaping () -> Void = {}, retapTick: Int = 0) {
         _store = State(initialValue: store)
         self.videoOnly = videoOnly
         self.onOpenDiscover = onOpenDiscover
         self.onOpenProfile = onOpenProfile
+        self.onOpenHub = onOpenHub
+        self.retapTick = retapTick
     }
 
     /// Per-surface state (fixes the video-only-tab blank-ready edge logged
@@ -129,120 +139,207 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            content
-                .background(BitOSTheme.background)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .principal) { header }
-                }
-                .task { await store.start() }
-                .onChange(of: environment.identityStore.account) { _, account in
-                    store.setAccount(account?.pubkeyHex)
-                }
-                .onAppear {
-                    store.setAccount(environment.identityStore.account?.pubkeyHex)
-                    store.holdNewNotes(false)
-                }
-                // APP-004: arrivals hold while scrolled into the pager;
-                // being at the top (or unset) auto-reveals.
-                .onChange(of: topId) { _, id in
-                    let atTop = id == nil || id == store.notes.first?.id
-                    store.holdNewNotes(!atTop)
-                }
-                .onDisappear {
-                    store.stop()
-                    pool.releaseAll()
-                }
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        HStack(spacing: BitOSTheme.Spacing.sm) {
-                            Button {
-                                showMediaImport = true
-                            } label: {
-                                Image(systemName: "photo.on.rectangle")
-                            }
-                            .accessibilityLabel("Import and publish a video")
-                            Button {
-                                showComposer = true
-                            } label: {
-                                Image(systemName: "square.and.pencil")
-                            }
-                            .accessibilityLabel("Compose a note")
-                        }
-                    }
-                }
-                .sheet(item: Binding(
-                    get: { authorTarget.map { AuthorTarget(id: $0) } },
-                    set: { authorTarget = $0?.id }
-                )) { target in
-                    AuthorProfileSheet(
-                        authorPubkey: target.id,
-                        onClose: { authorTarget = nil }
-                    )
-                    .environment(identity)
-                    .presentationDetents([.medium, .large])
-                }
-                .sheet(isPresented: $showMediaImport) {
-                    ImportMediaSheet(onClose: { showMediaImport = false })
-                        .environment(identity)
-                        .presentationDetents([.medium, .large])
-                }
-                .appMenuHost($menu)
-                .sheet(item: $zapTarget) { target in
-                    ZapSheet(
-                        note: target,
-                        profiles: store.profiles,
-                        onClose: { zapTarget = nil }
-                    )
-                    .environment(identity)
-                    .presentationDetents([.medium])
-                }
-                .sheet(item: $commentTarget) { target in
-                    CommentSheet(
-                        note: target,
-                        store: store,
-                        publisher: environment.notePublisher,
-                        onClose: { commentTarget = nil }
-                    )
-                    .environment(identity)
-                    .presentationDetents([.medium, .large])
-                }
-                .sheet(isPresented: $showComposer) {
-                    ComposerSheet(publisher: environment.notePublisher) {
-                        environment.notePublisher.dismiss()
-                        showComposer = false
-                    }
-                    .presentationDetents([.medium, .large])
-                }
+            feedSurface
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Modifier chain split into named stages — one giant expression times
+    /// out the Swift type-checker (same fix class as pagerPage/pagerPosition).
+    private var feedSurface: some View {
+        sheetHosted(
+            toolbarDecorated
+        )
+    }
+
+    private var toolbarDecorated: some View {
+        lifecycleDecorated
+            .toolbar { appBarItems }
+    }
+
+    @ToolbarContentBuilder
+    private var appBarItems: some ToolbarContent {
+        // APP-004 app bar (spec §3.4): wordmark leading, centered
+        // content-filter trigger, search/apps-grid/import actions.
+        ToolbarItem(placement: .topBarLeading) { wordmark }
+        ToolbarItem(placement: .principal) { filterTrigger }
+        ToolbarItem(placement: .topBarTrailing) { appBarActions }
+    }
+
+    private var wordmark: some View {
+        Image("Wordmark")
+            .resizable()
+            .scaledToFit()
+            .frame(height: 16)
+            .accessibilityLabel("BitOS")
+    }
+
+    private var filterTrigger: some View {
+        AppMenuAnchorButton(
+            symbol: AppIcons.filter,
+            tint: store.filterOrdinal == 0 ? BitOSTheme.textSecondary : BitOSTheme.accent,
+            label: "Filter notes"
+        ) { point in
+            presentFilterMenu(at: point)
+        }
+    }
+
+    private var appBarActions: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Button(action: onOpenDiscover) {
+                AppIcons.image(for: AppIcons.search)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Search")
+            Button(action: onOpenHub) {
+                AppIcons.image(for: AppIcons.appsGrid)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Open hub")
+            Button {
+                showMediaImport = true
+            } label: {
+                AppIcons.image(for: AppIcons.photo)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Import and publish a video")
+        }
+    }
+
+    private var lifecycleDecorated: some View {
+        content
+            .background(BitOSTheme.background)
+            .navigationBarTitleDisplayMode(.inline)
+            .task { await store.start() }
+            .onChange(of: environment.identityStore.account) { _, account in
+                store.setAccount(account?.pubkeyHex)
+            }
+            .onAppear {
+                store.setAccount(environment.identityStore.account?.pubkeyHex)
+                store.holdNewNotes(false)
+            }
+            // APP-004: arrivals hold while scrolled into the pager;
+            // being at the top (or unset) auto-reveals.
+            .onChange(of: topId) { _, id in
+                let atTop = id == nil || id == store.notes.first?.id
+                store.holdNewNotes(!atTop)
+            }
+            .onDisappear {
+                store.stop()
+                pool.releaseAll()
+            }
+            // APP-003/APP-004: re-tap on the active shell tab scrolls to
+            // top; a re-tap while already at top refreshes (X pattern).
+            .onChange(of: retapTick) { _, tick in
+                guard tick > 0 else { return }
+                handleRetap()
+            }
+    }
+
+    private func handleRetap() {
+        if videoOnly {
+            if topId != notes.first?.id, let first = notes.first {
+                topId = first.id
+            } else {
+                store.refresh()
+            }
+        } else {
+            if listAtTop {
+                store.refresh()
+            } else {
+                listScrollToTopTick += 1
+            }
+        }
+    }
+
+    /// Revealing buffered arrivals deliberately returns to the list head so
+    /// the newly prepended cards are immediately visible. The scroll request
+    /// is driven by the list's reader below; the store remains UI-agnostic.
+    private func revealPendingAtTop() {
+        if !listAtTop { listScrollToTopTick += 1 }
+        store.revealPendingNotes()
+    }
+
+    private func sheetHosted(_ base: some View) -> some View {
+        base
+            .sheet(item: Binding(
+                get: { authorTarget.map { AuthorTarget(id: $0) } },
+                set: { authorTarget = $0?.id }
+            )) { target in
+                AuthorProfileSheet(
+                    authorPubkey: target.id,
+                    onClose: { authorTarget = nil }
+                )
+                .environment(identity)
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showMediaImport) {
+                ImportMediaSheet(onClose: { showMediaImport = false })
+                    .environment(identity)
+                    .presentationDetents([.medium, .large])
+            }
+            .appMenuHost($menu)
+            .sheet(item: $zapTarget) { target in
+                ZapSheet(
+                    note: target,
+                    profiles: store.profiles,
+                    onClose: { zapTarget = nil }
+                )
+                .environment(identity)
+                .presentationDetents([.medium])
+            }
+            .sheet(item: $commentTarget) { target in
+                CommentSheet(
+                    note: target,
+                    store: store,
+                    publisher: environment.notePublisher,
+                    onClose: { commentTarget = nil }
+                )
+                .environment(identity)
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showComposer) {
+                ComposerSheet(publisher: environment.notePublisher) {
+                    environment.notePublisher.dismiss()
+                    showComposer = false
+                }
+                .presentationDetents([.medium, .large])
+            }
     }
 
     @ViewBuilder
     private var content: some View {
         VStack(spacing: 0) {
-            if !videoOnly && !store.pendingNotes.isEmpty {
-                NewNotesPill(
-                    count: store.pendingNotes.count,
-                    authors: store.pendingAuthors,
-                    onReveal: { store.revealPendingNotes() }
-                )
-            }
-            if identity.account == nil {
-                GuestBanner(onGetStarted: onOpenProfile)
-            }
-            switch store.timeline {
-            case .forYou:
-                switch surfaceState {
-                case .loading: FeedLoadingView()
-                case .empty: FeedEmptyView(health: store.relayHealth)
-                case .ready:
-                    if videoOnly { pager } else { notesList }
+            timelineTabs
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    if identity.account == nil {
+                        GuestBanner(onGetStarted: onOpenProfile)
+                    }
+                    timelineContent
                 }
-            case .following:
-                FollowingPlaceholderView()
+                // Float in the feed area immediately below the tabs, never
+                // above them, so the tab targets remain unobstructed.
+                if !videoOnly && !store.pendingNotes.isEmpty {
+                    NewNotesPill(
+                        count: store.pendingNotes.count,
+                        authors: store.pendingAuthors,
+                        profiles: store.profiles,
+                        onReveal: revealPendingAtTop
+                    )
+                    .padding(.top, BitOSTheme.Spacing.xs)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(1)
+                }
             }
         }
+        .animation(.spring(duration: 0.3), value: store.pendingNotes.count)
         .overlay(alignment: .bottomTrailing) {
             // APP-004: New-note extended FAB (spec §3.4).
             Button {
@@ -263,42 +360,158 @@ struct HomeView: View {
         }
     }
 
+    /// Timeline states are shared by both tabs; Following is honest about
+    /// identity (needs an account; contacts resolve before notes show).
+    @ViewBuilder
+    private var timelineContent: some View {
+        switch store.timeline {
+        case .forYou:
+            feedStates
+        case .following:
+            if store.accountPubkey == nil {
+                FollowingPlaceholderView()
+            } else if !store.followingResolved {
+                FeedLoadingView()
+            } else {
+                feedStates
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var feedStates: some View {
+        switch surfaceState {
+        case .loading: FeedLoadingView()
+        case .empty:
+            FeedEmptyView(
+                health: store.relayHealth,
+                filterActive: store.filterOrdinal != 0 &&
+                    (store.timeline == .following ? store.followingCount : store.forYouCount) > 0,
+                onRetry: { store.retryNow() },
+                onShowAll: { store.selectFilter(0) }
+            )
+        case .ready:
+            if videoOnly { pager } else { notesList }
+        }
+    }
+
+    // MARK: - APP-004: sticky mode tabs (underline + live counts)
+
+    private var timelineTabs: some View {
+        HStack(spacing: BitOSTheme.Spacing.lg) {
+            timelineTab(title: "For you", symbol: AppIcons.sparkles, isSelected: store.timeline == .forYou, count: 0) {
+                store.selectTimeline(.forYou)
+            }
+            timelineTab(title: "Following", symbol: AppIcons.people, isSelected: store.timeline == .following, count: store.followingCount) {
+                store.selectTimeline(.following)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .overlay(alignment: .bottom) {
+            Divider().background(BitOSTheme.divider)
+        }
+    }
+
+    private func timelineTab(title: LocalizedStringKey, symbol: String, isSelected: Bool, count: Int, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                HStack(spacing: 6) {
+                    AppIcons.image(for: symbol)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    if count > 0 {
+                        Text(count > 999 ? "999+" : "\(count)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle((isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary).opacity(0.7))
+                    }
+                }
+                .foregroundStyle(isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                Rectangle()
+                    .fill(isSelected ? BitOSTheme.accent : .clear)
+                    .frame(height: 2.5)
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint("Switches the feed timeline")
+    }
+
     // MARK: - Vertical pager (iOS 17 scroll-target paging)
 
     /// Home tab: scrolling compact NoteCard list (legacy UX parity).
     private var notesList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(notes) { note in
-                    NoteCardRow(
-                        note: note,
-                        profile: store.profiles[note.pubkey],
-                        actions: store.localActions,
-                        isBookmarked: store.bookmarkedIds.contains(note.id) || store.localActions.bookmarked.contains(note.id),
-                        richJson: store.richTokens(for: note.content),
-                        onLike: { like(note) },
-                        onBookmark: { toggleBookmark(note) },
-                        onComment: { commentTarget = note },
-                        onRepost: { repost(note) },
-                        onZap: { zapTarget = note },
-                        onAuthor: { authorTarget = note.pubkey },
-                        onMore: { point in presentMoreMenu(for: note, at: point) }
-                    )
-                    Divider().background(BitOSTheme.divider)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
+                        NoteCardRow(
+                            note: note,
+                            profile: store.profiles[note.pubkey],
+                            actions: store.localActions,
+                            isBookmarked: store.bookmarkedIds.contains(note.id) || store.localActions.bookmarked.contains(note.id),
+                            richJson: store.richTokens(for: note.content),
+                            onLike: { like(note) },
+                            onBookmark: { toggleBookmark(note) },
+                            onComment: { commentTarget = note },
+                            onRepost: { repost(note) },
+                            onZap: { zapTarget = note },
+                            onAuthor: { authorTarget = note.pubkey },
+                            onMore: { point in presentMoreMenu(for: note, at: point) }
+                        )
+                        .onAppear {
+                            // Top visibility drives hold/reveal + re-tap
+                            // refresh; near the end prefetches an older page.
+                            if index == 0 {
+                                listAtTop = true
+                                store.holdNewNotes(false)
+                            }
+                            if index >= notes.count - 6 { store.loadOlder() }
+                        }
+                        .onDisappear {
+                            if index == 0 {
+                                listAtTop = false
+                                store.holdNewNotes(true)
+                            }
+                        }
+                        Divider().background(BitOSTheme.divider)
+                    }
+                    // APP-004 pagination: footer spinner while an older
+                    // page loads.
+                    if store.isLoadingOlder {
+                        HStack {
+                            ProgressView().tint(BitOSTheme.accent)
+                        }
+                        .padding(BitOSTheme.Spacing.base)
+                    }
                 }
             }
+            .onChange(of: listScrollToTopTick) { _, _ in
+                if let first = notes.first {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(first.id, anchor: .top)
+                    }
+                }
+            }
+            .refreshable { store.refresh() }
         }
-        .refreshable { store.refresh() }
-        .onAppear { store.holdNewNotes(!store.notes.isEmpty) }
     }
 
     private var pager: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(notes) { note in
+                ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
                     pagerPage(note)
                         .containerRelativeFrame(.vertical)
                         .id(note.id)
+                        .onAppear {
+                            // APP-004 pagination: settle near the end → fetch
+                            // one older page.
+                            if index >= notes.count - 3 { store.loadOlder() }
+                        }
                 }
             }
             .scrollTargetLayout()
@@ -345,65 +558,48 @@ struct HomeView: View {
             onMore: { point in presentMoreMenu(for: note, at: point) }
         )
     }
-
-    private var header: some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            TimelineTab(title: "For You", isSelected: store.timeline == .forYou) {
-                store.selectTimeline(.forYou)
-            }
-            TimelineTab(title: "Following", isSelected: store.timeline == .following) {
-                store.selectTimeline(.following)
-            }
-            Spacer(minLength: BitOSTheme.Spacing.base)
-            RelayHealthPill(health: store.relayHealth)
-            AppMenuAnchorButton(
-                symbol: AppIcons.filter,
-                tint: store.filterOrdinal == 0 ? BitOSTheme.textSecondary : BitOSTheme.accent,
-                label: "Filter notes"
-            ) { point in
-                presentFilterMenu(at: point)
-            }
-            Button(action: onOpenDiscover) {
-                Image(systemName: AppIcons.search)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                    .padding(8)
-                    .background(Circle().fill(BitOSTheme.surfaceOverlay))
-            }
-            .accessibilityLabel("Search")
-        }
-        .frame(maxWidth: .infinity)
-    }
 }
 
 // MARK: - APP-004 chrome: new-notes pill + guest banner
 
-/// "↑ N new notes" reveal pill with a stacked author avatar row — tap
-/// reveals, never auto-jumps (spec §3.4).
+/// Header reveal pill: author avatars plus a count centered in its badge.
 private struct NewNotesPill: View {
     let count: Int
     let authors: [String]
+    let profiles: [String: ProfileMetadata]
     let onReveal: () -> Void
 
     var body: some View {
         Button(action: onReveal) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                HStack(spacing: -6) {
+                HStack(spacing: -8) {
                     ForEach(authors, id: \.self) { pubkey in
-                        PubkeyAvatarView(pubkey: pubkey, size: 20)
-                            .overlay(Circle().stroke(BitOSTheme.surface, lineWidth: 1.5))
+                        PubkeyAvatarView(
+                            pubkey: pubkey,
+                            size: 20,
+                            label: profiles[pubkey]?.bestDisplayName,
+                            hasLightning: !(profiles[pubkey]?.lud16?.isEmpty ?? true)
+                        )
+                            .overlay(Circle().stroke(BitOSTheme.accent, lineWidth: 1.5))
                     }
                 }
-                Text("↑ \(count) new \(count == 1 ? "note" : "notes")")
+                Text(count > 99 ? "99+" : "\(count)")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(BitOSTheme.background)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(BitOSTheme.background.opacity(0.16)))
+                AppIcons.image(for: AppIcons.arrowUp)
+                    .font(.system(size: 11, weight: .bold))
+                Text("New \(count == 1 ? "note" : "notes")")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(BitOSTheme.accent)
             }
+            .foregroundStyle(BitOSTheme.background)
             .padding(.horizontal, BitOSTheme.Spacing.base)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(BitOSTheme.accent.opacity(0.14)))
+            .padding(.vertical, 7)
+            .background(Capsule().fill(BitOSTheme.accent))
+            .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
         }
         .buttonStyle(.plain)
-        .padding(.top, BitOSTheme.Spacing.xs)
         .accessibilityLabel("Show \(count) new notes")
     }
 }
@@ -443,9 +639,109 @@ private extension FeedStore {
     }
 }
 
+// MARK: - APP-005: clamp + motion primitives
+
+/// Bodies collapse beyond 8 lines (line-based so font scaling cannot break
+/// the clamp); full-screen card pages never clamp.
+private struct ExpandableRichText: View {
+    let json: String
+    var onOpenProfile: ((String) -> Void)?
+
+    private static let collapseLines = 8
+
+    @State private var expanded = false
+    @State private var canExpand = false
+    @State private var clampedHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            RichTextView(json: json, onOpenProfile: onOpenProfile, onOpenHashtag: nil)
+                .lineLimit(expanded ? nil : Self.collapseLines)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ClampedHeightKey.self, value: geo.size.height)
+                    }
+                )
+            // Hidden unlimited-height twin measures the natural height; the
+            // probe disappears once the toggle is (or needs to be) offered.
+            if !canExpand && !expanded {
+                RichTextView(json: json, onOpenProfile: nil, onOpenHashtag: nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: FullHeightKey.self, value: geo.size.height)
+                        }
+                    )
+            }
+            if canExpand || expanded {
+                Button(expanded ? "Show less" : "Show more") {
+                    withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() }
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BitOSTheme.accent)
+                .buttonStyle(.plain)
+            }
+        }
+        .onPreferenceChange(ClampedHeightKey.self) { clampedHeight = $0 }
+        .onPreferenceChange(FullHeightKey.self) { fullHeight = $0 }
+        .onChange(of: clampedHeight) { _, _ in evaluate() }
+        .onChange(of: fullHeight) { _, _ in evaluate() }
+    }
+
+    private func evaluate() {
+        canExpand = fullHeight > clampedHeight + 2
+    }
+}
+
+private struct ClampedHeightKey: PreferenceKey {
+    // Immutable default; never mutated (Swift 6 strict-concurrency note).
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct FullHeightKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Spec §2.4 like: 300 ms spring scale-bounce (damped ≈ elasticOut) + light
+/// haptic on the like tap; unlike stays quiet. Solar heart Linear/Bold.
+private struct LikeTapIcon: View {
+    let liked: Bool
+    let tint: Color
+    let action: () -> Void
+    @State private var likeScale: CGFloat = 1
+
+    var body: some View {
+        Button(action: action) {
+            AppIcons.image(for: liked ? AppIcons.heartFill : AppIcons.heart)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(likeScale)
+        .accessibilityLabel(liked ? "Unlike" : "Like")
+        .onChange(of: liked) { _, isOn in
+            guard isOn else { return }
+            likeScale = 0.6
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.35)) {
+                likeScale = 1
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+}
+
 // MARK: - APP-005: compact feed card (Home tab list parity)
 
 private struct NoteCardRow: View {
+    @Environment(SettingsStore.self) private var settings
     let note: FeedNote
     let profile: ProfileMetadata?
     let actions: LocalActions
@@ -464,13 +760,21 @@ private struct NoteCardRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 36)
+                PubkeyAvatarView(pubkey: note.pubkey, size: 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
                     .onTapGesture(perform: onAuthor)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(BitOSTheme.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.textPrimary)
+                            .lineLimit(1)
+                        if !(profile?.nip05?.isEmpty ?? true) {
+                            AppIcons.image(for: AppIcons.checkCircle)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(BitOSTheme.accent)
+                                .accessibilityLabel("NIP-05 identity claim")
+                        }
+                    }
                     HStack(spacing: 4) {
                         if note.repostedBy != nil {
                             AppIcons.image(for: AppIcons.repost)
@@ -485,17 +789,23 @@ private struct NoteCardRow: View {
                 Spacer()
                 AppMenuAnchorButton(symbol: AppIcons.more, tint: BitOSTheme.textSecondary, label: "More options", action: onMore)
             }
-            if note.contentWarning && !revealed {
+            if note.contentWarning && !revealed && settings.state.sensitiveMedia != .show {
                 SensitiveCover { revealed = true }
             } else {
-                RichTextView(json: richJson, onOpenProfile: { _ in onAuthor() }, onOpenHashtag: nil)
+                // APP-005: font-scale-safe clamp — Show more/less beyond 8 lines.
+                ExpandableRichText(json: richJson, onOpenProfile: { _ in onAuthor() })
                 MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
             }
             HStack(spacing: BitOSTheme.Spacing.base) {
                 cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
                 cardAction(AppIcons.repost, "Repost", BitOSTheme.repost, onRepost)
                 let liked = actions.liked.contains(note.id)
-                cardAction(liked ? AppIcons.heartFill : AppIcons.heart, liked ? "Unlike" : "Like", liked ? BitOSTheme.like : BitOSTheme.textSecondary, onLike)
+                // APP-005 §2.4: scale-bounce + haptic on like.
+                LikeTapIcon(
+                    liked: liked,
+                    tint: liked ? BitOSTheme.like : BitOSTheme.textSecondary,
+                    action: onLike
+                )
                 cardAction(AppIcons.zap, "Zap", BitOSTheme.zap, onZap)
                 cardAction(isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark, isBookmarked ? "Remove bookmark" : "Bookmark", isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary, onBookmark)
             }
@@ -615,12 +925,20 @@ private struct VideoNotePage: View {
     private var caption: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
             HStack(spacing: BitOSSpacingAvatar) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 36)
+                PubkeyAvatarView(pubkey: note.pubkey, size: 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        if !(profile?.nip05?.isEmpty ?? true) {
+                            AppIcons.image(for: AppIcons.checkCircle)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(BitOSTheme.accent)
+                                .accessibilityLabel("NIP-05 identity claim")
+                        }
+                    }
                     Text(FeedFormat.timeAgo(createdAt: note.createdAt))
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.7))
@@ -789,6 +1107,7 @@ private struct RailButton: View {
 // MARK: - Text page
 
 private struct TextNotePage: View {
+    @Environment(SettingsStore.self) private var settings
     let note: FeedNote
     let profile: ProfileMetadata?
     let actions: LocalActions
@@ -831,7 +1150,7 @@ private struct TextNotePage: View {
                     }
                 }
                 Spacer().frame(height: BitOSTheme.Spacing.xs)
-                if note.contentWarning && !revealed {
+                if note.contentWarning && !revealed && settings.state.sensitiveMedia != .show {
                     // APP-005: NIP-36 cover with per-session reveal.
                     SensitiveCover { revealed = true }
                 } else {
@@ -940,49 +1259,6 @@ private struct PosterImage: View {
 
 // MARK: - Header / states (unchanged behavior)
 
-private struct TimelineTab: View {
-    let title: LocalizedStringKey
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(isSelected ? .semibold : .medium))
-                .foregroundStyle(isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary)
-                .padding(.horizontal, BitOSTheme.Spacing.md)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(isSelected ? BitOSTheme.accentContainer : .clear))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityHint("Switches the feed timeline")
-    }
-}
-
-private struct RelayHealthPill: View {
-    let health: RelayHealth
-
-    private var tint: Color {
-        if health.isLive { return BitOSTheme.success }
-        return health.total == 0 ? BitOSTheme.textTertiary : BitOSTheme.error
-    }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(tint).frame(width: 6, height: 6)
-            Text("\(health.connected)/\(health.total)")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(tint)
-        }
-        .padding(.horizontal, BitOSTheme.Spacing.sm)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(tint.opacity(0.12)))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Relay connections \(health.connected) of \(health.total)")
-    }
-}
-
 private struct FeedLoadingView: View {
     var body: some View {
         ProgressView()
@@ -993,15 +1269,54 @@ private struct FeedLoadingView: View {
 
 private struct FeedEmptyView: View {
     let health: RelayHealth
+    /// True when the window has notes under the All filter but the active
+    /// content filter matches none — the “Show all” CTA applies.
+    let filterActive: Bool
+    let onRetry: () -> Void
+    let onShowAll: () -> Void
 
     var body: some View {
-        ContentPlaceholderView(
-            title: "No notes yet",
-            message: health.isLive
-                ? "Connected relays have not returned verified notes yet."
-                : "Relays are connecting. The feed fills once a connection succeeds.",
-            symbol: "bolt.horizontal"
-        )
+        VStack(spacing: BitOSTheme.Spacing.sm) {
+            if !health.isLive && health.total > 0 {
+                // APP-004: relay-error state — relays configured, none
+                // connected; the pool keeps reconnecting, user can force it.
+                Text("Can't reach relays").font(.headline)
+                Text("No relay connection right now. We keep retrying automatically.")
+                    .font(.footnote)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            } else if filterActive {
+                // APP-004: filter-mismatch empty — notes exist under All.
+                Text("No notes match this filter").font(.headline)
+                Button("Show all notes", action: onShowAll)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            } else {
+                Text("No notes yet").font(.headline)
+                Text(health.isLive
+                     ? "Connected relays have not returned verified notes yet. Retrying every few seconds."
+                     : "Relays are connecting. The feed fills once a connection succeeds.")
+                    .font(.footnote)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            // Manual retry resets the APP-004 auto-retry backoff (2 s).
+            Button(action: onRetry) {
+                HStack(spacing: 6) {
+                    AppIcons.image(for: AppIcons.refresh)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Retry now")
+                        .font(.footnote.weight(.semibold))
+                }
+                .foregroundStyle(BitOSTheme.accent)
+                .padding(.horizontal, BitOSTheme.Spacing.base)
+                .padding(.vertical, 8)
+                .background(Capsule().strokeBorder(BitOSTheme.accent.opacity(0.5)))
+            }
+            .accessibilityLabel("Retry loading notes")
+        }
+        .padding(BitOSTheme.Spacing.xxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

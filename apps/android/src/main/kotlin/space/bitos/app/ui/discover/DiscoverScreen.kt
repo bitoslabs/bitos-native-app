@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package space.bitos.app.ui.discover
 
 import androidx.compose.foundation.background
@@ -56,9 +58,17 @@ private val topics = listOf("bitcoin", "lightning", "nostr", "memes", "video")
  * results rendered as compact feed cards.
  */
 @Composable
-fun DiscoverScreen(search: space.bitos.app.data.feed.SearchRepository) {
+fun DiscoverScreen(
+    search: space.bitos.app.data.feed.SearchRepository,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel? = null,
+    identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
+    notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
+) {
     val state by search.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
+    // APP-009 root resolution: a note1/nevent1/naddr1 query fetches the
+    // thread head; the result opens the X-style thread sheet.
+    var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
 
     LaunchedEffect(input) { search.search(input) }
 
@@ -86,7 +96,12 @@ fun DiscoverScreen(search: space.bitos.app.data.feed.SearchRepository) {
         if (input.isBlank()) {
             TopicChips { topic -> input = "#$topic" }
         } else {
-            SearchResults(state)
+            SearchResults(
+                state = state,
+                homeViewModel = homeViewModel,
+                identityViewModel = identityViewModel,
+                notePublisher = notePublisher,
+            )
         }
     }
 }
@@ -138,7 +153,14 @@ private fun TopicChips(onTopic: (String) -> Unit) {
 }
 
 @Composable
-private fun SearchResults(state: SearchUiState) {
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+private fun SearchResults(
+    state: SearchUiState,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel? = null,
+    identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
+    notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
+) {
+    var threadTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<FeedNote?>(null) }
     if (state.isSearching && state.results.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
@@ -176,7 +198,34 @@ private fun SearchResults(state: SearchUiState) {
             }
         }
         items(state.results, key = { it.id }) { note ->
-            SearchCard(note, state.profiles[note.pubkey])
+            SearchCard(
+                note = note,
+                profile = state.profiles[note.pubkey],
+                onOpen = {
+                    if (homeViewModel != null && identityViewModel != null && notePublisher != null) {
+                        homeViewModel.loadComments(note.id)
+                        threadTarget = note
+                    }
+                },
+            )
+        }
+    }
+
+    // APP-009: thread sheet reuses the feed's X-style CommentContent.
+    if (threadTarget != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
+        val target = threadTarget!!
+        val homeState by homeViewModel.state.collectAsStateWithLifecycle()
+        val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
+            space.bitos.app.ui.feed.CommentContent(
+                note = target,
+                feedState = homeState,
+                identityViewModel = identityViewModel,
+                publisherState = publisherState,
+                onLoadComments = { homeViewModel.loadComments(it) },
+                onReply = { text, note -> homeViewModel.reply(text, note) },
+                onClose = { threadTarget = null },
+            )
         }
     }
 }
@@ -204,8 +253,12 @@ private fun CreatorCard(pubkey: String, profile: ProfileMetadata?) {
 }
 
 @Composable
-private fun SearchCard(note: FeedNote, profile: ProfileMetadata?) {
-    Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.surface) {
+private fun SearchCard(note: FeedNote, profile: ProfileMetadata?, onOpen: () -> Unit = {}) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = BitOSColors.surface,
+        modifier = Modifier.clickable(onClickLabel = "Open thread") { onOpen() },
+    ) {
         Column(Modifier.padding(BitOSSpacing.base).fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PubkeyAvatar(pubkey = note.pubkey, size = 28)

@@ -72,6 +72,9 @@ class BusinessCoreBridge {
         val videoWidth: Int? = null,
         val videoHeight: Int? = null,
         val contentWarning: Boolean = false,
+        /** APP-009 NIP-10 thread anchors (root / immediate parent). */
+        val threadRootId: String? = null,
+        val threadParentId: String? = null,
     )
 
     /**
@@ -130,6 +133,8 @@ class BusinessCoreBridge {
             },
             repostedBy = note.repostedBy,
             contentWarning = note.contentWarning,
+            threadRootId = note.threadRootId,
+            threadParentId = note.threadParentId,
         )
         return space.bitos.core.feed.FeedFilters.passes(coreNote, filter, ownPubkeyHex, likedIds.toSet())
     }
@@ -145,6 +150,10 @@ class BusinessCoreBridge {
      * backoff capped at 30 s — shared `EmptyFeedRetry` policy).
      */
     fun emptyFeedRetryDelayMs(attempt: Int): Long = space.bitos.core.feed.EmptyFeedRetry.delayMs(attempt)
+
+    /** APP-004 pagination: one older page — feed kinds before `until`. */
+    fun olderFeedRequest(subscriptionId: String, until: Long, limit: Int): String =
+        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[1,22],"limit":$limit,"until":$until}""")
 
     fun isProfileKind(kind: Int): Boolean = kind == NostrKinds.PROFILE_METADATA
 
@@ -182,6 +191,8 @@ class BusinessCoreBridge {
             videoWidth = note.video?.width,
             videoHeight = note.video?.height,
             contentWarning = note.contentWarning,
+            threadRootId = note.threadRootId,
+            threadParentId = note.threadParentId,
         )
     }
 
@@ -198,11 +209,18 @@ class BusinessCoreBridge {
     }
 
     /** NIP-01 `["REQ", id, filter]` for a batched kind-0 author lookup. */
-    fun profileRequest(subscriptionId: String, authors: List<String>): String = try {
-        val joined = authors.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[0],"authors":$joined}""")
-    } catch (_: NostrEventCodec.Rejected) {
-        NostrEventCodec.encodeClose(subscriptionId)
+    fun profileRequest(subscriptionId: String, authors: List<String>): String {
+        val requested = authors.distinct().take(48)
+        if (requested.isEmpty()) return NostrEventCodec.encodeClose(subscriptionId)
+        return try {
+            val joined = requested.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
+            NostrEventCodec.encodeRequest(
+                subscriptionId,
+                """{"kinds":[0],"authors":$joined,"limit":${requested.size}}""",
+            )
+        } catch (_: NostrEventCodec.Rejected) {
+            NostrEventCodec.encodeClose(subscriptionId)
+        }
     }
 
     fun close(subscriptionId: String): String = NostrEventCodec.encodeClose(subscriptionId)
@@ -242,6 +260,7 @@ class BusinessCoreBridge {
         val defaultZapAmount: Int,
         val timeZone: String,
         val dateFormat: String,
+        val sensitiveMedia: String,
     )
 
     fun settingsSchemaVersion(): Int = space.bitos.core.settings.SettingsContract.SCHEMA_VERSION
@@ -268,6 +287,7 @@ class BusinessCoreBridge {
             defaultZapAmount = s.defaultZapAmount,
             timeZone = s.timeZone,
             dateFormat = s.dateFormat.wire,
+            sensitiveMedia = s.sensitiveMedia.wire,
         )
     }
 
@@ -352,6 +372,64 @@ class BusinessCoreBridge {
 
     /** hex64 pubkey -> npub (display form). */
     fun npubEncode(pubkeyHex: String): String? = space.bitos.core.identity.NostrKeyCodec.npub(pubkeyHex)
+
+    // ── Multi-account registry (APP-018a row 1) ─────────────────
+
+    /** Registry row wire — public projections only, never secrets. */
+    class RegisteredAccountWire(
+        val pubkeyHex: String,
+        val npub: String,
+        val displayName: String? = null,
+        val addedAtSeconds: Long = 0,
+    )
+
+    fun accountRegistryDecode(json: String): List<RegisteredAccountWire> =
+        space.bitos.core.identity.AccountRegistry.decode(json).map {
+            RegisteredAccountWire(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+        }
+
+    fun accountRegistryEncode(accounts: List<RegisteredAccountWire>): String =
+        space.bitos.core.identity.AccountRegistry.encode(
+            accounts.map {
+                space.bitos.core.identity.RegisteredAccount(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+            },
+        )
+
+    // ── Interaction gates (APP-018a row 2) ──────────────────────
+
+    /** Privacy-prefs wire (eight gate fields; sensitive media + push toggles live elsewhere). */
+    class PrivacyPrefsWire(
+        val privateAccount: Boolean,
+        val includeClientTag: Boolean,
+        val activityVisible: Boolean,
+        val readReceipts: Boolean,
+        val sensitiveReason: Boolean,
+        val storyShare: Boolean,
+        val messagePermission: String,
+        val commentPermission: String,
+    )
+
+    fun privacyPrefsDecode(json: String): PrivacyPrefsWire {
+        val p = space.bitos.core.settings.PrivacyPrefsContract.decode(json)
+        return PrivacyPrefsWire(
+            p.privateAccount, p.includeClientTag, p.activityVisible, p.readReceipts,
+            p.sensitiveReason, p.storyShare, p.messagePermission.wire, p.commentPermission.wire,
+        )
+    }
+
+    fun privacyPrefsEncode(wire: PrivacyPrefsWire): String =
+        space.bitos.core.settings.PrivacyPrefsContract.encode(
+            space.bitos.core.settings.PrivacyPrefs(
+                privateAccount = wire.privateAccount,
+                includeClientTag = wire.includeClientTag,
+                activityVisible = wire.activityVisible,
+                readReceipts = wire.readReceipts,
+                sensitiveReason = wire.sensitiveReason,
+                storyShare = wire.storyShare,
+                messagePermission = space.bitos.core.settings.MessagePermission.parse(wire.messagePermission),
+                commentPermission = space.bitos.core.settings.CommentPermission.parse(wire.commentPermission),
+            ),
+        )
 
     /** npub -> hex64 pubkey. */
     fun parseNpub(encoded: String): String? = space.bitos.core.identity.NostrKeyCodec.parseNpub(encoded)
@@ -518,6 +596,88 @@ class BusinessCoreBridge {
     fun commentsRequest(subscriptionId: String, targetEventId: String): String =
         NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE}],"#e":["$targetEventId"],"limit":50}""")
 
+    /**
+     * APP-009 root resolution: `note1`/`nevent1`/`naddr1` (± `nostr:`
+     * prefix) → pointer map. Forms: `id` → {form, id, author, relays};
+     * `coord` → {form, kind(int), pubkey, d, author, relays}. Null = invalid.
+     */
+    fun eventRefParse(bech32: String): Map<String, Any>? {
+        val ref = space.bitos.core.nostr.EventRefs.parse(bech32) ?: return null
+        return when (ref) {
+            is space.bitos.core.nostr.EventRef.ById -> mapOf(
+                "form" to "id",
+                "id" to ref.id,
+                "author" to (ref.authorPubkey ?: ""),
+                "relays" to ref.relayHints,
+            )
+            is space.bitos.core.nostr.EventRef.ByCoordinate -> mapOf(
+                "form" to "coord",
+                "kind" to ref.kind,
+                "pubkey" to ref.pubkey,
+                "d" to ref.d,
+                "author" to ref.authorPubkey,
+                "relays" to ref.relayHints,
+            )
+        }
+    }
+
+    /** APP-009 root fetch by hex id (thread head REQ). */
+    fun threadRootRequestById(subscriptionId: String, eventId: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            space.bitos.core.nostr.EventRefs.requestFilter(
+                space.bitos.core.nostr.EventRef.ById(eventId, null, emptyList()),
+            ),
+        )
+
+    /** APP-009 root fetch by NIP-33 coordinate (newest `#d` version). */
+    fun threadRootRequestByCoordinate(subscriptionId: String, kind: Int, pubkey: String, d: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            space.bitos.core.nostr.EventRefs.requestFilter(
+                space.bitos.core.nostr.EventRef.ByCoordinate(kind, pubkey, d, pubkey, emptyList()),
+            ),
+        )
+
+    /**
+     * APP-009 X-style threading for the iOS renderer (shared
+     * `ThreadAssembly`). Input: JSON array of reply projections
+     * `{"id":…,"createdAt":n,"threadRootId":…,"threadParentId":…}`.
+     * Output (shape locked by `ThreadAssemblyTest.bridgeJsonShape`):
+     * `[{"id":…,"depth":n,"parent":…,"orphan":bool}]`.
+     */
+    fun threadItemsJson(rootId: String, itemsJson: String): String? {
+        val replies = try {
+            Json.parseToJsonElement(itemsJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                FeedNote(
+                    id = obj.getValue("id").jsonPrimitive.content,
+                    pubkey = "t",
+                    content = "",
+                    createdAt = obj.getValue("createdAt").jsonPrimitive.content.toLongOrNull() ?: return@mapNotNull null,
+                    kind = 1,
+                    replyTo = null,
+                    threadRootId = (obj["threadRootId"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                    threadParentId = (obj["threadParentId"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                    hashtags = emptyList(),
+                    mentions = emptyList(),
+                    mediaUrls = emptyList(),
+                    isProtocolPayload = false,
+                )
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.feed.ThreadAssembly.assemble(rootId, replies).joinToString(prefix = "[", separator = ",", postfix = "]") { item ->
+            buildJsonObject {
+                put("id", item.id)
+                put("depth", item.depth)
+                put("parent", item.parentId ?: "")
+                put("orphan", item.orphan)
+            }.toString()
+        }
+    }
+
     /** Composes the unsigned kind-3 follow list and returns its canonical id. */
     fun composeFollowListEventId(authorPubkey: String, follows: List<String>, nowSeconds: Long): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
@@ -533,6 +693,256 @@ class BusinessCoreBridge {
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeFollowList(authorPubkey, follows) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    // ── Relay manager (APP-018 §3.18, NIP-65) ──────────────────────
+
+    /** Managed-relay wire row for the bridge ([RelayListContract] JSON in/out). */
+    class RelayEntryWire(val url: String, val read: Boolean, val write: Boolean)
+
+    /** Lenient decode of the persisted managed set; corruption yields []. */
+    fun relayListDecode(json: String): List<RelayEntryWire> =
+        space.bitos.core.model.RelayListContract.decode(json).map {
+            RelayEntryWire(url = it.url.value, read = it.read, write = it.write)
+        }
+
+    /** Normalizes + encodes the managed set to the versioned wire JSON. */
+    fun relayListEncode(entries: List<RelayEntryWire>): String =
+        space.bitos.core.model.RelayListContract.encode(
+            entries.mapNotNull { wire ->
+                space.bitos.core.model.RelayUrl.parse(wire.url)
+                    ?.let { space.bitos.core.model.RelayEntry(it, wire.read, wire.write) }
+            },
+        )
+
+    /** Canonical url for a valid add-field input, or null (validation rule). */
+    fun relayUrlNormalize(raw: String): String? =
+        space.bitos.core.model.RelayUrl.parse(raw)?.value
+
+    // ── App facts (APP-018 help/about content, APP-020 parity) ─────
+
+    /** Static help/about content wire (single source in `AppFacts`). */
+    class AppFactsWire(
+        val appName: String,
+        val tagline: String,
+        val license: String,
+        val builtOn: String,
+        val supportedNips: List<Long>,
+        val linkNips: String,
+        val linkNostr: String,
+        val linkSource: String,
+        val supportLud16: String,
+        val supportTiersSats: List<Long>,
+        val contributeNote: String,
+    )
+
+    /** FAQ entry wire for the settings help section. */
+    class FaqEntryWire(val question: String, val answer: String)
+
+    fun appFacts(): AppFactsWire = AppFactsWire(
+        appName = space.bitos.core.settings.AppFacts.APP_NAME,
+        tagline = space.bitos.core.settings.AppFacts.TAGLINE,
+        license = space.bitos.core.settings.AppFacts.LICENSE,
+        builtOn = space.bitos.core.settings.AppFacts.BUILT_ON,
+        supportedNips = space.bitos.core.settings.AppFacts.SUPPORTED_NIPS.map { it.toLong() },
+        linkNips = space.bitos.core.settings.AppFacts.LINK_NIPS,
+        linkNostr = space.bitos.core.settings.AppFacts.LINK_NOSTR,
+        linkSource = space.bitos.core.settings.AppFacts.LINK_SOURCE,
+        supportLud16 = space.bitos.core.settings.AppFacts.SUPPORT_LUD16,
+        supportTiersSats = space.bitos.core.settings.AppFacts.SUPPORT_TIERS_SATS.map { it.toLong() },
+        contributeNote = space.bitos.core.settings.AppFacts.CONTRIBUTE_NOTE,
+    )
+
+    fun appFactsFaq(): List<FaqEntryWire> =
+        space.bitos.core.settings.AppFacts.FAQ.map {
+            FaqEntryWire(question = it.question, answer = it.answer)
+        }
+
+    // ── Algorithm preferences (APP-018 §3.18, origin parity) ──────────
+
+    /** Algorithm wire types (surface/signal keys are the shared wire names). */
+    class AlgoSignalWire(val enabled: Boolean, val weight: Double)
+    class AlgoSurfaceWire(val enabled: Boolean, val signals: Map<String, AlgoSignalWire>)
+    class AlgoSnapshotWire(val freshnessHours: Long, val surfaces: Map<String, AlgoSurfaceWire>)
+
+    fun algorithmFreshnessSteps(): List<Long> =
+        space.bitos.core.feed.AlgorithmContract.FRESHNESS_STEPS_HOURS.map { it.toLong() }
+
+    fun algorithmSnapshotDecode(json: String): AlgoSnapshotWire {
+        val s = space.bitos.core.feed.AlgorithmContract.decode(json)
+        return snapshotToWire(s)
+    }
+
+    fun algorithmSnapshotEncode(wire: AlgoSnapshotWire): String {
+        val s = wireToSnapshot(wire)
+        return space.bitos.core.feed.AlgorithmContract.encode(s)
+    }
+
+    fun algorithmPresetWire(surfaceWire: String, presetWire: String): AlgoSurfaceWire {
+        val surface = space.bitos.core.feed.AlgorithmSurface.entries.first { it.wire == surfaceWire }
+        val preset = when (presetWire) {
+            "LATEST" -> space.bitos.core.feed.AlgorithmPresetId.LATEST
+            "TRENDING" -> space.bitos.core.feed.AlgorithmPresetId.TRENDING
+            "TRUSTED" -> space.bitos.core.feed.AlgorithmPresetId.TRUSTED
+            else -> space.bitos.core.feed.AlgorithmPresetId.BALANCED
+        }
+        return surfaceToWire(surface, space.bitos.core.feed.AlgorithmContract.preset(surface, preset))
+    }
+
+    fun algorithmDetectPreset(surfaceWire: String, wire: AlgoSurfaceWire): String {
+        val surface = space.bitos.core.feed.AlgorithmSurface.entries.first { it.wire == surfaceWire }
+        val setting = wireToSurface(wire)
+        return space.bitos.core.feed.AlgorithmContract.detectPreset(surface, setting).name
+    }
+
+    /**
+     * Ranking seam for the Swift feed mirror: orders minimal note rows
+     * (JSON `[{"id","pubkey","createdAt"},…]`) through the shared engine
+     * and returns the ordered ids.
+     */
+    fun algorithmRankIds(
+        notesJson: String,
+        surfaceWire: String,
+        snapshotJson: String,
+        followingJson: String,
+        zapCountsJson: String,
+        replyCountsJson: String,
+        nowSeconds: Long,
+    ): List<String> {
+        val surface = space.bitos.core.feed.AlgorithmSurface.entries.first { it.wire == surfaceWire }
+        val snapshot = space.bitos.core.feed.AlgorithmContract.decode(snapshotJson)
+        val notes = parseMinimalNotes(notesJson) ?: return emptyList()
+        val following = parseStringSet(followingJson)
+        val zapCounts = parseCountMap(zapCountsJson)
+        val replyCounts = parseCountMap(replyCountsJson)
+        return space.bitos.core.feed.FeedRanking.rank(
+            notes = notes,
+            surface = surface,
+            snapshot = snapshot,
+            ctx = space.bitos.core.feed.RankingContext(
+                nowSeconds = nowSeconds,
+                following = following,
+                zapCounts = zapCounts,
+                replyCounts = replyCounts,
+            ),
+        ).map { it.id }
+    }
+
+    private fun snapshotToWire(s: space.bitos.core.feed.AlgorithmSnapshot) = AlgoSnapshotWire(
+        freshnessHours = s.freshnessHours.toLong(),
+        surfaces = s.surfaces.entries.associate { (surface, setting) ->
+            surface.wire to surfaceToWire(surface, setting)
+        },
+    )
+
+    private fun wireToSnapshot(w: AlgoSnapshotWire): space.bitos.core.feed.AlgorithmSnapshot {
+        val surfaces = w.surfaces.entries.mapNotNull { (key, wire) ->
+            space.bitos.core.feed.AlgorithmSurface.entries
+                .firstOrNull { it.wire == key }
+                ?.let { it to wireToSurface(wire) }
+        }.toMap()
+        return space.bitos.core.feed.AlgorithmSnapshot(w.freshnessHours.toInt(), surfaces)
+    }
+
+    private fun surfaceToWire(surface: space.bitos.core.feed.AlgorithmSurface, setting: space.bitos.core.feed.SurfaceSetting) =
+        AlgoSurfaceWire(
+            enabled = setting.enabled,
+            signals = setting.signals.entries.associate { (signal, s) ->
+                signal.wire to AlgoSignalWire(s.enabled, s.weight)
+            },
+        )
+
+    private fun wireToSurface(w: AlgoSurfaceWire): space.bitos.core.feed.SurfaceSetting =
+        space.bitos.core.feed.AlgorithmContract.normalize(
+            space.bitos.core.feed.SurfaceSetting(
+                enabled = w.enabled,
+                signals = w.signals.entries.mapNotNull { (key, s) ->
+                    space.bitos.core.feed.AlgorithmSignal.entries
+                        .firstOrNull { it.wire == key }
+                        ?.let { it to space.bitos.core.feed.SignalSetting(s.enabled, s.weight) }
+                }.toMap(),
+            ),
+        )
+
+    private fun parseMinimalNotes(json: String): List<space.bitos.core.feed.FeedNote>? = try {
+        val arr = kotlinx.serialization.json.Json.parseToJsonElement(json).jsonArray
+        arr.map { el ->
+            val o = el.jsonObject
+            space.bitos.core.feed.FeedNote(
+                id = o["id"]?.jsonPrimitive?.content ?: "",
+                pubkey = o["pubkey"]?.jsonPrimitive?.content ?: "",
+                content = "",
+                createdAt = o["createdAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                kind = 1,
+                replyTo = null,
+                hashtags = emptyList(),
+                mentions = emptyList(),
+                mediaUrls = emptyList(),
+                isProtocolPayload = false,
+            )
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun parseStringSet(json: String): Set<String> = try {
+        kotlinx.serialization.json.Json.parseToJsonElement(json).jsonArray
+            .mapNotNull { it.jsonPrimitive.content }.toSet()
+    } catch (_: Exception) {
+        emptySet()
+    }
+
+    private fun parseCountMap(json: String): Map<String, Int> = try {
+        kotlinx.serialization.json.Json.parseToJsonElement(json).jsonObject
+            .entries.associate { (k, v) -> k to (v.jsonPrimitive.content.toIntOrNull() ?: 0) }
+    } catch (_: Exception) {
+        emptyMap()
+    }
+
+    /** Composes the unsigned NIP-65 relay list and returns its canonical id. */
+    fun composeRelayListEventId(authorPubkey: String, relayListJson: String, nowSeconds: Long): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeRelayList(
+            authorPubkey,
+            space.bitos.core.model.RelayListContract.decode(relayListJson),
+        )?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-10002 relay list, or null. */
+    fun relayListPublishMessage(
+        authorPubkey: String,
+        relayListJson: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeRelayList(
+            authorPubkey,
+            space.bitos.core.model.RelayListContract.decode(relayListJson),
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** APP-012/APP-018 blocked-list REQ (NIP-51 kind 10004 head). */
+    fun encodeBlockListRequest(subscriptionId: String, accountPubkey: String): String? =
+        space.bitos.core.nostr.NostrEventCodec.encodeBlockListRequest(subscriptionId, accountPubkey)
+
+    /** Composes the unsigned kind-10004 block list and returns its canonical id. */
+    fun composeBlockListEventId(authorPubkey: String, blocked: List<String>, nowSeconds: Long): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeBlockList(authorPubkey, blocked)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-10004 block list, or null. */
+    fun blockListPublishMessage(
+        authorPubkey: String,
+        blocked: List<String>,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeBlockList(authorPubkey, blocked) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
 
@@ -583,6 +993,18 @@ class BusinessCoreBridge {
         }
         if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
         return space.bitos.core.model.BookmarkList.bookmarkedIds(event)
+    }
+
+    /** Blocked pubkeys from a verified kind-10004 head (null on any other kind). */
+    fun blockListPubkeys(message: String, relayUrl: String): List<String>? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        }
+        if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
+        return space.bitos.core.model.BlockList.blockedPubkeys(event)?.toList()
     }
 
     /** REQ for the account's bookmark list (addressable coordinate). */
@@ -766,6 +1188,70 @@ class BusinessCoreBridge {
             """{"kinds":[1,7,6,${space.bitos.core.model.ZapReceipt.RECEIPT_KIND},3],"#p":["$accountPubkey"],"limit":50}""",
         )
 
+    /** APP-012 blocked-author filter: REQ for the account's kind-10004 list. */
+    fun blockListRequest(subscriptionId: String, accountPubkey: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${space.bitos.core.model.BlockList.KIND}],"authors":["$accountPubkey"],"limit":1}""",
+        )
+
+    /**
+     * APP-012 blocked set from a verified kind-10004 frame authored by the
+     * account. Map keys: `createdAt` (Long), `pubkeys` (List<String>).
+     * The store keeps the newest verified head (compare createdAt).
+     */
+    fun blockListFromFrame(message: String, relayUrl: String, accountPubkey: String): Map<String, Any>? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        }
+        if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
+        if (event.pubkey.value != accountPubkey) return null
+        val blocked = space.bitos.core.model.BlockList.blockedPubkeys(event) ?: return null
+        return mapOf(
+            "createdAt" to event.createdAt,
+            "pubkeys" to blocked.toList(),
+        )
+    }
+
+    /** APP-012 search-row predicate (shared `NotificationFilters` rule). */
+    fun notificationQueryMatches(summary: String, authorName: String?, query: String): Boolean {
+        val item = space.bitos.core.model.NotificationItem(
+            id = "q",
+            authorPubkey = "q",
+            kind = space.bitos.core.model.NotificationKind.REACTION,
+            targetEventId = null,
+            summary = summary,
+            createdAt = 0,
+        )
+        return space.bitos.core.model.NotificationFilters.queryMatches(item, query, authorName)
+    }
+
+    /**
+     * APP-012 read-cursor rule: explicit marks OR createdAt ≤ cursor. Pass a
+     * negative [cursorSeconds] when no cursor is persisted yet.
+     */
+    fun notificationCursorIsRead(
+        id: String,
+        createdAtSeconds: Long,
+        cursorSeconds: Long,
+        explicitlyRead: List<String>,
+    ): Boolean =
+        space.bitos.core.model.NotificationFilters.isRead(
+            space.bitos.core.model.NotificationItem(
+                id = id,
+                authorPubkey = "q",
+                kind = space.bitos.core.model.NotificationKind.REACTION,
+                targetEventId = null,
+                summary = "",
+                createdAt = createdAtSeconds,
+            ),
+            cursorSeconds = cursorSeconds.takeIf { it >= 0 },
+            explicitlyRead = explicitlyRead.toSet(),
+        )
+
     /**
      * APP-012 origin-note REQ: fetch up to [ids] events by id, batched to
      * ≤100 ids per request (relay convention). Invalid/non-hex ids drop.
@@ -797,6 +1283,8 @@ class BusinessCoreBridge {
             "excerpt" to note.excerpt,
             "thumbUrl" to (note.thumbUrl ?: ""),
             "content" to note.content,
+            "mediaUrls" to note.mediaUrls,
+            "contentWarning" to note.contentWarning,
         )
     }
 

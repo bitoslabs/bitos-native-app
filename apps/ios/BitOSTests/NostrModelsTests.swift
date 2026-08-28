@@ -27,6 +27,49 @@ final class NostrModelsTests: XCTestCase {
     }
 }
 
+/**
+ * APP-012 read-model seam: locks the new bridge surface (origin-note media
+ * strip keys, read-cursor + search predicates) against the XCFramework.
+ * The underlying rules are locked once in the shared common suite; the
+ * NIP-36 tag form needs tagged compose helpers and stays covered there.
+ */
+final class NotificationBridgeRuleTests: XCTestCase {
+    private let bridge = BusinessCoreBridge()
+    private let secretHex = String(repeating: "01", count: 32) // public test key
+
+    func testOriginNoteFrameCarriesTheMediaStrip() throws {
+        let pubkey = try XCTUnwrap(bridge.derivePublicKey(secretHex: secretHex))
+        let content = "pics https://a.example/1.png and https://a.example/2.jpg end"
+        let id = try XCTUnwrap(bridge.composeEventId(content: content, pubkeyHex: pubkey, nowSeconds: 1_700_000_000))
+        let signature = try XCTUnwrap(bridge.signDetached(messageHex: id, secretHex: secretHex, auxHex: ""))
+        let frame = #"["EVENT","sub",{"id":"\#(id)","pubkey":"\#(pubkey)","created_at":1700000000,"kind":1,"tags":[],"content":"\#(content)","sig":"\#(signature)"}]"#
+
+        let note = try XCTUnwrap(
+            bridge.originNoteFromFrame(message: frame, relayUrl: "wss://relay.test", wantedIds: [id]) as? [String: Any]
+        )
+        XCTAssertEqual(note["mediaUrls"] as? [String], ["https://a.example/1.png", "https://a.example/2.jpg"])
+        XCTAssertEqual((note["contentWarning"] as? KotlinBoolean)?.boolValue, false)
+
+        // An id outside the wanted set yields nothing.
+        XCTAssertNil(bridge.originNoteFromFrame(message: frame, relayUrl: "wss://relay.test", wantedIds: ["ff" + String(repeating: "0", count: 63)]))
+    }
+
+    func testCursorAndQueryPredicates() {
+        // Cursor: at-or-below reads implicitly; above stays unread; explicit
+        // ids read without any cursor (−1 sentinel).
+        XCTAssertTrue(bridge.notificationCursorIsRead(id: "a", createdAtSeconds: 100, cursorSeconds: 100, explicitlyRead: []))
+        XCTAssertTrue(bridge.notificationCursorIsRead(id: "a", createdAtSeconds: 99, cursorSeconds: 100, explicitlyRead: []))
+        XCTAssertFalse(bridge.notificationCursorIsRead(id: "a", createdAtSeconds: 101, cursorSeconds: 100, explicitlyRead: []))
+        XCTAssertTrue(bridge.notificationCursorIsRead(id: "a", createdAtSeconds: 500, cursorSeconds: -1, explicitlyRead: ["a"]))
+
+        // Search: summary + author-name contains, case-insensitive.
+        XCTAssertTrue(bridge.notificationQueryMatches(summary: "Great post about Bitcoin", authorName: nil, query: "bitcoin"))
+        XCTAssertFalse(bridge.notificationQueryMatches(summary: "Great post", authorName: "Satoshi", query: "alice"))
+        XCTAssertTrue(bridge.notificationQueryMatches(summary: "hello", authorName: "Satoshi Nakamoto", query: "satoshi"))
+        XCTAssertTrue(bridge.notificationQueryMatches(summary: "anything", authorName: nil, query: "  "))
+    }
+}
+
 final class BusinessCoreFacadeTests: XCTestCase {
     private let client = FrameworkBusinessCoreClient()
 

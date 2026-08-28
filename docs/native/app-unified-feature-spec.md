@@ -295,8 +295,8 @@ Anatomy:
       All · Original · Replies · Media · Liked · Mine — checkmarks,
       multi-select on web / single-select mobile → keep single+All [F]
 - [ ] Search action → Discover tab; apps-grid action → More hub
-- [ ] Sticky mode tabs: ✨ For you · 👥 Following — underline indicator +
-      live note counts
+- [ ] Sticky mode tabs: ✨ For you · 👥 Following — underline indicator;
+      Following displays its live note count
 - [ ] [W] pinned followed-hashtag chips (NIP-51 interest set) after tabs
 - [ ] StoriesBar (§3.6) as list header scrolling WITH content (not pinned);
       GuestBanner when signed out ("browsing as guest" + sign-in CTA)
@@ -307,8 +307,9 @@ Anatomy:
       explicit load-more), skeleton rows, empty states (no notes yet / no
       follows yet + Discover CTA / no filter match + Show all CTA),
       relay-error state + retry, stale-while-revalidate (cached first)
-- [ ] **New-notes pill**: sticky "↑ N new notes" + up-to-4 author avatar
-      stack; tap reveals (prepend), never auto-jump; read position stable
+- [ ] **New-notes pill**: floats immediately below the mode tabs, up-to-4
+      author avatars plus a count centered in its circular badge; tap reveals
+      (prepend) and returns the notes list to its top so the new cards show
 - [ ] [W] ZapLiveStrip live zap ticker under tabs — V1.x
 - [ ] [W] ranked banner "Ranked for you · preset" + Tune → settings
 - [ ] [W] per-card rank chip (top signal) → RankExplainer sheet (per-signal
@@ -320,11 +321,14 @@ Data: kind 1 (+20/21/22/34235/34236 video kinds — already subscribed),
 reactions/reposts/zap totals folded into cards, protocol-note classifier
 (hide machine traffic unless pref), followed hashtags merged, discovery
 relays opt-in (For you only), dedup by id, newest-first capped window.
+Kind-0 author metadata is batched (≤48): query the primary connected relay
+first, then after 900 ms query only unresolved authors on fallback relays.
 
 ### 3.5 APP-005 — NoteCard & rich content renderer (V1) — shared component
 
-- [ ] Author row: hex avatar (→profile) · display name (+fallback) ·
-      NIP-05 badge · time-ago · ⋯ menu (mute author · block · report · copy
+- [ ] Author row: username-initial hex avatar (→profile) · Lightning badge
+      when `lud16` is available · display name (+fallback) · NIP-05 claim
+      marker · time-ago · ⋯ menu (mute author · block · report · copy
       id · [W] raw JSON) · repost attribution ("↻ Reposted by X" when kind 6)
 - [ ] Rich body — **NIP-27 entity rendering**: npub/nprofile/note/nevent/
       naddr, bare + `nostr:`-prefixed + `@`-prefixed mentions; TLV relay/
@@ -667,14 +671,14 @@ choice tiles + permission rows):
 | `appearance` | theme mode (dark/light/system) · accent palette · font size · font family · compact mode · live preview — live: theme/font/compact persist through shared contract; light tokens + accent land with APP-023 |
 | `security` | nsec reveal (confirm-gated) + copy · app-lock (biometric) · sign-out · danger zone |
 | `relays` | relay CRUD (add/edit/remove) · read/write toggles · live status dots + latency · recommended list · NIP-65 relay-list publish indicator · [W] event outbox viewer (pending ACKs) |
-| `algorithm` | per-surface enable (feed/bitz/discover) · presets Latest/Balanced/Trending/Trusted/Custom · freshness Live 1h/Balanced 6h/Relaxed 24h/Chill 3d · per-signal weight sliders (Recency/Engagement/Zaps/Affinity/Topics/WoT) + total readout · interaction-profile reset · [W] settings-sync backup/restore (kind 30078) — live: timeline Latest/Trending · media previews · reactions · protocol notes · default zap amount |
+| `algorithm` | per-surface enable (feed/bitz/discover) · presets Latest/Balanced/Trending/Trusted/Custom · freshness Live 1h/Balanced 6h/Relaxed 24h/Chill 3d · per-signal weight sliders (Recency/Engagement/Zaps/Affinity/Topics/WoT) + total readout · interaction-profile reset · [W] settings-sync backup/restore (kind 30078) — live: full ranking controls (shared `AlgorithmContract` + `FeedRanking.rank` drives the For-You window on both platforms; off = chronological, Following always chronological; Topics/WoT rows render but contribute 0 until their data feeds land) + timeline Latest/Trending · media previews · reactions · protocol notes · default zap amount |
 | `lightning` | default zap amount · wallet → zaps page |
-| `privacy` | per-type notification mutes · DM/mention/zap gates · read-receipt behavior · blocked users manage · media auto-load rules · sensitive-media default |
-| `notifications` | master toggle · sound · haptics · per-type toggles — live: master/sound/haptics; per-type with APP-012 |
-| `media` | autoplay · video quality · playback rate · default upload provider (`_ProviderTile`: Blossom default; [W] Cloudinary/S3/server fallback config) — live: autoplay/quality |
+| `privacy` | per-type notification mutes · DM/mention/zap gates · read-receipt behavior · blocked users manage · media auto-load rules · sensitive-media default — live: media auto-load · protocol notes · sensitive-media default (drives the NIP-36 cover on both platforms) · blocked users manage (kind-10004 head view + unblock publish; blocked set filters feeds AND the inbox) |
+| `notifications` | master toggle · sound · haptics · per-type toggles — live: master/sound/haptics + per-type toggles (all six kinds, same muted-kinds store as the inbox header) |
+| `media` | autoplay · video quality · playback rate · default upload provider (`_ProviderTile`: Blossom default; [W] Cloudinary/S3/server fallback config) — live: autoplay/quality/playback rate + honest Blossom provider row |
 | `language` | English / Lao (+ system) — live: en/lo picker + date format + timezone display |
-| `help` | FAQ · shortcuts · support/donate widget · contributors |
-| `about` | version · links · `/about` |
+| `help` | FAQ · shortcuts · support/donate widget · contributors — live: FAQ (shared `AppFacts` single source) · support/contribute card (donate tiers render when the project LUD-16 is configured) · links; shortcuts + contributors pending |
+| `about` | version · links · `/about` — live: brand card (legacy copy), honest supported-NIP chips, links, schema rows |
 
 ### 3.19 APP-019 — Studio & Meme Studio (V1 quick editor; V2 full suite)
 

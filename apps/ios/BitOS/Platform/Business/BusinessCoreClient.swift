@@ -34,6 +34,9 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     var repostedBy: String? = nil
     var video: MediaMetadata? = nil
     var contentWarning: Bool = false
+    /// APP-009 NIP-10 thread anchors (root / immediate parent). */
+    var threadRootId: String? = nil
+    var threadParentId: String? = nil
 }
 
 /// Display-oriented media attachment (mirror of the shared `MediaMetadata`).
@@ -86,6 +89,8 @@ protocol BusinessCoreClient: Sendable {
     /// APP-004 empty-feed retry delay in ms (shared `EmptyFeedRetry` policy:
     /// 2 s exponential backoff capped at 30 s).
     func emptyFeedRetryDelayMs(attempt: Int) -> Int
+    /// APP-004 pagination: one older page — feed kinds before `until`.
+    func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
     func feedRequest(subscriptionId: String) -> String
@@ -145,6 +150,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         Int(bridge.emptyFeedRetryDelayMs(attempt: Int32(attempt)))
     }
 
+    func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String {
+        bridge.olderFeedRequest(subscriptionId: subscriptionId, until: until, limit: Int32(limit))
+    }
+
     func profile(from event: VerifiedEvent) -> ProfileMetadata? {
         bridge.profile(event: event.bridgeEvent(bridge: bridge)).map {
             ProfileMetadata(
@@ -182,7 +191,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
                     height: note.videoHeight?.intValue
                 )
             },
-            contentWarning: note.contentWarning
+            contentWarning: note.contentWarning,
+            threadRootId: note.threadRootId,
+            threadParentId: note.threadParentId
         )
     }
 
@@ -298,7 +309,9 @@ private extension FeedNote {
             posterUrl: video?.posterUrl,
             videoWidth: video?.width.map { KotlinInt(value: Int32(truncatingIfNeeded: $0)) },
             videoHeight: video?.height.map { KotlinInt(value: Int32(truncatingIfNeeded: $0)) },
-            contentWarning: contentWarning
+            contentWarning: contentWarning,
+            threadRootId: threadRootId,
+            threadParentId: threadParentId
         )
     }
 }
@@ -333,6 +346,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         true
     }
     func emptyFeedRetryDelayMs(attempt: Int) -> Int { 2_000 }
+    func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }
     func profile(from event: VerifiedEvent) -> ProfileMetadata? { nil }
     func feedNote(from event: VerifiedEvent) -> FeedNote {
         FeedNote(id: event.id, pubkey: event.pubkey, content: event.content,

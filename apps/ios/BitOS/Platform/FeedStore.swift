@@ -8,6 +8,15 @@ enum FeedTimeline: Hashable, Sendable {
     case following
 }
 
+/// APP-009 X-style display item (shared `ThreadAssembly` through the
+/// bridge): top-level at depth 0, descendants flattened behind indents.
+struct ThreadDisplayItem: Sendable, Equatable, Identifiable {
+    let id: String
+    let depth: Int
+    let parentId: String?
+    let orphan: Bool
+}
+
 /// Optimistic local interaction state, keyed by verified event id.
 struct LocalActions: Sendable, Equatable {
     var liked: Set<String> = []
@@ -44,14 +53,24 @@ final class FeedStore {
     private(set) var relayHealth = RelayHealth(connected: 0, total: 0)
     private(set) var isLoading = false
     private(set) var hasLoadedAnyEvent = false
+    /// APP-004 pagination: an older-notes REQ is in flight (footer spinner).
+    private(set) var isLoadingOlder = false
+    /// True once an older page made no progress — pauses until refresh.
+    private(set) var noMoreOlder = false
     var localActions = LocalActions()
     private(set) var accountPubkey: String?
     private(set) var followingResolved = false
     private(set) var comments: [String: [FeedNote]] = [:]
+    /** APP-009 X-style display list per thread (shared assembly rule). */
+    private(set) var threads: [String: [ThreadDisplayItem]] = [:]
     private(set) var following: Set<String> = []
     private(set) var bookmarkedIds: Set<String> = []
     private(set) var zapCounts: [String: Int] = [:]
     private(set) var muted: Set<String> = []
+
+    /// Blocked authors (NIP-51 kind-10004 head) — filtered like mutes.
+    private(set) var blocked: Set<String> = []
+    private var blockHeadAt: Int64?
 
     private let pool: RelayPool
     private let client: any BusinessCoreClient
@@ -67,11 +86,15 @@ final class FeedStore {
     private var healthTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var retryAttempt = 0
+    private var olderCounter = 0
+    private var oldestLoadedAt: Int64?
     private var subscriptionCounter = 0
     private var profileQueue: [String] = []
     private var requestedProfiles: Set<String> = []
     private var profileTimestamps: [String: Int64] = [:]
     private var profileDrainTask: Task<Void, Never>?
+    private var profileFallbackTasks: [Task<Void, Never>] = []
+    private var profileRequestCounter = 0
 
     init(pool: RelayPool, client: any BusinessCoreClient, eventStore: EventStore? = nil) {
         muted = Set(UserDefaults.standard.stringArray(forKey: "bitos_mutes") ?? [])
@@ -109,7 +132,7 @@ final class FeedStore {
                 guard let self else { return }
                 let delayMs = self.client.emptyFeedRetryDelayMs(attempt: self.retryAttempt)
                 try? await Task.sleep(for: .milliseconds(delayMs))
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled else { return }
                 if self.forYouCount > 0 {
                     self.retryAttempt = 0
                     continue
@@ -129,6 +152,8 @@ final class FeedStore {
         collectTask = nil
         profileDrainTask?.cancel()
         profileDrainTask = nil
+        profileFallbackTasks.forEach { $0.cancel() }
+        profileFallbackTasks.removeAll()
         healthTask?.cancel()
         healthTask = nil
         retryTask?.cancel()
@@ -179,7 +204,11 @@ final class FeedStore {
     }
 
     func refresh() {
+        // Fresh subscription re-opens the timeline head; older pages may
+        // exist again after new arrivals push the window deeper.
         isLoading = !hasLoadedAnyEvent
+        noMoreOlder = false
+        oldestLoadedAt = nil
         subscribe()
     }
 
@@ -187,7 +216,45 @@ final class FeedStore {
     /// backoff so the next auto-retry is 2 s away, then re-issues the REQ.
     func retryNow() {
         retryAttempt = 0
+        noMoreOlder = false
+        oldestLoadedAt = nil
         subscribe()
+    }
+
+    /**
+     * APP-004 pagination: request one page older than the window's oldest
+     * note (`until` exclusive). One in-flight REQ at a time; a watchdog
+     * marks the feed exhausted (`noMoreOlder`) when a page brings nothing
+     * new, pausing infinite scroll until the next refresh.
+     */
+    func loadOlder() {
+        guard !isLoadingOlder, !noMoreOlder else { return }
+        guard let window else { return }
+        let snapshot = window.snapshot()
+        guard !snapshot.isEmpty else { return }
+        if snapshot.count >= Self.olderWindowMax {
+            noMoreOlder = true
+            return
+        }
+        guard let oldest = snapshot.map(\.createdAt).min() else { return }
+        guard oldestLoadedAt != oldest else { return } // same page requested
+        oldestLoadedAt = oldest
+        isLoadingOlder = true
+        olderCounter += 1
+        let request = client.olderFeedRequest(
+            subscriptionId: "bitos-older-\(olderCounter)", until: oldest, limit: 40
+        )
+        Task { [pool] in await pool.broadcast(request) }
+        Task { [weak self, oldest] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled else { return }
+            guard self.isLoadingOlder else { return }
+            self.isLoadingOlder = false
+            // No progress by deadline: exhausted until the next refresh.
+            if (self.window?.snapshot() ?? []).map(\.createdAt).min() == oldest {
+                self.noMoreOlder = true
+            }
+        }
     }
 
     // MARK: - Absorption
@@ -210,6 +277,8 @@ final class FeedStore {
             }
         } else if event.kind == 30003 {
             absorbBookmarkList(frame)
+        } else if event.kind == 10004 {
+            absorbBlockList(frame, event: event)
         } else if client.isProfileKind(event.kind) {
             absorbProfile(event)
         } else if client.isFeedKind(event.kind) {
@@ -289,6 +358,15 @@ final class FeedStore {
 
     private var bookmarkHeadAt: Int64?
 
+    private func absorbBlockList(_ frame: RelayFrame, event: VerifiedEvent) {
+        guard let account = accountPubkey, event.pubkey == account else { return }
+        let ids = (bridgeFacade().blockListPubkeys(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) ?? []
+        if event.createdAt >= (blockHeadAt ?? Int64.min) {
+            blocked = Set(ids)
+            blockHeadAt = event.createdAt
+        }
+    }
+
     /** Loads zap receipts for one note (NIP-01 tagged #e filter). */
     func loadZaps(targetEventId: String) {
         if let request = (bridgeFacade().zapReceiptsRequest(
@@ -346,7 +424,12 @@ final class FeedStore {
         if let pubkey, let request = (bridgeFacade().bookmarkListRequest(subscriptionId: "bitos-bookmarks", accountPubkey: pubkey) as String?) {
             Task { await pool.broadcast(request) }
         }
+        if let pubkey, let request = (bridgeFacade().encodeBlockListRequest(subscriptionId: "bitos-blocks", accountPubkey: pubkey) as String?) {
+            Task { await pool.broadcast(request) }
+        }
         bookmarked.removeAll()
+        blocked.removeAll()
+        blockHeadAt = nil
         publishState()
     }
 
@@ -369,6 +452,39 @@ final class FeedStore {
         let authors = Array(followingAuthors)
         if let request = (bridgeFacade().followingRequest(subscriptionId: "bitos-following", authors: authors) as? String) {
             Task { await pool.broadcast(request) }
+        }
+    }
+
+    // MARK: - APP-009 X-style threading (shared assembly via bridge)
+
+    private func threadItems(rootId: String, replies: [FeedNote]) -> [ThreadDisplayItem] {
+        let payload = replies.map { note in
+            [
+                "id": note.id,
+                "createdAt": note.createdAt,
+                "threadRootId": note.threadRootId ?? "",
+                "threadParentId": note.threadParentId ?? "",
+            ] as [String: Any]
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: payload),
+            let itemsJson = String(data: data, encoding: .utf8),
+            let json = bridgeFacade().threadItemsJson(rootId: rootId, itemsJson: itemsJson) as String?,
+            let jsonData = json.data(using: .utf8),
+            let array = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: Any]]
+        else {
+            // Honest fallback: keep every reply visible, flat, when the
+            // bridge round-trip fails.
+            return replies.map { ThreadDisplayItem(id: $0.id, depth: 0, parentId: nil, orphan: true) }
+        }
+        return array.compactMap { obj in
+            guard let id = obj["id"] as? String else { return nil }
+            return ThreadDisplayItem(
+                id: id,
+                depth: (obj["depth"] as? NSNumber)?.intValue ?? 0,
+                parentId: (obj["parent"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                orphan: (obj["orphan"] as? NSNumber)?.boolValue ?? false
+            )
         }
     }
 
@@ -406,10 +522,36 @@ final class FeedStore {
         profileQueue.removeFirst(min(batch.count, profileQueue.count))
         guard !batch.isEmpty else { return }
         requestedProfiles.formUnion(batch)
-        let request = client.profileRequest(
-            subscriptionId: "bitos-profiles-\(requestedProfiles.count)", authors: batch
-        )
-        Task { await pool.broadcast(request) }
+        Task { [weak self, batch] in
+            guard let self else { return }
+            let primary = await self.pool.primaryRelay()
+            self.profileRequestCounter += 1
+            let request = self.client.profileRequest(
+                subscriptionId: "bitos-profiles-\(self.profileRequestCounter)", authors: batch
+            )
+            if let primary {
+                await self.pool.broadcast(request, to: [primary])
+            } else {
+                await self.pool.broadcast(request)
+            }
+            self.scheduleProfileFallback(batch, excluding: primary)
+        }
+    }
+
+    private func scheduleProfileFallback(_ batch: [String], excluding primary: RelayURL?) {
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard let self, !Task.isCancelled else { return }
+            let unresolved = batch.filter { self.profiles[$0] == nil }
+            let relays = await self.pool.fallbackRelays(excluding: primary)
+            guard !unresolved.isEmpty, !relays.isEmpty else { return }
+            self.profileRequestCounter += 1
+            let request = self.client.profileRequest(
+                subscriptionId: "bitos-profiles-fallback-\(self.profileRequestCounter)", authors: unresolved
+            )
+            await self.pool.broadcast(request, to: relays)
+        }
+        profileFallbackTasks.append(task)
     }
 
     private func subscribe() {
@@ -420,24 +562,74 @@ final class FeedStore {
 
     private var currentSubscriptionId: String { "bitos-feed-\(subscriptionCounter)" }
 
+    // MARK: - Algorithm (APP-018 §3.18 — origin parity)
+
+    /// Canonical algorithm wire; a disabled FEED surface (or nil) keeps
+    /// For-You strictly chronological. Following is ALWAYS chronological.
+    private var algorithmJson: String?
+
+    func setAlgorithm(snapshotJson: String) {
+        algorithmJson = snapshotJson
+        publishState()
+    }
+
+    /// Orders the For-You window through the shared engine (bridge seam:
+    /// minimal note rows in, ordered ids out).
+    private func rankedForYou(_ base: [FeedNote]) -> [FeedNote] {
+        guard let algoJson = algorithmJson,
+              let decoded = try? JSONSerialization.jsonObject(with: Data(algoJson.utf8)) as? [String: Any],
+              let surfaces = decoded["s"] as? [String: Any],
+              let feedSurface = surfaces["feed"] as? [String: Any],
+              (feedSurface["e"] as? String) == "1" || (feedSurface["e"] as? Int) == 1 else {
+            return base
+        }
+        let rows = base.map { "{\"id\":\"\($0.id)\",\"pubkey\":\"\($0.pubkey)\",\"createdAt\":\($0.createdAt)}" }
+        let following = followingAuthors.map { "\"\($0)\"" }
+        let zaps = zapCountsBuffer.map { "\"\($0.key)\":\($0.value)" }
+        let replies = commentThreads.map { "\"\($0.key)\":\($0.value.count)" }
+        guard let ids = bridgeFacade().algorithmRankIds(
+            notesJson: "[\(rows.joined(separator: ","))]",
+            surfaceWire: "feed",
+            snapshotJson: algoJson,
+            followingJson: "[\(following.joined(separator: ","))]",
+            zapCountsJson: "{\(zaps.joined(separator: ","))}",
+            replyCountsJson: "{\(replies.joined(separator: ","))}",
+            nowSeconds: Int64(Date.now.timeIntervalSince1970)
+        ) as? [String], !ids.isEmpty else {
+            return base
+        }
+        let byId = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { byId[$0] }
+    }
+
     private func publishState() {
-        let mutedSet = muted
+        let hiddenSet = muted.union(blocked)
         let filterOrdinal = filterOrdinal
         let ownPubkey = accountPubkey
         let liked = Array(localActions.liked)
-        let forYouBase = (window?.snapshot() ?? []).filter { !mutedSet.contains($0.pubkey) && !$0.isProtocolPayload }
-        let followingBase = (followingWindow?.snapshot() ?? []).filter { !mutedSet.contains($0.pubkey) && !$0.isProtocolPayload }
+        let forYouBase = (window?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && !$0.isProtocolPayload }
+        let followingBase = (followingWindow?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && !$0.isProtocolPayload }
         forYouCount = forYouBase.count
         followingCount = followingBase.count
-        notes = (timeline == .following ? followingBase : forYouBase).filter {
+        notes = (timeline == .following ? followingBase : rankedForYou(forYouBase)).filter {
             client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked)
         }
         comments = commentThreads
+        var assembled: [String: [ThreadDisplayItem]] = [:]
+        for (rootId, replies) in commentThreads {
+            assembled[rootId] = threadItems(rootId: rootId, replies: replies)
+        }
+        threads = assembled
         following = followingAuthors
         bookmarkedIds = Set(bookmarked)
         zapCounts = zapCountsBuffer
         isLoading = false
         hasLoadedAnyEvent = true
+        // Older page arrived when the window's oldest note moved back.
+        if isLoadingOlder, let loadedAt = oldestLoadedAt,
+           let oldestNow = window?.snapshot().map(\.createdAt).min(), oldestNow < loadedAt {
+            isLoadingOlder = false
+        }
     }
 
     // MARK: - Persistence (DAT-003)
@@ -503,6 +695,7 @@ final class FeedStore {
     private static let profileBatchSize = 48
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
+    private static let olderWindowMax = 200
     private var holdingNewNotes = false
     private var knownNoteIds: Set<String> = []
 }

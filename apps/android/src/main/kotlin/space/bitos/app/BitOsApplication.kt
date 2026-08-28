@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedRepository
 import space.bitos.app.data.db.SqliteEventCache
@@ -21,13 +22,46 @@ class BitOsApplication : Application() {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    init {
+        // Algorithm preferences drive the For-You ranking for the process
+        // lifetime (collect from start so boot reads the persisted snapshot).
+        applicationScope.launch {
+            algorithmStore.snapshot.collect { feedRepository.setAlgorithm(it) }
+        }
+    }
+
+    /** Interaction-gate store (APP-018a row 2 — origin parity). */
+    val privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore by lazy {
+        space.bitos.app.data.settings.PrivacyPrefsStore(this)
+    }
+
+    /** Algorithm preferences (APP-018 §3.18 — origin parity). */
+    val algorithmStore: space.bitos.app.data.feed.AlgorithmStore by lazy {
+        space.bitos.app.data.feed.AlgorithmStore(this)
+    }
+
+    /** Cold-start managed set: the persisted relays, or the platform defaults. */
+    private val bootRelays: List<space.bitos.core.model.RelayEntry> by lazy {
+        space.bitos.app.data.relay.RelayManager.bootEntries(
+            getSharedPreferences(space.bitos.app.data.relay.RelayManager.PREFS_NAME, MODE_PRIVATE),
+        )
+    }
+
     private val relayPool: RelayPool by lazy {
         RelayPool(
             scope = applicationScope,
-            urls = DefaultRelays.urls,
+            urls = bootRelays.map { it.url },
             transportFactory = { relay, onClosed ->
                 OkHttpRelayTransport(relay, relayHttpClient(), onClosed)
             },
+        )
+    }
+
+    /** Relays manager (APP-018): persisted managed set + live pool edits. */
+    val relayManager: space.bitos.app.data.relay.RelayManager by lazy {
+        space.bitos.app.data.relay.RelayManager(
+            pool = relayPool,
+            prefs = getSharedPreferences(space.bitos.app.data.relay.RelayManager.PREFS_NAME, MODE_PRIVATE),
         )
     }
 
@@ -89,5 +123,11 @@ private class SharedPrefsNotificationPrefs(
 
     override fun saveMutedKinds(kinds: Set<String>) {
         prefs.edit().putStringSet("muted_kinds", kinds).apply()
+    }
+
+    override fun cursorSeconds(): Long = prefs.getLong("cursor_seconds", -1L)
+
+    override fun saveCursorSeconds(seconds: Long) {
+        prefs.edit().putLong("cursor_seconds", seconds).apply()
     }
 }

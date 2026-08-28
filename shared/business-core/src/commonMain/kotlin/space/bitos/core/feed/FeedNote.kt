@@ -17,6 +17,10 @@ data class FeedNote(
     val createdAt: Long,
     val kind: Int,
     val replyTo: String?,
+    /** APP-009 NIP-10 thread root (`e` marker `root` or first positional). */
+    val threadRootId: String? = null,
+    /** APP-009 NIP-10 immediate parent (marker `reply` or last positional). */
+    val threadParentId: String? = null,
     val hashtags: List<String>,
     val mentions: List<String>,
     val mediaUrls: List<String>,
@@ -53,6 +57,8 @@ data class FeedNote(
             val replyTag = event.tags.firstOrNull { it.firstOrNull() == "e" && it.size >= 4 && it[3] == "reply" }
             val nip22Parent = event.tags.firstOrNull { it.firstOrNull() == "e" }?.getOrNull(1)
                 ?: event.tags.firstOrNull { it.firstOrNull() == "E" }?.getOrNull(1)
+            // APP-009: marker-aware thread anchors (root/parent per NIP-10).
+            val (threadRootId, threadParentId) = ThreadAssembly.rootAndParent(event.tags)
 
             return FeedNote(
                 id = event.id.value,
@@ -61,16 +67,15 @@ data class FeedNote(
                 createdAt = event.createdAt,
                 kind = event.kind,
                 replyTo = replyTag?.getOrNull(1) ?: nip22Parent,
+                threadRootId = threadRootId,
+                threadParentId = threadParentId,
                 hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
                 mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
                 mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
                     .map { it.value }.distinct().take(8).toList(),
                 isProtocolPayload = protocolPayloadPattern.containsMatchIn(event.content),
                 video = MediaMetadata.fromEvent(event),
-                contentWarning = event.tags.any { tag ->
-                    tag.firstOrNull() == "content-warning" ||
-                        ((tag.firstOrNull() == "L" || tag.firstOrNull() == "l") && tag.getOrNull(1) == "content warning")
-                },
+                contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
             )
         }
 

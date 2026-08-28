@@ -58,6 +58,10 @@ fun CommentContent(
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     var text by remember { mutableStateOf("") }
     val comments = feedState.comments[note.id].orEmpty()
+    // APP-009 X-style threading (shared ThreadAssembly): top-level +
+    // flattened descendants behind depth indents.
+    val thread = feedState.threads[note.id].orEmpty()
+    val noteById = remember(comments) { comments.associateBy { it.id } }
 
     androidx.compose.runtime.LaunchedEffect(note.id) { onLoadComments(note.id) }
 
@@ -71,7 +75,7 @@ fun CommentContent(
             Text("Replies", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.width(BitOSSpacing.sm))
             Text(
-                "${comments.size}",
+                "${thread.size}",
                 style = MaterialTheme.typography.labelMedium,
                 color = BitOSColors.textTertiary,
             )
@@ -86,8 +90,15 @@ fun CommentContent(
                 .height(320.dp),
             verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
         ) {
-            items(comments, key = { it.id }) { reply ->
-                ReplyRow(reply, feedState.profiles[reply.pubkey])
+            items(thread, key = { it.id }) { item ->
+                noteById[item.id]?.let { reply ->
+                    ReplyRow(
+                        reply = reply,
+                        profile = feedState.profiles[reply.pubkey],
+                        depth = item.depth,
+                        orphan = item.orphan,
+                    )
+                }
             }
             if (comments.isEmpty()) {
                 item {
@@ -134,9 +145,30 @@ fun CommentContent(
 }
 
 @Composable
-private fun ReplyRow(reply: FeedNote, profile: space.bitos.core.model.ProfileMetadata?) {
-    Surface(shape = RoundedCornerShape(12.dp), color = BitOSColors.surface) {
+private fun ReplyRow(
+    reply: FeedNote,
+    profile: space.bitos.core.model.ProfileMetadata?,
+    depth: Int,
+    orphan: Boolean,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (depth > 0) BitOSColors.background else BitOSColors.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 16).dp),
+    ) {
         Row(Modifier.padding(BitOSSpacing.md)) {
+            // APP-009: descendants carry a left border (conversation rail).
+            if (depth > 0) {
+                Box(
+                    Modifier
+                        .width(2.dp)
+                        .height(44.dp)
+                        .background(BitOSColors.primary.copy(alpha = 0.35f), RoundedCornerShape(1.dp)),
+                )
+                Spacer(Modifier.width(BitOSSpacing.sm))
+            }
             PubkeyAvatar(pubkey = reply.pubkey, size = 32)
             Spacer(Modifier.width(BitOSSpacing.sm))
             Column {
@@ -155,6 +187,13 @@ private fun ReplyRow(reply: FeedNote, profile: space.bitos.core.model.ProfileMet
                     )
                 }
                 Text(reply.content, style = MaterialTheme.typography.bodyMedium)
+                if (orphan) {
+                    Text(
+                        "Reply above unavailable",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textTertiary,
+                    )
+                }
             }
         }
     }

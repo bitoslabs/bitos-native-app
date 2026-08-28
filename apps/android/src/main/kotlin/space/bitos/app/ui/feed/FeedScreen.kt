@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.MoreHoriz
@@ -38,7 +40,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -63,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedTimeline
@@ -77,6 +83,7 @@ import space.bitos.app.ui.components.AppMenuItem
 import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.MediaRow
 import space.bitos.app.ui.components.PubkeyAvatar
+import space.bitos.app.ui.components.AnimatedLikeIcon
 import space.bitos.app.ui.components.RichText
 import space.bitos.app.ui.components.SensitiveCover
 import space.bitos.app.ui.components.formatTimeAgo
@@ -105,9 +112,13 @@ fun FeedScreen(
     mediaPublishViewModel: MediaPublishViewModel,
     authorRepository: space.bitos.app.data.feed.AuthorRepository,
     videoOnly: Boolean = false,
+    sensitiveShowByDefault: Boolean = false,
     onOpenProfile: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
     onOpenHub: () -> Unit = {},
+    /** APP-003/APP-004: bumped when the user re-taps the ACTIVE shell tab
+     * (Home/Bitz) — scrolls to top, or refreshes when already at top. */
+    retapTick: Int = 0,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
@@ -127,6 +138,17 @@ fun FeedScreen(
         if (videoOnly) state.notes.filter { it.video != null } else state.notes.filter { it.video == null }
     }
     val pagerState = rememberPagerState(pageCount = { feedNotes.size })
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val revealPendingAtTop = {
+        scope.launch {
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                listState.animateScrollToItem(0)
+            }
+            viewModel.revealPendingNotes()
+        }
+        Unit
+    }
 
     DisposableEffect(Unit) {
         onDispose { pool.releaseAll() }
@@ -134,10 +156,56 @@ fun FeedScreen(
     LaunchedEffect(pagerState.settledPage, state.notes) {
         pool.update(pagerState.settledPage, state)
     }
-    // APP-004: arrivals are held while scrolled into the feed; page 0
-    // (top) auto-reveals.
-    LaunchedEffect(pagerState.settledPage, videoOnly) {
-        viewModel.holdNewNotes(!videoOnly && pagerState.settledPage != 0)
+    // APP-004: arrivals are held while the user is scrolled into the ACTIVE
+    // surface (list first row / pager page 0 = top); at top auto-reveals.
+    LaunchedEffect(
+        videoOnly,
+        pagerState.settledPage,
+        listState.firstVisibleItemIndex,
+        listState.firstVisibleItemScrollOffset,
+    ) {
+        viewModel.holdNewNotes(
+            if (videoOnly) {
+                pagerState.settledPage != 0
+            } else {
+                listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0
+            },
+        )
+    }
+    // APP-004 pagination: near the end of the active surface, fetch one
+    // older page (the repository guards in-flight + exhausted requests).
+    LaunchedEffect(videoOnly, pagerState.settledPage, feedNotes.size) {
+        if (videoOnly && feedNotes.isNotEmpty() && pagerState.settledPage >= feedNotes.size - 3) {
+            viewModel.loadOlder()
+        }
+    }
+    val listNearEnd by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            info.totalItemsCount > 0 &&
+                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 6
+        }
+    }
+    LaunchedEffect(listNearEnd) {
+        if (!videoOnly && listNearEnd) viewModel.loadOlder()
+    }
+    // APP-003/APP-004: re-tap on the active shell tab scrolls to top; a
+    // re-tap while already at top refreshes (X/Instagram pattern).
+    LaunchedEffect(retapTick) {
+        if (retapTick == 0) return@LaunchedEffect
+        if (videoOnly) {
+            if (pagerState.currentPage != 0) {
+                scope.launch { pagerState.animateScrollToPage(0) }
+            } else {
+                viewModel.refresh()
+            }
+        } else {
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                scope.launch { listState.animateScrollToItem(0) }
+            } else {
+                viewModel.refresh()
+            }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(BitOSColors.background)) {
@@ -149,55 +217,58 @@ fun FeedScreen(
                 onOpenDiscover = onOpenDiscover,
                 onOpenHub = onOpenHub,
             )
-            if (!videoOnly && state.pendingNotes.isNotEmpty()) {
-                NewNotesPill(
-                    pending = state.pendingNotes,
-                    onReveal = viewModel::revealPendingNotes,
-                )
+            // Float within the feed area, below (not over) the tabs. This
+            // keeps the control visible while preserving tab hit targets.
+            Box(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize()) {
+                    if (state.accountPubkey == null) {
+                        GuestBanner(onGetStarted = onOpenProfile)
+                    }
+                    when {
+                        state.isLoading && feedNotes.isEmpty() -> FeedLoading()
+                        state.timeline == FeedTimeline.FOLLOWING && state.accountPubkey == null && feedNotes.isEmpty() -> FollowingPlaceholder()
+                        state.timeline == FeedTimeline.FOLLOWING && !state.followingResolved && feedNotes.isEmpty() -> FeedLoading()
+                        feedNotes.isEmpty() -> FeedEmpty(
+                            relayHealth = state.relayHealth,
+                            filterActive = state.filter != FeedFilter.ALL &&
+                                (if (state.timeline == FeedTimeline.FOLLOWING) state.followingCount else state.forYouCount) > 0,
+                            onRetry = viewModel::retryNow,
+                            onShowAll = { viewModel.selectFilter(FeedFilter.ALL) },
+                        )
+                        else -> if (videoOnly) VerticalPager(state = pagerState) { page ->
+                            FeedPage(
+                                note = feedNotes[page], state = state, actions = actions, pool = pool,
+                                onLike = viewModel::toggleLike, onBookmark = viewModel::toggleBookmark,
+                                onComment = { showCommentsFor = it }, onRepost = viewModel::repost,
+                                onFollow = viewModel::toggleFollow,
+                                onZap = { viewModel.loadZaps(it.id); zapTarget = it },
+                                onAuthor = { authorTarget = it }, isMuted = viewModel.isMuted(feedNotes[page].pubkey),
+                                onMuteToggle = { viewModel.toggleMute(feedNotes[page].pubkey) },
+                                onReport = { reason -> viewModel.report(feedNotes[page], reason) },
+                            )
+                        } else NotesList(
+                            notes = feedNotes, state = state, actions = actions, viewModel = viewModel,
+                            listState = listState, onComment = { showCommentsFor = it }, onZap = { zapTarget = it },
+                            onAuthor = { authorTarget = it }, onLike = viewModel::toggleLike,
+                            onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
+                            sensitiveShowByDefault = sensitiveShowByDefault,
+                        )
+                    }
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !videoOnly && state.pendingNotes.isNotEmpty(),
+                    enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = BitOSSpacing.xs),
+                ) {
+                    NewNotesPill(
+                        pending = state.pendingNotes,
+                        authorName = { state.profiles[it]?.bestDisplayName },
+                        hasLightning = { !state.profiles[it]?.lud16.isNullOrBlank() },
+                        onReveal = revealPendingAtTop,
+                    )
+                }
             }
-            if (state.accountPubkey == null) {
-                GuestBanner(onGetStarted = onOpenProfile)
-            }
-        when {
-            state.timeline == FeedTimeline.FOLLOWING -> FollowingPlaceholder(state.accountPubkey != null)
-            state.isLoading && feedNotes.isEmpty() -> FeedLoading()
-            feedNotes.isEmpty() -> FeedEmpty(
-                relayHealth = state.relayHealth,
-                filterActive = state.filter != FeedFilter.ALL &&
-                    (if (state.timeline == FeedTimeline.FOLLOWING) state.followingCount else state.forYouCount) > 0,
-                onRetry = viewModel::retryNow,
-                onShowAll = { viewModel.selectFilter(FeedFilter.ALL) },
-            )
-            else -> if (videoOnly) VerticalPager(state = pagerState) { page ->
-                FeedPage(
-                    note = feedNotes[page],
-                    state = state,
-                    actions = actions,
-                    pool = pool,
-                    onLike = viewModel::toggleLike,
-                    onBookmark = viewModel::toggleBookmark,
-                    onComment = { showCommentsFor = it },
-                    onRepost = viewModel::repost,
-                    onFollow = viewModel::toggleFollow,
-                    onZap = { viewModel.loadZaps(it.id); zapTarget = it },
-                    onAuthor = { authorTarget = it },
-                    isMuted = viewModel.isMuted(feedNotes[page].pubkey),
-                    onMuteToggle = { viewModel.toggleMute(feedNotes[page].pubkey) },
-                    onReport = { reason -> viewModel.report(feedNotes[page], reason) },
-                )
-            } else NotesList(
-                notes = feedNotes,
-                state = state,
-                actions = actions,
-                viewModel = viewModel,
-                onComment = { showCommentsFor = it },
-                onZap = { zapTarget = it },
-                onAuthor = { authorTarget = it },
-                onLike = viewModel::toggleLike,
-                onBookmark = viewModel::toggleBookmark,
-                onRepost = viewModel::repost,
-            )
-        }
         }
 
         // APP-004: New-note extended FAB (spec §3.4).
@@ -403,16 +474,13 @@ private fun CaptionOverlay(note: FeedNote, state: FeedUiState, onFollow: (String
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clickable(onClickLabel = "View author profile") { onAuthor(note.pubkey) },
         ) {
-            PubkeyAvatar(pubkey = note.pubkey, size = 36)
+            PubkeyAvatar(pubkey = note.pubkey, size = 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank())
             Spacer(Modifier.width(BitOSSpacing.sm))
             Column {
-                Text(
-                    profile?.bestDisplayName ?: shortPubkey(note.pubkey),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(profile?.bestDisplayName ?: shortPubkey(note.pubkey), style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!profile?.nip05.isNullOrBlank()) Icon(Icons.Rounded.CheckCircle, contentDescription = "NIP-05 identity claim", tint = BitOSColors.primary, modifier = Modifier.padding(start = 4.dp).size(14.dp))
+                }
                 Text(
                     formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
                     style = MaterialTheme.typography.labelSmall,
@@ -736,8 +804,10 @@ private suspend fun loadBitmap(url: String): Bitmap? = withContext(Dispatchers.I
 private fun NotesList(
     notes: List<FeedNote>,
     state: FeedUiState,
+    sensitiveShowByDefault: Boolean = false,
     actions: LocalActions,
     viewModel: HomeViewModel,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onComment: (FeedNote) -> Unit,
     onZap: (FeedNote) -> Unit,
     onAuthor: (String) -> Unit,
@@ -745,7 +815,7 @@ private fun NotesList(
     onBookmark: (String) -> Unit,
     onRepost: (FeedNote) -> Unit,
 ) {
-    androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
+    androidx.compose.foundation.lazy.LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         items(notes, key = { it.id }) { note ->
             NoteCardRow(
                 note = note,
@@ -760,7 +830,16 @@ private fun NotesList(
                 isMuted = viewModel.isMuted(note.pubkey),
                 onMuteToggle = { viewModel.toggleMute(note.pubkey) },
                 onReport = { reason -> viewModel.report(note, reason) },
+                sensitiveShowByDefault = sensitiveShowByDefault,
             )
+        }
+        // APP-004 pagination: footer spinner while an older page loads.
+        if (state.isLoadingOlder) {
+            item(key = "older-footer") {
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                }
+            }
         }
     }
 }
@@ -779,10 +858,14 @@ private fun NoteCardRow(
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    sensitiveShowByDefault: Boolean = false,
 ) {
     val profile = state.profiles[note.pubkey]
     val bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked
     var revealed by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
+    // APP-005 Show more/less: font-scale-safe line clamp.
+    var expanded by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
+    var canExpand by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
     var lightboxUrl by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf<String?>(null) }
     lightboxUrl?.let { url ->
         androidx.compose.ui.window.Dialog(onDismissRequest = { lightboxUrl = null }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
@@ -796,18 +879,15 @@ private fun NoteCardRow(
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PubkeyAvatar(pubkey = note.pubkey, size = 36).let {
+            PubkeyAvatar(pubkey = note.pubkey, size = 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank()).let {
                 Box(Modifier.clickable(onClickLabel = "Open author") { onAuthor() }) { it }
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
             Column {
-                Text(
-                    profile?.bestDisplayName ?: shortPubkey(note.pubkey),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = BitOSColors.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(profile?.bestDisplayName ?: shortPubkey(note.pubkey), style = MaterialTheme.typography.titleSmall, color = BitOSColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!profile?.nip05.isNullOrBlank()) Icon(Icons.Rounded.CheckCircle, contentDescription = "NIP-05 identity claim", tint = BitOSColors.primary, modifier = Modifier.padding(start = 4.dp).size(13.dp))
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (note.repostedBy != null) {
                         SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(10.dp))
@@ -823,25 +903,48 @@ private fun NoteCardRow(
             Spacer(Modifier.weight(1f))
             MoreMenuButton(isMuted = isMuted, onMuteToggle = onMuteToggle, onReport = onReport)
         }
-        if (note.contentWarning && !revealed) {
+        if (note.contentWarning && !revealed && !sensitiveShowByDefault) {
             SensitiveCover(onReveal = { revealed = true })
         } else {
             RichText(
                 tokens = androidx.compose.runtime.remember(note.content) { space.bitos.core.nostr.Nip27.tokenize(note.content) },
+                maxLines = if (expanded) Int.MAX_VALUE else NOTE_COLLAPSE_LINES,
+                onOverflow = { canExpand = it },
                 onOpenProfile = { onAuthor() },
             )
+            if (canExpand || expanded) {
+                androidx.compose.material3.TextButton(
+                    onClick = { expanded = !expanded },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        if (expanded) "Show less" else "Show more",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BitOSColors.primary,
+                    )
+                }
+            }
             MediaRow(urls = note.mediaUrls, onOpen = { lightboxUrl = it })
         }
         Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
             CardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
             CardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
-            val liked = note.id in actions.liked
-            CardAction(if (liked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart, if (liked) "Unlike" else "Like", if (liked) BitOSColors.like else BitOSColors.textSecondary, onLike)
+            // APP-005 §2.4: scale-bounce + haptic on like.
+            AnimatedLikeIcon(
+                liked = note.id in actions.liked,
+                tint = if (note.id in actions.liked) BitOSColors.like else BitOSColors.textSecondary,
+                iconSize = 18.dp,
+                onClick = onLike,
+            )
             CardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
             CardAction(if (bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark, if (bookmarked) "Remove bookmark" else "Bookmark", if (bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary, onBookmark)
         }
     }
 }
+
+/** APP-005: bodies collapse beyond 8 lines (line-based, so font scaling
+ * cannot break the clamp); full-screen card pages never clamp. */
+private const val NOTE_COLLAPSE_LINES = 8
 
 @Composable
 private fun CardAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
@@ -929,7 +1032,7 @@ private fun FeedHeader(
                 .padding(horizontal = BitOSSpacing.screen),
             verticalAlignment = Alignment.Bottom,
         ) {
-            TimelineTab("For You", AppIcons.Sparkles, state.timeline == FeedTimeline.FOR_YOU, state.forYouCount) { onTimeline(FeedTimeline.FOR_YOU) }
+            TimelineTab("For You", AppIcons.Sparkles, state.timeline == FeedTimeline.FOR_YOU, 0) { onTimeline(FeedTimeline.FOR_YOU) }
             Spacer(Modifier.width(BitOSSpacing.lg))
             TimelineTab("Following", AppIcons.People, state.timeline == FeedTimeline.FOLLOWING, state.followingCount) { onTimeline(FeedTimeline.FOLLOWING) }
             Spacer(Modifier.weight(1f))
@@ -937,31 +1040,66 @@ private fun FeedHeader(
     }
 }
 
-/** APP-004: "↑ N new notes" reveal pill with a stacked author avatar row. */
+/** APP-004: reveal pill with author avatars and a count centered in its badge. */
 @Composable
-private fun NewNotesPill(pending: List<FeedNote>, onReveal: () -> Unit) {
+private fun NewNotesPill(
+    pending: List<FeedNote>,
+    authorName: (String) -> String?,
+    hasLightning: (String) -> Boolean,
+    onReveal: () -> Unit,
+) {
     val authors = pending.asSequence().map { it.pubkey }.distinct().take(4).toList()
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = BitOSColors.primaryContainer,
-        modifier = Modifier
-            .padding(horizontal = BitOSSpacing.screen)
-            .padding(bottom = BitOSSpacing.sm)
-            .clickable(onClickLabel = "Show ${pending.size} new notes") { onReveal() },
+        color = BitOSColors.primary,
+        shadowElevation = 6.dp,
+        modifier = Modifier.clickable(onClickLabel = "Show ${pending.size} new notes") { onReveal() },
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            authors.forEach { pubkey ->
-                PubkeyAvatar(pubkey = pubkey, size = 20)
+            if (authors.isNotEmpty()) {
+                // X-style overlapping avatar stack; later entries draw on top.
+                Row(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
+                    authors.forEach { pubkey ->
+                        Box(
+                            Modifier
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(BitOSColors.primary)
+                                .padding(1.5.dp),
+                        ) {
+                            PubkeyAvatar(pubkey = pubkey, size = 18, label = authorName(pubkey), hasLightning = hasLightning(pubkey))
+                        }
+                    }
+                }
             }
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(Color(0xFF0A0A0F).copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (pending.size > 99) "99+" else pending.size.toString(),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.W800,
+                    color = Color(0xFF0A0A0F),
+                )
+            }
+            Icon(
+                AppIcons.ArrowUp,
+                contentDescription = null,
+                tint = Color(0xFF0A0A0F),
+                modifier = Modifier.size(14.dp),
+            )
             Text(
-                "↑ ${pending.size} new ${if (pending.size == 1) "note" else "notes"}",
+                "New ${if (pending.size == 1) "note" else "notes"}",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.W600,
-                color = BitOSColors.primary,
+                fontWeight = FontWeight.W700,
+                color = Color(0xFF0A0A0F),
             )
         }
     }
@@ -1087,19 +1225,12 @@ private fun FeedEmpty(
 }
 
 @Composable
-private fun FollowingPlaceholder(hasAccount: Boolean) {
+private fun FollowingPlaceholder() {
     Box(Modifier.fillMaxSize().padding(BitOSSpacing.xxl), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            Text("Following needs an identity", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (hasAccount) "No followed notes yet" else "Following needs an identity",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                if (hasAccount) {
-                    "Notes from accounts you follow appear here once relays return them."
-                } else {
-                    "Create, import or connect a Nostr identity to build a following timeline."
-                },
+                "Create, import or connect a Nostr identity to build a following timeline.",
                 style = MaterialTheme.typography.bodySmall,
                 color = BitOSColors.textSecondary,
             )

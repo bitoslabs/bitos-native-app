@@ -43,6 +43,11 @@ class IdentityViewModel(
 
     private val store = SecureKeyStore(application)
 
+    /** Multi-account registry (APP-018a row 1) — public projections only. */
+    private val registry = AccountRegistryStore(application)
+    val registeredAccounts = registry.accounts
+    val activeRegistryPubkey = registry.activePubkey
+
     private val mutableState = MutableStateFlow(IdentityUiState())
     val state: StateFlow<IdentityUiState> = mutableState.asStateFlow()
 
@@ -61,7 +66,11 @@ class IdentityViewModel(
 
     private fun loadExisting() {
         viewModelScope.launch {
-            val secret = withContext(Dispatchers.IO) { store.loadSecret() } ?: return@launch
+            val secret = withContext(Dispatchers.IO) {
+                // Active slot first (multi-account); legacy single-secret fallback.
+                registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) }
+                    ?: store.loadSecret()
+            } ?: return@launch
             val identity = identityFor(secret) ?: return@launch
             mutableState.value = mutableState.value.copy(account = identity)
         }
@@ -115,8 +124,19 @@ class IdentityViewModel(
         val preview = mutableState.value.preview ?: return
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(busy = true)
-            withContext(Dispatchers.IO) { store.storeSecret(preview.secretHex) }
+            withContext(Dispatchers.IO) {
+                store.storeSecret(preview.secretHex)
+                store.storeSecret(preview.secretHex, slotPubkey = currentPubkeyHex(preview) ?: "")
+            }
             val identity = identityFor(preview.secretHex) ?: return@launch
+            registry.register(
+                space.bitos.core.identity.RegisteredAccount(
+                    pubkeyHex = identity.pubkeyHex,
+                    npub = identity.npub,
+                    addedAtSeconds = System.currentTimeMillis() / 1_000,
+                ),
+                makeActive = true,
+            )
             mutableState.value = mutableState.value.copy(
                 account = identity,
                 preview = null,
@@ -129,11 +149,54 @@ class IdentityViewModel(
         mutableState.value = mutableState.value.copy(preview = null, importError = null)
     }
 
+    /**
+     * Sign-out = deactivate (legacy parity): the ACTIVE pointer clears but
+     * every sealed slot and registry row survives — one-tap switch back in.
+     */
+    fun signOut() {
+        registry.setActive(null)
+        mutableState.value = IdentityUiState()
+    }
+
     /** Destructive: removes the sealed secret after explicit confirmation. */
     fun removeAccount() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.clear() }
+            registry.setActive(null)
             mutableState.value = IdentityUiState()
+        }
+    }
+
+    /** One-tap account switch (registry row → sealed slot → active). */
+    fun switchTo(pubkeyHex: String) {
+        if (mutableState.value.account?.pubkeyHex == pubkeyHex) return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(busy = true)
+            val secret = withContext(Dispatchers.IO) { store.loadSecret(slotPubkey = pubkeyHex) }
+            val identity = secret?.let(::identityFor)
+            if (identity == null) {
+                // Slot lost (keychain wipe): drop the dead row.
+                registry.remove(pubkeyHex)
+                mutableState.value = mutableState.value.copy(busy = false)
+                return@launch
+            }
+            registry.setActive(pubkeyHex)
+            mutableState.value = mutableState.value.copy(
+                account = identity,
+                preview = null,
+                busy = false,
+            )
+        }
+    }
+
+    /** Destructive per-account removal: wipes the sealed slot + registry row. */
+    fun removeRegisteredAccount(pubkeyHex: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { store.removeSecret(pubkeyHex) }
+            registry.remove(pubkeyHex)
+            if (mutableState.value.account?.pubkeyHex == pubkeyHex) {
+                mutableState.value = IdentityUiState()
+            }
         }
     }
 
@@ -165,9 +228,10 @@ class IdentityViewModel(
         mutableProfileEdit.value = ProfileEditState()
     }
 
-    /** Transient signer from the sealed secret; null when no account is stored. */
+    /** Transient signer from the active account's sealed slot; null when none. */
     suspend fun createSigner(): LocalKeySigner? = withContext(Dispatchers.IO) {
-        store.loadSecret()?.let(::LocalKeySigner)
+        (registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) } ?: store.loadSecret())
+            ?.let(::LocalKeySigner)
     }
 
     /**
@@ -193,6 +257,10 @@ class IdentityViewModel(
 
     private fun hexBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+
+    /** Slot key for the preview identity (pubkey derived from the secret). */
+    private fun currentPubkeyHex(preview: IdentityPreview): String? =
+        identityFor(preview.secretHex)?.pubkeyHex
 
     companion object {
         fun factory(

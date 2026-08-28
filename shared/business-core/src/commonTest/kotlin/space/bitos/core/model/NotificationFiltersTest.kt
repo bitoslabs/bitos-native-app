@@ -3,9 +3,18 @@ package space.bitos.core.model
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NotificationFiltersTest {
+
+    private fun item(
+        id: String = "a".repeat(64),
+        author: String = "e93fbf1000405bc8bb536a8ae37eebe349ebde8ecae3779ad3786def739aa301",
+        kind: NotificationKind = NotificationKind.REPLY,
+        createdAt: Long = 1_000,
+        summary: String = "nice post",
+    ) = NotificationItem(id = id, authorPubkey = author, kind = kind, targetEventId = null, summary = summary, createdAt = createdAt)
 
     @Test
     fun primaryTabsFilterByKindAndReadState() {
@@ -45,5 +54,53 @@ class NotificationFiltersTest {
         assertFalse(NotificationFilters.shouldKeep(listOf(first), republish))
         assertTrue(NotificationFilters.shouldKeep(listOf(first), otherAuthor))
         assertTrue(NotificationFilters.shouldKeep(listOf(first), reply))
+    }
+
+    /** APP-012 search row: summary + author-name contains, blank = match. */
+    @Test
+    fun queryMatchesSummaryAndAuthorNameCaseInsensitively() {
+        val reply = item(summary = "Great post about Bitcoin")
+        assertTrue(NotificationFilters.queryMatches(reply, ""))
+        assertTrue(NotificationFilters.queryMatches(reply, "   "))
+        assertTrue(NotificationFilters.queryMatches(reply, "bitcoin"))
+        assertTrue(NotificationFilters.queryMatches(reply, "GREAT POST"))
+        assertFalse(NotificationFilters.queryMatches(reply, "zap"))
+        // Author display name participates when the platform supplies it.
+        assertTrue(NotificationFilters.queryMatches(reply, "satoshi", authorName = "Satoshi Nakamoto"))
+        assertFalse(NotificationFilters.queryMatches(reply, "satoshi", authorName = null))
+        assertFalse(NotificationFilters.queryMatches(reply, "satoshi", authorName = ""))
+        // Queries are bounded: an oversized needle is truncated to QUERY_MAX
+        // before matching (the tail past 64 chars is ignored, never matched).
+        assertFalse(NotificationFilters.queryMatches(reply, "x".repeat(NotificationFilters.QUERY_MAX) + "bitcoin"))
+    }
+
+    /** APP-012 blocked-author eviction. */
+    @Test
+    fun blockedAuthorsAreEvicted() {
+        val blocked = setOf("e93fbf1000405bc8bb536a8ae37eebe349ebde8ecae3779ad3786def739aa301")
+        assertTrue(NotificationFilters.blockedEvicted(item(), blockedPubkeys = blocked))
+        assertFalse(NotificationFilters.blockedEvicted(item(author = "aa".repeat(32)), blockedPubkeys = blocked))
+        assertFalse(NotificationFilters.blockedEvicted(item(), blockedPubkeys = emptySet()))
+    }
+
+    /** APP-012 read cursor: redelivered history never re-rings. */
+    @Test
+    fun readCursorMarksHistoryReadBeyondExplicitIds() {
+        val old = item(id = "old", createdAt = 900)
+        val atCursor = item(id = "at", createdAt = 1_000)
+        val fresh = item(id = "new", createdAt = 1_100)
+        val explicit = setOf("new")
+
+        // No cursor (fresh install): only explicit marks read.
+        assertFalse(NotificationFilters.isRead(old, cursorSeconds = null, explicitlyRead = explicit))
+        assertTrue(NotificationFilters.isRead(fresh, cursorSeconds = null, explicitlyRead = explicit))
+
+        // Cursor at 1000: everything at or below is implicitly read.
+        val read = setOf(old.id, atCursor.id)
+        listOf(old, atCursor).forEach {
+            assertTrue(NotificationFilters.isRead(it, cursorSeconds = 1_000, explicitlyRead = emptySet()), "${it.id} should be cursor-read")
+        }
+        assertFalse(NotificationFilters.isRead(fresh, cursorSeconds = 1_000, explicitlyRead = emptySet()))
+        assertTrue(read.size == 2)
     }
 }

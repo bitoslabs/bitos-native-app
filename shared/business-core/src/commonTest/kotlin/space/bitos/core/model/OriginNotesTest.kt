@@ -2,16 +2,18 @@ package space.bitos.core.model
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class OriginNotesTest {
 
-    private fun event(content: String, kind: Int = 1, createdAt: Long = 1_000) = NostrEvent(
+    private fun event(content: String, kind: Int = 1, createdAt: Long = 1_000, tags: List<List<String>> = emptyList()) = NostrEvent(
         id = EventId.parse("11".repeat(32))!!,
         pubkey = Pubkey.parse("e93fbf1000405bc8bb536a8ae37eebe349ebde8ecae3779ad3786def739aa301")!!,
         createdAt = createdAt,
         kind = kind,
-        tags = emptyList(),
+        tags = tags,
         content = content,
         signature = null,
         receivedFromRelay = null,
@@ -48,5 +50,39 @@ class OriginNotesTest {
     fun fullContentIsPreservedForThreadRoots() {
         val content = "full note body with https://cdn.example/i.png and #tag kept verbatim"
         assertEquals(content, OriginNotes.project(event(content)).content)
+    }
+
+    /** APP-012 media strip: ≤4 distinct media URLs, same deterministic rule
+     * as the feed card (image matches first, then video matches — FeedNote
+     * parity — distinct, strip-bounded). */
+    @Test
+    fun mediaStripCollectsUpToFourDistinctMediaUrls() {
+        val note = OriginNotes.project(
+            event(
+                "pics https://a.example/1.png https://a.example/1.png " +
+                    "https://a.example/2.jpg?w=8 https://a.example/3.webm " +
+                    "https://a.example/4.gif https://a.example/5.mov " +
+                    "https://a.example/page not-media",
+            ),
+        )
+        assertEquals(
+            listOf(
+                "https://a.example/1.png",
+                "https://a.example/2.jpg?w=8",
+                "https://a.example/4.gif",
+                "https://a.example/3.webm",
+            ),
+            note.mediaUrls,
+        )
+    }
+
+    /** APP-012 sensitive cover: NIP-36 tag + label forms both flag. */
+    @Test
+    fun contentWarningFollowsNip36TagAndLabelForms() {
+        assertTrue(OriginNotes.project(event("nsfw", tags = listOf(listOf("content-warning", "why")))).contentWarning)
+        assertTrue(OriginNotes.project(event("nsfw", tags = listOf(listOf("L", "content warning")))).contentWarning)
+        assertTrue(OriginNotes.project(event("nsfw", tags = listOf(listOf("l", "content warning")))).contentWarning)
+        assertFalse(OriginNotes.project(event("safe")).contentWarning)
+        assertFalse(OriginNotes.project(event("safe", tags = listOf(listOf("L", "other label")))).contentWarning)
     }
 }

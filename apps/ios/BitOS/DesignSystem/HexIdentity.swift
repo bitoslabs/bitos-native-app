@@ -55,42 +55,64 @@ struct HexAvatarView: View {
     let pubkey: String
     var size: CGFloat = 40
     var imageURL: URL?
+    var label: String?
+    var hasLightning: Bool = false
 
-    init(pubkey: String, size: CGFloat = 40, imageURL: URL? = nil) {
+    init(pubkey: String, size: CGFloat = 40, imageURL: URL? = nil, label: String? = nil, hasLightning: Bool = false) {
         self.pubkey = pubkey
         self.size = size
         self.imageURL = imageURL
+        self.label = label
+        self.hasLightning = hasLightning
     }
 
     private var initials: some View {
-        Text(pubkey.prefix(2).uppercased())
+        Text(avatarInitials(label ?? pubkey))
             .font(.system(size: size / 3, weight: .bold))
             .foregroundStyle(.white)
     }
 
     var body: some View {
         let colors = HexIdentity.avatarGradient(for: pubkey)
-        ZStack {
-            LinearGradient(
-                colors: [colors.start, colors.end],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            if let imageURL {
-                AsyncImage(url: imageURL) { image in
-                    image
-                        .resizable()
-                        .scaledToFill()
-                } placeholder: {
+        ZStack(alignment: .bottomTrailing) {
+            ZStack {
+                LinearGradient(
+                    colors: [colors.start, colors.end],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                if let imageURL {
+                    AsyncImage(url: imageURL) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        initials
+                    }
+                } else {
                     initials
                 }
-            } else {
-                initials
+            }
+            .frame(width: size, height: size)
+            .clipShape(HexShape())
+            if hasLightning {
+                AppIcons.image(for: AppIcons.zap)
+                    .font(.system(size: min(max(size * 0.18, 6), 10), weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: min(max(size * 0.36, 10), 18), height: min(max(size * 0.36, 10), 18))
+                    .background(Circle().fill(LinearGradient(colors: [Color(red: 1, green: 0.71, blue: 0.11), Color(red: 0.97, green: 0.58, blue: 0.10)], startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .overlay(Circle().stroke(.white, lineWidth: 1))
             }
         }
         .frame(width: size, height: size)
-        .clipShape(HexShape())
-        .accessibilityLabel("Avatar \(pubkey.prefix(2).uppercased())")
+        .accessibilityLabel("Avatar \(avatarInitials(label ?? pubkey))")
+    }
+}
+
+private func avatarInitials(_ label: String) -> String {
+    let words = label.split(whereSeparator: \.isWhitespace)
+    switch words.count {
+    case 0: return "?"
+    case 1: return String(words[0].prefix(2)).uppercased()
+    default: return "\(words[0].prefix(1))\(words[words.count - 1].prefix(1))".uppercased()
     }
 }
 

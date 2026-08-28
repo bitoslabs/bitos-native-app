@@ -3,6 +3,8 @@
     <!-- Adaptive launcher icon background (legacy app flutter_launcher_icons parity). -->
     <color name="ic_launcher_background">#0A0A0F</color>
     <!-- Splash backgrounds (legacy flutter_native_splash parity: F4F7FB / 0A0A0F). -->
-    <color name="splash_background">#F4F7FB</color>
+    <!-- APP-023: launch chain is dark-only to match the dark-only shell
+         (Theme.kt darkColorScheme); light #F4F7FB returns with light tokens. -->
+    <color name="splash_background">#0A0A0F</color>
     <color name="splash_background_dark">#0A0A0F</color>
 </resources>

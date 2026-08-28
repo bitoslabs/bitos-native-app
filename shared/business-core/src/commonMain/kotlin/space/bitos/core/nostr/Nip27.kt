@@ -128,7 +128,7 @@ object Nip27 {
     // contract, entities are not — TLV payloads vary).
     // ------------------------------------------------------------------
 
-    private fun decodeBech32(expectedHrp: String, encoded: String): ByteArray? {
+    internal fun decodeBech32(expectedHrp: String, encoded: String): ByteArray? {
         if (encoded.length < 8 || encoded.length > MAX_ENTITY_LENGTH) return null
         val hasLower = encoded.any { it in 'a'..'z' }
         val hasUpper = encoded.any { it in 'A'..'Z' }

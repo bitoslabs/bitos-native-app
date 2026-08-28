@@ -243,6 +243,15 @@ object NostrEventCodec {
         return encodeRequest(subscriptionId, "{\"ids\":[" + bounded.joinToString(",") { "\"" + it + "\"" } + "]}")
     }
 
+    /**
+     * APP-012/APP-018 blocked-list REQ (NIP-51 kind 10004): one hex
+     * author, newest head only. Null when the pubkey is malformed.
+     */
+    fun encodeBlockListRequest(subscriptionId: String, accountPubkey: String): String? {
+        if (accountPubkey.length != 64 || !accountPubkey.all { it.isDigit() || it in 'a'..'f' }) return null
+        return encodeRequest(subscriptionId, "{\"kinds\":[10004],\"authors\":[\"$accountPubkey\"],\"limit\":1}")
+    }
+
     /** Build a NIP-01 `["CLOSE", subId]` message. */
     fun encodeClose(subscriptionId: String): String =
         "[\"CLOSE\",\"" + escape(subscriptionId) + "\"]"

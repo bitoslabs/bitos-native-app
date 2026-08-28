@@ -51,4 +51,63 @@ class BootSplashTimingTest {
         assertEquals(1.02f, BootSplashTiming.breathe(0.25f), 1e-4f) // sin(π/2)
         assertEquals(0.98f, BootSplashTiming.breathe(0.75f), 1e-4f) // sin(3π/2)
     }
+
+    // ── Animated gradient border (no spin) ──
+
+    @Test
+    fun borderWavePingPongsSmoothly() {
+        // Cosine wave: 0 → ½ (quarter) → 1 (half) → ½ (¾) → seamless wrap.
+        assertEquals(0f, BootSplashTiming.borderWave(0f), 1e-4f)
+        assertEquals(0.5f, BootSplashTiming.borderWave(0.25f), 1e-4f)
+        assertEquals(1f, BootSplashTiming.borderWave(0.5f), 1e-4f)
+        assertEquals(0.5f, BootSplashTiming.borderWave(0.75f), 1e-4f)
+        // Continuous across the loop wrap — no rotation-style hard cut.
+        assertEquals(
+            BootSplashTiming.borderWave(0.999f),
+            BootSplashTiming.borderWave(0.001f),
+            0.02f,
+        )
+    }
+
+    @Test
+    fun borderStopsRipplePhaseShiftedNotRotated() {
+        // Stop 0 peaks (full yellow) at t=0.5; neighbours peak a third of a
+        // loop apart — stops stay anchored, only colors evolve (no spin).
+        assertTrue(BootSplashTiming.borderStopWave(0.5f, 0) > 0.99f)
+        assertTrue(BootSplashTiming.borderStopWave(0.5f, 1) < 0.26f)
+        assertTrue(BootSplashTiming.borderStopWave(0.5f, 2) < 0.26f)
+        // The wrap stop (k=3) repeats stop 0's color → seamless gradient join.
+        assertEquals(
+            BootSplashTiming.borderStopWave(0.5f, 3),
+            BootSplashTiming.borderStopWave(0.5f, 0),
+            1e-6f,
+        )
+        // Waves never leave the 0…1 lerp domain at any loop time.
+        for (i in 0..19) {
+            val t = i / 19f
+            for (k in 0 until 3) {
+                val w = BootSplashTiming.borderStopWave(t, k)
+                assertTrue(w in 0f..1f)
+            }
+        }
+        assertEquals(3, BootSplashTiming.BORDER_STOP_COUNT)
+    }
+
+    @Test
+    fun borderColorRipplesBetweenBrandColors() {
+        // t=0 → stop color is pure Bitcoin orange; half a loop later → yellow
+        // (component-wise, tolerant of float lerp rounding).
+        val c0 = BootSplashTiming.borderColor(0f, 0)
+        assertEquals(BootSplashTiming.ORANGE.red, c0.red, 1e-3f)
+        assertEquals(BootSplashTiming.ORANGE.green, c0.green, 1e-3f)
+        assertEquals(BootSplashTiming.ORANGE.blue, c0.blue, 1e-3f)
+        val c1 = BootSplashTiming.borderColor(0.5f, 0)
+        assertEquals(BootSplashTiming.YELLOW.red, c1.red, 1e-3f)
+        assertEquals(BootSplashTiming.YELLOW.green, c1.green, 1e-3f)
+        assertEquals(BootSplashTiming.YELLOW.blue, c1.blue, 1e-3f)
+        // Quarter loop = even mix (continuous flow, not a jump).
+        val mid = BootSplashTiming.borderColor(0.25f, 0)
+        assertTrue(mid.red > BootSplashTiming.ORANGE.red)
+        assertTrue(mid.blue < BootSplashTiming.YELLOW.blue)
+    }
 }

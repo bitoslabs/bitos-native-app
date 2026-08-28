@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -63,6 +65,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedRepository
+import space.bitos.app.data.publish.NotePublisher
+import space.bitos.app.data.relay.RelayConnectionState
+import space.bitos.app.data.relay.RelayManager
 import space.bitos.app.data.settings.SettingsStore
 import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.components.HexShape
@@ -83,6 +88,12 @@ fun SettingsScreen(
     identityViewModel: IdentityViewModel,
     store: SettingsStore,
     feedRepository: FeedRepository,
+    relayManager: RelayManager,
+    notePublisher: NotePublisher,
+    notifications: space.bitos.app.data.feed.NotificationRepository,
+    algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
+    privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
     onBack: () -> Unit = {},
 ) {
     var openSection by remember { mutableStateOf<String?>(null) }
@@ -95,6 +106,12 @@ fun SettingsScreen(
             identityViewModel = identityViewModel,
             store = store,
             feedRepository = feedRepository,
+            relayManager = relayManager,
+            notePublisher = notePublisher,
+            notifications = notifications,
+            algorithmStore = algorithmStore,
+            homeViewModel = homeViewModel,
+            privacyPrefs = privacyPrefs,
         )
         return
     }
@@ -183,7 +200,7 @@ fun SettingsScreen(
         if (account != null) {
             if (confirmSignOut) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { identityViewModel.removeAccount(); confirmSignOut = false }) {
+                    TextButton(onClick = { identityViewModel.signOut(); confirmSignOut = false }) {
                         Text("Confirm sign out", color = BitOSColors.error, fontWeight = FontWeight.W600)
                     }
                     TextButton(onClick = { confirmSignOut = false }) {
@@ -306,6 +323,12 @@ private fun SettingsDetail(
     identityViewModel: IdentityViewModel,
     store: SettingsStore,
     feedRepository: FeedRepository,
+    relayManager: RelayManager,
+    notePublisher: NotePublisher,
+    notifications: space.bitos.app.data.feed.NotificationRepository,
+    algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
+    privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
 ) {
     val snapshot by store.snapshot.collectAsStateWithLifecycle()
 
@@ -321,17 +344,17 @@ private fun SettingsDetail(
             style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.W700,
         )
         when (sectionKey) {
-            "notifications" -> NotificationsDetail(snapshot, store)
+            "notifications" -> NotificationsDetail(snapshot, store, notifications)
             "appearance" -> AppearanceDetail(snapshot, store)
-            "algorithm" -> AlgorithmDetail(snapshot, store)
+            "algorithm" -> AlgorithmDetail(snapshot, store, algorithmStore)
             "media" -> MediaDetail(snapshot, store)
             "language" -> LanguageDetail(snapshot, store)
-            "account" -> AccountDetail(identityViewModel, store)
+            "account" -> AccountDetail(identityViewModel, store, feedRepository)
             "about" -> AboutDetail(store)
             "security" -> SecurityDetail(identityViewModel)
             "lightning" -> LightningDetail(snapshot, store)
-            "privacy" -> PrivacyDetail(snapshot, store)
-            "relays" -> RelaysDetail(feedRepository)
+            "privacy" -> PrivacyDetail(snapshot, store, homeViewModel, identityViewModel, notePublisher, relayManager, privacyPrefs)
+            "relays" -> RelaysDetail(feedRepository, relayManager, identityViewModel, notePublisher)
             "help" -> HelpDetail()
             else -> PendingDetail(sectionKey)
         }
@@ -345,7 +368,10 @@ private fun detailTitle(key: String): String =
 private fun NotificationsDetail(
     snapshot: space.bitos.core.settings.SettingsSnapshot,
     store: SettingsStore,
+    notifications: space.bitos.app.data.feed.NotificationRepository,
 ) {
+    val notifState by notifications.state.collectAsStateWithLifecycle()
+    val muted = notifState.mutedKinds
     DetailCard("Notifications") {
         PrefRow("Notifications", snapshot.notificationsEnabled) {
             store.setRaw(space.bitos.core.settings.SettingsContract.KEY_NOTIFICATIONS_ENABLED, if (it) "1" else "0")
@@ -358,6 +384,24 @@ private fun NotificationsDetail(
         }
     }
     Footnote("Push delivery arrives with the notification service (APP-012).")
+    DetailCard("Notify me about") {
+        for (kind in space.bitos.core.model.NotificationKind.entries) {
+            PrefRow(notificationTypeLabel(kind), kind !in muted) { enabled ->
+                val next = if (enabled) muted - kind else muted + kind
+                notifications.setMutedKinds(next)
+            }
+        }
+    }
+    Footnote("Muted types drop from the inbox, unread counts and the Activity badge (same mutes as the inbox header menu).")
+}
+
+private fun notificationTypeLabel(kind: space.bitos.core.model.NotificationKind): String = when (kind) {
+    space.bitos.core.model.NotificationKind.REPLY -> "Replies"
+    space.bitos.core.model.NotificationKind.MENTION -> "Mentions"
+    space.bitos.core.model.NotificationKind.REACTION -> "Likes"
+    space.bitos.core.model.NotificationKind.REPOST -> "Reposts"
+    space.bitos.core.model.NotificationKind.ZAP -> "Zaps"
+    space.bitos.core.model.NotificationKind.FOLLOW -> "New follows"
 }
 
 @Composable
@@ -399,8 +443,16 @@ private fun AppearanceDetail(
 private fun AlgorithmDetail(
     snapshot: space.bitos.core.settings.SettingsSnapshot,
     store: SettingsStore,
+    algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
 ) {
     val C = space.bitos.core.settings.SettingsContract
+    val algo by algorithmStore.snapshot.collectAsStateWithLifecycle()
+    var surface by remember { mutableStateOf<space.bitos.core.feed.AlgorithmSurface>(space.bitos.core.feed.AlgorithmSurface.FEED) }
+    val setting = algo.surfaces[surface] ?: space.bitos.core.feed.AlgorithmContract.preset(
+        surface, space.bitos.core.feed.AlgorithmPresetId.BALANCED,
+    )
+    val preset = algorithmStore.detectPreset(surface)
+
     DetailCard("Feed") {
         OptionRow("Timeline", listOf("latest" to "Latest", "trending" to "Trending"), snapshot.feedTimeline.wire) {
             store.setRaw(C.KEY_FEED_TIMELINE, it)
@@ -410,6 +462,173 @@ private fun AlgorithmDetail(
         PrefRow("Protocol notes", snapshot.showProtocolNotes) { store.setRaw(C.KEY_FEED_SHOW_PROTOCOL_NOTES, if (it) "1" else "0") }
     }
     Footnote("Protocol notes show raw kind events (reposts, reactions) in the timeline — web feedPreferences parity.")
+
+    // ── Ranking (origin AlgorithmSettings parity) ─────────────────────
+    DetailCard("Freshness") {
+        OptionRow(
+            "Recency half-life",
+            listOf(
+                1 to "Live · 1h",
+                6 to "Balanced · 6h",
+                24 to "Relaxed · 24h",
+                72 to "Chill · 3d",
+            ).map { (h, label) -> h.toString() to label },
+            selected = space.bitos.core.feed.AlgorithmContract.FRESHNESS_STEPS_HOURS
+                .firstOrNull { it == algo.freshnessHours }?.toString()
+                ?: space.bitos.core.feed.AlgorithmContract.FRESHNESS_DEFAULT_HOURS.toString(),
+        ) { algorithmStore.setFreshness(it.toInt()) }
+    }
+    Footnote("Freshness retunes the recency signal everywhere — older notes survive longer at higher steps.")
+
+    DetailCard("Surfaces") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (s in space.bitos.core.feed.AlgorithmSurface.entries) {
+                    val selected = s == surface
+                    Text(
+                        s.name.lowercase().replaceFirstChar { it.uppercase() },
+                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.W700 else FontWeight.W500,
+                        color = if (selected) BitOSColors.primary else BitOSColors.textSecondary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(if (selected) BitOSColors.primaryContainer else BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
+                            .clickable { surface = s }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            PrefRow(
+                "Ranked ${surface.name.lowercase()}",
+                setting.enabled,
+            ) { algorithmStore.setEnabled(surface, it) }
+            if (!setting.enabled) {
+                Footnote("Off = strict reverse-chronological — never hidden.")
+            }
+        }
+    }
+
+    if (setting.enabled) {
+        DetailCard("Preset") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((id, label) in listOf(
+                        space.bitos.core.feed.AlgorithmPresetId.LATEST to "Latest",
+                        space.bitos.core.feed.AlgorithmPresetId.BALANCED to "Balanced",
+                        space.bitos.core.feed.AlgorithmPresetId.TRENDING to "Trending",
+                        space.bitos.core.feed.AlgorithmPresetId.TRUSTED to "Trusted",
+                    )) {
+                        val selected = id == preset
+                        Text(
+                            label,
+                            fontSize = 13.sp,
+                            fontWeight = if (selected) FontWeight.W700 else FontWeight.W500,
+                            color = if (selected) BitOSColors.primary else BitOSColors.textSecondary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(if (selected) BitOSColors.primaryContainer else BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
+                                .clickable { algorithmStore.setPreset(surface, id) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                    if (preset == space.bitos.core.feed.AlgorithmPresetId.CUSTOM) {
+                        Text(
+                            "Custom",
+                            fontSize = 13.sp, fontWeight = FontWeight.W700,
+                            color = BitOSColors.accent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(BitOSColors.accent.copy(alpha = 0.15f))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        DetailCard("Signals") {
+            MixBar(setting)
+            for (signal in space.bitos.core.feed.AlgorithmSignal.entries) {
+                SignalRow(
+                    signal = signal,
+                    config = setting.signals[signal] ?: space.bitos.core.feed.SignalSetting(false, 0.0),
+                    totalWeight = setting.signals.values.filter { it.enabled && it.weight > 0 }.sumOf { it.weight },
+                    onChange = { enabled, weight -> algorithmStore.setSignal(surface, signal, enabled, weight) },
+                )
+            }
+        }
+        Footnote("Weights re-balance live — turning a signal off instantly re-normalizes the mix. Topics & Web-of-trust contribute once their data feeds land (W2).")
+    }
+}
+
+@Composable
+private fun MixBar(setting: space.bitos.core.feed.SurfaceSetting) {
+    val active = setting.signals.entries.filter { it.value.enabled && it.value.weight > 0 }
+    if (active.isEmpty()) return
+    val total = active.sumOf { it.value.weight }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .padding(horizontal = 12.dp, vertical = 0.dp)
+            .clip(RoundedCornerShape(99.dp)),
+    ) {
+        for ((signal, config) in active) {
+            Box(
+                Modifier
+                    .weight((config.weight / total).toFloat())
+                    .fillMaxHeight()
+                    .background(signalColor(signal)),
+            )
+        }
+    }
+}
+
+private fun signalColor(signal: space.bitos.core.feed.AlgorithmSignal): Color = when (signal) {
+    space.bitos.core.feed.AlgorithmSignal.RECENCY -> BitOSColors.primary
+    space.bitos.core.feed.AlgorithmSignal.ENGAGEMENT -> BitOSColors.like
+    space.bitos.core.feed.AlgorithmSignal.ZAPS -> BitOSColors.zap
+    space.bitos.core.feed.AlgorithmSignal.AFFINITY -> BitOSColors.reply
+    space.bitos.core.feed.AlgorithmSignal.TOPICS -> BitOSColors.accent
+    space.bitos.core.feed.AlgorithmSignal.WOT -> BitOSColors.success
+}
+
+@Composable
+private fun SignalRow(
+    signal: space.bitos.core.feed.AlgorithmSignal,
+    config: space.bitos.core.feed.SignalSetting,
+    totalWeight: Double,
+    onChange: (Boolean, Double) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(signalColor(signal)))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                signal.name.lowercase().replaceFirstChar { it.uppercase() },
+                fontSize = 14.sp, color = if (config.enabled) BitOSColors.textPrimary else BitOSColors.textTertiary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (config.enabled && totalWeight > 0) "${(config.weight / totalWeight * 100).toInt()}%" else "—",
+                fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textSecondary,
+            )
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = { onChange(it, config.weight) },
+                colors = SwitchDefaults.colors(checkedTrackColor = BitOSColors.primary),
+            )
+        }
+        if (config.enabled) {
+            androidx.compose.material3.Slider(
+                value = config.weight.toFloat(),
+                onValueChange = { onChange(true, it.toDouble()) },
+                valueRange = 0.05f..1f,
+                steps = 18,
+            )
+        }
+    }
 }
 
 @Composable
@@ -434,6 +653,10 @@ private fun MediaDetail(
         }
     }
     Footnote("Autoplay honors the network policy above; downloads stay hash-verified (Blossom).")
+    DetailCard("Uploads") {
+        InfoLine("Provider", "Blossom (default)")
+    }
+    Footnote("Hash-verified Blossom uploads before signing; S3/Cloudinary fallbacks arrive with the media wave.")
 }
 
 @Composable
@@ -458,13 +681,20 @@ private fun LanguageDetail(
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun AccountDetail(identityViewModel: IdentityViewModel, store: SettingsStore) {
+private fun AccountDetail(
+    identityViewModel: IdentityViewModel,
+    store: SettingsStore,
+    feedRepository: FeedRepository,
+) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val profileEditState by identityViewModel.profileEditState.collectAsStateWithLifecycle()
+    val registered by identityViewModel.registeredAccounts.collectAsStateWithLifecycle()
+    val activePubkey by identityViewModel.activeRegistryPubkey.collectAsStateWithLifecycle()
     val account = identity.account
     val clipboard = LocalClipboardManager.current
     var npubCopied by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
+    var confirmRemove by remember { mutableStateOf<String?>(null) }
 
     if (account == null) {
         Footnote("No account — create or import a key on the You tab.")
@@ -504,9 +734,70 @@ private fun AccountDetail(identityViewModel: IdentityViewModel, store: SettingsS
             Text("Edit profile", color = BitOSColors.primary, fontWeight = FontWeight.W600)
         }
     }
+
+    DetailCard("Accounts on this device") {
+        if (registered.isEmpty()) {
+            Text(
+                "No saved accounts — create or import a key on the You tab.",
+                fontSize = 13.sp, color = BitOSColors.textSecondary,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            )
+        } else {
+            for (acct in registered) {
+                val isActive = acct.pubkeyHex == (activePubkey ?: account?.pubkeyHex)
+                var displayName by remember(acct.pubkeyHex) { mutableStateOf(acct.displayName ?: "") }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isActive) { identityViewModel.switchTo(acct.pubkeyHex) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PubkeyAvatar(pubkey = acct.pubkeyHex, size = 36)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            displayName.ifEmpty { "Account" },
+                            fontSize = 14.sp, fontWeight = if (isActive) FontWeight.W700 else FontWeight.W500,
+                            color = BitOSColors.textPrimary,
+                        )
+                        Text(
+                            store.shortNpub(acct.npub),
+                            fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textSecondary,
+                        )
+                    }
+                    if (isActive) {
+                        Icon(
+                            androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                            contentDescription = "Active account",
+                            tint = BitOSColors.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    if (confirmRemove == acct.pubkeyHex) {
+                        TextButton(onClick = {
+                            identityViewModel.removeRegisteredAccount(acct.pubkeyHex)
+                            confirmRemove = null
+                        }) { Text("Remove", color = BitOSColors.error, fontWeight = FontWeight.W600) }
+                    } else {
+                        TextButton(onClick = { confirmRemove = acct.pubkeyHex }) {
+                            Text("Remove", color = BitOSColors.textSecondary)
+                        }
+                    }
+                }
+            }
+            Footnote("Switching keeps every account sealed on this device — one tap back. Remove wipes that account's key (back it up first).")
+        }
+    }
+
     DetailCard("Storage") {
         InfoLine("Settings cache", store.cacheSizeLabel())
-        TextButton(onClick = { store.clearCache() }) {
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        TextButton(onClick = {
+            store.clearCache()
+            scope.launch { feedRepository.clearEventCache() }
+        }) {
             Text("Clear cache (keeps theme & language)", color = BitOSColors.error, fontWeight = FontWeight.W600)
         }
     }
@@ -514,11 +805,69 @@ private fun AccountDetail(identityViewModel: IdentityViewModel, store: SettingsS
 
 @Composable
 private fun AboutDetail(store: SettingsStore) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val version = try {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
+    } catch (_: Exception) {
+        "1.0"
+    }
+    val facts = space.bitos.core.settings.AppFacts
+
+    // Brand card (legacy About hero parity).
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(BitOSColors.surface.copy(alpha = 0.6f))
+            .border(1.dp, BitOSColors.border.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+            .padding(vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        HexIconTile(iconRes = space.bitos.app.R.drawable.solar_bolt_linear, tint = BitOSColors.primary, size = 56)
+        Spacer(Modifier.height(10.dp))
+        Text(facts.APP_NAME, fontSize = 20.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary)
+        Text(
+            "version $version · built on ${facts.BUILT_ON} · ${facts.LICENSE}",
+            fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textTertiary,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            facts.TAGLINE,
+            fontSize = 13.sp, color = BitOSColors.textSecondary,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+    }
+
+    DetailCard("Supported NIPs") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            for (row in facts.SUPPORTED_NIPS.chunked(5)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (nip in row) {
+                        Text(
+                            "NIP-${if (nip < 10) "0$nip" else "$nip"}",
+                            fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                            color = BitOSColors.textSecondary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+    }
+    Footnote("Only NIPs live in this client are listed — the list grows with each shipped wave.")
+
     DetailCard("Version") {
         InfoLine("Settings schema", "v${space.bitos.core.settings.SettingsContract.SCHEMA_VERSION}")
+        InfoLine("App facts schema", "v${space.bitos.core.settings.AppFacts.SCHEMA_VERSION}")
         InfoLine("Contract keys", "${space.bitos.core.settings.SettingsContract.SECTIONS.size} sections")
     }
-    Footnote("BitOS — sovereign identity on Nostr. Notes are canonical signed events; this app is a projection of them.")
+    Footnote("Notes are canonical signed events; this app is a projection of them.")
 }
 
 @Composable
@@ -638,8 +987,19 @@ private fun LightningDetail(
 private fun PrivacyDetail(
     snapshot: space.bitos.core.settings.SettingsSnapshot,
     store: SettingsStore,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
+    identityViewModel: IdentityViewModel,
+    notePublisher: NotePublisher,
+    relayManager: RelayManager,
+    privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
 ) {
+    val privacy by privacyPrefs.state.collectAsStateWithLifecycle()
     val C = space.bitos.core.settings.SettingsContract
+    val feedState by homeViewModel.state.collectAsStateWithLifecycle()
+    val identity by identityViewModel.state.collectAsStateWithLifecycle()
+    val publishState by notePublisher.state.collectAsStateWithLifecycle()
+    val blocked = feedState.blocked
+
     DetailCard("Content") {
         OptionRow("Media auto-load", listOf("always" to "Always", "wifi" to "Wi-Fi Only", "never" to "Never"), snapshot.mediaAutoPlay.wire) {
             store.setRaw(C.KEY_MEDIA_AUTO_PLAY, it)
@@ -647,41 +1007,253 @@ private fun PrivacyDetail(
         PrefRow("Protocol notes in feed", snapshot.showProtocolNotes) {
             store.setRaw(C.KEY_FEED_SHOW_PROTOCOL_NOTES, if (it) "1" else "0")
         }
+        OptionRow(
+            "Sensitive media",
+            listOf("cover" to "Cover by default", "show" to "Show directly"),
+            snapshot.sensitiveMedia.wire,
+        ) { store.setRaw(C.KEY_SENSITIVE_MEDIA, it) }
     }
-    Footnote("DM/mention gates, read receipts and blocked-user management arrive with the trust wave.")
+    Footnote("Cover keeps NIP-36 flagged notes behind a tap-to-reveal; Show renders them directly. Device-local choice.")
+
+    DetailCard("Account privacy") {
+        PrefRow("Private account", privacy.privateAccount) { enabled ->
+            privacyPrefs.update { it.copy(privateAccount = enabled) }
+        }
+        PrefRow("Include client tag", privacy.includeClientTag) { enabled ->
+            privacyPrefs.update { it.copy(includeClientTag = enabled) }
+        }
+        PrefRow("Activity visible to others", privacy.activityVisible) { enabled ->
+            privacyPrefs.update { it.copy(activityVisible = enabled) }
+        }
+        PrefRow("Read receipts", privacy.readReceipts) { enabled ->
+            privacyPrefs.update { it.copy(readReceipts = enabled) }
+        }
+        PrefRow("Show sensitive-content reason", privacy.sensitiveReason) { enabled ->
+            privacyPrefs.update { it.copy(sensitiveReason = enabled) }
+        }
+        PrefRow("Allow story sharing", privacy.storyShare) { enabled ->
+            privacyPrefs.update { it.copy(storyShare = enabled) }
+        }
+    }
+    Footnote("Read receipts and story sharing take effect when DMs and stories ship (W2); the choices persist now — legacy parity.")
+
+    DetailCard("Interactions") {
+        OptionRow(
+            "Who can message me",
+            listOf("everyone" to "Everyone", "followers" to "Followers", "none" to "No one"),
+            privacy.messagePermission.wire,
+        ) { privacyPrefs.setMessagePermission(space.bitos.core.settings.MessagePermission.parse(it)) }
+        OptionRow(
+            "Who can comment",
+            listOf("everyone" to "Everyone", "followers" to "Followers", "friends" to "Friends"),
+            privacy.commentPermission.wire,
+        ) { privacyPrefs.setCommentPermission(space.bitos.core.settings.CommentPermission.parse(it)) }
+    }
+    Footnote("Gates apply to incoming interactions (W2 DMs/comments enforcement; persisted now — legacy parity).")
+
+    DetailCard("Blocked users") {
+        if (blocked.isEmpty()) {
+            Text(
+                "No blocked authors on this account's kind-10004 list.",
+                fontSize = 13.sp, color = BitOSColors.textSecondary,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            )
+        } else {
+            for (pubkey in blocked.take(50)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PubkeyAvatar(pubkey = pubkey, size = 28)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        space.bitos.core.identity.NostrKeyCodec.npub(pubkey)
+                            ?.let(store::shortNpub) ?: pubkey,
+                        fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                        color = BitOSColors.textSecondary, modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        notePublisher.dismiss()
+                        notePublisher.publishBlockList(
+                            blocked = blocked.filterNot { it == pubkey },
+                            signerProvider = { identityViewModel.createSigner() },
+                            writeRelays = relayManager.writeRelays(),
+                        )
+                    }) { Text("Unblock", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
+                }
+            }
+            if (blocked.size > 50) {
+                Footnote("Showing first 50 of ${blocked.size} blocked authors.")
+            }
+            PublishStatusLine(publishState)
+            Footnote("Unblock publishes a new kind-10004 head to your write relays.")
+        }
+    }
+    Footnote("Blocked authors are filtered from feeds and the inbox (NIP-51). DM/mention gates and read receipts arrive with the DM wave.")
 }
 
-// ── Relays (configured set + live health; CRUD pending) ───────────────
+// ── Relays manager (APP-018 §3.18: CRUD, roles, status dots, NIP-65) ──
 
 @Composable
-private fun RelaysDetail(feedRepository: FeedRepository) {
+private fun RelaysDetail(
+    feedRepository: FeedRepository,
+    relayManager: RelayManager,
+    identityViewModel: IdentityViewModel,
+    notePublisher: NotePublisher,
+) {
     val feedState by feedRepository.state.collectAsStateWithLifecycle()
     val health = feedState.relayHealth
+    val entries by relayManager.entries.collectAsStateWithLifecycle()
+    val connections by relayManager.connectionStates.collectAsStateWithLifecycle()
+    val publishState by notePublisher.state.collectAsStateWithLifecycle()
+    val identity by identityViewModel.state.collectAsStateWithLifecycle()
+    var addInput by remember { mutableStateOf("") }
+    var addError by remember { mutableStateOf<String?>(null) }
+    val clipboard = LocalClipboardManager.current
 
     DetailCard("Status") {
         InfoLine("Connected", "${health.connected}/${health.total}")
     }
-    Footnote("Adding, removing and per-relay read/write toggles arrive with the relay wave (NIP-65 publish).")
+    Footnote("Edits connect and disconnect sockets immediately and persist on this device.")
+
     DetailCard("Configured relays") {
-        for (url in DefaultRelays.urls) {
-            val write = DefaultRelays.writeUrls.any { it.value == url.value }
-            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(
-                    url.value,
-                    fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textPrimary,
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    RoleChip("read", BitOSColors.primary)
-                    if (write) RoleChip("write", BitOSColors.success)
+        for (entry in entries) {
+            RelayRow(
+                entry = entry,
+                state = connections[entry.url],
+                onRemove = { relayManager.remove(entry.url) },
+                onToggleRead = { relayManager.setRoles(entry.url, !entry.read, entry.write) },
+                onToggleWrite = { relayManager.setRoles(entry.url, entry.read, !entry.write) },
+            )
+        }
+    }
+    Footnote("Roles follow NIP-65: read relays serve your feeds; write relays receive your events. A relay needs at least one role.")
+
+    DetailCard("Add relay") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            OutlinedTextField(
+                value = addInput,
+                onValueChange = { addInput = it; addError = null },
+                singleLine = true,
+                isError = addError != null,
+                placeholder = { Text("wss://relay.example.com", fontSize = 13.sp) },
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (addError != null) {
+                Text(addError!!, fontSize = 12.sp, color = BitOSColors.error)
+            }
+            Row {
+                TextButton(
+                    onClick = {
+                        if (!relayManager.add(addInput)) {
+                            addError = when {
+                                entries.any { it.url.value == addInput.trim() } -> "Already in your relay set."
+                                entries.size >= space.bitos.core.model.RelayListContract.MAX_RELAYS ->
+                                    "Relay set is full (${space.bitos.core.model.RelayListContract.MAX_RELAYS})."
+                                else -> "Enter a valid wss:// relay URL."
+                            }
+                        } else {
+                            addInput = ""
+                        }
+                    },
+                    enabled = addInput.isNotBlank(),
+                ) {
+                    Icon(
+                        androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_add_circle_linear),
+                        contentDescription = null,
+                        tint = BitOSColors.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Add relay", color = BitOSColors.primary, fontWeight = FontWeight.W600)
                 }
             }
+        }
+    }
+
+    DetailCard("Publish") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            if (identity.account == null) {
+                Footnote("Publishing the relay list (kind 10002) needs an account — create or import a key on the You tab.")
+            } else {
+                TextButton(onClick = {
+                    notePublisher.dismiss()
+                    notePublisher.publishRelayList(
+                        relayListJson = relayManager.encode(),
+                        signerProvider = { identityViewModel.createSigner() },
+                        writeRelays = relayManager.writeRelays(),
+                    )
+                }) {
+                    Icon(
+                        androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                        contentDescription = null,
+                        tint = BitOSColors.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Publish relay list (NIP-65)", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+                }
+                PublishStatusLine(publishState)
+            }
+        }
+    }
+    Footnote("The published kind-10002 event advertises your relays to other clients (NIP-65).")
+}
+
+@Composable
+private fun RelayRow(
+    entry: space.bitos.core.model.RelayEntry,
+    state: RelayConnectionState?,
+    onRemove: () -> Unit,
+    onToggleRead: () -> Unit,
+    onToggleWrite: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(relayStateColor(state)),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                entry.url.value,
+                fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onRemove) {
+                Icon(
+                    androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_trash_linear),
+                    contentDescription = "Remove ${entry.url.host()}",
+                    tint = BitOSColors.error,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            RoleChip("read", entry.read, onToggleRead)
+            RoleChip("write", entry.write, onToggleWrite)
         }
     }
 }
 
 @Composable
-private fun RoleChip(label: String, color: Color) {
+private fun relayStateColor(state: RelayConnectionState?): Color = when (state) {
+    RelayConnectionState.CONNECTED -> BitOSColors.success
+    RelayConnectionState.CONNECTING, RelayConnectionState.RETRYING -> BitOSColors.warning
+    else -> BitOSColors.textTertiary
+}
+
+@Composable
+private fun RoleChip(label: String, active: Boolean, onClick: () -> Unit) {
+    val color = if (active) BitOSColors.primary else BitOSColors.textTertiary
     Text(
         label,
         fontSize = 10.sp, fontWeight = FontWeight.W600,
@@ -689,30 +1261,69 @@ private fun RoleChip(label: String, color: Color) {
         modifier = Modifier
             .clip(RoundedCornerShape(99.dp))
             .background(color.copy(alpha = 0.15f))
+            .clickable(onClickLabel = "Toggle $label role") { onClick() }
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
 
-// ── Help (static FAQ, legacy parity) ──────────────────────────────────
+@Composable
+private fun PublishStatusLine(publishState: space.bitos.app.data.publish.PublishUiState) {
+    val text = when {
+        publishState.result == null && publishState.inFlightId != null -> "Publishing…"
+        publishState.result == space.bitos.app.data.publish.PublishResult.PUBLISHED -> "Published ✓"
+        publishState.result == space.bitos.app.data.publish.PublishResult.REJECTED ->
+            "Rejected: ${publishState.receipts.firstOrNull { it.accepted == false }?.message ?: "relay declined"}"
+        publishState.result == space.bitos.app.data.publish.PublishResult.TIMEOUT -> "No relay receipt before timeout."
+        publishState.result == space.bitos.app.data.publish.PublishResult.SIGNING_REFUSED -> "No account key available."
+        publishState.result == space.bitos.app.data.publish.PublishResult.INVALID -> "Relay list invalid — nothing sent."
+        else -> null
+    } ?: return
+    Text(
+        text,
+        fontSize = 12.sp,
+        color = if (publishState.result == space.bitos.app.data.publish.PublishResult.PUBLISHED) BitOSColors.success else BitOSColors.textSecondary,
+    )
+}
 
-private val helpFaq: List<Pair<String, String>> = listOf(
-    "What is BitOS?" to
-        "A Nostr client for short notes, Bitz clips and zaps. Your identity is a key pair you own — no email, no server account.",
-    "Where is my data stored?" to
-        "Notes are canonical signed events on relays. This device keeps a bounded cache; nothing is stored on a BitOS server.",
-    "How do I back up my account?" to
-        "Settings → Security → Reveal secret key. The nsec is the only recovery method — store it offline and never share it.",
-    "Why do some posts not load?" to
-        "Relays are independent servers. A post is only visible if at least one of your relays carries it.",
-    "How do zaps work?" to
-        "You can set a default amount and create an LNURL zap invoice. Wallet pairing and in-app settlement are not available yet, so pay the invoice in an external wallet.",
-    "What works today?" to
-        "Browsing verified relay notes, composing notes/replies/reposts/reactions, local bookmarks and follows, media upload verification, profile editing, relay status, and the listed settings preferences are available. Wallet pairing, relay editing, biometric app lock, full theming, and translations are still pending.",
-)
+// ── Help (legacy SupportSettings parity: FAQ + contribute + donate) ────
+
+private val helpFaq: List<Pair<String, String>> =
+    space.bitos.core.settings.AppFacts.FAQ.map { it.question to it.answer }
 
 @Composable
 private fun HelpDetail() {
     var expanded by remember { mutableStateOf<String?>(null) }
+
+    DetailCard("Support the project") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                space.bitos.core.settings.AppFacts.CONTRIBUTE_NOTE,
+                fontSize = 13.sp, color = BitOSColors.textSecondary,
+            )
+            if (space.bitos.core.settings.AppFacts.SUPPORT_LUD16.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Zap the team · " + space.bitos.core.settings.AppFacts.SUPPORT_LUD16,
+                    fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textTertiary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (tier in space.bitos.core.settings.AppFacts.SUPPORT_TIERS_SATS) {
+                        Text(
+                            "$tier ⚡",
+                            fontSize = 13.sp, fontWeight = FontWeight.W600, color = BitOSColors.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(BitOSColors.primaryContainer)
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+    Footnote("Support tiers activate when the project lightning address is configured.")
+
     DetailCard("FAQ") {
         for ((question, answer) in helpFaq) {
             Column(
@@ -726,7 +1337,7 @@ private fun HelpDetail() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(question, fontSize = 15.sp, fontWeight = FontWeight.W500, color = BitOSColors.textPrimary)
+                    Text(question, fontSize = 15.sp, fontWeight = FontWeight.W500, color = BitOSColors.textPrimary, modifier = Modifier.weight(1f))
                     Text(
                         if (expanded == question) "−" else "+",
                         fontSize = 16.sp, fontWeight = FontWeight.W700, color = BitOSColors.textTertiary,
@@ -738,6 +1349,47 @@ private fun HelpDetail() {
                 }
             }
         }
+    }
+
+    DetailCard("Links") {
+        LinkRow("Nostr Improvement Possibilities", space.bitos.core.settings.AppFacts.LINK_NIPS)
+        LinkRow("What is Nostr?", space.bitos.core.settings.AppFacts.LINK_NOSTR)
+        if (space.bitos.core.settings.AppFacts.LINK_SOURCE.isNotEmpty()) {
+            LinkRow("Source code", space.bitos.core.settings.AppFacts.LINK_SOURCE)
+        }
+    }
+}
+
+@Composable
+private fun LinkRow(label: String, url: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable {
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),
+                    )
+                }
+            }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_widget_linear),
+            contentDescription = null,
+            tint = BitOSColors.primary,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(label, fontSize = 15.sp, color = BitOSColors.textPrimary, modifier = Modifier.weight(1f))
+        Text(
+            url.removePrefix("https://").removePrefix("www."),
+            fontSize = 11.sp, color = BitOSColors.textTertiary,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -804,7 +1456,7 @@ private fun OptionRow(
 
 @Composable
 private fun ZapAmountRow(amount: Int, onChange: (Int) -> Unit) {
-    val presets = listOf(21, 100, 500, 1000)
+    val presets = listOf(1, 5, 21, 100, 500, 1000)
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Text("Default zap: $amount sats", fontSize = 15.sp, color = BitOSColors.textPrimary)
         Spacer(Modifier.height(6.dp))

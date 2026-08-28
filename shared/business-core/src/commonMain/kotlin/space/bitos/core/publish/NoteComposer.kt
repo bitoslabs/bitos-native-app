@@ -111,6 +111,46 @@ class NoteComposer(
     }
 
     /**
+     * Builds the unsigned NIP-65 relay list (kind 10002): one `r` tag per
+     * managed relay — marker omitted for read+write, `"read"`/`"write"`
+     * otherwise. Empty or role-less sets compose nothing.
+     */
+    fun composeRelayList(
+        authorPubkey: String,
+        entries: List<space.bitos.core.model.RelayEntry>,
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val bounded = space.bitos.core.model.RelayListContract.normalize(entries)
+        if (bounded.isEmpty()) return null
+        return compose(
+            authorPubkey,
+            space.bitos.core.model.RelayListContract.KIND,
+            space.bitos.core.model.RelayListContract.nip65Tags(bounded),
+            "",
+        )
+    }
+
+    /**
+     * Builds the unsigned NIP-51 public block list (kind 10004): one `p`
+     * tag per blocked pubkey, bounded and validated. An empty set composes
+     * nothing (publishing an unblock-everything head is explicit at the UI).
+     */
+    fun composeBlockList(authorPubkey: String, blocked: List<String>): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val bounded = blocked
+            .filter { it.matches(Regex("^[0-9a-f]{64}$")) }
+            .distinct()
+            .take(space.bitos.core.model.BlockList.MAX_BLOCKS)
+        if (bounded.isEmpty()) return null
+        return compose(
+            authorPubkey,
+            space.bitos.core.model.BlockList.KIND,
+            bounded.map { listOf("p", it) },
+            "",
+        )
+    }
+
+    /**
      * Builds the unsigned kind-6 repost (NIP-18): `e` tag naming the target
      * (optional relay hint), `p` tag naming its author, empty content.
      */

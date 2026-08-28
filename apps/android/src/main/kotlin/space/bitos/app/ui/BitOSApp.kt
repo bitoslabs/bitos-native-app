@@ -39,7 +39,6 @@ import space.bitos.app.ui.inbox.InboxScreen
 import space.bitos.app.ui.profile.ProfileScreen
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSTheme
-import space.bitos.app.ui.components.BootSplashScreen
 
 /** Six-tab product shell (user decision 2026-08-28, legacy-app parity):
  * Home · Bitz · Discover · Chats · Activity · You. Studio/Create entry
@@ -66,17 +65,23 @@ fun BitOSApp(
     authorRepository: space.bitos.app.data.feed.AuthorRepository,
     settingsStore: space.bitos.app.data.settings.SettingsStore,
     feedRepository: space.bitos.app.data.feed.FeedRepository,
+    relayManager: space.bitos.app.data.relay.RelayManager,
+    algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
+    privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
 ) {
-    // Branded boot splash (legacy Flutter main.dart parity): holds while the
-    // first feed page hydrates, then hands off to the six-tab shell.
-    var showBoot by remember { mutableStateOf(true) }
+    // Fast access (user decision 2026-08-28): the native system splash hands
+    // off straight into the six-tab shell — the branded BootSplashScreen is
+    // disabled at app entry (component retained in the library, APP-022).
 
     BitOSTheme {
-        if (showBoot) {
-            BootSplashScreen(onDismissed = { showBoot = false })
-            return@BitOSTheme
-        }
         var destination by rememberSaveable { mutableStateOf(TopLevelDestination.HOME) }
+        // APP-003/APP-004: re-tap on the active Home/Bitz tab scrolls the
+        // feed to top; a re-tap while already at top refreshes it.
+        var feedRetapTick by remember { mutableStateOf(0) }
+        // APP-018 privacy: sensitive-media default gates every cover.
+        val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
+        val sensitiveShowByDefault =
+            settingsSnapshot.sensitiveMedia == space.bitos.core.settings.SensitiveMediaSetting.SHOW
         val identity by identityViewModel.state.collectAsStateWithLifecycle()
         val notificationsState by notifications.state.collectAsStateWithLifecycle()
         // Shell-level account wiring: the Activity badge needs the inbox
@@ -97,7 +102,15 @@ fun BitOSApp(
                         }
                         NavigationBarItem(
                             selected = destination == item,
-                            onClick = { destination = item },
+                            onClick = {
+                                if (destination == item &&
+                                    (item == TopLevelDestination.HOME || item == TopLevelDestination.BITZ)
+                                ) {
+                                    feedRetapTick++
+                                } else {
+                                    destination = item
+                                }
+                            },
                             icon = {
                                 androidx.compose.material3.BadgedBox(badge = {
                                     if (badge != null) {
@@ -127,9 +140,14 @@ fun BitOSApp(
                 contentAlignment = Alignment.TopStart,
             ) {
                 when (destination) {
-                    TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU })
-                    TopLevelDestination.BITZ -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = true, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU })
-                    TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(searchRepository)
+                    TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
+                    TopLevelDestination.BITZ -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, videoOnly = true, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { destination = TopLevelDestination.YOU }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
+                    TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(
+                        searchRepository,
+                        homeViewModel,
+                        identityViewModel,
+                        notePublisher,
+                    )
                     TopLevelDestination.CHATS -> space.bitos.app.ui.inbox.ChatsScreen()
                     TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
                         identityViewModel,
@@ -137,8 +155,9 @@ fun BitOSApp(
                         homeViewModel,
                         notePublisher,
                         authorRepository,
+                        sensitiveShowByDefault = sensitiveShowByDefault,
                     )
-                    TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository)
+                    TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs)
                 }
             }
         }

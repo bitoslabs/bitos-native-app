@@ -4,7 +4,7 @@ import Observation
 
 /// Notification kind mirror (shared `NotificationKind`; ordinals locked by
 /// `BusinessCoreBridge.extractNotification` — 0 reply … 5 follow).
-enum NotificationKind: Sendable, Equatable {
+enum NotificationKind: Sendable, Equatable, CaseIterable {
     case reply, mention, reaction, repost, zap, follow
 
     /** Shared-enum name used for per-type mute persistence. */
@@ -53,6 +53,10 @@ struct OriginNote: Sendable, Equatable {
     let thumbUrl: String?
     /** Full bounded content for thread roots. */
     let content: String
+    /** Media strip (APP-012): ≤4 image/video URLs. */
+    var mediaUrls: [String] = []
+    /** NIP-36 flag — the strip renders behind a sensitive cover. */
+    var contentWarning: Bool = false
 }
 
 enum OriginNoteState: Sendable, Equatable {
@@ -121,6 +125,8 @@ final class InboxStore {
     private(set) var origins: [String: OriginNoteState] = [:]
     /** Per-type mutes (kind names); muted kinds never reach items or counts. */
     private(set) var mutedKinds: Set<NotificationKind> = []
+    /** Blocked authors (kind-10004 head) — rows evicted, badge-safe. */
+    private(set) var blockedPubkeys: Set<String> = []
 
     private let pool: RelayPool
     private let bridge: BusinessCoreBridge
@@ -130,8 +136,11 @@ final class InboxStore {
     private var originBatch = 0
     private var originTimeoutTasks: [String: Task<Void, Never>] = [:]
     private var seen = Set<String>()
+    private var blockHeadAt: Int64?
+    private var cursorSeconds: Int64 = -1
     private static let readIdsKey = "bitos_notification_read_ids"
     private static let mutedKindsKey = "bitos_notification_muted_kinds"
+    private static let cursorKey = "bitos_notification_cursor"
     private static let maxItems = 100
     private static let originTimeoutNanos: UInt64 = 8_000_000_000
 
@@ -159,6 +168,9 @@ final class InboxStore {
         loaded = false
         hasAccount = pubkey != nil
         readIds = Set(defaults.stringArray(forKey: Self.readIdsKey) ?? [])
+        blockedPubkeys = []
+        blockHeadAt = nil
+        cursorSeconds = defaults.object(forKey: Self.cursorKey) == nil ? -1 : Int64(defaults.integer(forKey: Self.cursorKey))
         mutedKinds = Set((defaults.stringArray(forKey: Self.mutedKindsKey) ?? []).compactMap(NotificationKind.init(name:)))
         watchTask?.cancel()
         watchTask = nil
@@ -167,22 +179,39 @@ final class InboxStore {
     }
 
     func isRead(_ item: NotificationItem) -> Bool {
-        readIds.contains(item.id)
+        // Shared cursor rule: explicit marks + everything at/below the
+        // persisted cursor (redelivered history never re-rings).
+        readIds.contains(item.id) ||
+            bridge.notificationCursorIsRead(
+                id: item.id,
+                createdAtSeconds: item.createdAt,
+                cursorSeconds: cursorSeconds,
+                explicitlyRead: []
+            )
     }
 
     var unreadCount: Int {
         items.filter { !isRead($0) }.count
     }
 
-    /// Marks one notification (or one aggregated group's ids) read.
+    /// Marks one notification (or one aggregated group's ids) read; the
+    /// cursor advances to the newest marked item (spec §3.12).
     func markRead(_ ids: [String]) {
         guard !ids.isEmpty else { return }
         readIds.formUnion(ids)
+        advanceCursor(to: items.filter { ids.contains($0.id) }.map(\.createdAt).max())
         persistReadIds()
     }
 
     func markAllRead() {
+        advanceCursor(to: items.map(\.createdAt).max())
         markRead(items.map(\.id))
+    }
+
+    private func advanceCursor(to newestMarkedAt: Int64?) {
+        guard let newestMarkedAt, newestMarkedAt > cursorSeconds else { return }
+        cursorSeconds = newestMarkedAt
+        defaults.set(Int(newestMarkedAt), forKey: Self.cursorKey)
     }
 
     /** Per-type mutes: muted kinds drop from items, counts and the badge. */
@@ -202,11 +231,23 @@ final class InboxStore {
         defaults.set(bounded, forKey: Self.readIdsKey)
     }
 
-    /// Filters items by the shared tab/chip rules, then groups them through
-    /// the shared core into day sections (both platforms agree by contract).
-    func sections(tab: NotificationTab, activity: NotificationActivity) -> [NotificationDaySection] {
+    /// Filters items by the shared tab/chip/search rules, then groups them
+    /// through the shared core into day sections (contract-locked shape).
+    func sections(
+        tab: NotificationTab,
+        activity: NotificationActivity,
+        query: String = "",
+        authorNames: [String: String] = [:],
+        blocked: Set<String> = []
+    ) -> [NotificationDaySection] {
         let filtered = items.filter { item in
-            bridge.notificationTabMatches(kindInt: Int32(item.kind.ordinal), tabOrdinal: Int32(tab.rawValue), isRead: isRead(item)) &&
+            !blocked.contains(item.authorPubkey) && // APP-012 blocked-author filtering (10004 head)
+            (query.isEmpty || bridge.notificationQueryMatches(
+                summary: item.summary,
+                authorName: authorNames[item.authorPubkey],
+                query: query
+            )) &&
+                bridge.notificationTabMatches(kindInt: Int32(item.kind.ordinal), tabOrdinal: Int32(tab.rawValue), isRead: isRead(item)) &&
                 bridge.notificationActivityMatches(kindInt: Int32(item.kind.ordinal), activityOrdinal: Int32(activity.rawValue))
         }
         guard !filtered.isEmpty else { return [] }
@@ -292,6 +333,10 @@ final class InboxStore {
         if let request = (bridge.notificationsRequest(subscriptionId: "bitos-notifications", accountPubkey: accountPubkey!) as String?) {
             Task { await pool.broadcast(request) }
         }
+        // Blocked-author set (kind-10004 head) rides the same round.
+        if let request = (bridge.blockListRequest(subscriptionId: "bitos-blocks", accountPubkey: accountPubkey!) as String?) {
+            Task { await pool.broadcast(request) }
+        }
         let stream = await pool.frames()
         watchTask = Task { [weak self] in
             for await frame in stream {
@@ -303,6 +348,7 @@ final class InboxStore {
 
     private func absorb(_ frame: RelayFrame) {
         guard let account = accountPubkey else { return }
+        absorbBlockList(frame, account: account)
         absorbOrigin(frame)
         guard let notification = bridge.extractNotification(
             message: frame.message,
@@ -315,6 +361,8 @@ final class InboxStore {
         let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) } ?? .mention
         // Per-type mutes never reach items or counts.
         if mutedKinds.contains(kind) { return }
+        // Blocked authors never reach items or counts.
+        if blockedPubkeys.contains((notification["authorPubkey"] as? String) ?? "") { return }
         let amountRaw = Self.int64(notification["amountMsat"])
         let item = NotificationItem(
             id: (notification["id"] as? String) ?? UUID().uuidString,
@@ -336,6 +384,25 @@ final class InboxStore {
         if items.count > Self.maxItems { items.removeLast(items.count - Self.maxItems) }
         rawEvents[item.id] = frame.message
         loaded = true
+    }
+
+    /// APP-012 blocked-author filter: newest verified kind-10004 head wins;
+    /// arriving heads also evict already-collected rows.
+    private func absorbBlockList(_ frame: RelayFrame, account: String) {
+        guard let list = bridge.blockListFromFrame(
+            message: frame.message,
+            relayUrl: frame.relay.rawValue,
+            accountPubkey: account
+        ) as? [String: Any] else { return }
+        let createdAt = Self.int64(list["createdAt"])
+        guard createdAt >= (blockHeadAt ?? Int64.min) else { return }
+        blockHeadAt = createdAt
+        let next = Set((list["pubkeys"] as? [String]) ?? [])
+        guard next != blockedPubkeys else { return }
+        blockedPubkeys = next
+        let evicted = items.filter { next.contains($0.authorPubkey) }
+        items.removeAll { next.contains($0.authorPubkey) }
+        seen.subtract(evicted.map(\.id))
     }
 
     /// Kotlin Long boxes as KotlinLong across the bridge; be tolerant.
@@ -362,7 +429,9 @@ final class InboxStore {
             createdAt: Self.int64(note["createdAt"]),
             excerpt: (note["excerpt"] as? String) ?? "",
             thumbUrl: (note["thumbUrl"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-            content: (note["content"] as? String) ?? ""
+            content: (note["content"] as? String) ?? "",
+            mediaUrls: (note["mediaUrls"] as? [String]) ?? [],
+            contentWarning: (note["contentWarning"] as? KotlinBoolean)?.boolValue ?? false
         ))
         originTimeoutTasks[id]?.cancel()
         originTimeoutTasks[id] = nil

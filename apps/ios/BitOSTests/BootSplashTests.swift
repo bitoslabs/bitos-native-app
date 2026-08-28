@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import XCTest
 @testable import BitOS
 
@@ -45,6 +46,78 @@ final class BootSplashTests: XCTestCase {
         XCTAssertEqual(BootSplashTiming.breathe(t: 0), 1.0, accuracy: 1e-4)
         XCTAssertEqual(BootSplashTiming.breathe(t: 0.25), 1.02, accuracy: 1e-4) // sin(π/2)
         XCTAssertEqual(BootSplashTiming.breathe(t: 0.75), 0.98, accuracy: 1e-4) // sin(3π/2)
+    }
+
+    // MARK: - Animated gradient border (no spin)
+
+    func testBorderWavePingPongsSmoothly() {
+        // Cosine wave: 0 → ½ (quarter) → 1 (half) → ½ (¾) → seamless wrap.
+        XCTAssertEqual(BootSplashTiming.borderWave(0), 0, accuracy: 1e-4)
+        XCTAssertEqual(BootSplashTiming.borderWave(0.25), 0.5, accuracy: 1e-4)
+        XCTAssertEqual(BootSplashTiming.borderWave(0.5), 1, accuracy: 1e-4)
+        XCTAssertEqual(BootSplashTiming.borderWave(0.75), 0.5, accuracy: 1e-4)
+        // Continuous across the loop wrap — no rotation-style hard cut.
+        XCTAssertEqual(
+            BootSplashTiming.borderWave(0.999),
+            BootSplashTiming.borderWave(0.001),
+            accuracy: 0.02
+        )
+    }
+
+    func testBorderStopsRipplePhaseShiftedNotRotated() {
+        // Stop 0 peaks (full yellow) at t=0.5; neighbours peak a third of a
+        // loop apart — stops stay anchored, only colors evolve (no spin).
+        XCTAssertGreaterThan(BootSplashTiming.borderStopWave(0.5, stop: 0), 0.99)
+        XCTAssertLessThan(BootSplashTiming.borderStopWave(0.5, stop: 1), 0.26)
+        XCTAssertLessThan(BootSplashTiming.borderStopWave(0.5, stop: 2), 0.26)
+        // The wrap stop (k=3) repeats stop 0's color → seamless gradient join.
+        XCTAssertEqual(
+            BootSplashTiming.borderStopWave(0.5, stop: 3),
+            BootSplashTiming.borderStopWave(0.5, stop: 0),
+            accuracy: 1e-6
+        )
+        // Waves never leave the 0…1 lerp domain at any loop time.
+        for i in 0...19 {
+            let t = Double(i) / 19
+            for k in 0..<3 {
+                let w = BootSplashTiming.borderStopWave(t, stop: k)
+                XCTAssertTrue((0...1).contains(w))
+            }
+        }
+        XCTAssertEqual(BootSplashTiming.borderStopCount, 3)
+    }
+
+    /// SwiftUI `Color` → sRGB components via UIKit (Color has no component API).
+    private func rgba(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
+        var (r, g, b, a) = (0.0, 0.0, 0.0, 0.0)
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (r, g, b, a)
+    }
+
+    func testBorderColorRipplesBetweenBrandColors() {
+        // t=0 → stop color is pure Bitcoin orange; half a loop later → yellow.
+        let orange = rgba(BootSplashTiming.orange)
+        let yellow = rgba(BootSplashTiming.yellow)
+        let c0 = rgba(BootSplashTiming.borderColor(t: 0, stop: 0))
+        XCTAssertEqual(c0.r, orange.r, accuracy: 1e-3)
+        XCTAssertEqual(c0.g, orange.g, accuracy: 1e-3)
+        XCTAssertEqual(c0.b, orange.b, accuracy: 1e-3)
+        let c1 = rgba(BootSplashTiming.borderColor(t: 0.5, stop: 0))
+        XCTAssertEqual(c1.r, yellow.r, accuracy: 1e-3)
+        XCTAssertEqual(c1.g, yellow.g, accuracy: 1e-3)
+        XCTAssertEqual(c1.b, yellow.b, accuracy: 1e-3)
+        // Quarter loop = even mix (continuous flow, not a jump).
+        let mid = rgba(BootSplashTiming.borderColor(t: 0.25, stop: 0))
+        XCTAssertEqual(mid.r, (orange.r + yellow.r) / 2, accuracy: 1e-3)
+    }
+
+    func testMixClampsFraction() {
+        let orange = rgba(BootSplashTiming.orange)
+        let yellow = rgba(BootSplashTiming.yellow)
+        let below = rgba(BootSplashTiming.mix(BootSplashTiming.orange, BootSplashTiming.yellow, fraction: -1))
+        let above = rgba(BootSplashTiming.mix(BootSplashTiming.orange, BootSplashTiming.yellow, fraction: 2))
+        XCTAssertEqual(below.r, orange.r, accuracy: 1e-3)
+        XCTAssertEqual(above.b, yellow.b, accuracy: 1e-3)
     }
 
     // MARK: - Bolt geometry

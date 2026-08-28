@@ -11,6 +11,8 @@ struct InboxView: View {
 
     @State private var tab: NotificationTab = .all
     @State private var activity: NotificationActivity = .none
+    @State private var query = ""
+    @State private var searchOpen = false
     @State private var menu: AppMenuPresentation?
     @State private var muteMenu: AppMenuPresentation?
     @State private var rawJson: RawEvent?
@@ -77,15 +79,19 @@ struct InboxView: View {
                 symbol: "bell"
             )
         } else {
-            let sections = store.sections(tab: tab, activity: activity)
+            let authorNames = environment.feedStore.profiles.mapValues { $0.bestDisplayName }
+            let sections = store.sections(tab: tab, activity: activity, query: query, authorNames: authorNames, blocked: environment.feedStore.blocked)
             VStack(spacing: 0) {
                 header
+                searchRow
                 tabs
                 chips
                 if sections.isEmpty {
                     ContentPlaceholderView(
                         title: "Nothing in this filter",
-                        message: "Switch tabs or clear the activity chips to see all notifications.",
+                        message: query.isEmpty
+                            ? "Switch tabs or clear the activity chips to see all notifications."
+                            : "No notifications match “\(query.trimmed)”. Clear the search or switch tabs to see more.",
                         symbol: "line.3.horizontal.decrease.circle"
                     )
                 } else {
@@ -149,6 +155,50 @@ struct InboxView: View {
         } else {
             authorTarget = group.actors.first.map(AuthorTarget.init)
         }
+    }
+
+    /// APP-012 expandable search row (name/content; shared predicate applies
+    /// in `InboxStore.sections`).
+    private var searchRow: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Button {
+                if searchOpen && query.isEmpty {
+                    searchOpen = false
+                } else {
+                    searchOpen = true
+                }
+            } label: {
+                AppIcons.image(for: AppIcons.search)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(query.isEmpty && !searchOpen ? BitOSTheme.textSecondary : BitOSTheme.accent)
+                    .frame(width: 30, height: 30)
+            }
+            .accessibilityLabel(searchOpen ? "Close search" : "Search notifications")
+            if searchOpen {
+                TextField("Search names and notes…", text: $query)
+                    .font(.system(size: 13))
+                    .textFieldStyle(.plain)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, BitOSTheme.Spacing.sm)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(BitOSTheme.surfaceElevated)
+                    )
+            } else if !query.isEmpty {
+                Text("“\(query.trimmed)”")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.accent)
+                    .lineLimit(1)
+            }
+            if !query.isEmpty {
+                Button("Clear") { query = "" }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .padding(.bottom, BitOSTheme.Spacing.xs)
     }
 
     private var header: some View {
@@ -452,6 +502,7 @@ private struct AvatarStack: View {
 
 private struct OriginPreviewView: View {
     let origin: OriginNoteState?
+    @Environment(SettingsStore.self) private var settings
 
     var body: some View {
         switch origin {
@@ -466,29 +517,99 @@ private struct OriginPreviewView: View {
                 .font(.caption2)
                 .foregroundStyle(BitOSTheme.textTertiary)
         case .ready(let note):
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                if note.kind == 22 || note.thumbUrl != nil {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(BitOSTheme.surfaceOverlay)
-                            .frame(width: 44, height: 28)
-                        if note.kind == 22 {
-                            Image(systemName: AppIcons.play)
-                                .font(.caption2)
-                                .foregroundStyle(BitOSTheme.textSecondary)
-                        }
+            OriginPreviewReady(note: note, sensitiveShowByDefault: settings.state.sensitiveMedia == .show)
+        }
+    }
+}
+
+/// Ready preview with the APP-012 media strip (≤4 16:9 tiles behind a
+/// NIP-36 cover; tap → lightbox).
+private struct OriginPreviewReady: View {
+    let note: OriginNote
+    /** APP-018 privacy: `show` renders NIP-36 media directly (no cover). */
+    var sensitiveShowByDefault: Bool = false
+    @State private var revealed = false
+    @State private var lightboxUrl: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
+            if note.kind == 22 || (note.thumbUrl != nil && note.mediaUrls.isEmpty) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(BitOSTheme.surfaceOverlay)
+                        .frame(width: 44, height: 28)
+                    if note.kind == 22 {
+                        AppIcons.image(for: AppIcons.play)
+                            .font(.caption2)
+                            .foregroundStyle(BitOSTheme.textSecondary)
                     }
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(note.excerpt.isEmpty ? "Media note" : note.excerpt)
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                        .lineLimit(2)
-                    Text("\(FeedFormat.shortPubkey(note.authorPubkey)) · \(FeedFormat.timeAgo(createdAt: note.createdAt))")
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(note.excerpt.isEmpty ? "Media note" : note.excerpt)
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .lineLimit(2)
+                if !note.mediaUrls.isEmpty {
+                    mediaStrip
+                }
+                Text("\(FeedFormat.shortPubkey(note.authorPubkey)) · \(FeedFormat.timeAgo(createdAt: note.createdAt))")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+        }
+        .sheet(item: Binding(
+            get: { lightboxUrl.map { LightboxTarget(url: $0) } },
+            set: { lightboxUrl = $0?.url }
+        )) { target in
+            MediaLightbox(url: target.url, onClose: { lightboxUrl = nil })
+        }
+    }
+
+    @ViewBuilder
+    private var mediaStrip: some View {
+        if note.contentWarning && !revealed && !sensitiveShowByDefault {
+            Button {
+                revealed = true
+            } label: {
+                HStack(spacing: 6) {
+                    AppIcons.image(for: AppIcons.photo)
+                        .font(.system(size: 12))
+                    Text("Sensitive content — tap to reveal")
                         .font(.caption2)
-                        .foregroundStyle(BitOSTheme.textTertiary)
+                }
+                .foregroundStyle(BitOSTheme.textTertiary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(BitOSTheme.surfaceOverlay)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal sensitive media")
+        } else {
+            HStack(spacing: 4) {
+                ForEach(note.mediaUrls, id: \.self) { url in
+                    Button {
+                        lightboxUrl = url
+                    } label: {
+                        RemoteImageView(url: url)
+                            .frame(width: 56, height: 32)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .accessibilityLabel("Open media")
                 }
             }
         }
     }
+}
+
+private struct LightboxTarget: Identifiable {
+    let url: String
+    var id: String { url }
+}
+
+private extension String {
+    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }

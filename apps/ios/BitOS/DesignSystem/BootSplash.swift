@@ -1,16 +1,23 @@
 import SwiftUI
 
 /**
- * Branded boot/splash screen — 1:1 port of the legacy Flutter
+ * Branded boot/splash screen — port of the legacy Flutter
  * `BootSplashScreen` (web BootSplash parity): the official lightning-bolt
- * mark inside the shared flat-top `HexShape` avatar, breathing + swept by a
- * rotating orbit gradient while core services hydrate; 9 PoW segments sweep
- * (web `pow-boot-seg`), the official wordmark and a mono status pill.
- * Holds `minDisplay` so the brand moment always lands, then fades out
- * before the app shell shows. The native launch screen (Info.plist
- * `UILaunchScreen`: SplashBackground + SplashLogo) hands off into this view
- * — same colors, same mark — so launch reads as one continuous brand
- * moment instead of a hard cut.
+ * mark inside the shared flat-top `HexShape` avatar, breathing inside an
+ * **animated gradient border** while core services hydrate. The border's
+ * gradient stays anchored to the hexagon and its stop colors ripple
+ * Bitcoin-orange ↔ brand yellow in phase-shifted waves — deliberately NOT
+ * the legacy rotating `SweepGradient` orbit, which read as a spinner. 9 PoW
+ * segments sweep (web `pow-boot-seg`), the official wordmark and a mono
+ * status pill follow. Holds `minDisplay` so the brand moment always lands,
+ * then fades out before the app shell shows. The native launch screen
+ * (Info.plist `UILaunchScreen`: SplashBackground + SplashLogo) hands off
+ * into this view — same colors, same mark — so launch reads as one
+ * continuous brand moment instead of a hard cut.
+ *
+ * NOTE: disabled at app entry (fast-access decision 2026-08-28) — the native
+ * launch screen hands off straight to the shell. Component is retained in
+ * the library (APP-022) for future branded-loading moments.
  */
 
 /// Pure timing contract, shared with Android `BootSplashTiming` and the
@@ -37,6 +44,47 @@ enum BootSplashTiming {
     /// Breathing scale: 1 ± 0.02 over the 2s loop.
     static func breathe(t: Double) -> Double {
         1.0 + 0.02 * sin(t * 2 * .pi)
+    }
+
+    // MARK: - Animated gradient border (no spin)
+
+    /// Number of color stops anchored around the border gradient.
+    static let borderStopCount = 3
+
+    /// Smooth 0→1→0 cosine wave over the loop-normalized time `t` (continuous
+    /// at the wrap — no hard cut, unlike a rotation).
+    static func borderWave(_ t: Double) -> Double {
+        0.5 - 0.5 * cos(t * 2 * .pi)
+    }
+
+    /// Wave for border stop `k`, phase-shifted by ⅓ loop per stop so the
+    /// hues ripple around the *anchored* gradient — the stops never move,
+    /// so nothing spins; only the colors evolve.
+    static func borderStopWave(_ t: Double, stop k: Int) -> Double {
+        let phase = t + Double(k) / Double(borderStopCount)
+        return borderWave(phase.truncatingRemainder(dividingBy: 1))
+    }
+
+    /// Border stop color at loop time `t`: Bitcoin-orange ↔ brand-yellow
+    /// ripple. `k` wraps modulo `borderStopCount` so the closing stop repeats
+    /// the opening one (seamless angular join).
+    static func borderColor(t: Double, stop k: Int) -> Color {
+        mix(orange, yellow, fraction: borderStopWave(t, stop: k % borderStopCount))
+    }
+
+    /// Linear RGB mix between two colors (pure; used only for brand colors).
+    static func mix(_ a: Color, _ b: Color, fraction: Double) -> Color {
+        let f = CGFloat(min(max(fraction, 0), 1))
+        var (ar, ag, ab, aa) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+        var (br, bg, bb, ba) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+        UIColor(a).getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
+        UIColor(b).getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        return Color(
+            red: Double(ar + (br - ar) * f),
+            green: Double(ag + (bg - ag) * f),
+            blue: Double(ab + (bb - ab) * f),
+            opacity: Double(aa + (ba - aa) * f)
+        )
     }
 
     // Brand palette (web/Flutter parity)
@@ -104,9 +152,15 @@ struct BootSplashScreen: View {
     var status: String = "Booting BitOS…"
     var onDismissed: (() -> Void)?
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var enterAmount = 0.0
     @State private var fadeAmount = 1.0
+
+    // APP-023: the shell is dark-only (RootView forces
+    // .preferredColorScheme(.dark)) until light tokens ship, so the splash
+    // must be dark in BOTH system modes — a light splash handing off into
+    // the near-black shell reads as a jarring "black screen". Re-wire to
+    // the persisted theme setting when APP-023 lands.
+    private let colorScheme: ColorScheme = .dark
 
     private var background: Color {
         colorScheme == .dark ? BootSplashTiming.backgroundDark : BootSplashTiming.backgroundLight
@@ -154,8 +208,8 @@ struct BootSplashScreen: View {
 }
 
 /// The bolt mark in the shared hex avatar: surface + orange glow +
-/// rotating sweep-gradient orbit stroke + breathing scale
-/// (legacy `_SplashHexAvatar`).
+/// animated gradient border (anchored hue ripple, no rotation) + breathing
+/// scale (legacy `_SplashHexAvatar`, reworked off the rotating orbit).
 private struct SplashHexAvatar: View {
     let progress: Double
     let colorScheme: ColorScheme
@@ -165,21 +219,20 @@ private struct SplashHexAvatar: View {
         colorScheme == .dark ? BootSplashTiming.surfaceDark : .white
     }
 
-    /// SweepGradient(colors: [orange 12%, yellow 95%, orange 12%],
-    /// stops: [0, 0.10, 0.20]) rotated by progress·2π.
-    private var orbitGradient: AngularGradient {
-        let rotation = Angle.degrees(progress * 360)
-        return AngularGradient(
-            stops: [
-                .init(color: BootSplashTiming.orange.opacity(0.12), location: 0.0),
-                .init(color: BootSplashTiming.yellow.opacity(0.95), location: 0.1),
-                .init(color: BootSplashTiming.orange.opacity(0.12), location: 0.2),
-                .init(color: BootSplashTiming.orange.opacity(0.12), location: 1.0),
-            ],
-            center: .center,
-            startAngle: rotation,
-            endAngle: rotation + .degrees(360)
-        )
+    /// Animated gradient border: `AngularGradient` **anchored** to the
+    /// hexagon (angles fixed — no rotation, no spin) whose three stops
+    /// crossfade orange↔yellow in phase-shifted waves, so the gradient
+    /// visibly flows along the outline. Stop 3 repeats stop 0 for a seamless
+    /// wrap. (Legacy `SweepGradient` rotated by progress·2π was a comet
+    /// sweep — that read as a spinner.)
+    private var borderGradient: AngularGradient {
+        let stops = (0...BootSplashTiming.borderStopCount).map { k in
+            Gradient.Stop(
+                color: BootSplashTiming.borderColor(t: progress, stop: k),
+                location: Double(k) / Double(BootSplashTiming.borderStopCount)
+            )
+        }
+        return AngularGradient(stops: stops, center: .center)
     }
 
     var body: some View {
@@ -193,11 +246,14 @@ private struct SplashHexAvatar: View {
                 endRadius: size * 0.72
             )
             .frame(width: size * 1.44, height: size * 1.44)
-            // Orbit: hexagon outline, inset 2pt (legacy hexPath(size−4).shift(2,2)).
+            // Animated gradient border: hexagon outline, inset 2pt (legacy
+            // hexPath(size−4).shift(2,2) geometry kept).
             HexShape()
-                .stroke(orbitGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                .stroke(borderGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
                 .padding(2)
             // Hex surface with the bolt (padding 13/92 h · 20/92 v parity).
+            // Legacy 5/92 inset is what exposes the animated border ring:
+            // without it the full-size surface covers the stroke completely.
             HexShape()
                 .fill(surface)
                 .overlay(
@@ -206,6 +262,7 @@ private struct SplashHexAvatar: View {
                         .padding(.horizontal, size * 13 / 92)
                         .padding(.vertical, size * 20 / 92)
                 )
+                .padding(size * 5 / 92)
         }
         .frame(width: size, height: size)
         .scaleEffect(breathe)

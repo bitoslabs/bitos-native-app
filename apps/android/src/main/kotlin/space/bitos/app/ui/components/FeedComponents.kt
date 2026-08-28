@@ -23,8 +23,14 @@ import androidx.compose.ui.unit.sp
  * Geometry and colors live in [HexIdentity].
  */
 @Composable
-fun PubkeyAvatar(pubkey: String, modifier: Modifier = Modifier, size: Int = 40) {
-    HexAvatar(pubkey = pubkey, modifier = modifier, size = size)
+fun PubkeyAvatar(
+    pubkey: String,
+    modifier: Modifier = Modifier,
+    size: Int = 40,
+    label: String? = null,
+    hasLightning: Boolean = false,
+) {
+    HexAvatar(pubkey = pubkey, modifier = modifier, size = size, label = label, hasLightning = hasLightning)
 }
 
 /** Compact social counter: 1_234 -> "1.2K". */

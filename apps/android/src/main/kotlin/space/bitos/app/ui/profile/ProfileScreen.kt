@@ -59,6 +59,12 @@ fun ProfileScreen(
     identityViewModel: IdentityViewModel,
     settingsStore: space.bitos.app.data.settings.SettingsStore,
     feedRepository: space.bitos.app.data.feed.FeedRepository,
+    relayManager: space.bitos.app.data.relay.RelayManager,
+    notePublisher: space.bitos.app.data.publish.NotePublisher,
+    notifications: space.bitos.app.data.feed.NotificationRepository,
+    algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
+    privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
 ) {
     var showSettings by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     if (showSettings) {
@@ -66,6 +72,12 @@ fun ProfileScreen(
             identityViewModel,
             store = settingsStore,
             feedRepository = feedRepository,
+            relayManager = relayManager,
+            notePublisher = notePublisher,
+            notifications = notifications,
+            algorithmStore = algorithmStore,
+            homeViewModel = homeViewModel,
+            privacyPrefs = privacyPrefs,
             onBack = { showSettings = false },
         )
         return

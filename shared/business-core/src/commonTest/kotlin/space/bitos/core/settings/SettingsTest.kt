@@ -226,6 +226,26 @@ class SettingsTest {
 
     @Test
     fun schemaIsVersioned() {
-        assertEquals(2, SettingsContract.SCHEMA_VERSION)
+        assertEquals(3, SettingsContract.SCHEMA_VERSION)
+    }
+
+    // MARK: - Sensitive-media default (v3, APP-018 privacy)
+
+    @Test
+    fun sensitiveMediaDecodesCanonicalizesAndClearsWithCache() {
+        assertEquals(SensitiveMediaSetting.COVER, SettingsCodec.decode(emptyMap()).sensitiveMedia)
+        assertEquals(
+            SensitiveMediaSetting.SHOW,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_SENSITIVE_MEDIA to "show")).sensitiveMedia,
+        )
+        // Corrupt values self-heal to cover.
+        assertEquals(
+            SensitiveMediaSetting.COVER,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_SENSITIVE_MEDIA to "whatever")).sensitiveMedia,
+        )
+        assertEquals("show", SettingsRules.normalize(SettingsContract.KEY_SENSITIVE_MEDIA, "show"))
+        assertEquals("cover", SettingsRules.normalize(SettingsContract.KEY_SENSITIVE_MEDIA, "garbage"))
+        // Content preference: NOT protected from clear-cache.
+        assertFalse(SettingsContract.KEY_SENSITIVE_MEDIA in SettingsContract.CLEAR_CACHE_PROTECTED_KEYS)
     }
 }

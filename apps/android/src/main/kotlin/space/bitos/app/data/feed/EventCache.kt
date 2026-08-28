@@ -18,4 +18,7 @@ interface EventCache {
 
     /** Keep only the newest [maxRows] rows. */
     suspend fun pruneToLimit(maxRows: Int)
+
+    /** Wipes every cached row (clear-cache, APP-018a row 5 — legacy parity). */
+    suspend fun clearAllCache()
 }

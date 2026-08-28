@@ -186,6 +186,57 @@ class NotePublisher(
         }
     }
 
+    /**
+     * Kind-10002 relay-list publish (NIP-65, APP-018 relays manager):
+     * composes from the managed-set wire JSON and fans out to the set's
+     * write-role relays through the same receipt machine.
+     */
+    fun publishRelayList(
+        relayListJson: String,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val list = composer.composeRelayList(
+                signer.publicKeyHex(),
+                space.bitos.core.model.RelayListContract.decode(relayListJson),
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(list, signer, writeRelays)
+        }
+    }
+
+    /**
+     * Kind-10004 public block-list publish (NIP-51, APP-018 privacy):
+     * replaces the head with the given set (unblock = publish without).
+     */
+    fun publishBlockList(
+        blocked: List<String>,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val list = composer.composeBlockList(signer.publicKeyHex(), blocked)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(list, signer, writeRelays)
+        }
+    }
+
     /** Kind-6 repost (NIP-18) through the same machine. */
     fun publishRepostWith(
         targetEventId: String,

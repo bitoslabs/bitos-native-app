@@ -92,6 +92,7 @@ enum AppIcons {
     static let search = "magnifyingglass"
     static let filter = "line.3.horizontal.decrease"  // feed content filter
     static let appsGrid = "square.grid.2x2"           // More hub entry
+    static let arrowUp = "arrow.up"                   // new-notes reveal (X parity; Solar swap-in later)
     static let settings = "gearshape"
 
     // Home feed tabs (legacy Flutter parity: sparkles / users).

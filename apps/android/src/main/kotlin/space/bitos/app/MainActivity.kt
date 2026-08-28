@@ -23,6 +23,9 @@ class MainActivity : ComponentActivity() {
         val searchRepository = application.searchRepository
         val authorRepository = application.authorRepository
         val settingsStore = application.settingsStore
+        val algorithmStore = application.algorithmStore
+        val privacyPrefs = application.privacyPrefs
+        val relayManager = application.relayManager
 
         val identity: IdentityViewModel by viewModels(factoryProducer = { IdentityViewModel.factory(application, publisher) })
         val viewModel: HomeViewModel by viewModels(factoryProducer = {
@@ -43,6 +46,9 @@ class MainActivity : ComponentActivity() {
                 authorRepository = authorRepository,
                 settingsStore = settingsStore,
                 feedRepository = repository,
+                relayManager = relayManager,
+                algorithmStore = algorithmStore,
+                privacyPrefs = privacyPrefs,
             )
         }
     }

@@ -41,12 +41,14 @@ actor RelayPool {
 
     private let urlSession: URLSession
     private var connections: [RelayURL: Connection] = [:]
+    private var relayOrder: [RelayURL] = []
     private var continuations: [UUID: AsyncStream<RelayFrame>.Continuation] = [:]
     private var running = false
 
     init(urls: [RelayURL], urlSession: URLSession = .bitOSRelaySession()) {
         for url in urls {
             connections[url] = Connection(url: url)
+            relayOrder.append(url)
         }
         self.urlSession = urlSession
     }
@@ -74,6 +76,29 @@ actor RelayPool {
         }
     }
 
+    /// Adds a relay to the pool (relays manager): installs the connection
+    /// and connects immediately when the pool is running. Idempotent.
+    func add(_ url: RelayURL) {
+        guard connections[url] == nil else { return }
+        connections[url] = Connection(url: url)
+        relayOrder.append(url)
+        if running { connect(url) }
+    }
+
+    /// Removes a relay: cancels its receive loop + socket, drops state.
+    func remove(_ url: RelayURL) {
+        guard let connection = connections.removeValue(forKey: url) else { return }
+        relayOrder.removeAll { $0 == url }
+        connection.receiveTask?.cancel()
+        connection.socket?.cancel(with: .normalClosure, reason: nil)
+        connection.state = .disconnected
+    }
+
+    /// Per-relay connection states (status dots in the relays manager).
+    func relayStates() -> [RelayURL: RelayConnectionState] {
+        connections.mapValues(\.state)
+    }
+
     func shutdown() {
         running = false
         for connection in connections.values {
@@ -98,6 +123,16 @@ actor RelayPool {
         for url in urls {
             send(message, to: url)
         }
+    }
+
+    /// First configured connected relay for latency-sensitive read requests.
+    func primaryRelay() -> RelayURL? {
+        relayOrder.first { connections[$0]?.state == .connected }
+    }
+
+    /// Configured relays other than `primary`, in their pool order.
+    func fallbackRelays(excluding primary: RelayURL?) -> [RelayURL] {
+        relayOrder.filter { $0 != primary && connections[$0] != nil }
     }
 
     func health() -> RelayHealth {

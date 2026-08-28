@@ -17,8 +17,10 @@ import space.bitos.app.data.relay.RelayFrame
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.RelayTransport
 import space.bitos.core.identity.DeterministicTestSigner
+import space.bitos.core.model.BlockList
 import space.bitos.core.model.NotificationKind
 import space.bitos.core.model.RelayUrl
+import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
 import space.bitos.core.publish.NoteComposer
 import space.bitos.core.publish.PublishClock
@@ -75,6 +77,83 @@ class NotificationRepositoryTest {
         val signature = runBlocking { signer.sign(unsigned.messageBytes()) }!!
         val clientFrame = composer.publishMessage(unsigned, signature)!!
         return """["EVENT","sub",""" + clientFrame.substringAfter(',')
+    }
+
+    /** Hand-built event with an explicit created-at (the composer clock is fixed). */
+    private fun unsignedEvent(
+        kind: Int,
+        tags: List<List<String>>,
+        content: String,
+        authorPubkey: String,
+        createdAt: Long,
+    ): space.bitos.core.publish.UnsignedNote = space.bitos.core.publish.UnsignedNote(
+        idHex = NostrEventCodec.computeId(hasher, authorPubkey, createdAt, kind, tags, content),
+        pubkeyHex = authorPubkey,
+        createdAtSeconds = createdAt,
+        kind = kind,
+        tags = tags,
+        content = content,
+    )
+
+    /** APP-012 blocked-author filtering: signed kind-10004 head evicts rows,
+     * filters new arrivals and rides the subscription round. */
+    @Test
+    fun blockListHeadEvictsRowsAndFiltersArrivals(): Unit = runBlocking {
+        repository.setAccount(account.publicKeyHex())
+        withTimeout(20_000) { repository.state.first { it.hasAccount } }
+        val target = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+
+        transport.emit(relayFrame(composer.composeReaction(target, account.publicKeyHex(), actor1.publicKeyHex())!!, actor1))
+        withTimeout(20_000) { repository.state.first { it.items.size == 1 } }
+
+        // The account publishes a block list naming actor1 (newest head wins).
+        val blockTags = listOf(listOf("p", actor1.publicKeyHex()))
+        val blockListEvent = unsignedEvent(BlockList.KIND, blockTags, "", account.publicKeyHex(), 1_700_000_500)
+        transport.emit(relayFrame(blockListEvent, account))
+        val blocked = withTimeout(20_000) { repository.state.first { it.blockedPubkeys.isNotEmpty() } }
+        assertEquals(setOf(actor1.publicKeyHex()), blocked.blockedPubkeys)
+        assertTrue(blocked.items.isEmpty(), "blocked author's row must be evicted")
+
+        // New arrivals from the blocked author never surface; others do.
+        transport.emit(relayFrame(composer.composeReply("blocked hello", target, account.publicKeyHex(), actor1.publicKeyHex())!!, actor1))
+        kotlinx.coroutines.delay(200)
+        assertTrue(repository.state.value.items.none { it.authorPubkey == actor1.publicKeyHex() })
+        transport.emit(relayFrame(composer.composeReply("allowed hello", target, account.publicKeyHex(), actor2.publicKeyHex())!!, actor2))
+        withTimeout(20_000) { repository.state.first { it.items.size == 1 } }
+
+        // The kind-10004 REQ went out with the subscription round.
+        assertTrue(transport.sent.any { it.contains("bitos-blocks") && it.contains("10004") })
+    }
+
+    /** APP-012 read cursor: marking a fresh item read covers redelivered
+     * history (never re-rings), and the cursor survives a store reload. */
+    @Test
+    fun readCursorCoversRedeliveredHistoryAndPersists(): Unit = runBlocking {
+        repository.setAccount(account.publicKeyHex())
+        withTimeout(20_000) { repository.state.first { it.hasAccount } }
+        val target = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val pTag = listOf("p", account.publicKeyHex())
+
+        val oldEvent = unsignedEvent(7, listOf(listOf("e", target), pTag), "", actor1.publicKeyHex(), 1_600_000_000)
+        val freshEvent = unsignedEvent(7, listOf(listOf("e", target), pTag), "", actor2.publicKeyHex(), 1_700_000_000)
+        transport.emit(relayFrame(oldEvent, actor1))
+        transport.emit(relayFrame(freshEvent, actor2))
+        withTimeout(20_000) { repository.state.first { it.items.size == 2 } }
+
+        // Mark only the FRESH item read: the cursor advances to its created-at.
+        repository.markRead(listOf(freshEvent.idHex))
+        val read = withTimeout(20_000) { repository.state.first { it.readIds.size == 2 } }
+        assertTrue(oldEvent.idHex in read.readIds, "history at/below the cursor must read implicitly")
+        assertEquals(1_700_000_000L, prefs.savedCursor)
+
+        // Store reload (fresh repository, same prefs): redelivered history
+        // arrives already read — the badge never re-rings.
+        val reloaded = NotificationRepository(scope, pool, hasher, prefs)
+        reloaded.setAccount(account.publicKeyHex())
+        withTimeout(20_000) { reloaded.state.first { it.hasAccount } }
+        transport.emit(relayFrame(oldEvent, actor1))
+        val redelivered = withTimeout(20_000) { reloaded.state.first { it.items.size == 1 } }
+        assertTrue(oldEvent.idHex in redelivered.readIds)
     }
 
     @Test
@@ -244,6 +323,7 @@ class NotificationRepositoryTest {
 private class RecordingPrefs : NotificationPrefs {
     var saved: Set<String> = emptySet()
     var savedMuted: Set<String> = emptySet()
+    var savedCursor: Long = -1L
     override fun readIds(): Set<String> = saved
     override fun save(readIds: Set<String>) {
         saved = readIds
@@ -251,6 +331,10 @@ private class RecordingPrefs : NotificationPrefs {
     override fun mutedKinds(): Set<String> = savedMuted
     override fun saveMutedKinds(kinds: Set<String>) {
         savedMuted = kinds
+    }
+    override fun cursorSeconds(): Long = savedCursor
+    override fun saveCursorSeconds(seconds: Long) {
+        savedCursor = seconds
     }
 }
 

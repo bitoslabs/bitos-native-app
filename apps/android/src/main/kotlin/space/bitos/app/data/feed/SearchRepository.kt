@@ -20,6 +20,9 @@ data class SearchUiState(
     val results: List<FeedNote> = emptyList(),
     val profiles: Map<String, ProfileMetadata> = emptyMap(),
     val resolvedNpub: String? = null,
+    /** APP-009: the query was a note1/nevent1/naddr1 reference — the first
+     * result (when it arrives) is the thread root. */
+    val isRefSearch: Boolean = false,
     val isSearching: Boolean = false,
     val hasSearched: Boolean = false,
 )
@@ -101,12 +104,24 @@ class SearchRepository(
             space.bitos.core.identity.NostrKeyCodec.parseNpub(query)
         } else null
 
+        // APP-009 root resolution: note1/nevent1/naddr1 fetches the thread
+        // head directly (id or newest NIP-33 coordinate version).
+        val eventRef = space.bitos.core.nostr.EventRefs.parse(query)
         mutableState.value = mutableState.value.copy(
             isSearching = true,
             hasSearched = true,
             resolvedNpub = npub,
+            isRefSearch = eventRef != null,
         )
 
+        if (eventRef != null) {
+            pool.broadcast(
+                NostrEventCodec.encodeRequest(
+                    "bitos-ref-$subscriptionCounter",
+                    space.bitos.core.nostr.EventRefs.requestFilter(eventRef),
+                ),
+            )
+        } else {
         // Text search over feed kinds (NIP-50; relay support varies — the
         // empty result state says "relays may not support search").
         val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.VIDEO}],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
@@ -121,6 +136,7 @@ class SearchRepository(
                 ),
             )
         }
+        } // ref-search branch: no NIP-50/npub fan-out
 
         // Resolve the search-in-progress state after a settling window.
         scope.launch {

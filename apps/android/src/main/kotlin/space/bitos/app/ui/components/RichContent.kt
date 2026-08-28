@@ -65,6 +65,10 @@ import java.net.URL
 fun RichText(
     tokens: List<RichToken>,
     modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    /** APP-005 Show more/less: reports whether the body overflowed the
+     * [maxLines] clamp (only meaningful with a finite limit). */
+    onOverflow: ((Boolean) -> Unit)? = null,
     onOpenProfile: ((String) -> Unit)? = null,
     onOpenHashtag: ((String) -> Unit)? = null,
 ) {
@@ -111,6 +115,9 @@ fun RichText(
         annotated,
         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(color = BitOSColors.textPrimary),
         modifier = modifier,
+        maxLines = maxLines,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+        onTextLayout = { result -> onOverflow?.invoke(result.hasVisualOverflow) },
     )
 }
 

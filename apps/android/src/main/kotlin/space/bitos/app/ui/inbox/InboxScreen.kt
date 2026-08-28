@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +55,7 @@ import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.feed.CommentContent
 import space.bitos.app.ui.feed.HomeViewModel
+import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
@@ -90,6 +92,8 @@ fun InboxScreen(
     homeViewModel: HomeViewModel,
     notePublisher: NotePublisher,
     authorRepository: AuthorRepository,
+    /** APP-018 privacy: `show` renders NIP-36 media directly (no cover). */
+    sensitiveShowByDefault: Boolean = false,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val state by notifications.state.collectAsStateWithLifecycle()
@@ -98,6 +102,8 @@ fun InboxScreen(
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(NotificationTab.ALL) }
     var activity by rememberSaveable { mutableStateOf(NotificationActivity.NONE) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
     var muteMenu by remember { mutableStateOf(false) }
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
     var authorTarget by remember { mutableStateOf<String?>(null) }
@@ -167,6 +173,13 @@ fun InboxScreen(
                 message = "Create or import a key (You tab) to see replies, mentions, reactions, reposts and zaps addressed to you.",
             )
             else -> {
+                // APP-012 search row: name/content contains over the shared rule.
+                NotificationSearchRow(
+                    query = query,
+                    onQueryChange = { query = it },
+                    expanded = searchOpen,
+                    onToggle = { searchOpen = !searchOpen || query.isNotEmpty() },
+                )
                 InboxTabs(
                     state = state,
                     selected = tab,
@@ -175,10 +188,16 @@ fun InboxScreen(
                 ActivityChips(selected = activity, onSelect = { chip ->
                     activity = if (activity == chip) NotificationActivity.NONE else chip
                 })
-                val filtered = remember(state.items, state.readIds, tab, activity) {
+                val filtered = remember(state.items, state.readIds, tab, activity, query, feedState.profiles, feedState.blocked) {
                     state.items.filter { item ->
-                        NotificationFilters.tabMatches(item.kind, tab, isRead = item.id in state.readIds) &&
-                            NotificationFilters.activityMatches(item.kind, activity)
+                        item.authorPubkey !in feedState.blocked && // APP-012 blocked-author filtering (kind-10004 head)
+                            NotificationFilters.tabMatches(item.kind, tab, isRead = item.id in state.readIds) &&
+                            NotificationFilters.activityMatches(item.kind, activity) &&
+                            NotificationFilters.queryMatches(
+                                item,
+                                query,
+                                feedState.profiles[item.authorPubkey]?.bestDisplayName,
+                            )
                     }
                 }
                 // Fetch previews for whatever targets are visible.
@@ -197,12 +216,17 @@ fun InboxScreen(
                 } else if (filtered.isEmpty()) {
                     InboxPlaceholder(
                         title = "Nothing in this filter",
-                        message = "Switch tabs or clear the activity chips to see all notifications.",
+                        message = if (query.isNotBlank()) {
+                            "No notifications match “${query.trim()}”. Clear the search or switch tabs to see more."
+                        } else {
+                            "Switch tabs or clear the activity chips to see all notifications."
+                        },
                     )
                 } else {
                     GroupedNotificationList(
                         filtered = filtered,
                         state = state,
+                        sensitiveShowByDefault = sensitiveShowByDefault,
                         onMarkRead = notifications::markRead,
                         onOpenThread = { note -> threadTarget = note },
                         onOpenAuthor = { pubkey -> authorTarget = pubkey },
@@ -310,6 +334,7 @@ private fun ActivityChips(selected: NotificationActivity, onSelect: (Notificatio
 private fun GroupedNotificationList(
     filtered: List<NotificationItem>,
     state: NotificationUiState,
+    sensitiveShowByDefault: Boolean,
     onMarkRead: (List<String>) -> Unit,
     onOpenThread: (FeedNote) -> Unit,
     onOpenAuthor: (String) -> Unit,
@@ -335,6 +360,7 @@ private fun GroupedNotificationList(
                         group = group,
                         isRead = group.itemIds.all { it in state.readIds },
                         origin = group.targetEventId?.let { state.origins[it] },
+                        sensitiveShowByDefault = sensitiveShowByDefault,
                         onMarkRead = { onMarkRead(group.itemIds) },
                         onOpen = {
                             val originReady = group.targetEventId
@@ -408,6 +434,7 @@ private fun NotificationGroupRow(
     group: NotificationGroup,
     isRead: Boolean,
     origin: OriginNoteState?,
+    sensitiveShowByDefault: Boolean,
     onMarkRead: () -> Unit,
     onOpen: () -> Unit,
     onShowRaw: () -> Unit,
@@ -444,7 +471,7 @@ private fun NotificationGroupRow(
                         maxLines = 2,
                     )
                 }
-                OriginPreview(origin, group)
+                OriginPreview(origin, group, sensitiveShowByDefault)
                 Text(
                     formatTimeAgo(group.newestAt, System.currentTimeMillis() / 1000) +
                         if (group.itemIds.size > 1) " · ${group.itemIds.size}" else "",
@@ -500,8 +527,56 @@ private fun AvatarStack(group: NotificationGroup) {
     }
 }
 
+/** APP-012 expandable search row (name/content; shared predicate applies). */
 @Composable
-private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup) {
+private fun NotificationSearchRow(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.screen)
+            .padding(bottom = BitOSSpacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        androidx.compose.material3.IconButton(onClick = onToggle) {
+            Icon(
+                AppIcons.Search,
+                contentDescription = if (expanded) "Close search" else "Search notifications",
+                tint = if (query.isNotEmpty() || expanded) BitOSColors.primary else BitOSColors.textSecondary,
+            )
+        }
+        if (expanded) {
+            androidx.compose.material3.OutlinedTextField(
+                value = query,
+                onValueChange = { onQueryChange(it.take(NotificationFilters.QUERY_MAX)) },
+                placeholder = { Text("Search names and notes…") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        } else if (query.isNotEmpty()) {
+            Text(
+                "“${query.trim()}”",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.primary,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (query.isNotEmpty()) {
+            androidx.compose.material3.TextButton(onClick = { onQueryChange("") }) {
+                Text("Clear", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup, sensitiveShowByDefault: Boolean) {
     val state = origin ?: return
     when (state) {
         is OriginNoteState.Loading -> Text(
@@ -516,8 +591,16 @@ private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup) {
             color = BitOSColors.textTertiary,
             maxLines = 1,
         )
-        is OriginNoteState.Ready -> Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state.note.kind == 22 || state.note.thumbUrl != null) {
+        is OriginNoteState.Ready -> {
+            var revealed by remember(state.note.id) { mutableStateOf(false) }
+            var lightboxUrl by remember(state.note.id) { mutableStateOf<String?>(null) }
+            lightboxUrl?.let { url ->
+                androidx.compose.ui.window.Dialog(onDismissRequest = { lightboxUrl = null }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+                    MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state.note.kind == 22 || (state.note.thumbUrl != null && state.note.mediaUrls.isEmpty())) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = BitOSColors.surfaceOverlay,
@@ -543,6 +626,52 @@ private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup) {
                     color = BitOSColors.textSecondary,
                     maxLines = 2,
                 )
+                // APP-012 media strip: ≤4 16:9 tiles behind a NIP-36 cover
+                // (the APP-018 sensitive-media default gates it).
+                if (state.note.mediaUrls.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    if (state.note.contentWarning && !revealed && !sensitiveShowByDefault) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = BitOSColors.surfaceOverlay,
+                            modifier = Modifier
+                                .clickable(onClickLabel = "Reveal sensitive media") { revealed = true },
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    AppIcons.Photo,
+                                    contentDescription = null,
+                                    tint = BitOSColors.textTertiary,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                                Text(
+                                    "Sensitive content — tap to reveal",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textTertiary,
+                                )
+                            }
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            state.note.mediaUrls.forEach { url ->
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = BitOSColors.surfaceOverlay,
+                                    modifier = Modifier
+                                        .size(width = 56.dp, height = 32.dp)
+                                        .clickable(onClickLabel = "Open media") { lightboxUrl = url },
+                                ) {
+                                    space.bitos.app.ui.feed.PosterImage(url = url, modifier = Modifier.fillMaxSize())
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
                 Text(
                     shortPubkey(state.note.authorPubkey) + " · " + formatTimeAgo(state.note.createdAt, System.currentTimeMillis() / 1000),
                     style = MaterialTheme.typography.labelSmall,
@@ -550,6 +679,7 @@ private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup) {
                     maxLines = 1,
                 )
             }
+        }
         }
     }
 }

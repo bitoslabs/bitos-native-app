@@ -76,6 +76,7 @@ class BusinessCoreBridgeTest {
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)
         assertTrue(profileRequest.contains(""""authors":[""" + "\"" + "a".repeat(64)), profileRequest)
+        assertTrue(profileRequest.contains(""""limit":1"""), profileRequest)
     }
 
     @Test

@@ -4,21 +4,19 @@ import SwiftUI
 struct BitOSApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var settings = SettingsStore()
-    /// Branded boot splash (legacy Flutter main.dart parity): holds while the
-    /// feed/environment hydrate under it, then fades out to the product shell.
-    @State private var bootDone = false
 
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                RootView()
-                    .environment(environment)
-                    .environment(settings)
-                if !bootDone {
-                    BootSplashScreen { bootDone = true }
-                        .zIndex(1)
-                }
-            }
+            // Fast access (user decision 2026-08-28): the native launch
+            // screen hands off straight into the product shell — the branded
+            // BootSplashScreen is disabled at app entry (component retained,
+            // APP-022).
+            RootView()
+                .environment(environment)
+                .environment(settings)
+                .environment(environment.relayManager)
+                .environment(environment.algorithmStore)
+                .environment(environment.privacyPrefs)
         }
     }
 }

@@ -4,6 +4,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Bookmark
@@ -72,6 +73,7 @@ object AppIcons {
     val Send = Icons.AutoMirrored.Rounded.Send  // Solar: plain
     val Pen = Icons.Rounded.Edit                 // compose / new note (Solar: pen)
     val Refresh = Icons.Rounded.Refresh         // Solar: refresh
+    val ArrowUp = Icons.Rounded.ArrowUpward      // new-notes reveal (X parity)
     val Add = Icons.Rounded.Add                 // Solar: addCircle
     val Search = Icons.Rounded.Search
     val Filter = Icons.Rounded.Tune             // feed content filter

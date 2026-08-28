@@ -108,8 +108,10 @@ enum FeedFormat {
 struct PubkeyAvatarView: View {
     let pubkey: String
     var size: CGFloat = 40
+    var label: String? = nil
+    var hasLightning = false
 
     var body: some View {
-        HexAvatarView(pubkey: pubkey, size: size)
+        HexAvatarView(pubkey: pubkey, size: size, label: label, hasLightning: hasLightning)
     }
 }

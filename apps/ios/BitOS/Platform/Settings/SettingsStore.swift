@@ -80,6 +80,17 @@ enum SettingsPlaybackRate: String, CaseIterable, Identifiable {
     var label: String { rawValue + "×" }
 }
 
+enum SettingsSensitiveMedia: String, CaseIterable, Identifiable {
+    case cover, show
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .cover: "Cover by default"
+        case .show: "Show directly"
+        }
+    }
+}
+
 enum SettingsDateFormat: String, CaseIterable, Identifiable {
     case mdy = "MDY", dmy = "DMY", ymd = "YMD"
     var id: String { rawValue }
@@ -125,6 +136,7 @@ struct SettingsState: Equatable {
     var defaultZapAmount = 21
     var timeZone = "auto"
     var dateFormat: SettingsDateFormat = .mdy
+    var sensitiveMedia: SettingsSensitiveMedia = .cover
 }
 
 /**
@@ -169,7 +181,8 @@ final class SettingsStore {
             playbackRate: SettingsPlaybackRate(rawValue: snapshot.videoPlaybackRate) ?? .x1,
             defaultZapAmount: Int(snapshot.defaultZapAmount),
             timeZone: snapshot.timeZone,
-            dateFormat: SettingsDateFormat(rawValue: snapshot.dateFormat) ?? .mdy
+            dateFormat: SettingsDateFormat(rawValue: snapshot.dateFormat) ?? .mdy,
+            sensitiveMedia: SettingsSensitiveMedia(rawValue: snapshot.sensitiveMedia) ?? .cover
         )
     }
 
@@ -193,6 +206,7 @@ final class SettingsStore {
     func set(_ quality: SettingsVideoQuality) { setRaw(quality.rawValue, forKey: "bitos_video_quality") }
     func set(_ rate: SettingsPlaybackRate) { setRaw(rate.rawValue, forKey: "bitos_video_playback_rate") }
     func set(_ format: SettingsDateFormat) { setRaw(format.rawValue, forKey: "bitos_date_format") }
+    func set(_ sensitive: SettingsSensitiveMedia) { setRaw(sensitive.rawValue, forKey: "bitos_sensitive_media") }
 
     /** Accent palette value (`#RRGGBB`); shared rule canonicalizes to uppercase. */
     func setAccentColor(hex: String) { setRaw(hex, forKey: "bitos_accent_color") }

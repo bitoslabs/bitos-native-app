@@ -38,8 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -50,20 +50,29 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 import space.bitos.app.R
 
 /**
- * Branded boot/splash screen — 1:1 port of the legacy Flutter
+ * Branded boot/splash screen — port of the legacy Flutter
  * `BootSplashScreen` (web BootSplash parity): the official lightning-bolt
- * mark inside the shared flat-top hex avatar, breathing + orbit-swept while
- * core services hydrate; PoW segments sweep (web `pow-boot-seg`), official
- * wordmark, status pill. Holds [BootSplashTiming.MIN_DISPLAY] so the brand
- * moment always lands, then fades [BootSplashTiming.FADE_OUT] before the
- * app shell mounts. The native system splash (windowSplashScreen* /
- * launch_background) hands off into this screen — same colors, same mark —
- * so launch reads as one continuous brand moment.
+ * mark inside the shared flat-top hex avatar, breathing inside an
+ * **animated gradient border** while core services hydrate. The border's
+ * gradient stays anchored to the hexagon and its stop colors ripple
+ * Bitcoin-orange ↔ brand yellow in phase-shifted waves — deliberately NOT
+ * the legacy rotating `SweepGradient` orbit, which read as a spinner. PoW
+ * segments sweep (web `pow-boot-seg`), official wordmark, status pill.
+ * Holds [BootSplashTiming.MIN_DISPLAY] so the brand moment always lands,
+ * then fades [BootSplashTiming.FADE_OUT] before the app shell mounts. The
+ * native system splash (windowSplashScreen* / launch_background) hands off
+ * into this screen — same colors, same mark — so launch reads as one
+ * continuous brand moment.
+ *
+ * NOTE: disabled at app entry (fast-access decision 2026-08-28) — the
+ * native system splash hands off straight to the shell. Component is
+ * retained in the library (APP-022) for future branded-loading moments.
  */
 
 /** Pure timing/color contract (JVM-testable, mirrors the Swift/Flutter/web constants). */
@@ -88,6 +97,29 @@ object BootSplashTiming {
     /** Breathing scale: 1 ± 0.02 over the 2s loop. */
     fun breathe(t: Float): Float = 1f + 0.02f * sin(t * 2f * PI.toFloat()).toFloat()
 
+    // ── Animated gradient border (no spin) ──
+
+    /** Number of color stops anchored around the border gradient. */
+    const val BORDER_STOP_COUNT = 3
+
+    /** Smooth 0→1→0 cosine wave over the loop-normalized [t] (continuous at
+     *  the wrap — no hard cut, unlike a rotation). */
+    fun borderWave(t: Float): Float = 0.5f - 0.5f * cos(t * 2f * PI.toFloat()).toFloat()
+
+    /** Wave for border stop [k], phase-shifted by ⅓ loop per stop so hues
+     *  ripple around the *anchored* gradient — stops never move, nothing
+     *  spins; only the colors evolve. */
+    fun borderStopWave(t: Float, k: Int): Float {
+        val phase = t + k / BORDER_STOP_COUNT.toFloat()
+        return borderWave(((phase % 1f) + 1f) % 1f)
+    }
+
+    /** Border stop color at loop time [t]: Bitcoin-orange ↔ brand-yellow
+     *  ripple. [k] wraps modulo [BORDER_STOP_COUNT] so the closing stop
+     *  repeats the opening one (seamless angular join). */
+    fun borderColor(t: Float, k: Int): Color =
+        lerp(ORANGE, YELLOW, borderStopWave(t, k % BORDER_STOP_COUNT))
+
     // Brand palette (web/Flutter parity)
     val ORANGE = Color(0xFFF7931A)
     val YELLOW = Color(0xFFFFD83D)
@@ -105,7 +137,12 @@ fun BootSplashScreen(
     status: String = "Booting BitOS…",
     onDismissed: () -> Unit,
 ) {
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val isDark = true
+    // APP-023: the product shell is dark-only (Theme.kt `darkColorScheme`)
+    // until light tokens ship, so the splash must be dark in BOTH system
+    // modes — a system-light splash handing off into the near-black shell
+    // reads as a jarring "black screen". Drive from the theme setting when
+    // APP-023 lands.
     val bg = if (isDark) BootSplashTiming.BG_DARK else BootSplashTiming.BG_LIGHT
     val dim = if (isDark) Color.White.copy(alpha = 0.45f) else Color.Black.copy(alpha = 0.45f)
 
@@ -163,8 +200,9 @@ fun BootSplashScreen(
     }
 }
 
-/** The bolt mark in the shared hex avatar: surface + orange glow + rotating
- *  sweep-gradient orbit stroke + breathing scale (legacy `_SplashHexAvatar`). */
+/** The bolt mark in the shared hex avatar: surface + orange glow + animated
+ *  gradient border (anchored hue ripple, no rotation) + breathing scale
+ *  (legacy `_SplashHexAvatar`, reworked off the rotating orbit). */
 @Composable
 private fun SplashHexAvatar(progress: Float, isDark: Boolean, size: Dp = 92.dp) {
     val density = LocalDensity.current
@@ -182,32 +220,35 @@ private fun SplashHexAvatar(progress: Float, isDark: Boolean, size: Dp = 92.dp) 
                     ),
                     radius = size.toPx() * 0.72f,
                 )
-                // Orbit: hexagon outline with a rotating sweep gradient
+                // Border geometry (legacy hexPath(size−4).shift(2,2) parity).
                 val px = with(density) { 1.6.dp.toPx() }
                 val hex = hexOutlinePx(Size(this.size.width - 2f * px, this.size.height - 2f * px))
                 hex.translate(Offset(px, px))
-                rotate(degrees = progress * 360f) {
-                    drawPath(
-                        path = hex,
-                        brush = Brush.sweepGradient(
-                            colorStops = arrayOf(
-                                0.0f to BootSplashTiming.ORANGE.copy(alpha = 0.12f),
-                                0.1f to BootSplashTiming.YELLOW.copy(alpha = 0.95f),
-                                0.2f to BootSplashTiming.ORANGE.copy(alpha = 0.12f),
-                                1.0f to BootSplashTiming.ORANGE.copy(alpha = 0.12f),
-                            ),
-                            center = Offset(this.size.width / 2f, this.size.height / 2f),
-                        ),
-                        style = Stroke(width = px, cap = StrokeCap.Round),
-                    )
-                }
+                // Animated gradient border: sweep gradient **anchored** to the
+                // hexagon (no rotate()) whose three stops crossfade orange↔yellow
+                // in phase-shifted waves — the gradient flows along the outline
+                // without ever spinning. Stop 3 repeats stop 0 for a seamless wrap.
+                // (The legacy GradientRotation comet read as a spinner.)
+                drawPath(
+                    path = hex,
+                    brush = Brush.sweepGradient(
+                        colors = List(BootSplashTiming.BORDER_STOP_COUNT + 1) { k ->
+                            BootSplashTiming.borderColor(progress, k % BootSplashTiming.BORDER_STOP_COUNT)
+                        },
+                        center = Offset(this.size.width / 2f, this.size.height / 2f),
+                    ),
+                    style = Stroke(width = px, cap = StrokeCap.Round),
+                )
             },
     ) {
-        // Hex surface with the bolt, padded like the legacy splash (13/92 h, 20/92 v).
+        // Hex surface with the bolt, padded like the legacy splash (13/92 h,
+        // 20/92 v). The 5/92 inset is what exposes the animated border ring:
+        // without it the full-size clip(HexShape()) surface covers the stroke.
         val markSize = size
         Box(
             modifier = Modifier
                 .size(markSize)
+                .padding(markSize * (5f / 92f))
                 .clip(HexShape())
                 .background(if (isDark) BootSplashTiming.SURFACE_DARK else BootSplashTiming.SURFACE_LIGHT)
                 .padding(
@@ -219,10 +260,9 @@ private fun SplashHexAvatar(progress: Float, isDark: Boolean, size: Dp = 92.dp) 
             Image(
                 painter = painterResource(R.drawable.bitos_bolt),
                 contentDescription = "BitOS lightning bolt",
-                modifier = Modifier.size(
-                    width = markSize - markSize * (26f / 92f),
-                    height = markSize - markSize * (40f / 92f),
-                ),
+                // Fill the padded hex interior (56×42 at 92dp) — legacy
+                // SvgPicture fills its ClipPath padding exactly the same way.
+                modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
             )
         }
