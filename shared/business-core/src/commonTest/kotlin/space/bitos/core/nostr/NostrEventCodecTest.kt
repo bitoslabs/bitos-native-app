@@ -167,6 +167,15 @@ class NostrEventCodecTest {
         assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT",7,{}]"""))
         assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT","${"x".repeat(129)}",{}]"""))
     }
+
+    @Test
+    fun parsesOnlyBoundedEoseSubscriptionIds() {
+        // Wire values mirror contracts/nostr/fixtures/pagination-v1.json.
+        assertEquals("bitos-older-1", NostrEventCodec.relayEoseSubscriptionId("""["EOSE","bitos-older-1"]"""))
+        assertNull(NostrEventCodec.relayEoseSubscriptionId("""["EVENT","bitos-older-7",{}]"""))
+        assertNull(NostrEventCodec.relayEoseSubscriptionId("""["EOSE",7]"""))
+        assertNull(NostrEventCodec.relayEoseSubscriptionId("""["EOSE","${"x".repeat(129)}"]"""))
+    }
 }
 
 class RelayUrlTest {

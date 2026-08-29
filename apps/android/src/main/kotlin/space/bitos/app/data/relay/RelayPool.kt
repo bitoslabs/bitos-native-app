@@ -106,6 +106,13 @@ class RelayPool(
         relayOrder.filter { it != primary && it in transports }
     }
 
+    /** Connected read relays at request time, used to aggregate EOSE safely. */
+    fun connectedRelays(): Set<RelayUrl> = synchronized(lock) {
+        relayOrder.filterTo(linkedSetOf()) {
+            transports[it]?.state?.value == RelayConnectionState.CONNECTED
+        }
+    }
+
     fun shutdown() {
         val current = snapshot()
         synchronized(lock) {

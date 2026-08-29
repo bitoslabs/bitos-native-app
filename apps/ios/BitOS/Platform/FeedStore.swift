@@ -65,6 +65,7 @@ final class FeedStore {
     private(set) var isLoadingOlder = false
     /// True once an older page made no progress — pauses until refresh.
     private(set) var noMoreOlder = false
+    var paginationPrefetchThreshold: Int { client.bitzWalkPrefetchThreshold() }
     var localActions = LocalActions()
     private(set) var accountPubkey: String?
     private(set) var followingResolved = false
@@ -164,6 +165,7 @@ final class FeedStore {
     }
 
     func stop() {
+        cancelActiveOlderBatch()
         collectTask?.cancel()
         collectTask = nil
         profileDrainTask?.cancel()
@@ -262,15 +264,16 @@ final class FeedStore {
             return
         }
         guard let oldest = snapshot.map(\.createdAt).min() else { return }
-        guard lane.anchorSeconds != oldest else { return } // same page requested
-        lane.anchorSeconds = oldest
+        if lane.anchorSeconds != oldest {
+            lane.anchorSeconds = oldest
+            lane.cursorSeconds = max(0, oldest - 1)
+        }
+        let cursor = lane.cursorSeconds ?? max(0, oldest - 1)
         olderLanes[timeline] = lane
-        olderKnownIds = Set((olderProgressWindow(for: timeline)?.snapshot() ?? []).map(\.id))
-        olderKnownPlayableIds = Set(snapshot.filter { $0.video != nil }.map(\.id))
-        olderEmptyAttempts = 0
         loadingOlderTimeline = timeline
         syncPaginationState()
-        walkOlder(timeline: timeline, cursor: oldest - 1, batches: 0, budget: client.bitzWalkPageBudget())
+        walkOlder(timeline: timeline, cursor: cursor, batches: 0,
+                  budget: client.bitzWalkPageBudget(), emptyAttempts: 0)
     }
 
     /// Per-tab pagination source: Following walks the follows window.
@@ -278,15 +281,41 @@ final class FeedStore {
         timeline == .following ? followingWindow : window
     }
 
-    /// Generic older requests advance on all returned notes; the Following
-    /// media budget remains scoped to its followed-author window.
-    private func olderProgressWindow(for timeline: FeedTimeline) -> (any FeedWindowing)? {
-        window
-    }
-
     private struct OlderLane {
         var anchorSeconds: Int64?
+        var cursorSeconds: Int64?
         var exhausted = false
+    }
+
+    /** Exact results for one REQ, merged and deduped across parallel relays. */
+    private final class OlderBatch {
+        let timeline: FeedTimeline
+        let subId: String
+        let cursor: Int64
+        let batches: Int
+        let budget: Int
+        let emptyAttempts: Int
+        let expectedRelays: Set<RelayURL>
+        let knownBefore: Set<String>
+        var returnedIds: Set<String> = []
+        var freshIds: Set<String> = []
+        var freshPlayableIds: Set<String> = []
+        var eoseRelays: Set<RelayURL> = []
+        var oldestInBatch: Int64?
+        var timeoutTask: Task<Void, Never>?
+
+        init(timeline: FeedTimeline, subId: String, cursor: Int64, batches: Int,
+             budget: Int, emptyAttempts: Int, expectedRelays: Set<RelayURL>,
+             knownBefore: Set<String>) {
+            self.timeline = timeline
+            self.subId = subId
+            self.cursor = cursor
+            self.batches = batches
+            self.budget = budget
+            self.emptyAttempts = emptyAttempts
+            self.expectedRelays = expectedRelays
+            self.knownBefore = knownBefore
+        }
     }
 
     /// Walk bookkeeping is independent for For You and Following.
@@ -295,61 +324,97 @@ final class FeedStore {
         .following: OlderLane(),
     ]
     private var loadingOlderTimeline: FeedTimeline?
-    private var olderKnownIds: Set<String> = []
-    private var olderKnownPlayableIds: Set<String> = []
-    private var olderEmptyAttempts = 0
+    private var activeOlderBatch: OlderBatch?
 
-    private func walkOlder(timeline: FeedTimeline, cursor: Int64, batches: Int, budget: Int) {
+    private func walkOlder(timeline: FeedTimeline, cursor: Int64, batches: Int,
+                           budget: Int, emptyAttempts: Int) {
         guard batches < Self.walkMaxBatches else {
             finishOlderWalk(timeline)
             return
         }
         olderCounter += 1
         let subId = "bitos-older-\(olderCounter)"
-        let knownBefore = olderKnownIds
-        let playableBefore = olderKnownPlayableIds
-        let request = client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
-        Task { [pool] in await pool.broadcast(request) }
-        Task { [weak self, cursor, batches, budget] in
-            try? await Task.sleep(for: .milliseconds(Self.walkPageMaxWaitMs))
-            guard let self, !Task.isCancelled else { return }
-            guard self.loadingOlderTimeline == timeline else { return } // refresh/retry reset mid-walk
-            guard let source = self.olderSourceWindow(for: timeline),
-                  let progress = self.olderProgressWindow(for: timeline) else { return }
-            let snapshot = source.snapshot()
-            let progressSnapshot = progress.snapshot()
-            let idsNow = Set(progressSnapshot.map(\.id))
-            let playableIdsNow = Set(snapshot.filter { $0.video != nil }.map(\.id))
-            let freshIds = idsNow.subtracting(knownBefore).count
-            let freshPlayable = playableIdsNow.subtracting(playableBefore).count
-            let oldestInBatch = progressSnapshot.map(\.createdAt).min()
-            let nextCursor = min(cursor, oldestInBatch ?? cursor) - 1
-            self.publishState()
-            if freshIds == 0 {
-                self.olderEmptyAttempts += 1
-                // Relay ignoring `until` (no advance) or two empty pages.
-                let stalled = oldestInBatch.map { $0 >= cursor } ?? true
-                if stalled || self.olderEmptyAttempts >= 2 {
-                    var lane = self.olderLanes[timeline] ?? OlderLane()
-                    lane.exhausted = true
-                    self.olderLanes[timeline] = lane
-                    self.finishOlderWalk(timeline)
-                    return
-                }
-            } else {
-                self.olderEmptyAttempts = 0
+        let knownBefore = knownNoteIds
+            .union(window?.snapshot().map(\.id) ?? [])
+            .union(pendingNotes.map(\.id))
+        Task { [weak self, pool] in
+            let expectedRelays = await pool.connectedRelays()
+            guard let self, self.loadingOlderTimeline == timeline else { return }
+            let batch = OlderBatch(
+                timeline: timeline, subId: subId, cursor: cursor, batches: batches,
+                budget: budget, emptyAttempts: emptyAttempts,
+                expectedRelays: expectedRelays, knownBefore: knownBefore
+            )
+            self.activeOlderBatch = batch
+            batch.timeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(Self.walkPageMaxWaitMs))
+                guard !Task.isCancelled else { return }
+                self?.completeOlderBatch(subscriptionId: subId)
             }
-            self.olderKnownIds.formUnion(idsNow)
-            self.olderKnownPlayableIds.formUnion(playableIdsNow)
-            // Budget counts FRESH playable notes; duplicates/text pages
-            // keep walking in the background so the user never strands.
-            let remaining = max(0, budget - freshPlayable)
-            if remaining == 0 || batches + 1 >= Self.walkMaxBatches {
-                self.finishOlderWalk(timeline)
-                return
-            }
-            self.walkOlder(timeline: timeline, cursor: nextCursor, batches: batches + 1, budget: remaining)
+            let request = self.client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
+            await pool.broadcast(request)
         }
+    }
+
+    private func recordOlderEvent(subscriptionId: String?, event: VerifiedEvent, note: FeedNote) {
+        guard let subscriptionId, let batch = activeOlderBatch,
+              batch.subId == subscriptionId else { return }
+        batch.returnedIds.insert(note.id)
+        batch.oldestInBatch = min(batch.oldestInBatch ?? event.createdAt, event.createdAt)
+        if !batch.knownBefore.contains(note.id), batch.freshIds.insert(note.id).inserted,
+           note.video != nil,
+           batch.timeline == .forYou || followingAuthors.contains(event.pubkey) {
+            batch.freshPlayableIds.insert(note.id)
+        }
+    }
+
+    private func recordOlderEose(subscriptionId: String, relay: RelayURL) {
+        guard let batch = activeOlderBatch, batch.subId == subscriptionId else { return }
+        batch.eoseRelays.insert(relay)
+        if !batch.expectedRelays.isEmpty, batch.eoseRelays.isSuperset(of: batch.expectedRelays) {
+            completeOlderBatch(subscriptionId: subscriptionId)
+        }
+    }
+
+    /** Completes one exact subscription batch on all-EOSE or its hard timeout. */
+    private func completeOlderBatch(subscriptionId: String) {
+        guard let batch = activeOlderBatch, batch.subId == subscriptionId else { return }
+        activeOlderBatch = nil
+        batch.timeoutTask?.cancel()
+        Task { [pool, client] in await pool.broadcast(client.close(subscriptionId: batch.subId)) }
+        guard loadingOlderTimeline == batch.timeline else { return }
+
+        let freshCount = batch.freshIds.count
+        let stalled = !batch.returnedIds.isEmpty && freshCount == 0 &&
+            (batch.oldestInBatch == nil || batch.oldestInBatch! >= batch.cursor)
+        if stalled {
+            var lane = olderLanes[batch.timeline] ?? OlderLane()
+            lane.exhausted = true
+            olderLanes[batch.timeline] = lane
+            finishOlderWalk(batch.timeline)
+            return
+        }
+        let nextEmptyAttempts = batch.returnedIds.isEmpty ? batch.emptyAttempts + 1 : 0
+        if nextEmptyAttempts >= 2 {
+            var lane = olderLanes[batch.timeline] ?? OlderLane()
+            lane.exhausted = true
+            olderLanes[batch.timeline] = lane
+            finishOlderWalk(batch.timeline)
+            return
+        }
+        let oldestCursor = batch.oldestInBatch.map { max(0, $0 - 1) } ?? batch.cursor
+        let nextCursor = min(batch.cursor, oldestCursor)
+        var lane = olderLanes[batch.timeline] ?? OlderLane()
+        lane.cursorSeconds = nextCursor
+        olderLanes[batch.timeline] = lane
+        let remaining = max(0, batch.budget - batch.freshPlayableIds.count)
+        if remaining == 0 || batch.batches + 1 >= Self.walkMaxBatches {
+            finishOlderWalk(batch.timeline)
+            return
+        }
+        walkOlder(timeline: batch.timeline, cursor: nextCursor,
+                  batches: batch.batches + 1, budget: remaining,
+                  emptyAttempts: nextEmptyAttempts)
     }
 
     private func finishOlderWalk(_ timeline: FeedTimeline) {
@@ -359,12 +424,17 @@ final class FeedStore {
     }
 
     private func resetOlderLanes() {
+        cancelActiveOlderBatch()
         olderLanes = [.forYou: OlderLane(), .following: OlderLane()]
         loadingOlderTimeline = nil
-        olderKnownIds.removeAll()
-        olderKnownPlayableIds.removeAll()
-        olderEmptyAttempts = 0
         syncPaginationState()
+    }
+
+    private func cancelActiveOlderBatch() {
+        guard let batch = activeOlderBatch else { return }
+        activeOlderBatch = nil
+        batch.timeoutTask?.cancel()
+        Task { [pool, client] in await pool.broadcast(client.close(subscriptionId: batch.subId)) }
     }
 
     private func syncPaginationState() {
@@ -380,6 +450,10 @@ final class FeedStore {
     // the main-actor hop.
 
     private func absorb(_ frame: RelayFrame) {
+        if let subId = client.relayEoseSubscriptionId(message: frame.message) {
+            recordOlderEose(subscriptionId: subId, relay: frame.relay)
+            return
+        }
         guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue) else { return }
 
         if event.kind == 7 || event.kind == 6 {
@@ -426,8 +500,11 @@ final class FeedStore {
         } else if client.isProfileKind(event.kind) {
             absorbProfile(event)
         } else if client.isFeedKind(event.kind) {
-            let fromOlderPage = bridgeFacade().relayEventSubscriptionId(message: frame.message)?
+            let subscriptionId = bridgeFacade().relayEventSubscriptionId(message: frame.message)
+            let fromOlderPage = subscriptionId?
                 .hasPrefix("bitos-older-") == true
+            let note = client.feedNote(from: event)
+            recordOlderEvent(subscriptionId: subscriptionId, event: event, note: note)
             absorbNote(event, fromOlderPage: fromOlderPage)
             persist(event)
         }

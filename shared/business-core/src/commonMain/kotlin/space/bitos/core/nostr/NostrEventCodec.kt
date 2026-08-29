@@ -173,6 +173,24 @@ object NostrEventCodec {
     }
 
     /**
+     * Returns the subscription id for a bounded NIP-01
+     * `["EOSE", <subscription-id>]` frame. Repositories use this only as a
+     * completion signal; it never bypasses event verification.
+     */
+    fun relayEoseSubscriptionId(message: String): String? {
+        if (message.length > NostrLimits.MAX_EVENT_BYTES) return null
+        return try {
+            val array = json.parseToJsonElement(message) as? JsonArray ?: return null
+            if (array.size != 2 || array[0].jsonPrimitive.content != "EOSE") return null
+            val subscription = array[1] as? JsonPrimitive ?: return null
+            if (!subscription.isString) return null
+            subscription.content.takeIf { it.length <= NostrLimits.MAX_SUBSCRIPTION_ID_LENGTH }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Decodes the client-to-relay publish form `["EVENT", event]` — used to
      * verify a frame before sending it (our own notes pass our own gate).
      */

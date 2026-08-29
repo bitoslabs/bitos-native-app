@@ -128,6 +128,7 @@ import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.core.feed.BitzExplore
 import space.bitos.core.feed.BitzSearch
+import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.feed.NoteShare
 import space.bitos.core.identity.NostrKeyCodec
@@ -304,28 +305,35 @@ fun BitzScreen(
     LaunchedEffect(pagerState.settledPage) {
         viewModel.holdNewNotes(pagerState.settledPage != 0)
     }
-    // Player pagination (Flutter `onPageChanged` parity): settle within 2
-    // pages of the active tab's end → one older walk. The walk deepens the
-    // window, so settling again re-triggers naturally on every tab.
-    LaunchedEffect(pagerState.settledPage, playerNotes.size) {
-        if (playerNotes.isNotEmpty() && pagerState.settledPage >= playerNotes.size - 2) {
+    // Prepare the next ten videos before the active tab reaches its edge.
+    LaunchedEffect(
+        pagerState.settledPage,
+        playerNotes.size,
+        state.isLoadingOlder,
+        state.noMoreOlder,
+    ) {
+        if (playerNotes.isNotEmpty() &&
+            !state.noMoreOlder &&
+            pagerState.settledPage >= playerNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
+        ) {
             viewModel.loadOlder()
         }
     }
 
-    // ── Explore paging (shared bounds: 24 + 18/explicit load-more) ────
+    // ── Explore paging (shared bounds: 24 + 10/near-edge reveal) ──────
     val visibleTiles = BitzExplore.visibleCount(loadMoreCount)
     val gridNearEnd by remember {
         derivedStateOf {
             val info = gridState.layoutInfo
             info.totalItemsCount > 0 &&
-                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 6
+                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >=
+                info.totalItemsCount - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         }
     }
-    LaunchedEffect(mode, gridNearEnd, videos.size, visibleTiles, state.noMoreOlder) {
+    LaunchedEffect(mode, gridNearEnd, videos.size, visibleTiles, state.isLoadingOlder, state.noMoreOlder) {
         if (mode == BitzModeSetting.EXPLORE && gridNearEnd) {
             // Grid near its end (Flutter `loadMoreExplore` parity): reveal
-            // the next 18 local tiles when hidden ones remain; when the
+            // the next 10 local tiles when hidden ones remain; when the
             // reveal catches the loaded window, ALSO warm the next relay
             // page so the footer never hits a cold boundary.
             if (BitzExplore.hasMore(videos.size, visibleTiles)) {

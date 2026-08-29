@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "description": "NIP-01 backwards feed pagination and EOSE completion vectors",
+  "cursor": {
+    "headCreatedAt": 1710000300,
+    "firstUntil": 1710000299,
+    "returnedOldestCreatedAt": 1710000000,
+    "nextUntil": 1709999999
+  },
+  "frames": [
+    {
+      "name": "valid-older-eose",
+      "valid": true,
+      "subscriptionId": "bitos-older-1",
+      "message": "[\"EOSE\",\"bitos-older-1\"]"
+    },
+    {
+      "name": "event-is-not-eose",
+      "valid": false,
+      "message": "[\"EVENT\",\"bitos-older-1\",{}]"
+    },
+    {
+      "name": "non-string-subscription",
+      "valid": false,
+      "message": "[\"EOSE\",7]"
+    }
+  ]
+}

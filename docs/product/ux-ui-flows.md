@@ -122,7 +122,8 @@ Acceptance criteria:
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
      -> vertical swipe changes active player lease
-     -> nearing the final buffered Bitz loads older videos for that mode
+     -> ten buffered Bitz remaining starts that mode's older-video query
+     -> parallel relays merge by event id until EOSE; oldest time becomes next cursor
      -> the final page remains visible until the next verified video appends
      -> tap pause; double tap react; hold speed
      -> caption/sound/author/provenance sheets
@@ -139,6 +140,9 @@ UI anatomy:
 - one active audio player; warm next/previous players only;
 - For You and Following paginate independently; exhausting one mode never
   disables loading in the other;
+- Explore reveals ten more tiles per local page and begins relay pagination ten
+  tiles before the loaded edge; Nostr uses the oldest event time as `until`
+  because relay offsets are not portable;
 - Explore prefetches a bounded adjacent poster window so newly revealed rows do
   not wait on full-size image decoding;
 - data-saver/quality indication only when it helps the user.

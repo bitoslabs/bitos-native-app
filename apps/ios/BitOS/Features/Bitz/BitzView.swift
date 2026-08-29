@@ -45,6 +45,10 @@ struct BitzBridgeRules {
         Int(bridge.bitzExploreVisibleCount(loadMoreCount: Int32(clamping: loadMoreCount)))
     }
 
+    func prefetchThreshold() -> Int {
+        Int(bridge.bitzWalkPrefetchThreshold())
+    }
+
     /// Wire seed tags (remix marker + p attribution + human credit) as JSON.
     func remixSeedTagsJson(note: FeedNote, label: String) -> String {
         let relaysData = (try? JSONSerialization.data(withJSONObject: [String]())) ?? Data()
@@ -543,9 +547,10 @@ struct BitzView: View {
                     .id(note.id)
                     .onAppear {
                         topId = topId ?? note.id
-                        // APP-004 pagination (Flutter `onPageChanged` parity):
-                        // settle within 2 pages of the tab's end → older walk.
-                        if index >= playerNotes.count - 2 { environment.feedStore.loadOlder() }
+                        // Prepare the next ten videos before this tab reaches its edge.
+                        if index >= playerNotes.count - rules.prefetchThreshold() {
+                            environment.feedStore.loadOlder()
+                        }
                     }
                 }
             }
@@ -556,6 +561,13 @@ struct BitzView: View {
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .bottom)
         .refreshable { refreshWindow() }
+        .onChange(of: environment.feedStore.isLoadingOlder) { _, loading in
+            guard !loading, !environment.feedStore.noMoreOlder,
+                  let topId,
+                  let index = playerNotes.firstIndex(where: { $0.id == topId }),
+                  index >= playerNotes.count - rules.prefetchThreshold() else { return }
+            environment.feedStore.loadOlder()
+        }
     }
 
     @ViewBuilder
@@ -593,7 +605,8 @@ struct BitzView: View {
                             // reveal the next local page when hidden tiles
                             // remain; when the reveal catches the loaded
                             // window, warm the next relay page too.
-                            if note.id == tiles.last?.id {
+                            let trigger = max(0, tiles.count - rules.prefetchThreshold())
+                            if index == trigger {
                                 if videos.count > visibleCount {
                                     loadMoreCount += 1
                                 } else {
@@ -616,6 +629,15 @@ struct BitzView: View {
                     .onEnded { value in horizontalSwipeEnded(value) }
             )
             .refreshable { refreshWindow() }
+            .onChange(of: environment.feedStore.isLoadingOlder) { _, loading in
+                guard !loading, !environment.feedStore.noMoreOlder,
+                      explorePrefetchStart >= max(0, visibleCount - rules.prefetchThreshold()) else { return }
+                if videos.count > visibleCount {
+                    loadMoreCount += 1
+                } else {
+                    environment.feedStore.loadOlder()
+                }
+            }
             .task(id: prefetchUrls.joined(separator: "|")) {
                 let scale = UIScreen.main.scale
                 let tilePixels = UIScreen.main.bounds.width * scale / 3

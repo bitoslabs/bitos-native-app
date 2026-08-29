@@ -67,15 +67,15 @@ class BitzTest {
         assertTrue(BitzSearch.results("", window, relay).isEmpty())
     }
 
-    // MARK: - Explore paging (spec §3.7: 24 initial + 18 per load-more)
+    // MARK: - Explore paging (spec §3.7: 24 initial + 10 per load-more)
 
     @Test
     fun explorePagesAreTwentyFourInitialThenEighteenEach() {
         assertEquals(BitzExplore.INITIAL_PAGE, BitzExplore.visibleCount(0))
         assertEquals(24, BitzExplore.INITIAL_PAGE)
-        assertEquals(18, BitzExplore.MORE_PAGE)
-        assertEquals(42, BitzExplore.visibleCount(1))
-        assertEquals(60, BitzExplore.visibleCount(2))
+        assertEquals(10, BitzExplore.MORE_PAGE)
+        assertEquals(34, BitzExplore.visibleCount(1))
+        assertEquals(44, BitzExplore.visibleCount(2))
         // Hostile counters clamp instead of overflowing the grid.
         assertEquals(BitzExplore.visibleCount(100), BitzExplore.visibleCount(250))
     }
@@ -176,18 +176,18 @@ class BitzTest {
     @Test
     fun walkStopsAtFreshBudgetOrBatchBound() {
         assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 0))
-        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 17, batchesIssued = 5))
-        // 18 fresh media = one full reveal page → stop.
-        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 18, batchesIssued = 0))
+        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 9, batchesIssued = 5))
+        // 10 fresh media = the next prepared scroll buffer → stop.
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 10, batchesIssued = 0))
         // Batch cap reached → stop even under budget.
         assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 6))
-        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 17, batchesIssued = 6))
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 9, batchesIssued = 6))
     }
 
     @Test
     fun cursorMovesMonotonicallyBackwardOnly() {
         // A relay re-sending newer events must never pull the cursor forward.
-        assertEquals(90, BitzTimelinePolicy.advanceCursor(oldestInBatch = 90, current = 100))
+        assertEquals(89, BitzTimelinePolicy.advanceCursor(oldestInBatch = 90, current = 100))
         assertEquals(90, BitzTimelinePolicy.advanceCursor(oldestInBatch = 120, current = 90))
         // Null batch (nothing arrived) holds the cursor.
         assertEquals(100, BitzTimelinePolicy.advanceCursor(oldestInBatch = null, current = 100))

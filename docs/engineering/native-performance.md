@@ -170,6 +170,15 @@ finishes, counts only newly playable videos toward the Bitz page budget, and
 uses non-video events only to advance the backwards cursor. UI end-of-window
 triggers may repeat safely because repositories reject overlapping walks.
 
+Nostr feed pagination is cursor-based, never offset-based. Each backwards REQ
+is broadcast to the connected read relays in parallel with one subscription
+id. The repository merges that exact subscription's verified events by event
+id, waits for EOSE from the request-time relay set (or the hard deadline), then
+closes the subscription and sets the next `until` to `oldest created_at - 1`.
+Unrelated live arrivals must not influence this cursor. Bitz starts this walk
+with ten loaded items remaining and targets ten fresh playable videos, so the
+next swipe/grid segment is normally ready before the user reaches the edge.
+
 ## 9. State and clean-code rules for fast paths
 
 Fast code is easier to optimize when responsibilities remain explicit:

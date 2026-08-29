@@ -45,8 +45,8 @@ class BitzTabsContractTest {
         // Batch 1 returned only duplicates but moved the cursor → walk on.
         assertFalse(BitzTimelinePolicy.relayStalled(oldestInBatch = 8_000, previousCursor = cursor0, freshCount = 0))
         assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 4, batchesIssued = 1))
-        // Batch 2 reaches the budget → stop; six batches is the hard bound.
-        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 18, batchesIssued = 2))
+        // Batch 2 reaches the ten-item budget → stop; six batches is the hard bound.
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 10, batchesIssued = 2))
         assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 6))
         // Stalled relay (no advance, nothing fresh) terminates instead of looping.
         assertTrue(BitzTimelinePolicy.relayStalled(oldestInBatch = cursor0, previousCursor = cursor0, freshCount = 0))

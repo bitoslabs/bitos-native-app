@@ -174,6 +174,35 @@ class FeedRepositoryTest {
     }
 
     @Test
+    fun olderBatchUsesItsOwnOldestEventAndEoseCompletesWithoutDeadlineWait(): Unit = runBlocking {
+        // Cursor and EOSE wire values mirror pagination-v1.json; signed EVENT
+        // frames remain verbatim verification-vectors.json fixtures.
+        repository.start()
+        // Head is 1710000300, so the first request starts at 1710000299.
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+        repository.loadOlder()
+        withTimeout(2_000) {
+            while (transport.sent.none { it.contains("bitos-older-1") }) kotlinx.coroutines.delay(10)
+        }
+
+        // This exact batch returns an older verified note. EOSE must advance
+        // immediately to oldest-created-at - 1, not wait the four-second
+        // watchdog and not inspect an unrelated global-window boundary.
+        transport.emit(VALID_TEXT_NOTE_MESSAGE.replace("\"sub1\"", "\"bitos-older-1\""))
+        transport.emit("""["EOSE","bitos-older-1"]""")
+
+        withTimeout(2_000) {
+            while (transport.sent.none {
+                    it.contains("bitos-older-2") && it.contains("\"until\":1709999999")
+                }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
+        assertTrue(transport.sent.any { it == """["CLOSE","bitos-older-1"]""" })
+    }
+
+    @Test
     fun dropsSignatureUnverifiedAndUnsignedEvents() = runBlocking {
         val unsigned = """["EVENT","sub1",{"id":"${"0".repeat(64)}","pubkey":"${"aa".repeat(32)}","created_at":1710000900,"kind":1,"tags":[],"content":"unsigned"}]"""
         repository.start()

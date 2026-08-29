@@ -124,6 +124,10 @@ class BusinessCoreBridge {
     fun relayEventSubscriptionId(message: String): String? =
         NostrEventCodec.relayEventSubscriptionId(message)
 
+    /** EOSE subscription id, used to complete parallel-relay page batches early. */
+    fun relayEoseSubscriptionId(message: String): String? =
+        NostrEventCodec.relayEoseSubscriptionId(message)
+
     fun isFeedKind(kind: Int): Boolean = FeedNote.isFeedKind(kind)
 
     /**
@@ -187,7 +191,7 @@ class BusinessCoreBridge {
             space.bitos.core.feed.BitzTimelinePolicy.batchFilters(until),
         )
 
-    /** FED-004 walk bound: page budget counts fresh media only (18). */
+    /** FED-004 walk bound: page budget counts fresh media only. */
     fun bitzWalkPageBudget(): Int = space.bitos.core.feed.BitzTimelinePolicy.PAGE_FRESH_MEDIA_TARGET
 
     // ── Bitz surface (APP-007) ──────────────────────────────────────────
@@ -296,7 +300,7 @@ class BusinessCoreBridge {
         }.toString()
     }
 
-    /** APP-007 Explore window: 24 initially, then 18 per explicit load-more. */
+    /** APP-007 Explore window: 24 initially, then 10 per explicit load-more. */
     fun bitzExploreVisibleCount(loadMoreCount: Int): Int =
         space.bitos.core.feed.BitzExplore.visibleCount(loadMoreCount)
 

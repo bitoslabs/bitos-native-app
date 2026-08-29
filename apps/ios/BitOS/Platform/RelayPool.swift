@@ -135,6 +135,11 @@ actor RelayPool {
         relayOrder.filter { $0 != primary && connections[$0] != nil }
     }
 
+    /// Connected read relays at request time, used to aggregate EOSE safely.
+    func connectedRelays() -> Set<RelayURL> {
+        Set(relayOrder.filter { connections[$0]?.state == .connected })
+    }
+
     func health() -> RelayHealth {
         let states = connections.values.map(\.state)
         return RelayHealth(

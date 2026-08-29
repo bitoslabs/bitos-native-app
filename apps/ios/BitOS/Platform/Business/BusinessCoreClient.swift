@@ -103,6 +103,8 @@ protocol BusinessCoreClient: Sendable {
     /// Returns nil for malformed frames, size-bound violations, ID hash
     /// mismatches and unsigned events.
     func decodeVerifiedEvent(message: String, relay: String?) -> VerifiedEvent?
+    /// Bounded NIP-01 EOSE subscription id; nil for every other frame.
+    func relayEoseSubscriptionId(message: String) -> String?
 
     func isFeedKind(_ kind: Int) -> Bool
     func isProfileKind(_ kind: Int) -> Bool
@@ -116,6 +118,8 @@ protocol BusinessCoreClient: Sendable {
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String
     /// FED-004 walk budget: fresh playable notes one load-more targets.
     func bitzWalkPageBudget() -> Int
+    /// FED-004 near-edge buffer that starts the next walk.
+    func bitzWalkPrefetchThreshold() -> Int
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
     func feedRequest(subscriptionId: String) -> String
@@ -154,6 +158,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         )
     }
 
+    func relayEoseSubscriptionId(message: String) -> String? {
+        bridge.relayEoseSubscriptionId(message: message)
+    }
+
     func isFeedKind(_ kind: Int) -> Bool {
         bridge.isFeedKind(kind: Int32(kind))
     }
@@ -181,6 +189,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func bitzWalkPageBudget() -> Int {
         Int(bridge.bitzWalkPageBudget())
+    }
+
+    func bitzWalkPrefetchThreshold() -> Int {
+        Int(bridge.bitzWalkPrefetchThreshold())
     }
 
     func profile(from event: VerifiedEvent) -> ProfileMetadata? {
@@ -386,6 +398,13 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func decodeVerifiedEvent(message: String, relay: String?) -> VerifiedEvent? {
         FrameworkBusinessCoreClient().decodeVerifiedEvent(message: message, relay: relay)
     }
+    func relayEoseSubscriptionId(message: String) -> String? {
+        guard let data = message.data(using: .utf8),
+              let frame = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              frame.count == 2,
+              frame[0] as? String == "EOSE" else { return nil }
+        return frame[1] as? String
+    }
 
     func isFeedKind(_ kind: Int) -> Bool { kind == 1 || kind == 21 || kind == 22 }
     func isProfileKind(_ kind: Int) -> Bool { kind == 0 }
@@ -395,7 +414,8 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func emptyFeedRetryDelayMs(attempt: Int) -> Int { 2_000 }
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }
-    func bitzWalkPageBudget() -> Int { 18 }
+    func bitzWalkPageBudget() -> Int { 10 }
+    func bitzWalkPrefetchThreshold() -> Int { 10 }
     func profile(from event: VerifiedEvent) -> ProfileMetadata? { nil }
     func feedNote(from event: VerifiedEvent) -> FeedNote {
         FeedNote(id: event.id, pubkey: event.pubkey, content: event.content,

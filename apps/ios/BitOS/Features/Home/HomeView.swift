@@ -631,7 +631,7 @@ struct HomeView: View {
                                 listAtTop = true
                                 store.holdNewNotes(false)
                             }
-                            if index >= notes.count - 6 { store.loadOlder() }
+                            if index >= notes.count - store.paginationPrefetchThreshold { store.loadOlder() }
                         }
                         .onDisappear {
                             if index == 0 {
@@ -681,7 +681,7 @@ struct HomeView: View {
                         .onAppear {
                             // APP-004 pagination: settle near the end → fetch
                             // one older page.
-                            if index >= notes.count - 3 { store.loadOlder() }
+                            if index >= notes.count - store.paginationPrefetchThreshold { store.loadOlder() }
                         }
                 }
             }

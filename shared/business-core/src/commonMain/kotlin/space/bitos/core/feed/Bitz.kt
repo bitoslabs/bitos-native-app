@@ -68,13 +68,13 @@ object BitzSearch {
 }
 
 /**
- * Explore-grid paging (spec §3.7): 24 initial tiles, 18 per load-more,
+ * Explore-grid paging (spec §3.7): 24 initial tiles, 10 per load-more,
  * sliced client-side from the bounded feed window (cap 200 — the window
  * bound is documented beside its owner, FeedRepository/FeedStore).
  */
 object BitzExplore {
     const val INITIAL_PAGE = 24
-    const val MORE_PAGE = 18
+    const val MORE_PAGE = 10
 
     /** Tiles visible after [loadMoreCount] load-more rounds (bounded arithmetic). */
     fun visibleCount(loadMoreCount: Int): Int =
@@ -132,8 +132,8 @@ object BitzTimelinePolicy {
     const val MEDIA_PAGE_LIMIT = 60
     const val TEXT_PAGE_LIMIT = 150
 
-    /** One load-more targets one full Explore reveal page of NEW media. */
-    const val PAGE_FRESH_MEDIA_TARGET = 18
+    /** One load-more keeps the next ten NEW media items ready. */
+    const val PAGE_FRESH_MEDIA_TARGET = 10
 
     /** Walk bound: 6 batches × [PAGE_MAX_WAIT_MS] is the worst-case latency. */
     const val MAX_QUERY_BATCHES = 6
@@ -142,13 +142,13 @@ object BitzTimelinePolicy {
     const val PAGE_MAX_WAIT_MS = 4_000L
 
     /** Prefetch when this few loaded-but-unrendered reels remain buffered. */
-    const val PREFETCH_BUFFER_THRESHOLD = 6
+    const val PREFETCH_BUFFER_THRESHOLD = 10
 
     /** Player render-window growth per near-edge trigger. */
     const val RENDER_BATCH = 5
 
-    /** Cursor is `oldestEventCreatedAt - 1` (`until` is exclusive). */
-    fun cursor(oldestCreatedAt: Long): Long = oldestCreatedAt - 1
+    /** Cursor is `oldestEventCreatedAt - 1`, avoiding a repeated boundary second. */
+    fun cursor(oldestCreatedAt: Long): Long = (oldestCreatedAt - 1).coerceAtLeast(0)
 
     fun initialFilters(): List<String> = listOf(
         """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_INITIAL_LIMIT}""",
@@ -169,7 +169,7 @@ object BitzTimelinePolicy {
      * re-sending newer events must never move the walk forward.
      */
     fun advanceCursor(oldestInBatch: Long?, current: Long): Long =
-        if (oldestInBatch == null) current else minOf(oldestInBatch, current)
+        if (oldestInBatch == null) current else minOf(cursor(oldestInBatch), current)
 
     /**
      * A relay that returns events but neither advances the cursor nor

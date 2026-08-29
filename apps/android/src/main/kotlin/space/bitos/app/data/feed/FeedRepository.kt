@@ -141,12 +141,33 @@ class FeedRepository(
     private var olderCounter = 0
     private data class OlderLane(
         var anchorSeconds: Long? = null,
+        var cursorSeconds: Long? = null,
         var exhausted: Boolean = false,
+    )
+
+    /** Exact results for one REQ, merged and deduped across parallel relays. */
+    private data class OlderBatch(
+        val timeline: FeedTimeline,
+        val subId: String,
+        val cursor: Long,
+        val batches: Int,
+        val freshMedia: Int,
+        val emptyAttempts: Int,
+        val expectedRelays: Set<RelayUrl>,
+        val knownBefore: Set<String>,
+        val returnedIds: MutableSet<String> = linkedSetOf(),
+        val freshIds: MutableSet<String> = linkedSetOf(),
+        val freshPlayableIds: MutableSet<String> = linkedSetOf(),
+        val eoseRelays: MutableSet<RelayUrl> = linkedSetOf(),
+        var oldestInBatch: Long? = null,
+        var timeoutJob: Job? = null,
     )
 
     /** Pagination is independent per For You / Following window. */
     private val olderLanes = FeedTimeline.entries.associateWith { OlderLane() }.toMutableMap()
     private var loadingOlderTimeline: FeedTimeline? = null
+    private val olderBatchLock = Any()
+    private var activeOlderBatch: OlderBatch? = null
 
     fun start() {
         if (collectJob != null) return
@@ -154,6 +175,11 @@ class FeedRepository(
         pool.start()
         collectJob = scope.launch {
             pool.frames.collect { frame ->
+                NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
+                    recordOlderEose(subId, frame.relay)
+                    return@collect
+                }
+                val relaySubscriptionId = NostrEventCodec.relayEventSubscriptionId(frame.message)
                 val event = runCatching {
                     NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
                 }.getOrNull() ?: return@collect
@@ -175,11 +201,15 @@ class FeedRepository(
                         // APP-009: kind-7 reactions tally per thread note.
                         tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
                     }
-                    FeedNote.isFeedKind(event.kind) -> absorbNote(
-                        event,
-                        fromOlderPage = NostrEventCodec.relayEventSubscriptionId(frame.message)
-                            ?.startsWith(OLDER_SUBSCRIPTION_PREFIX) == true,
-                    )
+                    FeedNote.isFeedKind(event.kind) -> {
+                        val note = FeedNote.from(event)
+                        recordOlderEvent(relaySubscriptionId, event, note)
+                        absorbNote(
+                            event,
+                            fromOlderPage = relaySubscriptionId
+                                ?.startsWith(OLDER_SUBSCRIPTION_PREFIX) == true,
+                        )
+                    }
                 }
             }
         }
@@ -203,6 +233,7 @@ class FeedRepository(
     }
 
     fun stop() {
+        cancelActiveOlderBatch()
         pool.broadcast(NostrEventCodec.encodeClose(subscriptionId()))
         collectJob?.cancel()
         collectJob = null
@@ -242,8 +273,10 @@ class FeedRepository(
         mutableState.value = mutableState.value.copy(isLoading = true, noMoreOlder = false)
         olderLanes.values.forEach {
             it.anchorSeconds = null
+            it.cursorSeconds = null
             it.exhausted = false
         }
+        cancelActiveOlderBatch()
         loadingOlderTimeline = null
         subscribe()
     }
@@ -255,8 +288,10 @@ class FeedRepository(
         mutableState.value = mutableState.value.copy(noMoreOlder = false)
         olderLanes.values.forEach {
             it.anchorSeconds = null
+            it.cursorSeconds = null
             it.exhausted = false
         }
+        cancelActiveOlderBatch()
         loadingOlderTimeline = null
         subscribe()
     }
@@ -285,13 +320,16 @@ class FeedRepository(
             return
         }
         val oldest = snapshot.minOf { it.createdAt }
-        if (oldest == lane.anchorSeconds) return // same page requested already
-        lane.anchorSeconds = oldest
+        if (oldest != lane.anchorSeconds) {
+            lane.anchorSeconds = oldest
+            lane.cursorSeconds = BitzTimelinePolicy.cursor(oldest)
+        }
+        val cursor = lane.cursorSeconds ?: BitzTimelinePolicy.cursor(oldest)
         loadingOlderTimeline = timeline
         publishState()
         walkOlder(
             timeline = timeline,
-            cursor = BitzTimelinePolicy.cursor(oldest),
+            cursor = cursor,
             batches = 0,
             freshMedia = 0,
             emptyAttempts = 0,
@@ -301,10 +339,6 @@ class FeedRepository(
     /** Per-tab pagination source: Following walks the follows window. */
     private fun windowFor(timeline: FeedTimeline): FeedAggregator =
         if (timeline == FeedTimeline.FOLLOWING) followingWindow else aggregator
-
-    /** Generic older REQs advance on every returned feed event; the Following
-     * media budget still counts only notes from the followed-author window. */
-    private fun progressWindowFor(timeline: FeedTimeline): FeedAggregator = aggregator
 
     private fun walkOlder(
         timeline: FeedTimeline,
@@ -317,53 +351,99 @@ class FeedRepository(
             finishOlderWalk(timeline)
             return
         }
-        val progressBefore = progressWindowFor(timeline).snapshot()
-        val idsBefore = progressBefore.mapTo(HashSet(progressBefore.size)) { it.id }
-        val playableBefore = windowFor(timeline).snapshot()
-        val playableIdsBefore = playableBefore.asSequence().filter { it.video != null }.mapTo(HashSet()) { it.id }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
+        val knownBefore = HashSet<String>(knownNoteIds.size + pendingNotes.size).apply {
+            addAll(knownNoteIds)
+            addAll(pendingNotes.map { it.id })
+            addAll(aggregator.snapshot().map { it.id })
+        }
+        val batch = OlderBatch(
+            timeline = timeline,
+            subId = subId,
+            cursor = cursor,
+            batches = batches,
+            freshMedia = freshMedia,
+            emptyAttempts = emptyAttempts,
+            expectedRelays = pool.connectedRelays(),
+            knownBefore = knownBefore,
+        )
+        synchronized(olderBatchLock) { activeOlderBatch = batch }
+        batch.timeoutJob = scope.launch {
+            delay(BitzTimelinePolicy.PAGE_MAX_WAIT_MS)
+            completeOlderBatch(subId)
+        }
         pool.broadcast(
             NostrEventCodec.encodeRequest(subId, BitzTimelinePolicy.batchFilters(cursor)),
         )
-        scope.launch {
-            delay(BitzTimelinePolicy.PAGE_MAX_WAIT_MS)
-            // Whatever landed by the deadline decides the next step.
-            if (loadingOlderTimeline != timeline) return@launch
-            val progressWindow = progressWindowFor(timeline).snapshot()
-            val freshIds = progressWindow.count { it.id !in idsBefore }
-            val oldestInBatch = progressWindow.minOfOrNull { it.createdAt }
-            val nextCursor = BitzTimelinePolicy.advanceCursor(oldestInBatch, cursor)
-            val playableWindow = windowFor(timeline).snapshot()
-            val freshPlayable = playableWindow.count { it.video != null && it.id !in playableIdsBefore }
-            when {
-                // Relay ignoring `until` → stop instead of loop.
-                BitzTimelinePolicy.relayStalled(oldestInBatch, cursor, freshIds) -> {
-                    olderLanes.getValue(timeline).exhausted = true
-                    finishOlderWalk(timeline)
-                }
-                // Fresh ids but no playable video yet → same trigger the
-                // Flutter controller has: keep walking in the background
-                // so a swipe near the end never strands the user.
-                freshIds > 0 && freshPlayable == 0 &&
-                    BitzTimelinePolicy.shouldContinue(freshMedia, batches + 1) -> {
-                    walkOlder(timeline, nextCursor, batches + 1, freshMedia, emptyAttempts)
-                }
-                else -> {
-                    var nextEmptyAttempts = emptyAttempts
-                    if (freshIds == 0) {
-                        nextEmptyAttempts += 1
-                        if (nextEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
-                            // Two empty pages: relays hold nothing older now.
-                            olderLanes.getValue(timeline).exhausted = true
-                            finishOlderWalk(timeline)
-                            return@launch
-                        }
-                    }
-                    walkOlder(timeline, nextCursor, batches + 1, freshMedia + freshPlayable, nextEmptyAttempts)
-                }
+    }
+
+    private fun recordOlderEvent(subscriptionId: String?, event: NostrEvent, note: FeedNote) {
+        if (subscriptionId == null) return
+        synchronized(olderBatchLock) {
+            val batch = activeOlderBatch?.takeIf { it.subId == subscriptionId } ?: return
+            batch.returnedIds += note.id
+            batch.oldestInBatch = minOf(batch.oldestInBatch ?: event.createdAt, event.createdAt)
+            if (note.id !in batch.knownBefore && batch.freshIds.add(note.id) &&
+                note.video != null &&
+                (batch.timeline == FeedTimeline.FOR_YOU || event.pubkey.value in followingAuthors)
+            ) {
+                batch.freshPlayableIds += note.id
             }
         }
+    }
+
+    private fun recordOlderEose(subscriptionId: String, relay: RelayUrl) {
+        val complete = synchronized(olderBatchLock) {
+            val batch = activeOlderBatch?.takeIf { it.subId == subscriptionId } ?: return
+            batch.eoseRelays += relay
+            batch.expectedRelays.isNotEmpty() && batch.eoseRelays.containsAll(batch.expectedRelays)
+        }
+        if (complete) completeOlderBatch(subscriptionId)
+    }
+
+    /** Completes one exact subscription batch on all-EOSE or its hard timeout. */
+    private fun completeOlderBatch(subscriptionId: String) {
+        val batch = synchronized(olderBatchLock) {
+            activeOlderBatch?.takeIf { it.subId == subscriptionId }?.also { activeOlderBatch = null }
+        } ?: return
+        batch.timeoutJob?.cancel()
+        pool.broadcast(NostrEventCodec.encodeClose(batch.subId))
+        if (loadingOlderTimeline != batch.timeline) return
+
+        val freshIds = batch.freshIds.size
+        val freshPlayable = batch.freshPlayableIds.size
+        val nextCursor = BitzTimelinePolicy.advanceCursor(batch.oldestInBatch, batch.cursor)
+        olderLanes.getValue(batch.timeline).cursorSeconds = nextCursor
+        val stalled = batch.returnedIds.isNotEmpty() &&
+            BitzTimelinePolicy.relayStalled(batch.oldestInBatch, batch.cursor, freshIds)
+        if (stalled) {
+            olderLanes.getValue(batch.timeline).exhausted = true
+            finishOlderWalk(batch.timeline)
+            return
+        }
+
+        val nextEmptyAttempts = if (batch.returnedIds.isEmpty()) batch.emptyAttempts + 1 else 0
+        if (nextEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
+            olderLanes.getValue(batch.timeline).exhausted = true
+            finishOlderWalk(batch.timeline)
+            return
+        }
+        walkOlder(
+            timeline = batch.timeline,
+            cursor = nextCursor,
+            batches = batch.batches + 1,
+            freshMedia = batch.freshMedia + freshPlayable,
+            emptyAttempts = nextEmptyAttempts,
+        )
+    }
+
+    private fun cancelActiveOlderBatch() {
+        val batch = synchronized(olderBatchLock) {
+            activeOlderBatch.also { activeOlderBatch = null }
+        } ?: return
+        batch.timeoutJob?.cancel()
+        pool.broadcast(NostrEventCodec.encodeClose(batch.subId))
     }
 
     private fun finishOlderWalk(timeline: FeedTimeline) {

@@ -87,6 +87,7 @@ import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.core.feed.FeedFilter
+import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarFeedIcon
@@ -203,8 +204,10 @@ fun FeedScreen(
     }
     // APP-004 pagination: near the end of the active surface, fetch one
     // older page (the repository guards in-flight + exhausted requests).
-    LaunchedEffect(videoOnly, pagerState.settledPage, feedNotes.size) {
-        if (videoOnly && feedNotes.isNotEmpty() && pagerState.settledPage >= feedNotes.size - 3) {
+    LaunchedEffect(videoOnly, pagerState.settledPage, feedNotes.size, state.isLoadingOlder, state.noMoreOlder) {
+        if (videoOnly && feedNotes.isNotEmpty() && !state.noMoreOlder &&
+            pagerState.settledPage >= feedNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
+        ) {
             viewModel.loadOlder()
         }
     }
@@ -212,11 +215,12 @@ fun FeedScreen(
         derivedStateOf {
             val info = listState.layoutInfo
             info.totalItemsCount > 0 &&
-                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 6
+                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >=
+                info.totalItemsCount - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         }
     }
-    LaunchedEffect(listNearEnd) {
-        if (!videoOnly && listNearEnd) viewModel.loadOlder()
+    LaunchedEffect(listNearEnd, state.isLoadingOlder, state.noMoreOlder) {
+        if (!videoOnly && listNearEnd && !state.noMoreOlder) viewModel.loadOlder()
     }
     // APP-003/APP-004: re-tap on the active shell tab scrolls to top; a
     // re-tap while already at top refreshes (X/Instagram pattern).
