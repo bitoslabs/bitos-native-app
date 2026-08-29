@@ -548,7 +548,10 @@ struct BitzView: View {
                     .onAppear {
                         topId = topId ?? note.id
                         // Prepare the next ten videos before this tab reaches its edge.
-                        if index >= playerNotes.count - rules.prefetchThreshold() {
+                        let threshold = environment.feedStore.paginationPrefetchThreshold
+                        if index >= playerNotes.count - threshold,
+                           !environment.feedStore.isLoadingOlder,
+                           !environment.feedStore.noMoreOlder {
                             environment.feedStore.loadOlder()
                         }
                     }
@@ -565,7 +568,7 @@ struct BitzView: View {
             guard !loading, !environment.feedStore.noMoreOlder,
                   let topId,
                   let index = playerNotes.firstIndex(where: { $0.id == topId }),
-                  index >= playerNotes.count - rules.prefetchThreshold() else { return }
+                  index >= playerNotes.count - environment.feedStore.paginationPrefetchThreshold else { return }
             environment.feedStore.loadOlder()
         }
     }
@@ -601,15 +604,13 @@ struct BitzView: View {
                         )
                         .onAppear {
                             explorePrefetchStart = max(explorePrefetchStart, index + 1)
-                            // Grid edge (Flutter `loadMoreExplore` parity):
-                            // reveal the next local page when hidden tiles
-                            // remain; when the reveal catches the loaded
-                            // window, warm the next relay page too.
-                            let trigger = max(0, tiles.count - rules.prefetchThreshold())
+                            let threshold = environment.feedStore.paginationPrefetchThreshold
+                            let trigger = max(0, tiles.count - threshold)
                             if index == trigger {
                                 if videos.count > visibleCount {
                                     loadMoreCount += 1
-                                } else {
+                                } else if !environment.feedStore.isLoadingOlder,
+                                          !environment.feedStore.noMoreOlder {
                                     environment.feedStore.loadOlder()
                                 }
                             }
@@ -631,14 +632,14 @@ struct BitzView: View {
             .refreshable { refreshWindow() }
             .onChange(of: environment.feedStore.isLoadingOlder) { _, loading in
                 guard !loading, !environment.feedStore.noMoreOlder,
-                      explorePrefetchStart >= max(0, visibleCount - rules.prefetchThreshold()) else { return }
+                      explorePrefetchStart >= max(0, visibleCount - environment.feedStore.paginationPrefetchThreshold) else { return }
                 if videos.count > visibleCount {
                     loadMoreCount += 1
                 } else {
                     environment.feedStore.loadOlder()
                 }
             }
-            .task(id: prefetchUrls.joined(separator: "|")) {
+            .task(id: "\(explorePrefetchStart)-\(videos.count)") {
                 let scale = UIScreen.main.scale
                 let tilePixels = UIScreen.main.bounds.width * scale / 3
                 await environment.posterImages.prefetch(
@@ -1329,7 +1330,7 @@ private struct BitzVideoPage: View {
             // Rich body: NIP-27 entities + external links tappable (white);
             // bare media links render as tiles and disappear from the body.
             RichTextView(
-                json: BusinessCoreBridge().richTokens(content: note.content),
+                json: richJson,
                 onOpenProfile: { _ in onAuthor() },
                 color: .white,
                 lineLimit: 3,

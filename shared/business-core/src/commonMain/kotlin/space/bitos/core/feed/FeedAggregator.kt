@@ -14,8 +14,12 @@ package space.bitos.core.feed
 class FeedAggregator(private val maxItems: Int = 200) {
 
     private val notes = LinkedHashMap<String, FeedNote>()
+    private var sortedCache: List<FeedNote>? = null
 
-    fun snapshot(): List<FeedNote> = notes.values.sortedWith(compareByDescending<FeedNote> { it.createdAt }.thenBy { it.id })
+    fun snapshot(): List<FeedNote> =
+        sortedCache ?: notes.values
+            .sortedWith(compareByDescending<FeedNote> { it.createdAt }.thenBy { it.id })
+            .also { sortedCache = it }
 
     fun size(): Int = notes.size
 
@@ -23,6 +27,7 @@ class FeedAggregator(private val maxItems: Int = 200) {
     fun insert(note: FeedNote): Boolean {
         if (notes.containsKey(note.id)) return false
         notes[note.id] = note
+        sortedCache = null
         trimIfNeeded()
         return true
     }
@@ -43,6 +48,7 @@ class FeedAggregator(private val maxItems: Int = 200) {
         for (note in fresh) pinned[note.id] = note
         notes.clear()
         for (note in pinned.values.take(maxItems)) notes[note.id] = note
+        sortedCache = null
         trimIfNeeded()
         return notes.values.toList()
     }

@@ -130,6 +130,13 @@ class FeedRepository(
     private val profileFallbackJobs = mutableSetOf<Job>()
     private var profileRequestCounter = 0
     private val bridge = BusinessCoreBridge()
+    // (size, comments, threadItems) per rootId — skips assembly when reply count unchanged.
+    private data class ThreadCache(val size: Int, val comments: List<FeedNote>, val items: List<space.bitos.core.feed.ThreadItem>)
+    private val threadCache = mutableMapOf<String, ThreadCache>()
+    // Profiles snapshot regenerated only when a new profile is absorbed.
+    private var profilesGeneration = 0
+    private var cachedProfilesGeneration = -1
+    private var cachedProfilesSnapshot: Map<String, ProfileMetadata> = emptyMap()
 
     private val mutableState = MutableStateFlow(FeedUiState())
     val state: StateFlow<FeedUiState> = mutableState.asStateFlow()
@@ -785,6 +792,7 @@ class FeedRepository(
             profileTimestamps[metadata.pubkey.value] = event.createdAt
         }
         persist(event)
+        profilesGeneration++
         publishState()
     }
 
@@ -938,11 +946,31 @@ class FeedRepository(
             pendingNotes = pendingNotes.toList(),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
-            profiles = profiles.toMap(),
-            comments = commentThreads.mapValues { it.value.values.toList() },
-            threads = commentThreads.mapValues { (rootId, replies) ->
-                space.bitos.core.feed.ThreadAssembly.assemble(rootId, replies.values.toList())
+            profiles = run {
+                if (cachedProfilesGeneration != profilesGeneration) {
+                    cachedProfilesSnapshot = profiles.toMap()
+                    cachedProfilesGeneration = profilesGeneration
+                }
+                cachedProfilesSnapshot
             },
+            comments = commentThreads.mapValues { (rootId, replies) ->
+                val size = replies.size
+                threadCache[rootId]?.takeIf { it.size == size }?.comments
+                    ?: run {
+                        val noteList = replies.values.toList()
+                        val items = space.bitos.core.feed.ThreadAssembly.assemble(rootId, noteList)
+                        threadCache[rootId] = ThreadCache(size, noteList, items)
+                        noteList
+                    }
+            },
+            threads = commentThreads.mapValues { (rootId, replies) ->
+                val size = replies.size
+                threadCache[rootId]?.takeIf { it.size == size }?.items
+                    ?: space.bitos.core.feed.ThreadAssembly.assemble(rootId, replies.values.toList()).also {
+                        val noteList = replies.values.toList()
+                        threadCache[rootId] = ThreadCache(size, noteList, it)
+                    }
+            }.also { threadCache.keys.retainAll(commentThreads.keys) },
             following = followingAuthors.toSet(),
             bookmarkedIds = bookmarked.toSet(),
             bookmarkedNotes = if (bookmarked.isEmpty()) {

@@ -294,7 +294,13 @@ fun BitzScreen(
         mode = next
         settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, next.wire)
     }
-    LaunchedEffect(mode, pagerState.settledPage, playerNotes) {
+    // Re-reconcile the pool only when the settled page's identity or its
+    // immediate neighbors change — live arrivals appended to the tail do
+    // not affect the three active slots.
+    val bitzSettledId = playerNotes.getOrNull(pagerState.settledPage)?.id
+    val bitzPrevId = playerNotes.getOrNull(pagerState.settledPage - 1)?.id
+    val bitzNextId = playerNotes.getOrNull(pagerState.settledPage + 1)?.id
+    LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId) {
         if (mode == BitzModeSetting.EXPLORE) {
             pool.releaseAll()
         } else {
@@ -313,7 +319,7 @@ fun BitzScreen(
         state.noMoreOlder,
     ) {
         if (playerNotes.isNotEmpty() &&
-            !state.noMoreOlder &&
+            !state.noMoreOlder && !state.isLoadingOlder &&
             pagerState.settledPage >= playerNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         ) {
             viewModel.loadOlder()
@@ -338,7 +344,7 @@ fun BitzScreen(
             // page so the footer never hits a cold boundary.
             if (BitzExplore.hasMore(videos.size, visibleTiles)) {
                 loadMoreCount++
-            } else if (!state.noMoreOlder) {
+            } else if (!state.noMoreOlder && !state.isLoadingOlder) {
                 viewModel.loadOlder()
             }
         }

@@ -89,6 +89,17 @@ struct HomeView: View {
         videoOnly ? store.notes.filter { $0.video != nil } : store.notes.filter { $0.video == nil }
     }
 
+    /// Settled page ± 1 note ids — the only indices that matter for pool
+    /// reconciliation. Changing when new pages load at the tail is benign.
+    private var neighborIds: [String?] {
+        guard let topId, let index = notes.firstIndex(where: { $0.id == topId }) else { return [] }
+        return [
+            index > 0 ? notes[index - 1].id : nil,
+            topId,
+            index < notes.count - 1 ? notes[index + 1].id : nil,
+        ]
+    }
+
     private func toggleFollow(author: String) {
         guard let updated = store.applyFollowChange(author: author, add: !store.following.contains(author)) else { return }
         guard environment.identityStore.account != nil else { return }
@@ -631,7 +642,8 @@ struct HomeView: View {
                                 listAtTop = true
                                 store.holdNewNotes(false)
                             }
-                            if index >= notes.count - store.paginationPrefetchThreshold { store.loadOlder() }
+                            if index >= notes.count - store.paginationPrefetchThreshold,
+                               !store.isLoadingOlder, !store.noMoreOlder { store.loadOlder() }
                         }
                         .onDisappear {
                             if index == 0 {
@@ -679,9 +691,8 @@ struct HomeView: View {
                         .containerRelativeFrame(.vertical)
                         .id(note.id)
                         .onAppear {
-                            // APP-004 pagination: settle near the end → fetch
-                            // one older page.
-                            if index >= notes.count - store.paginationPrefetchThreshold { store.loadOlder() }
+                            if index >= notes.count - store.paginationPrefetchThreshold,
+                               !store.isLoadingOlder, !store.noMoreOlder { store.loadOlder() }
                         }
                 }
             }
@@ -701,7 +712,9 @@ struct HomeView: View {
                 rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1)
             )
         }
-        .onChange(of: notes.count) { _, _ in
+        // Re-reconcile only when the settled page's neighbors change; live
+        // arrivals appended to the tail do not affect the three active slots.
+        .onChange(of: neighborIds) { _, _ in
             pool.update(
                 visibleId: topId, notes: notes,
                 autoplayAllowed: autoplayAllowed(),

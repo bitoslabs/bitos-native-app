@@ -65,7 +65,7 @@ final class FeedStore {
     private(set) var isLoadingOlder = false
     /// True once an older page made no progress — pauses until refresh.
     private(set) var noMoreOlder = false
-    var paginationPrefetchThreshold: Int { client.bitzWalkPrefetchThreshold() }
+    private(set) var paginationPrefetchThreshold: Int = 0
     var localActions = LocalActions()
     private(set) var accountPubkey: String?
     private(set) var followingResolved = false
@@ -112,12 +112,16 @@ final class FeedStore {
     private var profileDrainTask: Task<Void, Never>?
     private var profileFallbackTasks: [Task<Void, Never>] = []
     private var profileRequestCounter = 0
+    private var richTokensCache: [String: String] = [:]
+    // (replyCount, assembled) per rootId — skips bridge when thread size unchanged.
+    private var assembledThreadsCache: [String: (Int, [ThreadDisplayItem])] = [:]
 
     init(pool: RelayPool, client: any BusinessCoreClient, eventStore: EventStore? = nil) {
         muted = Set(UserDefaults.standard.stringArray(forKey: "bitos_mutes") ?? [])
         self.pool = pool
         self.client = client
         self.eventStore = eventStore
+        paginationPrefetchThreshold = client.bitzWalkPrefetchThreshold()
     }
 
     func start() async {
@@ -218,9 +222,14 @@ final class FeedStore {
     }
 
     /// APP-005: NIP-27 rich-content tokens (bridge seam; JSON shape locked
-    /// by shared `Nip27Test`).
+    /// by shared `Nip27Test`). Bounded by note immutability: content never
+    /// changes, so the cache key is the content string itself.
     func richTokens(for content: String) -> String {
-        bridgeFacade().richTokens(content: content)
+        if let cached = richTokensCache[content] { return cached }
+        let result = bridgeFacade().richTokens(content: content)
+        if richTokensCache.count > 300 { richTokensCache.removeValue(forKey: richTokensCache.keys.first!) }
+        richTokensCache[content] = result
+        return result
     }
 
     func refresh() {
@@ -534,7 +543,7 @@ final class FeedStore {
         }
         enqueueProfile(event.pubkey)
         // Web parity: mentioned pubkeys' profiles resolve for @display.
-        if let data = (bridgeFacade().richTokens(content: note.content) as String?)?.data(using: .utf8),
+        if let data = self.richTokens(for: note.content).data(using: .utf8),
            let tokens = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             let mentioned = tokens.compactMap { token -> String? in
                 guard token["k"] as? String == "n",
@@ -927,9 +936,9 @@ final class FeedStore {
         }
     }
 
-    private func bridgeFacade() -> BusinessCoreBridge {
+    private func bridgeFacade() -> BusinessCoreBridge { cachedBridge }
+    private lazy var cachedBridge: BusinessCoreBridge =
         (client as? FrameworkBusinessCoreClient)?.bridgeForFollowing() ?? BusinessCoreBridge()
-    }
 
     private func absorbProfile(_ event: VerifiedEvent) {
         guard let metadata = client.profile(from: event) else { return }
@@ -1056,8 +1065,16 @@ final class FeedStore {
         comments = commentThreads
         var assembled: [String: [ThreadDisplayItem]] = [:]
         for (rootId, replies) in commentThreads {
-            assembled[rootId] = threadItems(rootId: rootId, replies: replies)
+            let count = replies.count
+            if let (cachedCount, cachedItems) = assembledThreadsCache[rootId], cachedCount == count {
+                assembled[rootId] = cachedItems
+            } else {
+                let items = threadItems(rootId: rootId, replies: replies)
+                assembledThreadsCache[rootId] = (count, items)
+                assembled[rootId] = items
+            }
         }
+        assembledThreadsCache = assembledThreadsCache.filter { commentThreads[$0.key] != nil }
         threads = assembled
         following = followingAuthors
         bookmarkedIds = Set(bookmarked)

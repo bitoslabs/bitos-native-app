@@ -183,7 +183,13 @@ fun FeedScreen(
     DisposableEffect(Unit) {
         onDispose { pool.releaseAll() }
     }
-    LaunchedEffect(pagerState.settledPage, feedNotes) {
+    // Re-reconcile the pool only when the settled page's identity or its
+    // immediate neighbors change — live arrivals appended to the tail do
+    // not affect the three active slots.
+    val settledNoteId = feedNotes.getOrNull(pagerState.settledPage)?.id
+    val prevNoteId = feedNotes.getOrNull(pagerState.settledPage - 1)?.id
+    val nextNoteId = feedNotes.getOrNull(pagerState.settledPage + 1)?.id
+    LaunchedEffect(settledNoteId, prevNoteId, nextNoteId) {
         pool.update(pagerState.settledPage, feedNotes)
     }
     // APP-004: arrivals are held while the user is scrolled into the ACTIVE
@@ -205,7 +211,7 @@ fun FeedScreen(
     // APP-004 pagination: near the end of the active surface, fetch one
     // older page (the repository guards in-flight + exhausted requests).
     LaunchedEffect(videoOnly, pagerState.settledPage, feedNotes.size, state.isLoadingOlder, state.noMoreOlder) {
-        if (videoOnly && feedNotes.isNotEmpty() && !state.noMoreOlder &&
+        if (videoOnly && feedNotes.isNotEmpty() && !state.noMoreOlder && !state.isLoadingOlder &&
             pagerState.settledPage >= feedNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         ) {
             viewModel.loadOlder()
@@ -220,7 +226,7 @@ fun FeedScreen(
         }
     }
     LaunchedEffect(listNearEnd, state.isLoadingOlder, state.noMoreOlder) {
-        if (!videoOnly && listNearEnd && !state.noMoreOlder) viewModel.loadOlder()
+        if (!videoOnly && listNearEnd && !state.noMoreOlder && !state.isLoadingOlder) viewModel.loadOlder()
     }
     // APP-003/APP-004: re-tap on the active shell tab scrolls to top; a
     // re-tap while already at top refreshes (X/Instagram pattern).
@@ -1004,8 +1010,10 @@ private fun NotesList(
         itemsIndexed(notes, key = { _, note -> note.id }) { index, note ->
             NoteCardRow(
                 note = note,
-                state = state,
-                actions = actions,
+                profile = state.profiles[note.pubkey],
+                bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked,
+                liked = note.id in actions.liked,
+                resolveMentionName = { hex -> state.profiles[hex]?.bestDisplayName },
                 onLike = { onLike(note) },
                 onBookmark = { onBookmark(note.id) },
                 onComment = { onComment(note) },
@@ -1045,8 +1053,10 @@ private fun NotesList(
 @Composable
 private fun NoteCardRow(
     note: FeedNote,
-    state: FeedUiState,
-    actions: LocalActions,
+    profile: space.bitos.core.model.ProfileMetadata?,
+    bookmarked: Boolean,
+    liked: Boolean,
+    resolveMentionName: (String) -> String?,
     onLike: () -> Unit,
     onBookmark: () -> Unit,
     onComment: () -> Unit,
@@ -1064,8 +1074,6 @@ private fun NoteCardRow(
     mediaPreview: Boolean = true,
     compact: Boolean = false,
 ) {
-    val profile = state.profiles[note.pubkey]
-    val bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked
     var revealed by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
     // APP-005 Show more/less: font-scale-safe line clamp.
     var expanded by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
@@ -1135,7 +1143,7 @@ private fun NoteCardRow(
             RichText(
                 tokens = androidx.compose.runtime.remember(note.content) { space.bitos.core.nostr.Nip27.tokenize(note.content) },
                 hiddenMediaUrls = remember(note.mediaUrls) { note.mediaUrls.toSet() },
-                resolveMentionName = { hex -> state.profiles[hex]?.bestDisplayName },
+                resolveMentionName = resolveMentionName,
                 onOpenNoteRef = onOpenNoteRef,
                 onOpenExternalLink = onOpenExternalLink,
                 maxLines = if (expanded) Int.MAX_VALUE else NOTE_COLLAPSE_LINES,
@@ -1168,8 +1176,8 @@ private fun NoteCardRow(
             // User decision 2026-08-29: order [like · comment · repost ·
             // zap · bookmark]; APP-005 §2.4 scale-bounce + haptic on like.
             AnimatedLikeIcon(
-                liked = note.id in actions.liked,
-                tint = if (note.id in actions.liked) BitOSColors.like else BitOSColors.textSecondary,
+                liked = liked,
+                tint = if (liked) BitOSColors.like else BitOSColors.textSecondary,
                 iconSize = 18.dp,
                 onClick = onLike,
             )
