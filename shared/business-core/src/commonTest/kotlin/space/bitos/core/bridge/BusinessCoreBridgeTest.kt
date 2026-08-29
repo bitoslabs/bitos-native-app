@@ -112,6 +112,24 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun composerMentionQueryDistinguishesComposingFromNone() {
+        // `composerMentionQuery` collapses "none" and the bare-`@` empty
+        // query to ""; `composerIsComposingMention` keeps them apart so the
+        // empty query still surfaces the unfiltered candidate list.
+        assertEquals("sat", bridge.composerMentionQuery("hello @sat", 10))
+        assertTrue(bridge.composerIsComposingMention("hello @sat", 10))
+        assertEquals("", bridge.composerMentionQuery("hello @", 7))
+        assertTrue(bridge.composerIsComposingMention("hello @", 7))
+        assertEquals("", bridge.composerMentionQuery("hello bob", 9))
+        assertFalse(bridge.composerIsComposingMention("hello bob", 9))
+        // Cursor counts UTF-16 code units (Kotlin string indices), not
+        // grapheme clusters: the emoji is two units.
+        assertEquals("sat", bridge.composerMentionQuery("👍 @sat", 7))
+        assertTrue(bridge.composerIsComposingMention("👍 @sat", 7))
+        assertFalse(bridge.composerIsComposingMention("👍 @sat", 2))
+    }
+
+    @Test
     fun replyTagsJsonCarriesMarkersAndParticipants() {
         val author = "aa".repeat(32)
         val root = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"

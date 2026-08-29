@@ -1,4 +1,4 @@
-.PHONY: doctor check native-test ios-build android-test service-test infra-check format-check clean
+.PHONY: doctor check native-test build-ios ios-build android-test build-android-apk android-apk service-test infra-check format-check clean-cache clean
 
 doctor:
 	./scripts/doctor.sh
@@ -9,11 +9,18 @@ check:
 native-test:
 	./scripts/native-test.sh
 
-ios-build:
+build-ios:
 	./scripts/ios-build.sh
+
+ios-build: build-ios
 
 android-test:
 	./scripts/android-test.sh
+
+build-android-apk:
+	./scripts/android-apk.sh
+
+android-apk: build-android-apk
 
 service-test:
 	npm run test:services
@@ -24,6 +31,7 @@ infra-check:
 format-check:
 	npm run format:check
 
-clean:
-	cmake -E remove_directory build-native
-	xcodebuild -project apps/ios/BitOS.xcodeproj -scheme BitOS clean >/dev/null
+clean-cache:
+	./scripts/clean-cache.sh
+
+clean: clean-cache

@@ -282,7 +282,9 @@ class HomeViewModel(
         ) ?: return null
         currentZapRequestId = unsigned.idHex
         val signature = signer.sign(unsigned.messageBytes()) ?: return null
-        return if (payRequest.allowsNostr) composer.publishMessage(unsigned, signature) else null
+        // LUD-06: the `nostr` param is the BARE signed event object, never
+        // a relay `["EVENT",…]` frame (APP-014 fix — servers reject frames).
+        return if (payRequest.allowsNostr) composer.signedEventJson(unsigned, signature) else null
     }
 
     fun loadZaps(targetEventId: String) {

@@ -138,6 +138,16 @@ the shared core is now the single source of truth on both platforms:
   and handed to the user for payment in any external wallet. Zap counts
   surface per note. NWC wallet connection and bolt11 amount decoding stay
   out (separate safety-gated slices).
+  LNURL wire parity with the web client (2026-08-29 fix, fixture
+  `contracts/nostr/fixtures/lnurl-pay-v1.json`): the callback `nostr`
+  param is the BARE signed 9734 event object (`signedEventJson` /
+  bridge `zapRequestEventJson` — a relay `["EVENT",…]` frame is rejected
+  by construction); the `lnurl` param is the bech32 `lnurl1…` of the
+  pay-params URL; LUD-16 endpoints keep the local-part case (domain
+  lowercased only, local part percent-encoded — `LnurlPay.payEndpointUrl`
+  / bridge `lnurlPayEndpointUrl`); provider `reason`/`errors` surface in
+  the sheet; invalid `nostrPubkey` degrades to plain LNURL-pay instead of
+  failing the fetch.
 
 - Media publishing (PUB media path, infrastructure): Blossom BUD-02 in the
   shared core — kind-24242 upload auth (`t`/`expiration`/`x`/`size` tags,

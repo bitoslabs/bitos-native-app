@@ -5,6 +5,7 @@ import space.bitos.core.nostr.Sha256EventHasher
 import space.bitos.core.publish.NoteComposer
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -59,16 +60,48 @@ class ZapTest {
     }
 
     @Test
+    fun signedZapRequestIsBareEventForLnurlNostrParam() {
+        val request = composer.composeZapRequest(
+            recipientPubkey = recipient,
+            amountMillisats = 21_000,
+            relays = listOf("wss://relay.damus.io"),
+            lnurlHint = "user@wallet.example",
+            comment = "great work!",
+            authorPubkey = payer,
+            targetEventId = targetId,
+        )!!
+        val signature = "13".repeat(64)
+        val bare = composer.signedEventJson(request, signature)!!
+        // LUD-06 `nostr` param: a bare event object, not a relay frame.
+        assertTrue(bare.first() == '{' && bare.last() == '}', bare)
+        assertFalse(bare.contains("EVENT"))
+        assertEquals(
+            composer.publishMessage(request, signature)!!.substringAfter(',').removeSuffix("]"),
+            bare,
+        )
+        // Invalid signatures are refused.
+        assertNull(composer.signedEventJson(request, "zz"))
+    }
+
+    @Test
     fun parsesLnurlPayRequest() {
         val pay = LnurlPay.parsePayRequest(payJson)!!
         assertEquals("https://pay.example/callback", pay.callback)
         assertEquals(1000, pay.minSendableMillisats)
         assertTrue(pay.allowsNostr)
+        assertTrue(pay.supportsZap)
 
         assertNull(LnurlPay.parsePayRequest("""{"tag":"withdrawRequest"}"""))
         assertNull(LnurlPay.parsePayRequest("not json"))
         // Non-HTTPS callbacks are rejected by construction.
         assertNull(LnurlPay.parsePayRequest(payJson.replace("https://", "http://")))
+        // Explicit provider ERROR status fails the parse (caller surfaces
+        // `providerError` text).
+        assertNull(LnurlPay.parsePayRequest("""{"status":"ERROR","reason":"boom"}"""))
+        // Invalid nostrPubkey only drops zap support — never the whole fetch.
+        val weakKey = LnurlPay.parsePayRequest(payJson.replace("\"nostrPubkey\":\"${"ab".repeat(32)}\"", "\"nostrPubkey\":\"zz\""))!!
+        assertFalse(weakKey.supportsZap)
+        assertTrue(weakKey.allowsNostr)
     }
 
     @Test
@@ -77,15 +110,61 @@ class ZapTest {
         val url = LnurlPay.buildCallbackUrl(pay, 21_000, """{"id":"x"}""", "user@wallet.example")!!
         assertTrue(url.startsWith("https://pay.example/callback?amount=21000"))
         assertTrue(url.contains("nostr=%7B%22id%22%3A%22x%22%7D"))
+        // LUD-16: the lnurl param is the bech32 of the pay-params URL.
+        val endpoint = LnurlPay.payEndpointUrl("user@wallet.example")!!
+        val expectedLnurl = space.bitos.core.nostr.Nip27.encodeEntity(
+            "lnurl", endpoint.encodeToByteArray(),
+        )
+        assertTrue(url.endsWith("lnurl=" + expectedLnurl), url)
 
         // Out-of-range amounts are refused.
         assertNull(LnurlPay.buildCallbackUrl(pay, 1, null, "user@wallet.example"))
         assertNull(LnurlPay.buildCallbackUrl(pay, 200_000_000, null, "user@wallet.example"))
+        // LUD-06: a relay ["EVENT",…] frame is NOT a valid nostr param —
+        // servers parse the param as an event object.
+        assertNull(LnurlPay.buildCallbackUrl(pay, 21_000, """["EVENT",{"id":"x"}]""", "user@wallet.example"))
+        // A ready bech32 lnurl passes through as-is.
+        val rawLnurl = LnurlPay.buildCallbackUrl(pay, 21_000, null, expectedLnurl)!!
+        assertTrue(rawLnurl.endsWith("lnurl=$expectedLnurl"))
 
         val invoice = LnurlPay.parseInvoice("""{"pr":"lnbc210u1p3xq8z9abcdefghijklmnopqrstuvwxyz","status":"OK"}""")!!
         assertTrue(invoice.paymentRequest.startsWith("lnbc"))
         assertNull(LnurlPay.parseInvoice("""{"status":"ERROR","reason":"oops"}"""))
         assertNull(LnurlPay.parseInvoice("""{"pr":"not-an-invoice"}"""))
+    }
+
+    @Test
+    fun buildsLud16PayEndpoint() {
+        // Domain lowercased (DNS-insensitive), local part preserved.
+        assertEquals(
+            "https://getalby.com/.well-known/lnurlp/Satoshi",
+            LnurlPay.payEndpointUrl("Satoshi@GetAlby.com"),
+        )
+        // Unusual local parts stay percent-encoded.
+        assertEquals(
+            "https://wallet.example/.well-known/lnurlp/s%2Bpecial",
+            LnurlPay.payEndpointUrl("s+pecial@wallet.example"),
+        )
+        assertNull(LnurlPay.payEndpointUrl("no-at-sign"))
+        assertNull(LnurlPay.payEndpointUrl("@domain.com"))
+        assertNull(LnurlPay.payEndpointUrl("user@"))
+        assertNull(LnurlPay.payEndpointUrl("a@b@c"))
+        assertNull(LnurlPay.payEndpointUrl("https://preserve.example/user"))
+        assertNull(LnurlPay.payEndpointUrl("user@bad domain.com"))
+    }
+
+    @Test
+    fun amountAndProviderFailures() {
+        assertEquals("Minimum amount is 2 sats.", LnurlPay.amountFailure(1_500, 100_000, 1_000))
+        assertEquals("Maximum amount is 100 sats.", LnurlPay.amountFailure(1_000, 100_000, 150_000))
+        assertNull(LnurlPay.amountFailure(1_000, 100_000, 21_000))
+        // Degenerate bounds are ignored, not reported.
+        assertNull(LnurlPay.amountFailure(0, 0, 21_000))
+
+        assertEquals("boom", LnurlPay.providerError("""{"status":"ERROR","reason":"boom"}"""))
+        assertEquals("offline", LnurlPay.providerError("""{"errors":"offline"}"""))
+        assertNull(LnurlPay.providerError("""{"pr":"lnbc1…"}"""))
+        assertNull(LnurlPay.providerError("{nope"))
     }
 
     @Test

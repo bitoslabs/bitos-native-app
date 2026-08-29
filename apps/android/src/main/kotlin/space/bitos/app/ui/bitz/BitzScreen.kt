@@ -564,6 +564,7 @@ fun BitzScreen(
                     viewModel.zap(target, comment, anonymous)
                 },
                 onClose = { viewModel.dismissZap(); zapTarget = null },
+                profilePictureUrl = state.profiles[target.pubkey]?.picture,
             )
         }
     }

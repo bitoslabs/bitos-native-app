@@ -197,6 +197,7 @@ object LnurlPay {
         val maxSendableMillisats: Long,
         val allowsNostr: Boolean,
         val nostrPubkey: String?,
+        val commentAllowed: Int = 0,
     ) {
         init {
             require(callback.startsWith("https://")) { "callback must be HTTPS" }
@@ -204,7 +205,20 @@ object LnurlPay {
             require(minSendableMillisats in 1..1_000_000_000_000L)
             require(maxSendableMillisats >= minSendableMillisats)
             nostrPubkey?.let { require(it.length == 64) }
+            require(commentAllowed in 0..1_000)
         }
+
+        /**
+         * NIP-57 zap support (web `lnurlSupportsZap` parity): the provider
+         * must both `allowsNostr` AND publish a valid provider key. An
+         * invalid/absent key degrades to plain LNURL-pay, never a failure.
+         */
+        val supportsZap: Boolean
+            get() = allowsNostr && nostrPubkey != null
+
+        /** Whole-satoshi bounds for tier UIs (ceil/floor like the web app). */
+        val minSats: Long get() = (minSendableMillisats + 999) / 1000
+        val maxSats: Long get() = maxSendableMillisats / 1000
     }
 
     data class Invoice(val paymentRequest: String, val verifyUrl: String? = null) {
@@ -222,31 +236,112 @@ object LnurlPay {
         val root = json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject ?: return null
         val tag = (root["tag"] as? kotlinx.serialization.json.JsonPrimitive)?.content
         if (tag != "payRequest") return null
+        if ((root["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "ERROR") return null
         PayRequest(
             callback = (root["callback"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null,
             minSendableMillisats = (root["minSendable"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: return null,
             maxSendableMillisats = (root["maxSendable"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: return null,
             allowsNostr = (root["allowsNostr"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
-            nostrPubkey = (root["nostrPubkey"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+            // Tolerated, never trusted: an invalid provider key only drops
+            // nostr-zap support (plain LNURL-pay) instead of failing the fetch.
+            nostrPubkey = (root["nostrPubkey"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                ?.takeIf { it.matches(Regex("^[0-9a-f]{64}$")) },
+            commentAllowed = ((root["commentAllowed"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0).coerceIn(0, 1_000),
         )
     } catch (_: Exception) {
         null
     }
 
-    /** Builds the callback URL with amount, optional nostr event, and lnurl. */
+    /**
+     * LUD-16 pay-params endpoint for a `user@domain` Lightning address
+     * (web `lnurlEndpointOf` parity): the DOMAIN is lowercased (DNS is
+     * case-insensitive) but the LOCAL PART keeps its case and is
+     * percent-encoded — providers treat it as an opaque id.
+     */
+    fun payEndpointUrl(lud16: String): String? {
+        val trimmed = lud16.trim()
+        if (trimmed.length !in 3..512) return null
+        if (trimmed.contains("://")) return null
+        val at = trimmed.indexOf('@')
+        if (at <= 0 || at == trimmed.length - 1) return null
+        if (trimmed.indexOf('@', at + 1) != -1) return null
+        val user = trimmed.substring(0, at)
+        val domain = trimmed.substring(at + 1).lowercase()
+        if (user.any { it.isWhitespace() } || domain.any { it.isWhitespace() }) return null
+        if (!domain.matches(Regex("^[a-z0-9.:-]+$"))) return null
+        return "https://" + domain + "/.well-known/lnurlp/" + encodeQuery(user)
+    }
+
+    /**
+     * Human amount-range failure for the zap sheet (web copy parity);
+     * null when the millisats are within the provider bounds.
+     */
+    fun amountFailure(minMillisats: Long, maxMillisats: Long, amountMillisats: Long): String? {
+        if (minMillisats !in 1..1_000_000_000_000L || maxMillisats < minMillisats) return null
+        return when (amountMillisats) {
+            in minMillisats..maxMillisats -> null
+            else -> if (amountMillisats < minMillisats) {
+                "Minimum amount is ${(minMillisats + 999) / 1000} sats."
+            } else {
+                "Maximum amount is ${maxMillisats / 1000} sats."
+            }
+        }
+    }
+
+    /** Amount-range failure derived from a parsed pay request. */
+    fun amountFailure(payRequest: PayRequest, amountMillisats: Long): String? =
+        amountFailure(payRequest.minSendableMillisats, payRequest.maxSendableMillisats, amountMillisats)
+
+    /**
+     * Provider error text (`reason` / `errors`) from a failed LNURL body —
+     * surfaces the server's own message in the sheet (web parity); null
+     * when the body carries none.
+     */
+    fun providerError(body: String): String? = try {
+        val root = json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject
+        (root?.get("reason") as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?: (root?.get("errors") as? kotlinx.serialization.json.JsonPrimitive)?.content
+    } catch (_: Exception) {
+        null
+    }?.trim()?.takeIf { it.isNotEmpty() }?.take(280)
+
+    /**
+     * Builds the callback URL with amount, optional nostr event, and lnurl.
+     *
+     * LUD-06/NIP-57 shape (web `zap-invoice.ts` parity):
+     * - `nostr` must be the BARE signed kind-9734 event object — LNURL
+     *   servers parse it as an event, so a relay `[…,"EVENT",…]` frame is
+     *   rejected here instead of shipping a broken URL;
+     * - `lnurl` is the bech32 `lnurl1…` of the pay-params URL (raw
+     *   `user@domain` is NOT a valid LUD-16 param value).
+     */
     fun buildCallbackUrl(
         payRequest: PayRequest,
         amountMillisats: Long,
         nostrEventJson: String?,
-        lnurlHint: String,
+        lnurlHint: String?,
     ): String? {
         if (amountMillisats !in payRequest.minSendableMillisats..payRequest.maxSendableMillisats) return null
         if (nostrEventJson != null && (!payRequest.allowsNostr || nostrEventJson.length > 65_536)) return null
+        if (nostrEventJson != null && (!nostrEventJson.startsWith("{") || !nostrEventJson.endsWith("}"))) return null
         val base = payRequest.callback + (if (payRequest.callback.contains('?')) '&' else '?')
         val amount = "amount=$amountMillisats"
         val nostr = nostrEventJson?.let { "&nostr=" + encodeQuery(it) } ?: ""
-        val hint = lnurlHint.takeIf { it.isNotBlank() }?.let { "&lnurl=" + encodeQuery(it) } ?: ""
+        val hint = bech32LnurlParam(lnurlHint)?.let { "&lnurl=" + encodeQuery(it) } ?: ""
         return base + amount + nostr + hint
+    }
+
+    /**
+     * The `lnurl` callback param: a `user@domain` address becomes the
+     * bech32 `lnurl` of its pay-params URL; an already-bech32 LNURL passes
+     * through; anything else is dropped from the URL.
+     */
+    private fun bech32LnurlParam(hint: String?): String? {
+        val trimmed = hint?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (trimmed.length > 512) return null
+        if (trimmed.startsWith("lnurl1", ignoreCase = true)) return trimmed.lowercase()
+        val endpoint = payEndpointUrl(trimmed) ?: return null
+        return space.bitos.core.nostr.Nip27.encodeEntity("lnurl", endpoint.encodeToByteArray())
     }
 
     /** Parses the callback response carrying the bolt11 invoice. */

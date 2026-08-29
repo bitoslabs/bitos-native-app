@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -140,14 +141,23 @@ fun CreateNoteScreen(
     var showUrlDialog by remember { mutableStateOf(false) }
     var showPoll by remember { mutableStateOf(false) }
     var showGif by remember { mutableStateOf(false) }
+    var fieldFocused by remember { mutableStateOf(false) }
     val uploader = remember { BlossomUploader() }
 
     val counter = remember(field.text) { ComposerRules.counterState(field.text.length) }
     val mediaCount = remoteImageUrls.size + pickedKeys.size
     val canAddImage = mediaCount < ComposerRules.MAX_IMAGES
+    // @-autocomplete gating (legacy `_MentionField` parity): candidates
+    // surface only while the field is focused and the caret sits in a
+    // trailing @query — a bare `@` resolves with the empty query matching
+    // every known profile; no query at all means no panel.
     val mentionQuery = ComposerRules.mentionQueryAt(field.text, field.selection.end)
-    val suggestions = remember(mentionQuery, feedState.profiles) {
-        ComposerRules.mentionSuggestions(mentionQuery ?: "", feedState.profiles.values)
+    val suggestions = remember(mentionQuery, fieldFocused, feedState.profiles) {
+        if (fieldFocused && mentionQuery != null) {
+            ComposerRules.mentionSuggestions(mentionQuery, feedState.profiles.values)
+        } else {
+            emptyList()
+        }
     }
 
     val canPublish = !busy && !published &&
@@ -195,12 +205,13 @@ fun CreateNoteScreen(
                 val uploadedUrls = mutableListOf<String>()
                 pickedKeys.forEachIndexed { index, key ->
                     val (uriString, mime) = key.substringBeforeLast('|') to key.substringAfterLast('|', "image/png")
-                    uploadStatus = if (pickedKeys.size == 1) "Uploading media…" else "Uploading media ${index + 1}/${pickedKeys.size}…"
+                    uploadStatus = "Uploading media…"
                     val bytes = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(android.net.Uri.parse(uriString))?.use { it.readBytes() }
                     } ?: throw BlossomUploader.UploadFailure("could not read the picked file")
                     val media = uploader.upload(bytes, mime, signer, DefaultBlossomServer.url)
                     uploadedUrls += media.url
+                    uploadStatus = "Uploaded ${index + 1} of ${pickedKeys.size}"
                 }
                 uploadStatus = "Publishing…"
                 val rewritten = ComposerRules.rewriteMentions(field.text, trackedMentions)
@@ -238,7 +249,7 @@ fun CreateNoteScreen(
         containerColor = BitOSColors.background,
         topBar = {
             TopAppBar(
-                title = { Text("New note", style = MaterialTheme.typography.headlineMedium) },
+                title = { Text("Create Post", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (!published && !draft.isEmpty) showDiscardConfirm = true else onClose()
@@ -251,7 +262,7 @@ fun CreateNoteScreen(
                         if (busy) {
                             CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                         } else {
-                            Text("Publish", color = if (canPublish) BitOSColors.primary else BitOSColors.textTertiary)
+                            Text("Post", color = if (canPublish) BitOSColors.primary else BitOSColors.textTertiary)
                         }
                     }
                 },
@@ -307,7 +318,7 @@ fun CreateNoteScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text("Now", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+                        Text("Posting as you — notes are signed with your key", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
                     }
                 }
                 // Selection-aware field: @-mention detection, toolbar
@@ -318,15 +329,18 @@ fun CreateNoteScreen(
                         field = next
                         if (errorMessage.isNotEmpty()) errorMessage = ""
                     },
-                    placeholder = "What's happening?",
+                    placeholder = "Post a note…",
                     minLines = 4,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { fieldFocused = it.isFocused },
                 )
                 // Mention autocomplete (≤6, web `candidates` parity).
                 if (suggestions.isNotEmpty()) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = BitOSColors.surfaceElevated,
+                        modifier = Modifier.border(1.dp, BitOSColors.border.copy(alpha = 0.2f), RoundedCornerShape(14.dp)),
                     ) {
                         Column {
                             suggestions.forEach { suggestion ->
@@ -387,7 +401,7 @@ fun CreateNoteScreen(
                                 Icon(AppIcons.ReportSpam, contentDescription = null, tint = Color(0xFFF5A623), modifier = Modifier.size(15.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    "Content warning",
+                                    "Content Warning",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.W600,
                                     color = Color(0xFFF5A623),
@@ -396,7 +410,7 @@ fun CreateNoteScreen(
                             space.bitos.app.ui.components.BitosPlainTextField(
                                 value = contentWarningReason,
                                 onValueChange = { contentWarningReason = it.take(120) },
-                                placeholder = "Why is this sensitive? (optional)",
+                                placeholder = "e.g. NSFW, Spoiler...",
                                 singleLine = false,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -558,21 +572,42 @@ fun CreateNoteScreen(
 
     if (showUrlDialog) {
         var url by remember { mutableStateOf("") }
+        // Legacy `_isValidUrl` parity: http(s) with a host; an invalid
+        // non-empty entry shows inline instead of being silently dropped.
+        fun valid(u: String): Boolean {
+            val trimmed = u.trim()
+            if (trimmed.isEmpty()) return true
+            return runCatching {
+                val uri = java.net.URI(trimmed)
+                val scheme = uri.scheme?.lowercase()
+                (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty()
+            }.getOrDefault(false)
+        }
         AlertDialog(
             onDismissRequest = { showUrlDialog = false },
-            title = { Text("Add image URL") },
+            title = { Text("Add Image URL") },
             text = {
-                space.bitos.app.ui.components.BitosTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    placeholder = "https://example.com/image.jpg",
-                )
+                Column {
+                    space.bitos.app.ui.components.BitosTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        placeholder = "https://example.com/image.jpg",
+                    )
+                    if (!valid(url)) {
+                        Text(
+                            "Please enter a valid image URL",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BitOSColors.error,
+                            modifier = Modifier.padding(top = BitOSSpacing.xs),
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         val trimmed = url.trim()
-                        if ((trimmed.startsWith("https://") || trimmed.startsWith("http://")) && canAddImage) {
+                        if (valid(trimmed) && trimmed.isNotEmpty() && canAddImage) {
                             remoteImageUrls += trimmed
                         }
                         showUrlDialog = false
@@ -668,8 +703,8 @@ private fun ComposerToolbar(
             ToolbarButton(AppIcons.Globe, "Add image URL", enabled = canAddImage, onClick = onAddUrl)
             ToolbarButton(AppIcons.Gif, "Add GIF", enabled = canAddImage, onClick = onGif)
             ToolbarButton(AppIcons.Poll, "Create poll", onClick = onPoll)
-            ToolbarButton(AppIcons.QrCode, "Proof-of-work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
-            ToolbarButton(AppIcons.Mute, "Content warning", active = contentWarningOn, onClick = onToggleCw)
+            ToolbarButton(AppIcons.QrCode, "Proof of Work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
+            ToolbarButton(AppIcons.Mute, "Content Warning", active = contentWarningOn, onClick = onToggleCw)
             ToolbarButton(Icons.Rounded.Tag, "Insert hashtag", onClick = onHashtag)
             ToolbarButton(AppIcons.Chat, "Insert emoji", onClick = onEmoji)
             Spacer(Modifier.width(BitOSSpacing.sm))
@@ -845,10 +880,10 @@ private fun PublishedState(onBack: () -> Unit, onNew: () -> Unit) {
             Icon(AppIcons.Check, contentDescription = null, tint = BitOSColors.success, modifier = Modifier.size(30.dp))
         }
         Spacer(Modifier.height(BitOSSpacing.lg))
-        Text("Published", style = MaterialTheme.typography.headlineSmall)
+        Text("Published!", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(BitOSSpacing.sm))
         Text(
-            "Your note is on its way to the relays.",
+            "Your note has been sent to the Nostr network.",
             style = MaterialTheme.typography.bodyMedium,
             color = BitOSColors.textSecondary,
         )
@@ -856,7 +891,7 @@ private fun PublishedState(onBack: () -> Unit, onNew: () -> Unit) {
         Button(
             onClick = onBack,
             modifier = Modifier.width(220.dp),
-        ) { Text("Back to feed") }
-        TextButton(onClick = onNew) { Text("New post", color = BitOSColors.primary) }
+        ) { Text("Back to Home") }
+        TextButton(onClick = onNew) { Text("New Post", color = BitOSColors.primary) }
     }
 }

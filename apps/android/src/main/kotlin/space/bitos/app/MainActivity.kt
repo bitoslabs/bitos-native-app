@@ -2,6 +2,7 @@
 package space.bitos.app
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -17,6 +18,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        debugActivity("created")
         // Swap the launch theme (branded window background / Android 12
         // splash) for the normal app theme before Compose mounts — legacy
         // Flutter NormalTheme parity.
@@ -71,13 +73,52 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        debugActivity("received a new intent")
         takeDeepLink(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        debugActivity("started")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        debugActivity("resumed")
+    }
+
+    override fun onPause() {
+        debugActivity("paused")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        debugActivity("stopped")
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        debugActivity("destroyed")
+        super.onDestroy()
     }
 
     private fun takeDeepLink(intent: Intent?) {
         val data = intent?.data?.toString() ?: return
         if (space.bitos.core.nostr.DeepLinks.classify(data) != null) {
             pendingDeepLink.value = data
+            debugActivity("accepted a supported deep link")
+        } else {
+            debugActivity("ignored an unsupported deep link")
         }
+    }
+
+    private fun debugActivity(event: String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(ACTIVITY_LOG_TAG, event)
+        }
+    }
+
+    private companion object {
+        const val ACTIVITY_LOG_TAG = "BitOS.Activity"
     }
 }

@@ -101,6 +101,8 @@ fun ZapContent(
     onAmountSelected: (Long) -> Unit,
     onZap: (Long, String, Boolean) -> Unit,
     onClose: () -> Unit,
+    /** Recipient's kind-0 picture URL — HTTPS raster only, hex identicon fallback. */
+    profilePictureUrl: String? = null,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -165,6 +167,7 @@ fun ZapContent(
             title = if (paid) "Zap sent" else "Zap ⚡",
             recipientName = profileName,
             recipientPubkey = note.pubkey,
+            profilePictureUrl = profilePictureUrl,
             lud16 = lud16,
             copiedKind = copied,
             onCopyAddress = {
@@ -242,6 +245,7 @@ private fun ZapHeader(
     copiedKind: String?,
     onCopyAddress: () -> Unit,
     onClose: () -> Unit,
+    profilePictureUrl: String? = null,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -257,7 +261,13 @@ private fun ZapHeader(
                 )
             }
         }
-        PubkeyAvatar(pubkey = recipientPubkey, size = 40)
+        PubkeyAvatar(
+            pubkey = recipientPubkey,
+            size = 40,
+            pictureUrl = profilePictureUrl,
+            label = recipientName,
+            hasLightning = !lud16.isNullOrBlank(),
+        )
         Spacer(Modifier.width(BitOSSpacing.sm))
         if (!lud16.isNullOrBlank()) {
             TextButton(onClick = onCopyAddress) {

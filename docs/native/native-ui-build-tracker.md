@@ -56,13 +56,13 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
 | APP-006 | Stories §3.6 | W3 | ☐ | ☐ | ☐ | NIP-38/40 models + composer |
 | APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share) + delivered: rendition+mirror failover chain, 3-tab set (Explore/Following/For you — legacy Flutter parity; W2 trending/zapped REMOVED by user decision, wires migrate to default), the Flutter-parity load-more walk (fresh-playable budget, duplicate pages auto-continue, per-tab windows) and the legacy-Flutter Explore tab UX (caption+author+likes tile scrim, blurred sensitive tiles, trailing spinner tile, footer buttons REMOVED); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), PoW/remix/sound/split chips, dwell ranking |
-| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, legacy toolbar order, tinted error banner and selection-aware Android field; PoW gated while picks pending |
+| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation, caret-accurate @-autocomplete: cursor-tracking iOS field + focus/query-gated Android panel, bare `@` lists all candidates) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, legacy toolbar order, tinted error banner and selection-aware Android field; PoW gated while picks pending |
 | APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ◐ | comments exist; X-style threading, naddr resolution, live deltas, reply-bar options remain |
 | APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
 | APP-011 | Messages/DMs §3.11 | W2 | ☐ | ☐ | ☐ | NIP-17/44 chat first; calls/groups W3 |
 | APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
 | APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page at legacy-Flutter parity (2026-08-29): edge-to-edge hero (gradient + hex pattern + scrims, avatar glow band), glass controls, identity block (cyan verified, npub copy chip, chips), Edit pill + ⋯ menu, completion card w/ progress bar, stats (K/M), about chips, pinned tabs w/ real content (cards/strips/3-col grid/empty states); view+edit live; follower sheets, banner lightbox, other-user action row remain |
-| APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; LUD-21 verify poll remains; NWC W4 |
+| APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; 2026-08-29 LNURL wire fix (invoicable again): bare 9734 object in the `nostr` param (was a relay frame servers reject), bech32 `lnurl` param, LUD-16 local-part case preserved + percent-encoded, provider `reason`/`errors` surfaced, weak `nostrPubkey` degrades to plain pay (fixture lnurl-pay-v1.json); LUD-21 verify poll remains; NWC W4 |
 | APP-015 | Bookmarks §3.15 | W1 | ✅ | ✅ | ✅ | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test |
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
 | APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero + multi-account switch row + Following/Relays stat tiles + tile groups (live surfaces only) + honest coming-soon tiles + meta rows; remains: QR dialog, wallet tile (APP-014), Communities/Meme tiles (W3/W4), bookmark page link (APP-015) |
@@ -173,7 +173,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] Char counter 4,000/16,000 — shared `ComposerRules.counterState` (grouped label, target switch at soft limit, near/over states); Android ring UI (web parity)
 - [x] Draft persistence + discard confirm — shared `ComposerDraftContract` (versioned v1 wire: text ≤16k, ≤4 remote URLs, CW ≤120, ≤8 tracked mentions, pow 0–30; encode clamps, lenient decode → null on corrupt/oversize — 4 common tests incl. hostile clamp + round-trip); adapters: Android `ComposerDraftStore` (SharedPreferences `bitos_composer_draft`, autosave on change, restore on open, clear on publish/new post, BackHandler + close with "Discard draft?" confirm) / iOS UserDefaults via bridge `composerDraftEncode/Decode` (same behaviors, confirmationDialog); local picks are deliberately NOT persisted (ephemeral URIs)
 - [x] TEST: poll wire format (PollTest 5) + draft round-trip (ComposerDraftTest 4); PoW nonces verify (existing)
-- [x] iOS composer page (full-screen from FAB) + bridge surface — `ComposerScreen` (fullScreenCover; pbxproj registered) with the full parity set; bridge carries `composerCounter/insertHashtag/insertEmoji/mentionQuery/mentionSuggestions/rewriteMentions/composeContent/deriveTags/emojis` + tags-aware `composeTextNoteWithTagsEventId`/`textNoteWithTagsPublishMessage`/`mineTextNotePowWithTags`/`powTextNoteWithTags*`; NotePublisher grew `publishNote(tags:)`/`publishPowNote(tags:)`/`minePowChunkWithTags`; mention detection at end-of-text (SwiftUI TextEditor has no public cursor API — documented approximation)
+- [x] iOS composer page (full-screen from FAB) + bridge surface — `ComposerScreen` (fullScreenCover; pbxproj registered) with the full parity set; bridge carries `composerCounter/insertHashtag/insertEmoji/mentionQuery/mentionSuggestions/isComposingMention/rewriteMentions/composeContent/deriveTags/emojis` + tags-aware `composeTextNoteWithTagsEventId`/`textNoteWithTagsPublishMessage`/`mineTextNotePowWithTags`/`powTextNoteWithTags*`; NotePublisher grew `publishNote(tags:)`/`publishPowNote(tags:)`/`minePowChunkWithTags`; mention detection at the REAL caret via `ComposerTextEditor` (cursor-tracking UITextView wrapper: UTF-16 caret offsets matching `ComposerRules` indices, focus reporting, programmatic edit token for toolbar inserts / mention picks / draft restore with legacy refocus behavior)
 
 ### APP-009 — Thread (spec §3.9)
 
@@ -2027,6 +2027,32 @@ fixed, what's next.
   box; expectations independently verified), iOS `swiftc -typecheck`
   clean (no iOS platform runtime installed here — xcodebuild gates run
   in CI). Next APP-022: AppMenu popover, PowCard.
+
+- 2026-08-29 — APP-008 functional caret mentions + old-app string parity
+  (legacy Flutter `create_view`/`create_controller`/`_MentionField` studied
+  line-by-line). Shared: additive bridge `composerIsComposingMention`
+  (distinguishes "no @query" from a bare `@` — `composerMentionQuery`
+  collapses both to ""; the bare `@` must surface the unfiltered candidate
+  list, cap 6) + bridge contract test (incl. UTF-16 cursor-offset vectors).
+  iOS: new `ComposerTextEditor` (cursor-tracking UITextView wrapper — real
+  caret in UTF-16 units matching `ComposerRules` indices, focus reporting,
+  growing field `maxLines: null` parity, programmatic edit token with the
+  legacy `_textWorker` refocus-after-insert behavior) replaces TextEditor;
+  mention detect/insert, hashtag and emoji inserts now operate at the caret
+  (previously end-of-text approximation); counter/canPublish switched to
+  UTF-16 length (Kotlin parity); candidate panel gains the 20 % outline.
+  Android: fixed the always-visible suggestion panel (`mentionQuery ?: ""`
+  returned all profiles when not composing) — candidates now gate on focus
+  + active query; same outline parity. Both platforms: copy aligned to the
+  legacy locale (`Create Post`, `Post`, `Post a note…`, `Posting as you —
+  notes are signed with your key`, `Published!`, CW hint `e.g. NSFW,
+  Spoiler...`, `Uploaded X of Y`, URL dialog title + invalid-URL message).
+  Repaired pre-existing pbxproj corruption that made xcodebuild unable to
+  read the project at all (duplicate PBXBuildFile/PBXFileReference IDs for
+  DmStore/DmScreen/BitzView/BookmarksView, PBXBuildFile defs squatting on
+  the tests target's phase IDs 905/906, malformed stories fileRefs, and
+  three build files missing from the app sources phase); audit script
+  confirms zero duplicate/dangling IDs and `xcodebuild -list` opens again.
 
 - 2026-08-28 — Merged `app-flutter-feature.md` + `app-web-feature.md` +
   `DESIGN_SYSTEM.md` into `app-unified-feature-spec.md` (APP epic, 24

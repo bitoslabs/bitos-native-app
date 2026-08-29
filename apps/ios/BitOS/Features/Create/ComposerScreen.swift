@@ -5,12 +5,12 @@ import SwiftUI
 /**
  * APP-008 note composer PAGE (legacy Flutter `CreateView` parity — a full
  * screen, not a sheet): author header, mention-aware field with @-autocomplete
- * (end-of-text cursor approximation: SwiftUI TextEditor exposes no public
- * cursor API), ≤4 image grid (gallery picks + URLs), content-warning field,
- * upload status, toolbar (image/URL/CW/hashtag/emoji/PoW) with the
- * 4,000/16,000 character counter, and the published success state. All
- * rules execute in shared `ComposerRules` through the bridge; uploads run
- * hash-verified through Blossom before anything is signed.
+ * at the real caret (cursor-tracking `ComposerTextEditor`), ≤4 image grid
+ * (gallery picks + URLs), content-warning field, upload status, toolbar
+ * (image/URL/CW/hashtag/emoji/PoW) with the 4,000/16,000 character counter,
+ * and the published success state. All rules execute in shared
+ * `ComposerRules` through the bridge; uploads run hash-verified through
+ * Blossom before anything is signed.
  */
 struct ComposerScreen: View {
     @Environment(AppEnvironment.self) private var environment
@@ -43,6 +43,11 @@ struct ComposerScreen: View {
     }
 
     @State private var text = ""
+    /// Caret offset in UTF-16 code units — the index basis of the shared
+    /// `ComposerRules` string operations the bridge expects.
+    @State private var cursor = 0
+    @State private var focused = false
+    @State private var pendingEdit: ComposerTextEdit?
     @State private var trackedMentions: [(name: String, npub: String)] = []
     @State private var remoteImageUrls: [String] = []
     @State private var pickedImages: [PickedImage] = []
@@ -70,15 +75,13 @@ struct ComposerScreen: View {
     private var mediaCount: Int { remoteImageUrls.count + pickedImages.count }
     private var canAddImage: Bool { mediaCount < 4 }
 
-    private var counterLabel: String {
-        let map = bridge.composerCounter(length: Int32(text.count)) as? [String: Any] ?? [:]
-        return (map["label"] as? String) ?? ""
-    }
+    /// Kotlin string length basis (UTF-16 code units), not grapheme count.
+    private var utf16Length: Int { (text as NSString).length }
 
     private var canPublish: Bool {
         !busy && !published &&
             (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mediaCount > 0) &&
-            text.count <= 16_000
+            utf16Length <= 16_000
     }
 
     var body: some View {
@@ -91,7 +94,7 @@ struct ComposerScreen: View {
                 }
             }
             .background(BitOSTheme.background)
-            .navigationTitle("New note")
+            .navigationTitle("Create Post")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -115,13 +118,13 @@ struct ComposerScreen: View {
                         if busy {
                             ProgressView().tint(BitOSTheme.accent)
                         } else {
-                            Text("Publish")
+                            Text("Post")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(canPublish ? BitOSTheme.accent : BitOSTheme.textTertiary)
                         }
                     }
                     .disabled(!canPublish)
-                    .accessibilityLabel("Publish note")
+                    .accessibilityLabel("Post note")
                 }
             }
         }
@@ -141,6 +144,8 @@ struct ComposerScreen: View {
             if !errorMessage.isEmpty { errorMessage = "" }
             if !seeded { saveDraft() }
         }
+        .onChange(of: cursor) { _, _ in refreshSuggestions() }
+        .onChange(of: focused) { _, _ in refreshSuggestions() }
         .onChange(of: remoteImageUrls) { _, _ in if !seeded { saveDraft() } }
         .onChange(of: contentWarningReason) { _, _ in if !seeded { saveDraft() } }
         .onChange(of: contentWarningOn) { _, _ in if !seeded { saveDraft() } }
@@ -173,13 +178,17 @@ struct ComposerScreen: View {
             )
             .presentationDetents([.large, .medium])
         }
-        .alert("Add image URL", isPresented: $urlAlert) {
+        .alert("Add Image URL", isPresented: $urlAlert) {
             TextField("https://example.com/image.jpg", text: $urlField)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
             Button("Done") {
                 let trimmed = urlField.trimmingCharacters(in: .whitespacesAndNewlines)
-                if (trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://")) && canAddImage {
+                if !trimmed.isEmpty && !isValidRemoteUrl(trimmed) {
+                    // Legacy parity (`create.invalid_url`): surface the
+                    // invalid URL instead of silently dropping it.
+                    errorMessage = "Please enter a valid image URL"
+                } else if isValidRemoteUrl(trimmed) && canAddImage {
                     remoteImageUrls.append(trimmed)
                 }
                 urlField = ""
@@ -205,13 +214,11 @@ struct ComposerScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
                     authorHeader
-                    TextEditor(text: $text)
-                        .font(.system(size: 16))
+                    ComposerTextEditor(text: $text, cursor: $cursor, focused: $focused, pendingEdit: pendingEdit)
                         .frame(minHeight: 110)
-                        .scrollContentBackground(.hidden)
                         .overlay(alignment: .topLeading) {
                             if text.isEmpty {
-                                Text("What's happening?")
+                                Text("Post a note…")
                                     .font(.system(size: 16))
                                     .foregroundStyle(BitOSTheme.textTertiary)
                                     .padding(.top, 8)
@@ -273,7 +280,7 @@ struct ComposerScreen: View {
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(BitOSTheme.textPrimary)
                     .lineLimit(1)
-                Text("Now")
+                Text("Posting as you — notes are signed with your key")
                     .font(.system(size: 10))
                     .foregroundStyle(BitOSTheme.textTertiary)
             }
@@ -310,6 +317,11 @@ struct ComposerScreen: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(BitOSTheme.surfaceElevated)
+        )
+        .overlay(
+            // Legacy parity: 20 % outline on the candidate panel.
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(BitOSTheme.border.opacity(0.2))
         )
     }
 
@@ -374,11 +386,11 @@ struct ComposerScreen: View {
                 AppIcons.image(for: AppIcons.reportSpam)
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.warning)
-                Text("Content warning")
+                Text("Content Warning")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(BitOSTheme.warning)
             }
-            BitosField("Why is this sensitive? (optional)", text: $contentWarningReason)
+            BitosField("e.g. NSFW, Spoiler...", text: $contentWarningReason)
                 .font(.footnote)
                 .onChange(of: contentWarningReason) { _, value in
                     if value.count > 120 { contentWarningReason = String(value.prefix(120)) }
@@ -405,16 +417,18 @@ struct ComposerScreen: View {
                 // PhotosPicker lives in the overlay below; toggle via state.
                 pickerPrompt = true
             }
-            toolbarButton(AppIcons.globe, "Add image URL", enabled: canAddImage) { urlAlert = true }
+            toolbarButton(AppIcons.globe, "Add Image URL", enabled: canAddImage) { urlAlert = true }
             toolbarGlyphButton("GIF", "Add GIF", enabled: canAddImage) { gifSheet = true }
             toolbarButton("chart.bar", "Create poll") { pollSheet = true }
-            toolbarButton(AppIcons.qrCode, "Proof of work", enabled: pickedImages.isEmpty, active: powOutcome != nil || powTarget > 0,
+            toolbarButton(AppIcons.qrCode, "Proof of Work", enabled: pickedImages.isEmpty, active: powOutcome != nil || powTarget > 0,
                           badge: powOutcome.map { "\($0.targetDifficulty)" } ?? (powTarget > 0 ? "\(powTarget)" : nil)) { powSheet = true }
-            toolbarButton(AppIcons.mute, "Content warning", active: contentWarningOn) {
+            toolbarButton(AppIcons.mute, "Content Warning", active: contentWarningOn) {
                 contentWarningOn.toggle()
                 if !contentWarningOn { contentWarningReason = "" }
             }
-            toolbarButton("number", "Insert hashtag") { insertAtEnd { bridge.composerInsertHashtag(text: $0, cursor: Int32($0.count)) } }
+            toolbarButton("number", "Insert hashtag") {
+                applyInsert(bridge.composerInsertHashtag(text: text, cursor: Int32(cursor)))
+            }
             toolbarButton("face.smiling", "Insert emoji") { emojiSheet = true }
             Spacer(minLength: BitOSTheme.Spacing.sm)
             charCounter
@@ -470,7 +484,7 @@ struct ComposerScreen: View {
     }
 
     private var charCounter: some View {
-        let map = bridge.composerCounter(length: Int32(text.count)) as? [String: Any] ?? [:]
+        let map = bridge.composerCounter(length: Int32(utf16Length)) as? [String: Any] ?? [:]
         let ratio = (map["ratio"] as? KotlinDouble)?.doubleValue ?? (map["ratio"] as? NSNumber)?.doubleValue ?? 0
         let near = (map["near"] as? KotlinBoolean)?.boolValue ?? false
         let over = (map["over"] as? KotlinBoolean)?.boolValue ?? false
@@ -528,7 +542,7 @@ struct ComposerScreen: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: BitOSTheme.Spacing.sm) {
                 ForEach(emojis, id: \.self) { emoji in
                     Button {
-                        text += (text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n")) ? emoji : " \(emoji)"
+                        applyInsert(bridge.composerInsertEmoji(text: text, cursor: Int32(cursor), emoji: emoji))
                         emojiSheet = false
                     } label: {
                         Text(emoji)
@@ -545,14 +559,17 @@ struct ComposerScreen: View {
 
     // MARK: - Actions
 
-    /// SwiftUI TextEditor has no public cursor API: mentions detect and
-    /// insert at the end of the text (documented approximation).
+    /// @-autocomplete at the real caret (legacy `_MentionField` parity):
+    /// only while the field is focused and the caret sits in a trailing
+    /// `@query` — a bare `@` still resolves, with the empty query matching
+    /// every known profile (cap 6).
     private func refreshSuggestions() {
-        let query = bridge.composerMentionQuery(text: text, cursor: Int32(text.count))
-        guard !query.isEmpty else {
+        let atCursor = Int32(min(max(cursor, 0), utf16Length))
+        guard focused, bridge.composerIsComposingMention(text: text, cursor: atCursor) else {
             if !suggestions.isEmpty { suggestions = [] }
             return
         }
+        let query = bridge.composerMentionQuery(text: text, cursor: atCursor)
         let profiles = environment.feedStore.profiles.values.map { profile in
             [
                 "pubkey": profile.pubkey,
@@ -578,23 +595,50 @@ struct ComposerScreen: View {
         }
     }
 
+    /// Replace the `@query` in front of the caret with `@Name ` and track
+    /// the pick so publish rewrites it to `nostr:npub…` (NIP-27).
     private func pickMention(_ suggestion: MentionPick) {
-        guard let range = text.range(of: "@\(currentQueryTail)", options: .backwards) else {
+        let nsText = text as NSString
+        let search = NSRange(location: 0, length: min(max(cursor, 0), utf16Length))
+        let at = nsText.range(of: "@", options: .backwards, range: search)
+        guard at.location != NSNotFound else {
             suggestions = []
             return
         }
-        text = text.replacingCharacters(in: range, with: "@\(suggestion.name) ")
+        let replacement = "@\(suggestion.name) " as NSString
+        let next = nsText.replacingCharacters(
+            in: NSRange(location: at.location, length: search.length - at.location),
+            with: replacement as String
+        )
+        applyProgrammaticEdit(next, selection: at.location + replacement.length)
         trackedMentions.append((name: suggestion.name, npub: suggestion.npub))
         suggestions = []
     }
 
-    private var currentQueryTail: String {
-        bridge.composerMentionQuery(text: text, cursor: Int32(text.count))
+    /// Apply a text change driven from outside the field (mention pick,
+    /// toolbar insert): place the caret at the edit result and bring the
+    /// keyboard back (legacy `_textWorker` refocus parity).
+    private func applyProgrammaticEdit(_ next: String, selection: Int, refocus: Bool = true) {
+        text = next
+        cursor = selection
+        pendingEdit = ComposerTextEdit(selection: selection, refocus: refocus)
     }
 
-    private func insertAtEnd(_ transform: (String) -> [String: Any]) {
-        let map = transform(text)
-        if let next = map["text"] as? String { text = next }
+    /// Bridge toolbar inserts return {text, cursor}; apply both.
+    private func applyInsert(_ map: [String: Any]) {
+        guard let next = map["text"] as? String else { return }
+        let selection = (map["cursor"] as? KotlinInt)?.intValue
+            ?? (map["cursor"] as? NSNumber)?.intValue
+            ?? (next as NSString).length
+        applyProgrammaticEdit(next, selection: selection)
+    }
+
+    /// Legacy `_isValidUrl` parity: http(s) with an absolute path.
+    private func isValidRemoteUrl(_ url: String) -> Bool {
+        guard let components = URLComponents(string: url),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        return components.path.isEmpty || components.path.hasPrefix("/")
     }
 
     private func composedContent() -> String {
@@ -672,6 +716,10 @@ struct ComposerScreen: View {
             guard let name = obj["n"] as? String, let npub = obj["u"] as? String else { return nil }
             return (name: name, npub: npub)
         }
+        // Restored caret sits at the end; the composer opens without
+        // stealing focus (the legacy field focuses only on tap).
+        cursor = (text as NSString).length
+        pendingEdit = ComposerTextEdit(selection: cursor, refocus: false)
     }
 
     private func clearDraft() {
@@ -713,7 +761,7 @@ struct ComposerScreen: View {
         do {
             var uploadedUrls: [String] = []
             for (index, picked) in pickedImages.enumerated() {
-                uploadStatus = pickedImages.count == 1 ? "Uploading media…" : "Uploading media \(index + 1)/\(pickedImages.count)…"
+                uploadStatus = "Uploading media…"
                 let uploaded = try await uploader.upload(
                     bytes: picked.data,
                     mimeType: picked.mimeType,
@@ -721,6 +769,7 @@ struct ComposerScreen: View {
                     serverUrl: blossomServer
                 )
                 uploadedUrls.append(uploaded.url)
+                uploadStatus = "Uploaded \(index + 1) of \(pickedImages.count)"
             }
             uploadStatus = "Publishing…"
             // Base already carries remote URLs (composedContent); only the
@@ -878,16 +927,16 @@ private struct RemoteMediaThumb: View {
             AppIcons.image(for: AppIcons.checkCircle)
                 .font(.system(size: 44))
                 .foregroundStyle(BitOSTheme.success)
-            Text("Published")
+            Text("Published!")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(BitOSTheme.textPrimary)
-            Text("Your note is on its way to the relays.")
+            Text("Your note has been sent to the Nostr network.")
                 .font(.footnote)
                 .foregroundStyle(BitOSTheme.textSecondary)
             Button {
                 onClose()
             } label: {
-                Text("Back to feed")
+                Text("Back to Home")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(BitOSTheme.background)
                     .frame(width: 220)
@@ -895,9 +944,10 @@ private struct RemoteMediaThumb: View {
                     .background(Capsule().fill(BitOSTheme.accent))
             }
             .buttonStyle(.plain)
-            Button("New post") {
+            Button("New Post") {
                 environment.notePublisher.dismiss()
                 text = ""
+                cursor = 0
                 trackedMentions = []
                 remoteImageUrls = []
                 pickedImages = []

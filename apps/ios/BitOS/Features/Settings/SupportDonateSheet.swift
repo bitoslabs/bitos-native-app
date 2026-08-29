@@ -169,15 +169,20 @@ struct SupportDonateSheet: View {
 
     // MARK: - LNURL (mirror of ZapSheet's minimal client)
 
+    // MARK: - LNURL (shared rules through the bridge; mirror of ZapSheet)
+
     private func fetchInvoice(lud16: String) {
         invoiceBusy = true
         invoiceError = nil
         Task {
             defer { invoiceBusy = false }
             do {
-                let parts = lud16.lowercased().split(separator: "@")
-                guard parts.count == 2 else { throw Err("invalid lightning address") }
-                let meta = try await httpString("https://\\(parts[1])/.well-known/lnurlp/\\(parts[0])")
+                // Shared LUD-16 endpoint rule: domain lowercased, local part
+                // preserved + percent-encoded (APP-014 fix).
+                guard let endpoint = bridge.lnurlPayEndpointUrl(lud16: lud16) else {
+                    throw Err("invalid lightning address")
+                }
+                let meta = try await httpString(endpoint)
                 guard let pr = try await invoiceFromCallback(meta, millisats: Int64(amount) * 1000) else {
                     throw Err("no invoice returned")
                 }
@@ -190,6 +195,8 @@ struct SupportDonateSheet: View {
 
     private struct Err: LocalizedError { let message: String; init(_ m: String) { message = m } }
 
+    private var bridge: BusinessCoreBridge { BusinessCoreBridge() }
+
     private func httpString(_ urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw Err("bad url") }
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -197,21 +204,19 @@ struct SupportDonateSheet: View {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    /// Minimal LNURL-pay: parse callback+minSendable from the metadata JSON,
-    /// then hit the callback with amount + empty comment.
+    /// Minimal LNURL-pay through the shared parser/builder (HTTPS-only
+    /// callbacks, millisat range enforced, bounded inputs).
     private func invoiceFromCallback(_ metaJson: String, millisats: Int64) async throws -> String? {
-        guard let data = metaJson.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let callback = obj["callback"] as? String,
-              let minSendable = obj["minSendable"] as? Int64,
-              millisats >= minSendable else { return nil }
-        let sep = callback.contains("?") ? "&" : "?"
-        let url = "\\(callback)\\(sep)amount=\\(millisats)"
+        guard let params = bridge.lnurlParsePayRequest(body: metaJson),
+              let callback = params[0] as? String,
+              let min = (params[1] as? KotlinInt)?.int64Value,
+              let max = (params[2] as? KotlinInt)?.int64Value else { return nil }
+        guard let url = bridge.lnurlBuildCallbackUrl(
+            callback: callback, amount: millisats, minMillisats: min, maxMillisats: max,
+            allowsNostr: false, nostrEvent: nil, lnurlHint: nil
+        ) else { return nil }
         let body = try await httpString(url)
-        guard let bodyData = body.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-              let pr = parsed["pr"] as? String else { return nil }
-        return pr
+        return bridge.lnurlParseInvoice(body: body)
     }
 }
 

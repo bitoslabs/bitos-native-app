@@ -76,7 +76,48 @@ Then open [BitOS.xcodeproj](../../apps/ios/BitOS.xcodeproj), choose the `BitOS` 
 
 When running on a physical device, configure your own development team and signing in Xcode; never commit signing changes, provisioning profiles, or private keys.
 
-## 5. Run local services and infrastructure
+## 5. Build application artifacts
+
+Use the repository commands when you need a local app artifact rather than an
+IDE run. Both commands build unsigned debug artifacts suitable for local
+development; they do not create store-ready, signed releases.
+
+```sh
+make build-ios
+make build-android-apk
+```
+
+`make build-ios` is the preferred spelling of the existing `make ios-build`
+command. `make build-android-apk` writes the APK to:
+
+```text
+apps/android/build/outputs/apk/debug/android-debug.apk
+```
+
+Debug builds emit native lifecycle diagnostics without logging user content,
+keys, Nostr events, or deep-link values. View them with:
+
+```sh
+adb logcat BitOS.Activity:D BitOS.Process:D '*:S'
+```
+
+On iOS, use Xcode's debug console or the macOS Console app, filtering for the
+app's subsystem and the `activity` category.
+
+## 6. Clean generated build caches
+
+When an interrupted build or branch switch leaves stale local artifacts, run:
+
+```sh
+make clean-cache
+```
+
+This removes only repository-generated Gradle, native, iOS, and BusinessCore
+framework outputs. It intentionally preserves global tool and package caches,
+including the Android SDK, `~/.gradle`, and npm's cache. `make clean` remains
+an alias for this command.
+
+## 7. Run local services and infrastructure
 
 The native clients can be developed independently. When work needs the local service scaffold, make a local-only environment file and start Compose:
 
@@ -106,14 +147,15 @@ npm run worker
 
 Run each command in its own terminal. These processes currently provide the service scaffold; use Compose when the change needs its local dependencies.
 
-## 6. Tests and checks
+## 8. Tests and checks
 
 Run the narrowest relevant command while iterating, then run the available full check before handing work over:
 
 ```sh
 make native-test      # C++ MediaCore tests
 make android-test     # BusinessCore host tests + Android unit tests
-make ios-build        # BusinessCore frameworks + unsigned iOS build
+make build-ios        # BusinessCore frameworks + unsigned iOS build
+make build-android-apk # unsigned Android debug APK
 make service-test     # Node service tests
 make infra-check      # validates Compose configuration
 make check            # every locally available lane
@@ -121,7 +163,7 @@ make check            # every locally available lane
 
 `make check` skips an unavailable iOS or Android lane, but CI is authoritative. State any skipped lane in the pull request. See [testing.md](testing.md) and [development-workflow.md](development-workflow.md) for the required checks for each change type.
 
-## 7. Where to make changes
+## 9. Where to make changes
 
 - `apps/ios`: SwiftUI presentation and Apple adapters.
 - `apps/android`: Compose presentation and Android adapters.
@@ -132,7 +174,7 @@ make check            # every locally available lane
 
 Keep UI and platform APIs native. BusinessCore and MediaCore communicate only through their native adapters and versioned contracts; neither core imports the other. The fuller boundary rules are in [architecture.md](architecture.md).
 
-## 8. Troubleshooting builds
+## 10. Troubleshooting builds
 
 ### App installs but crashes on launch
 
@@ -176,4 +218,12 @@ for d in classes*.dex; do
   "$HOME/Library/Android/sdk/build-tools/36.0.0/dexdump" "$d" 2>/dev/null |
     grep -c "Class descriptor.*'Lspace/bitos/core/"
 done
+```
+
+
+
+```bash
+
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"; export PATH="$JAVA_HOME/bin:$PATH"; ./scripts/ios-build.sh > /tmp/ios-build.log 2>&1; echo "final_exit=$?"
+
 ```

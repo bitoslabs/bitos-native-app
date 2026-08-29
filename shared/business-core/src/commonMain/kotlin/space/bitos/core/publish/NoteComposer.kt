@@ -397,6 +397,13 @@ class NoteComposer(
         return UnsignedNote(id, pubkeyHex, createdAtSeconds, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
     }
 
+    /** The signed event object `{...}` (LNURL `nostr` param — never a relay frame). */
+    fun signedEventJson(note: UnsignedNote, signatureHex: String): String? {
+        if (!signatureHex.matches(Regex("^[0-9a-f]{128}$"))) return null
+        val frame = publishMessage(note, signatureHex) ?: return null
+        return frame.substringAfter(',').removeSuffix("]")
+    }
+
     /** The `["EVENT", {...}]` frame carrying the signed event, or null when malformed. */
     fun publishMessage(note: UnsignedNote, signatureHex: String): String? {
         if (!signatureHex.matches(Regex("^[0-9a-f]{128}$"))) return null

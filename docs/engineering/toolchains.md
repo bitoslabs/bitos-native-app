@@ -48,8 +48,10 @@ The wrapper JAR is generated from the official Gradle 9.5.0 source/distribution 
 ```text
 make doctor          report missing tools
 make native-test     compile/test C++ MediaCore
-make ios-build       compile the SwiftUI app without signing
+make build-ios       compile the SwiftUI app without signing
 make android-test    test BusinessCore and Android
+make build-android-apk build the unsigned Android debug APK
+make clean-cache     remove repository-generated build outputs
 make service-test    run Node service tests without external services
 make infra-check     validate Docker Compose structure
 make check           run every available local lane

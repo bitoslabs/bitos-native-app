@@ -1,6 +1,7 @@
 package space.bitos.app
 
 import android.app.Application
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -122,6 +123,7 @@ class BitOsApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        debugProcess("created")
         // Application properties are now fully initialized. Starting this in
         // `init` can dereference the later lazy delegates while Android is
         // still constructing the Application and crash before MainActivity.
@@ -131,8 +133,19 @@ class BitOsApplication : Application() {
     }
 
     override fun onTerminate() {
+        debugProcess("terminating")
         applicationScope.cancel()
         super.onTerminate()
+    }
+
+    private fun debugProcess(event: String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(PROCESS_LOG_TAG, event)
+        }
+    }
+
+    private companion object {
+        const val PROCESS_LOG_TAG = "BitOS.Process"
     }
 }
 

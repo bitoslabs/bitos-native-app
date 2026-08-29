@@ -761,6 +761,7 @@ fun CommentThreadSheet(
                     viewModel.zap(zapNote, comment, anonymous)
                 },
                 onClose = { viewModel.dismissZap(); zapTarget = null },
+                profilePictureUrl = state.profiles[zapNote.pubkey]?.picture,
             )
         }
     }

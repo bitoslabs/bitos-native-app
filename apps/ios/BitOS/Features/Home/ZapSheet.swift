@@ -130,6 +130,7 @@ struct ZapSheet: View {
                 paid: paid,
                 recipientName: displayName,
                 recipientPubkey: note.pubkey,
+                recipientPicture: profiles[note.pubkey]?.picture,
                 lud16: lud16,
                 copiedKind: copiedKind,
                 onCopyAddress: {
@@ -212,7 +213,10 @@ struct ZapSheet: View {
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
                     authorPubkey: account.pubkeyHex, targetEventId: note.id, nowSeconds: now
                 ), let signature = await identity.signLocally(eventId),
-                   let frame = bridge.zapRequestMessage(
+                   // LUD-06: the `nostr` param is the BARE signed event
+                   // object `{...}` — never a relay `["EVENT",…]` frame
+                   // (APP-014 fix: servers reject frames outright).
+                   let frame = bridge.zapRequestEventJson(
                     recipientPubkey: note.pubkey, amountMillisats: Int64(amount) * 1000,
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
                     authorPubkey: account.pubkeyHex, targetEventId: note.id,
@@ -258,22 +262,43 @@ struct ZapSheet: View {
     struct LnurlError: Error { let message: String }
 
     private func fetchPayRequest(lud16: String) async throws -> LnurlPayParams {
-        let parts = lud16.lowercased().split(separator: "@")
-        guard parts.count == 2, !parts[0].isEmpty else { throw LnurlError(message: "invalid lightning address") }
-        let (data, response) = try await URLSession.shared.data(from: URL(string: "https://\(parts[1])/.well-known/lnurlp/\(parts[0])")!)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw LnurlError(message: "LNURL server unreachable") }
-        return try LnurlPayParams(jsonBody: String(data: data, encoding: .utf8) ?? "", bridge: bridge)
+        // Shared LUD-16 rule (`LnurlPay.payEndpointUrl`): domain lowercased,
+        // local part preserved and percent-encoded (APP-014 fix — the old
+        // whole-string lowercase built wrong URLs; some providers are
+        // case-sensitive and unencoded parts break hosts).
+        guard let endpoint = bridge.lnurlPayEndpointUrl(lud16: lud16), let url = URL(string: endpoint) else {
+            throw LnurlError(message: "invalid lightning address")
+        }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw LnurlError(message: "Could not reach the Lightning provider.")
+        }
+        let body = String(data: data, encoding: .utf8) ?? ""
+        do {
+            return try LnurlPayParams(jsonBody: body, bridge: bridge)
+        } catch {
+            throw LnurlError(message: bridge.lnurlProviderError(body: body) ?? "The Lightning provider rejected the request.")
+        }
     }
 
     private func fetchInvoice(payRequest: LnurlPayParams, amountMillisats: Int64, nostrJson: String?, lud16: String) async throws -> (bolt11: String, verifyUrl: String?) {
         guard let url = payRequest.callbackUrl(amountMillisats: amountMillisats, nostrJson: nostrJson, lud16: lud16, bridge: bridge) else {
-            throw LnurlError(message: "amount out of range")
+            throw LnurlError(message: bridge.lnurlAmountFailure(
+                minMillisats: payRequest.minMillisats, maxMillisats: payRequest.maxMillisats, amountMillisats: amountMillisats
+            ) ?? "invalid zap request")
         }
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw LnurlError(message: "LNURL server unreachable") }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw LnurlError(message: "Could not create a Lightning invoice.")
+        }
         let body = String(data: data, encoding: .utf8) ?? ""
-        let parsed = try InvoiceResponse(jsonBody: body, bridge: bridge)
-        let verifyUrl = (bridge.lnurlInvoiceVerifyUrl(body: body) as String?).flatMap { URL(string: $0) == nil ? nil : $0 }
+        let parsed: InvoiceResponse
+        do {
+            parsed = try InvoiceResponse(jsonBody: body, bridge: bridge)
+        } catch {
+            throw LnurlError(message: bridge.lnurlProviderError(body: body) ?? "No invoice was returned.")
+        }
+        let verifyUrl = bridge.lnurlInvoiceVerifyUrl(body: body).flatMap { URL(string: $0) == nil ? nil : $0 }
         return (parsed.paymentRequest, verifyUrl)
     }
 }
@@ -288,7 +313,7 @@ private struct LnurlPayParams {
     init(jsonBody: String, bridge: BusinessCoreBridge) throws {
         // Parse via the shared pure rules through a minimal bridge surface:
         // the bridge validates HTTPS, bounds, and tag == payRequest.
-        guard let params = bridge.lnurlParsePayRequest(body: jsonBody) as? [Any],
+        guard let params = bridge.lnurlParsePayRequest(body: jsonBody),
               let callback = params[0] as? String,
               let min = (params[1] as? KotlinInt)?.int64Value,
               let max = (params[2] as? KotlinInt)?.int64Value else {
@@ -304,7 +329,7 @@ private struct LnurlPayParams {
         let url = bridge.lnurlBuildCallbackUrl(
             callback: callback, amount: amountMillisats, minMillisats: minMillisats, maxMillisats: maxMillisats,
             allowsNostr: allowsNostr, nostrEvent: nostrJson, lnurlHint: lud16
-        ) as? String
+        )
         return url.flatMap(URL.init(string:))
     }
 }
@@ -326,6 +351,7 @@ private struct ZapHeaderView: View {
     let paid: Bool
     let recipientName: String?
     let recipientPubkey: String
+    var recipientPicture: String? = nil
     let lud16: String?
     let copiedKind: String?
     let onCopyAddress: () -> Void
@@ -345,7 +371,13 @@ private struct ZapHeaderView: View {
                 }
             }
             Spacer()
-            PubkeyAvatarView(pubkey: recipientPubkey, size: 40)
+            PubkeyAvatarView(
+                pubkey: recipientPubkey,
+                size: 40,
+                picture: recipientPicture,
+                label: recipientName,
+                hasLightning: lud16 != nil
+            )
             if lud16 != nil {
                 Button(action: onCopyAddress) {
                     Text(copiedKind == "address" ? "✓" : "⌗")

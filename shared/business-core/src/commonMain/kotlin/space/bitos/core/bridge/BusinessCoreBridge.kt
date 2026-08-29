@@ -699,6 +699,15 @@ class BusinessCoreBridge {
         space.bitos.core.publish.ComposerRules.mentionQueryAt(text, cursor) ?: ""
 
     /**
+     * Whether the cursor sits in a trailing @query at all (a bare `@`
+     * counts): distinguishes "not composing" from the empty query that
+     * [composerMentionQuery] collapses to "" — the empty query must still
+     * surface the unfiltered candidate list (legacy parity).
+     */
+    fun composerIsComposingMention(text: String, cursor: Int): Boolean =
+        space.bitos.core.publish.ComposerRules.mentionQueryAt(text, cursor) != null
+
+    /**
      * Mention suggestions. Input `profilesJson`: [{pubkey, name,
      * displayName, picture?}]. Output (stable JSON, bridge-test locked):
      * [{"name":…,"pubkey":…,"npub":…,"picture":…}].
@@ -1968,6 +1977,29 @@ class BusinessCoreBridge {
         return composer.publishMessage(unsigned, signatureHex)
     }
 
+    /**
+     * The bare signed kind-9734 event JSON `{...}` for the LNURL `nostr`
+     * param (LUD-06/NIP-57): plain object, never a relay `[…"EVENT"…]`
+     * frame. APP-014 zap fix; null when composition fails.
+     */
+    fun zapRequestEventJson(
+        recipientPubkey: String,
+        amountMillisats: Long,
+        relays: List<String>,
+        lnurlHint: String,
+        comment: String,
+        authorPubkey: String,
+        targetEventId: String?,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeZapRequest(
+            recipientPubkey, amountMillisats, relays, lnurlHint, comment, authorPubkey, targetEventId,
+        ) ?: return null
+        return composer.signedEventJson(unsigned, signatureHex)
+    }
+
     /** REQ for zap receipts (kind 9735) targeting one note. */
     fun zapReceiptsRequest(subscriptionId: String, targetEventId: String): String =
         NostrEventCodec.encodeRequest(
@@ -1994,6 +2026,22 @@ class BusinessCoreBridge {
     }
 
     /**
+     * LUD-16 pay-params endpoint `https://<domain>/.well-known/lnurlp/<user>`
+     * for a `user@domain` address — domain lowercased, local part preserved
+     * and percent-encoded (web `lnurlEndpointOf` parity); null when invalid.
+     */
+    fun lnurlPayEndpointUrl(lud16: String): String? =
+        space.bitos.core.model.LnurlPay.payEndpointUrl(lud16)
+
+    /** Provider error text (`reason`/`errors`) from a failed LNURL body, or null. */
+    fun lnurlProviderError(body: String): String? =
+        space.bitos.core.model.LnurlPay.providerError(body)
+
+    /** Amount-range failure message (null = payment amount is in range). */
+    fun lnurlAmountFailure(minMillisats: Long, maxMillisats: Long, amountMillisats: Long): String? =
+        space.bitos.core.model.LnurlPay.amountFailure(minMillisats, maxMillisats, amountMillisats)
+
+    /**
      * Callback URL with amount + optional nostr event, or null when the
      * amount is outside [minMillisats, maxMillisats] from the real params.
      */
@@ -2004,7 +2052,7 @@ class BusinessCoreBridge {
         maxMillisats: Long,
         allowsNostr: Boolean,
         nostrEvent: String?,
-        lnurlHint: String,
+        lnurlHint: String?,
     ): String? {
         val pay = try {
             space.bitos.core.model.LnurlPay.PayRequest(callback, minMillisats, maxMillisats, allowsNostr, null)

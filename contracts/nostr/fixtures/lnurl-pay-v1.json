@@ -1,0 +1,30 @@
+{
+  "generator": "bitos-nostr-web zap-invoice.ts parity (LUD-01/LUD-16 LNURL-pay)",
+  "note": "Golden LNURL-pay wire shapes for the APP-014 zap flow. The 'nostr' callback param is the BARE signed kind-9734 event object (LUD-06) — never a ['EVENT',…] relay frame. The 'lnurl' param is the bech32 lnurl1… of the pay-params URL. The local part of a lud16 keeps its case; only the domain is lowercased.",
+  "lud16": "Satoshi@GetAlby.com",
+  "payEndpoint": "https://getalby.com/.well-known/lnurlp/Satoshi",
+  "payRequest": {
+    "body": "{\"callback\":\"https://getalby.com/callback\",\"minSendable\":1000,\"maxSendable\":100000000,\"tag\":\"payRequest\",\"allowsNostr\":true,\"nostrPubkey\":\"abababababababababababababababababababababababababababababababab\",\"commentAllowed\":256}",
+    "callback": "https://getalby.com/callback",
+    "minSendableMillisats": 1000,
+    "maxSendableMillisats": 100000000,
+    "allowsNostr": true,
+    "supportsZap": true,
+    "commentAllowed": 256
+  },
+  "callbackUrlPlainNoZip": "https://getalby.com/callback?amount=21000&lnurl=lnurl1dp68gurn8ghj7em9w3skccne9e3k7mf09emk2mrv944kummhdchkcmn4wfk8qt6nv96x7umgdyhhgjkx",
+  "invoice": {
+    "body": "{\"pr\":\"lnbc210u1p5qqqsp5zyqzqyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8q3hd\",\"status\":\"OK\",\"verify\":\"https://getalby.com/verify/x1\",\"routes\":[]}",
+    "paymentRequest": "lnbc210u1p5qqqsp5zyqzqyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq8q3hd",
+    "verifyUrl": "https://getalby.com/verify/x1"
+  },
+  "providerError": {
+    "payRequestBody": "{\"status\":\"ERROR\",\"errors\":\"user not found\"}",
+    "invoiceBody": "{\"status\":\"ERROR\",\"reason\":\"FAILED_RETRYABLE\"}",
+    "reason": "FAILED_RETRYABLE"
+  },
+  "amountFailures": [
+    { "minMillisats": 1500, "maxMillisats": 100000, "amountMillisats": 1000, "message": "Minimum amount is 2 sats." },
+    { "minMillisats": 1000, "maxMillisats": 100000, "amountMillisats": 150000, "message": "Maximum amount is 100 sats." }
+  ]
+}
