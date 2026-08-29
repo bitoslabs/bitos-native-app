@@ -1,5 +1,6 @@
 package space.bitos.app.ui.components
 
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -35,11 +36,13 @@ fun BitosTextField(
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
     textStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+    /** Compact: tighter h12/v8 padding (~48 dp) for dense forms. */
+    compact: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier,
+        modifier = if (compact) modifier.height(48.dp) else modifier,
         enabled = enabled,
         readOnly = readOnly,
         singleLine = singleLine,

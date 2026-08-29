@@ -142,13 +142,15 @@ class FeedRepositoryTest {
 
         repository.loadOlder()
         withTimeout(20_000) {
-            while (transport.sent.none { it.contains("bitos-older-1") && it.contains("\"until\":1710000000") }) {
+            while (transport.sent.none { it.contains("bitos-older-1") && it.contains("\"until\":1709999999") }) {
                 kotlinx.coroutines.delay(10)
             }
         }
         val request = transport.sent.last { it.contains("bitos-older-1") }
-        assertTrue(request.contains("\"kinds\":[21,22],\"limit\":16,\"until\":1710000000"), request)
-        assertTrue(request.contains("\"kinds\":[1],\"limit\":48,\"until\":1710000000"), request)
+        // Walk filters (shared BitzTimelinePolicy): deep media kinds with a
+        // 60-limit + shallow kind-1 150, cursor = oldest − 1 (until exclusive).
+        assertTrue(request.contains("\"kinds\":[20,21,22,34235,34236],\"limit\":60,\"until\":1709999999"), request)
+        assertTrue(request.contains("\"kinds\":[1],\"limit\":150,\"until\":1709999999"), request)
         assertTrue(repository.state.value.isLoadingOlder)
 
         // In-flight guard: a second call must not issue another REQ.

@@ -211,96 +211,105 @@ fun ProfileEditContent(
             onPickBanner = { sourceTarget = "banner" },
         )
 
-        // ── Web-form grid (settings/+page.svelte parity) ─────────────────
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                FieldLabel("Username")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = name,
-                    onValueChange = { if (it.length <= 64) name = it },
-                    placeholder = "username",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                FieldLabel("Display name")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = displayName,
-                    onValueChange = { if (it.length <= 64) displayName = it },
-                    placeholder = "Your name",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+        // ── Legacy form card: single-column full-width compact fields. ──
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            FieldLabel("Username")
+            space.bitos.app.ui.components.BitosTextField(
+                value = name,
+                onValueChange = { if (it.length <= 64) name = it },
+                placeholder = "username",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
-        FieldLabel("Bio")
-        space.bitos.app.ui.components.BitosTextField(
-            value = about,
-            onValueChange = { if (it.length <= 300) about = it },
-            placeholder = "Tell the world about yourself…",
-            singleLine = false,
-            minLines = 3,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text("${'$'}{about.length} / 300 characters", fontSize = 11.sp, color = BitOSColors.textTertiary)
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel("Display name")
+            space.bitos.app.ui.components.BitosTextField(
+                value = displayName,
+                onValueChange = { if (it.length <= 64) displayName = it },
+                placeholder = "Your name",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel("Bio")
+            space.bitos.app.ui.components.BitosTextField(
+                value = about,
+                onValueChange = { if (it.length <= 300) about = it },
+                placeholder = "Tell the world about yourself…",
+                singleLine = false,
+                minLines = 3,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("${'$'}{about.length} / 300 characters", fontSize = 11.sp, color = BitOSColors.textTertiary, modifier = Modifier.padding(top = 4.dp))
+        }
         uploadError?.let { Text(it, fontSize = 12.sp, color = BitOSColors.error) }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                FieldLabel("Avatar URL")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = picture,
-                    onValueChange = { if (it.length <= 256) picture = it },
-                    placeholder = "https://…",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                FieldLabel("Banner URL")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = banner,
-                    onValueChange = { if (it.length <= 256) banner = it },
-                    placeholder = "https://…",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel(if (uploadingTarget == "avatar") "Uploading… (avatar URL)" else "Avatar picture URL")
+            space.bitos.app.ui.components.BitosTextField(
+                value = picture,
+                onValueChange = { if (it.length <= 256) picture = it },
+                placeholder = "https://…",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                FieldLabel("Website")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = website,
-                    onValueChange = { if (it.length <= 128) website = it },
-                    placeholder = "https://example.com",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                FieldLabel("NIP-05")
-                space.bitos.app.ui.components.BitosTextField(
-                    value = nip05,
-                    onValueChange = { if (it.length <= 64) nip05 = it },
-                    placeholder = "name@example.com",
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel(if (uploadingTarget == "banner") "Uploading… (banner URL)" else "Banner picture URL")
+            space.bitos.app.ui.components.BitosTextField(
+                value = banner,
+                onValueChange = { if (it.length <= 256) banner = it },
+                placeholder = "https://…",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
-        FieldLabel("Lightning address")
-        space.bitos.app.ui.components.BitosTextField(
-            value = lud16,
-            onValueChange = { if (it.length <= 64) lud16 = it },
-            placeholder = "name@getalby.com",
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel("Website")
+            space.bitos.app.ui.components.BitosTextField(
+                value = website,
+                onValueChange = { if (it.length <= 128) website = it },
+                placeholder = "https://example.com",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel("NIP-05")
+            space.bitos.app.ui.components.BitosTextField(
+                value = nip05,
+                onValueChange = { if (it.length <= 64) nip05 = it },
+                placeholder = "name@example.com",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Column(Modifier.fillMaxWidth()) {
+            FieldLabel("Lightning address")
+            space.bitos.app.ui.components.BitosTextField(
+                value = lud16,
+                onValueChange = { if (it.length <= 64) lud16 = it },
+                placeholder = "name@getalby.com",
+                singleLine = true,
+                compact = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         Text(
             "Publishes a signed profile event to your relays; the change appears once confirmed.",
@@ -353,7 +362,7 @@ private fun EditHeaderPreview(
             Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 8.dp)
+                .padding(top = 4.dp)
                 .height(120.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(BitOSColors.primary.copy(alpha = 0.15f)),
@@ -400,11 +409,13 @@ private fun EditHeaderPreview(
                 Text("Change banner", fontSize = 11.sp, fontWeight = FontWeight.W600, color = Color.White)
             }
         }
-        // Avatar + camera chip, overlapping the banner bottom edge by 36.
+        // Avatar + camera chip: lift exactly half the avatar (88/2) so the
+        // hexagon's center sits ON the banner bottom edge (banner top pad 4
+        // + 120 = 124; avatar top = 124 - 44 = 80) — the hero center line.
         Column(
             Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = (120 - 36).dp),
+                .offset(y = (124 - 44).dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(

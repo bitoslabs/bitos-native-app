@@ -93,7 +93,6 @@ fun MoreScreen(
         androidx.compose.runtime.mutableStateOf<space.bitos.core.identity.RegisteredAccount?>(null)
     }
     var importInput by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
-    var importError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
     Column(
         Modifier
@@ -364,30 +363,28 @@ fun MoreScreen(
     // ── Add account (import nsec / create) ────────────────────────────
     if (showAddAccount) {
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { showAddAccount = false; importError = null },
+            onDismissRequest = { showAddAccount = false; importInput = "" },
             title = { Text("Add account") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Import an nsec or create a fresh key. Every account already on this device stays sealed.",
+                        "Log in with an nsec or create a fresh key. Every account already on this device stays sealed.",
                         fontSize = 12.sp, color = BitOSColors.textSecondary,
                     )
-                    androidx.compose.material3.OutlinedTextField(
+                    space.bitos.app.ui.components.SecretKeyField(
                         value = importInput,
-                        onValueChange = { importInput = it; importError = null },
-                        singleLine = true,
-                        isError = importError != null,
-                        placeholder = { Text("nsec1\u2026", fontSize = 13.sp) },
+                        onValueChange = {
+                            importInput = it
+                            identityViewModel.clearImportError()
+                        },
+                        error = identity.importError,
+                        onSubmit = { identityViewModel.importNsecPreview(importInput) },
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
                     )
-                    importError?.let { Text(it, fontSize = 12.sp, color = BitOSColors.error) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(
-                            onClick = {
-                                identityViewModel.importNsecPreview(importInput)
-                                importError = identityViewModel.state.value.importError
-                            },
-                            enabled = importInput.isNotBlank(),
+                            onClick = { identityViewModel.importNsecPreview(importInput) },
+                            enabled = space.bitos.app.ui.components.secretKeyReady(importInput),
                         ) { Text("Review key", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
                         TextButton(onClick = { identityViewModel.createKeyPreview() }) {
                             Text("Create new key", color = BitOSColors.primary)
@@ -439,6 +436,8 @@ fun MoreScreen(
         space.bitos.app.ui.components.ConfirmIdentityDialog(
             npub = preview.npub,
             replacesExisting = preview.replacesExisting,
+            isNewKey = preview.isNewKey,
+            secretNsec = if (preview.isNewKey) identityViewModel.previewNsec() else null,
             busy = identity.busy,
             onConfirm = { identityViewModel.confirmPreview(); showAddAccount = false },
             onDismiss = { identityViewModel.cancelPreview(); showAddAccount = false },

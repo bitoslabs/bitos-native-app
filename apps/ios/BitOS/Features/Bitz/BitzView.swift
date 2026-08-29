@@ -67,24 +67,6 @@ struct BitzBridgeRules {
         return array.compactMap { $0["id"] as? String }
     }
 
-    /// Performance study §2.9 tab sorts: trending (engagement × 72 h
-    /// half-life decay) and most-zapped (sats desc), both through the
-    /// shared `BitzSort`. Engagement rows in, ordered ids out.
-    func tabSortIds(mode: SettingsBitzMode, entries: [[String: Any]], nowSeconds: Int64) -> [String] {
-        let modeWire: String
-        switch mode {
-        case .trending: modeWire = "trending"
-        case .zapped: modeWire = "zapped"
-        default: return []
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: entries) else { return [] }
-        let entriesJson = String(data: data, encoding: .utf8) ?? "[]"
-        guard let raw = bridge.bitzTabSortIds(mode: modeWire, entriesJson: entriesJson, nowSeconds: nowSeconds),
-              let idsData = raw.data(using: .utf8),
-              let ids = try? JSONSerialization.jsonObject(with: idsData) as? [String] else { return [] }
-        return ids
-    }
-
     private func entriesJson(_ notes: [FeedNote], profiles: [String: ProfileMetadata]) -> String {
         let entries: [[String: String]] = notes.map { note in
             [
@@ -150,33 +132,11 @@ struct BitzView: View {
     }
 
     private var playerNotes: [FeedNote] {
+        // The paged list is the active tab's window (legacy
+        // `displayedEvents`): search picks spliced ahead, then the
+        // verified video window.
         let windowIds = Set(videos.map(\.id))
-        let window = spliced.filter { !windowIds.contains($0.id) } + videos
-        // §2.9: TRENDING/ZAPPED are view-only sorts over the same verified
-        // window — engagement rows through the shared BitzSort via the
-        // bridge, timeline lifecycle stays For-You's.
-        guard let mode, mode == .trending || mode == .zapped, !window.isEmpty else { return window }
-        let store = environment.feedStore
-        let rows: [[String: Any]] = window.map { note in
-            let tally = store.tallies[note.id]
-            return [
-                "id": note.id,
-                "createdAt": note.createdAt,
-                "reactions": tally?.reactions ?? 0,
-                "reposts": tally?.reposts ?? 0,
-                "zapCount": store.zapCounts[note.id] ?? 0,
-                "zapSats": (tally?.zapMillisats ?? 0) / 1_000,
-            ]
-        }
-        let ids = rules.tabSortIds(
-            mode: mode,
-            entries: rows,
-            nowSeconds: Int64(Date.now.timeIntervalSince1970)
-        )
-        guard !ids.isEmpty else { return window }
-        var rank: [String: Int] = [:]
-        for (index, id) in ids.enumerated() { rank[id] = index }
-        return window.sorted { (rank[$0.id] ?? ids.count) < (rank[$1.id] ?? ids.count) }
+        return spliced.filter { !windowIds.contains($0.id) } + videos
     }
 
     private var rootContent: some View {
@@ -388,12 +348,11 @@ struct BitzView: View {
             pool.releaseAll()
         }
         .task(id: mode) {
-            // The pills drive the same shared window Home uses; TRENDING
-            // and ZAPPED rank that window client-side (§2.9) and therefore
-            // ride the For-You timeline too.
+            // Three tabs (legacy Flutter parity): the pills drive the same
+            // shared window Home uses.
             guard let mode else { return }
             switch mode {
-            case .forYou, .trending, .zapped: environment.feedStore.selectTimeline(.forYou)
+            case .forYou: environment.feedStore.selectTimeline(.forYou)
             case .following: environment.feedStore.selectTimeline(.following)
             case .explore: break
             }
@@ -432,7 +391,6 @@ struct BitzView: View {
             Group {
                 switch mode {
                 case .explore: exploreGrid
-                case .trending, .zapped: rankedPlayerSurface
                 default: playerSurface
                 }
             }
@@ -451,38 +409,6 @@ struct BitzView: View {
         Group {
             if playerNotes.isEmpty && !environment.feedStore.isLoading {
                 playerEmptyState
-            } else {
-                pager
-            }
-        }
-    }
-
-    /// §2.9 ranked tabs (Trending / Most zapped): the same player surface
-    /// over the BitzSort-ordered window; a tailored empty state until the
-    /// first engagement tallies land.
-    private var rankedPlayerSurface: some View {
-        Group {
-            if playerNotes.isEmpty && !environment.feedStore.isLoading {
-                VStack(spacing: BitOSTheme.Spacing.sm) {
-                    AppIcons.image(for: AppIcons.bitz)
-                        .font(.system(size: 44))
-                        .foregroundStyle(BitOSTheme.textTertiary)
-                    Text(mode == .trending ? "Nothing trending yet" : "No zapped Bitz yet")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Text("Rankings build from live engagement on the For-you window.")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-                    Button {
-                        refreshWindow()
-                    } label: {
-                        Text("Refresh Bitz")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(BitOSTheme.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
             } else {
                 pager
             }
@@ -607,8 +533,9 @@ struct BitzView: View {
                     .id(note.id)
                     .onAppear {
                         topId = topId ?? note.id
-                        // APP-004 pagination: settle near the end → older page.
-                        if index >= playerNotes.count - 3 { environment.feedStore.loadOlder() }
+                        // APP-004 pagination (Flutter `onPageChanged` parity):
+                        // settle within 2 pages of the tab's end → older walk.
+                        if index >= playerNotes.count - 2 { environment.feedStore.loadOlder() }
                     }
                 }
             }
@@ -624,50 +551,92 @@ struct BitzView: View {
     private var exploreGrid: some View {
         let visibleCount = rules.exploreVisibleCount(loadMoreCount: loadMoreCount)
         let tiles = videos.prefix(visibleCount)
-        let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-        return ScrollView {
-            if environment.feedStore.isLoading && videos.isEmpty {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(0..<12, id: \.self) { _ in SkeletonTile() }
-                }
-            } else {
-                VStack(spacing: 0) {
-                    LazyVGrid(columns: columns, spacing: 2) {
-                        ForEach(Array(tiles), id: \.id) { note in
-                            BitzTile(
-                                note: note,
-                                profile: environment.feedStore.profiles[note.pubkey],
-                                zapCount: environment.feedStore.zapCounts[note.id] ?? 0,
-                                likeCount: environment.feedStore.tallies[note.id]?.reactions ?? 0,
-                                durationLabel: note.video?.durationSeconds.map { rules.formatDuration($0) },
-                                sensitiveShown: settings.state.sensitiveMedia == .show,
-                                revealed: revealedIds.contains(note.id),
-                                onReveal: { revealedIds.insert(note.id) },
-                                onOpen: { openInPlayer(note) }
-                            )
-                            .onAppear {
-                                // Prefetch an older relay page at the edge,
-                                // while the footer owns the explicit reveal.
-                                if note.id == tiles.last?.id, videos.count <= visibleCount {
+        let columns = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]
+        // Legacy bitz parity: centered spinner while the first page loads;
+        // Flutter `_BitsEmptyState` when the window is empty — both keep
+        // pull-to-refresh alive.
+        if videos.isEmpty && environment.feedStore.isLoading {
+            return AnyView(
+                Color.clear
+                    .overlay { ProgressView().tint(BitOSTheme.textTertiary) }
+                    .refreshable { refreshWindow() }
+            )
+        }
+        if videos.isEmpty {
+            return AnyView(exploreEmptyState)
+        }
+        return AnyView(
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 4) {
+                    ForEach(Array(tiles), id: \.id) { note in
+                        BitzTile(
+                            note: note,
+                            profile: environment.feedStore.profiles[note.pubkey],
+                            likeCount: environment.feedStore.tallies[note.id]?.reactions ?? 0,
+                            onOpenAuthor: { authorTarget = note.pubkey },
+                            sensitiveShown: settings.state.sensitiveMedia == .show,
+                            revealed: revealedIds.contains(note.id),
+                            onReveal: { revealedIds.insert(note.id) },
+                            onOpen: { openInPlayer(note) }
+                        )
+                        .onAppear {
+                            // Grid edge (Flutter `loadMoreExplore` parity):
+                            // reveal the next local page when hidden tiles
+                            // remain; when the reveal catches the loaded
+                            // window, warm the next relay page too.
+                            if note.id == tiles.last?.id {
+                                if videos.count > visibleCount {
+                                    loadMoreCount += 1
+                                } else {
                                     environment.feedStore.loadOlder()
                                 }
                             }
                         }
                     }
-                    BitzExploreFooter(
-                        hasHiddenTiles: videos.count > visibleCount,
-                        isLoadingOlder: environment.feedStore.isLoadingOlder,
-                        noMoreOlder: environment.feedStore.noMoreOlder,
-                        onRevealMore: { loadMoreCount += 1 },
-                        onLoadOlder: environment.feedStore.loadOlder
-                    )
+                    // One trailing spinner tile while the next relay page walks
+                    // (Flutter `_ExploreLoadingTile` parity; no footer).
+                    if environment.feedStore.isLoadingOlder && !environment.feedStore.noMoreOlder {
+                        ExploreLoadingTile()
+                    }
                 }
-                .padding(.top, 48)
-                .padding(.bottom, 88)
+                .padding(EdgeInsets(top: 76, leading: 10, bottom: 16, trailing: 10))
             }
+            .simultaneousGesture(
+                // Grid parity with the player: horizontal swipes cycle modes.
+                DragGesture(minimumDistance: 24)
+                    .onEnded { value in horizontalSwipeEnded(value) }
+            )
+            .refreshable { refreshWindow() }
+        )
+    }
+
+    /// Empty state (Flutter `_BitsEmptyState` parity): rounded icon box,
+    /// bold title, muted hint.
+    private var exploreEmptyState: some View {
+        ScrollView {
+            VStack(spacing: BitOSTheme.Spacing.base) {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        AppIcons.image(for: AppIcons.play)
+                            .font(.system(size: 32))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                Text("No Bitz found")
+                    .font(.title2.weight(.heavy))
+                    .foregroundStyle(.white)
+                Text("Your configured relays did not return kind-1 notes with video links.")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            .frame(maxWidth: .infinity, minHeight: 480)
+            .padding(.top, 100)
         }
+        .refreshable { refreshWindow() }
         .simultaneousGesture(
-            // Grid parity with the player: horizontal swipes cycle modes.
             DragGesture(minimumDistance: 24)
                 .onEnded { value in horizontalSwipeEnded(value) }
         )
@@ -717,20 +686,20 @@ struct BitzView: View {
     }
 
     /**
-     * TikTok-style horizontal swipe (5-tab cycle, §2.9): a left swipe
-     * advances Explore → Following → For you → Trending → Most zapped;
-     * the final left swipe on the deepest tab opens the settled page's
-     * creator profile; a right swipe steps back one mode. Presented
-     * sheets/overlays swallow the gesture.
+     * TikTok-style horizontal swipe (3-tab cycle, legacy Flutter parity):
+     * a left swipe advances Explore → Following → For you; the final left
+     * swipe on For you opens the settled page's creator profile; a right
+     * swipe steps back one mode. Presented sheets/overlays swallow the
+     * gesture.
      */
     private func handleSwipe(left: Bool) {
         guard !showSearch,
               commentTarget == nil, chainTarget == nil, zapTarget == nil,
               authorTarget == nil, remixAskTarget == nil else { return }
-        let order: [SettingsBitzMode] = [.explore, .following, .forYou, .trending, .zapped]
+        let order: [SettingsBitzMode] = [.explore, .following, .forYou]
         guard let current = mode, let index = order.firstIndex(of: current) else { return }
         if left {
-            if current == .zapped {
+            if current == .forYou {
                 let settled = playerNotes.first { $0.id == topId } ?? playerNotes.first
                 if let settled {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -887,44 +856,6 @@ struct BitzView: View {
     }
 }
 
-private struct BitzExploreFooter: View {
-    let hasHiddenTiles: Bool
-    let isLoadingOlder: Bool
-    let noMoreOlder: Bool
-    let onRevealMore: () -> Void
-    let onLoadOlder: () -> Void
-
-    var body: some View {
-        Group {
-            if hasHiddenTiles {
-                Button(action: onRevealMore) {
-                    Label("Load more Bitz", systemImage: AppIcons.add)
-                }
-                .accessibilityHint("Shows the next 18 loaded Bitz")
-            } else if isLoadingOlder {
-                Button(action: {}) {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Loading older Bitz")
-                    }
-                }
-                .disabled(true)
-            } else if !noMoreOlder {
-                Button("Load older Bitz", action: onLoadOlder)
-            } else {
-                Text("That's all the Bitz for now")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(BitOSTheme.textTertiary)
-            }
-        }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .font(.subheadline.weight(.bold))
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-    }
-}
-
 // MARK: - Top bar
 
 private struct BitzTopBar: View {
@@ -943,8 +874,6 @@ private struct BitzTopBar: View {
                 pill("Explore", .explore)
                 pill("Following", .following)
                 pill("For you", .forYou)
-                pill("Trending", .trending)
-                pill("Most zapped", .zapped)
             }
             Spacer(minLength: 8)
             Button(action: onRecord) {
@@ -982,15 +911,18 @@ private struct BitzTopBar: View {
 
 // MARK: - Explore grid
 
+/// One 9:16 explore tile (Flutter `_ExploreTile` parity): poster cover,
+/// bottom scrim = caption · author identity (hex avatar, ⚡ badge,
+/// ✓ NIP-05) · like count. Sensitive tiles blur; the reveal gate lives
+/// in the player.
 private struct BitzTile: View {
     let note: FeedNote
     let profile: ProfileMetadata?
-    let zapCount: Int
-    /** Legacy parity: like count alongside zaps in the tile footer. */
+    /** Legacy parity: like count in the tile footer. */
     var likeCount: Int = 0
+    /** Author identity row → profile sheet (Flutter `Routes.profileOf`). */
+    var onOpenAuthor: (() -> Void)? = nil
     private let rules = BitzBridgeRules()
-    /** Pre-formatted duration label (shared rule, computed by the parent). */
-    let durationLabel: String?
     let sensitiveShown: Bool
     let revealed: Bool
     let onReveal: () -> Void
@@ -998,6 +930,21 @@ private struct BitzTile: View {
 
     private var covered: Bool {
         note.contentWarning && !sensitiveShown && !revealed
+    }
+
+    /// Caption = content minus image/video URLs, whitespace-collapsed
+    /// (Flutter `stripMediaUrls` parity).
+    private var caption: String {
+        let noUrls = note.content.replacingOccurrences(
+            of: "https?://\\S+",
+            with: "",
+            options: .regularExpression
+        )
+        return noUrls
+            .replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\n[ \t]+", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -1009,84 +956,113 @@ private struct BitzTile: View {
                     .foregroundStyle(.white.opacity(0.8))
             }
             if covered {
+                // Sensitive: blurred poster + dim + eye-off label
+                // (Flutter parity); tap still opens For-you — the reveal
+                // gate lives in the player.
+                BitzPosterImage(url: note.video?.posterUrl)
+                    .blur(radius: 14)
+                Color.black.opacity(0.35)
                 VStack(spacing: 4) {
-                    Text("Sensitive content")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.9))
-                    Button("Show", action: onReveal)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(BitOSTheme.accent)
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white)
+                    Text("Sensitive")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(red: 0.04, green: 0.04, blue: 0.06).opacity(0.85))
             } else {
                 VStack {
                     Spacer()
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            if zapCount > 0 || likeCount > 0 {
-                                HStack(spacing: 6) {
-                                    if zapCount > 0 {
-                                        HStack(spacing: 2) {
-                                            AppIcons.image(for: AppIcons.zap)
-                                                .font(.system(size: 9))
-                                                .foregroundStyle(BitOSTheme.zap)
-                                            Text(rules.formatCount(Int64(zapCount)))
-                                                .font(.caption2)
-                                                .foregroundStyle(.white.opacity(0.9))
-                                        }
-                                    }
-                                    if likeCount > 0 {
-                                        HStack(spacing: 2) {
-                                            AppIcons.image(for: AppIcons.heart)
-                                                .font(.system(size: 9))
-                                                .foregroundStyle(BitOSTheme.like)
-                                            Text(rules.formatCount(Int64(likeCount)))
-                                                .font(.caption2)
-                                                .foregroundStyle(.white.opacity(0.9))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Spacer()
-                        if let durationLabel {
-                            Text(durationLabel)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
-                        }
-                    }
-                    .padding(4)
-                    .background(
-                        LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-                    )
+                    exploreFooter
                 }
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .aspectRatio(9.0 / 16.0, contentMode: .fit)
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .accessibilityLabel("Play video by \(profile?.bestDisplayName ?? "author")")
     }
+
+    /// Bottom scrim (Flutter `_ExploreTileFooter` parity).
+    private var exploreFooter: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+            }
+            HStack(spacing: 4) {
+                identityRow
+                Spacer(minLength: 4)
+                if likeCount > 0 {
+                    HStack(spacing: 2) {
+                        AppIcons.image(for: AppIcons.heart)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(rules.formatCount(Int64(likeCount)))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                }
+            }
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.3), .black.opacity(0.85)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
+    /// Author identity row: hex avatar + ⚡ badge + name + ✓ NIP-05;
+    /// taps open the profile when a handler is provided.
+    @ViewBuilder
+    private var identityRow: some View {
+        let name = profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey)
+        let row = HStack(spacing: 5) {
+            PubkeyAvatarView(
+                pubkey: note.pubkey,
+                size: 20,
+                picture: profile?.picture,
+                label: profile?.bestDisplayName,
+                hasLightning: !(profile?.lud16?.isEmpty ?? true)
+            )
+            Text(name)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            if let nip05 = profile?.nip05, !nip05.isEmpty {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+        }
+        if let onOpenAuthor {
+            Button(action: onOpenAuthor) { row }
+                .buttonStyle(.plain)
+        } else {
+            row
+        }
+    }
 }
 
-private struct SkeletonTile: View {
-    @State private var pulsing = false
-
+/// Trailing grid tile while the next relay page walks (Flutter
+/// `_ExploreLoadingTile` parity).
+private struct ExploreLoadingTile: View {
     var body: some View {
-        Rectangle()
-            .fill(BitOSTheme.surfaceElevated)
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.white.opacity(0.05))
+            .overlay {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(BitOSTheme.textTertiary)
+            }
             .aspectRatio(9.0 / 16.0, contentMode: .fit)
-            .opacity(pulsing ? 0.75 : 0.35)
-            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
-            .onAppear { pulsing = true }
     }
 }
 
@@ -1513,9 +1489,7 @@ struct BitzSearchOverlay: View {
                             BitzTile(
                                 note: note,
                                 profile: environment.feedStore.profiles[note.pubkey],
-                                zapCount: environment.feedStore.zapCounts[note.id] ?? 0,
                                 likeCount: environment.feedStore.tallies[note.id]?.reactions ?? 0,
-                                durationLabel: note.video?.durationSeconds.map { rules.formatDuration($0) },
                                 sensitiveShown: settings.state.sensitiveMedia == .show,
                                 revealed: revealedIds.contains(note.id),
                                 onReveal: { revealedIds.insert(note.id) },

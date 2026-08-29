@@ -1,10 +1,5 @@
 package space.bitos.core.feed
 
-import kotlin.math.exp
-
-/** ln(2), spelled out for Kotlin/Native common code portability. */
-private const val LN_TWO = 0.6931471805599453
-
 /**
  * Bitz short-video surface rules (APP-007, spec §3.7). The deterministic
  * product behavior of the reels surface lives here once and both platforms
@@ -182,51 +177,6 @@ object BitzTimelinePolicy {
      */
     fun relayStalled(oldestInBatch: Long?, previousCursor: Long, freshCount: Int): Boolean =
         freshCount == 0 && (oldestInBatch == null || oldestInBatch >= previousCursor)
-}
-
-/**
- * Bitz tab sorts (APP-007 W2, web `/bitz` parity): Trending and Most-zapped
- * are VIEW-ONLY sorts of the same loaded window — switching tabs never
- * fetches. Deterministic formulas live here once; both platforms render.
- *
- * Web parity (`trendingReels` / `zappedReels` in `src/routes/bitz/+page.svelte`):
- *  - Trending: `(reactions + reposts + zapCount) × 0.5^(ageHours / 72)` —
- *    engagement COUNTS (not sats), 3-day half-life decay.
- *  - Most zapped: `zapSats` descending, newest `createdAt` tiebreak.
- */
-object BitzSort {
-    /** Trending decay half-life in hours (web parity: 3 days). */
-    const val TRENDING_HALF_LIFE_HOURS = 72.0
-
-    data class Entry(
-        val id: String,
-        val createdAt: Long,
-        val reactions: Long = 0,
-        val reposts: Long = 0,
-        val zapCount: Long = 0,
-        val zapSats: Long = 0,
-    )
-
-    /** Raw trending score; exposed for tests and rank debugging. */
-    fun trendingScore(entry: Entry, nowSeconds: Long): Double {
-        val ageHours = ((nowSeconds - entry.createdAt).coerceAtLeast(0)) / 3_600.0
-        // 0.5^x == e^(-x·ln2): half-life decay without Math.pow (not in
-        // Kotlin/Native common code).
-        val decay = exp(-ageHours / TRENDING_HALF_LIFE_HOURS * LN_TWO)
-        return (entry.reactions + entry.reposts + entry.zapCount) * decay
-    }
-
-    /** Engagement-count × 72 h decay, descending; stable id tiebreak. */
-    fun trending(entries: List<Entry>, nowSeconds: Long): List<String> =
-        entries.sortedWith(
-            compareByDescending<Entry> { trendingScore(it, nowSeconds) }.thenBy { it.id },
-        ).map { it.id }
-
-    /** Raw sats descending, newest first, stable id tiebreak. */
-    fun zapped(entries: List<Entry>): List<String> =
-        entries.sortedWith(
-            compareByDescending<Entry> { it.zapSats }.thenByDescending { it.createdAt }.thenBy { it.id },
-        ).map { it.id }
 }
 
 /**

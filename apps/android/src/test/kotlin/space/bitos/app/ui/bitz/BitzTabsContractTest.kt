@@ -1,60 +1,55 @@
 package space.bitos.app.ui.bitz
 
 import org.junit.Test
-import space.bitos.core.feed.BitzSort
+import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.model.MediaMetadata
 import space.bitos.core.model.MediaRendition
 import space.bitos.core.settings.BitzModeSetting
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
- * Bitz tab + rendition adapter contract (APP-007 W2 / FED-004).
+ * Bitz tab + pagination + rendition adapter contract (APP-007 / FED-004).
  *
  * Locks the seams the surfaces rely on: the persisted bitz-mode wires
- * (SettingsContract ↔ shared BitzModeSetting, schema v5), the shared tab
- * sort ordering feeding the Trending / Most-zapped pills, and the
+ * (SettingsContract ↔ shared BitzModeSetting — THREE tabs, legacy
+ * Flutter parity), the walk policy the load-more loop executes (pages
+ * that only re-send known ids must not strand the surface), and the
  * rendition pick the player chain leads with.
  */
 class BitzTabsContractTest {
 
     @Test
-    fun bitzModeWiresCoverAllFiveTabs() {
+    fun bitzModeWiresCoverExactlyTheThreeLegacyTabs() {
         // Wire strings are the persisted contract; both platforms and the
         // shared settings normalizer must agree on exactly these.
         val wires = BitzModeSetting.entries.associate { it.wire to it }
-        assertEquals(5, wires.size)
+        assertEquals(3, wires.size)
         assertEquals("for_you", BitzModeSetting.FOR_YOU.wire)
         assertEquals("following", BitzModeSetting.FOLLOWING.wire)
         assertEquals("explore", BitzModeSetting.EXPLORE.wire)
-        assertEquals("trending", BitzModeSetting.TRENDING.wire)
-        assertEquals("zapped", BitzModeSetting.ZAPPED.wire)
+        // Removed W2 wires migrate to the default, never crash old installs.
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("trending"))
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("zapped"))
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("bogus"))
     }
 
     @Test
-    fun trendingDecayRanksFreshEngagementAboveStale() {
-        // Stale is 3 half-lives old (216 h, decay 0.125 → 600×.125 = 75);
-        // fresh is 1 h old (decay ≈ 0.99 → 100×.99 ≈ 99) and wins despite
-        // six times fewer reactions.
-        val now = 1_000_000L
-        val ordered = BitzSort.trending(
-            listOf(
-                BitzSort.Entry(id = "stale", createdAt = now - 216L * 3_600L, reactions = 600),
-                BitzSort.Entry(id = "fresh", createdAt = now - 1L * 3_600L, reactions = 100),
-            ),
-            nowSeconds = now,
-        )
-        assertEquals(listOf("fresh", "stale"), ordered)
-    }
-
-    @Test
-    fun zappedRanksSatsThenNewest() {
-        val ordered = BitzSort.zapped(
-            listOf(
-                BitzSort.Entry(id = "small", createdAt = 5, zapCount = 1, zapSats = 100),
-                BitzSort.Entry(id = "big", createdAt = 2, zapCount = 9, zapSats = 9_000),
-            ),
-        )
-        assertEquals(listOf("big", "small"), ordered)
+    fun walkContinuesWhileFreshMatchesRemainUnderBudget() {
+        // Root cause of "load more does nothing": a page re-sending known
+        // ids (budget-fresh = 0 but the cursor still moves) must CONTINUE
+        // the walk, not exhaust the feed.
+        val cursor0 = BitzTimelinePolicy.cursor(oldestCreatedAt = 10_000)
+        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 0))
+        // Batch 1 returned only duplicates but moved the cursor → walk on.
+        assertFalse(BitzTimelinePolicy.relayStalled(oldestInBatch = 8_000, previousCursor = cursor0, freshCount = 0))
+        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 4, batchesIssued = 1))
+        // Batch 2 reaches the budget → stop; six batches is the hard bound.
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 18, batchesIssued = 2))
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 6))
+        // Stalled relay (no advance, nothing fresh) terminates instead of looping.
+        assertTrue(BitzTimelinePolicy.relayStalled(oldestInBatch = cursor0, previousCursor = cursor0, freshCount = 0))
     }
 
     @Test

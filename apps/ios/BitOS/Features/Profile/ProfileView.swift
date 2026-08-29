@@ -100,6 +100,7 @@ struct ProfileView: View {
         .sheet(item: $store.preview) { preview in
             ConfirmIdentitySheet(
                 preview: preview,
+                secretNsec: preview.isNewKey ? store.previewSecretNsec : nil,
                 busy: store.busy,
                 onConfirm: { store.confirmPreview() },
                 onCancel: { store.cancelPreview() }
@@ -619,24 +620,23 @@ struct ProfileView: View {
 
     private var importPanel: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Import a secret key")
+            Text("Log in with a secret key")
                 .font(.subheadline.weight(.semibold))
-            SecureField("nsec1…", text: $importText)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            if let error = store.importError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(BitOSTheme.error)
-            }
+            SecretKeyField(
+                text: $importText,
+                error: store.importError,
+                onSubmit: { store.importKeyPreview(importText) }
+            )
+            .onChange(of: importText) { _, _ in store.clearImportError() }
             Button {
                 store.importKeyPreview(importText)
             } label: {
                 Label { Text("Review key") } icon: { AppIcons.image(for: AppIcons.qrCode) }
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .disabled(importText.trimmingCharacters(in: .whitespaces).isEmpty)
+            .buttonStyle(.borderedProminent)
+            .tint(BitOSTheme.accent)
+            .disabled(!secretKeyReady(importText))
             Text("The key stays on this device, sealed in the Keychain. Never share an nsec.")
                 .font(.caption2)
                 .foregroundStyle(BitOSTheme.textTertiary)
@@ -922,53 +922,6 @@ private struct FlowLayout: Layout {
 
 extension IdentityPreview: Identifiable {
     var id: String { npub }
-}
-
-private struct ConfirmIdentitySheet: View {
-    let preview: IdentityPreview
-    let busy: Bool
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(spacing: BitOSTheme.Spacing.base) {
-            Capsule()
-                .fill(BitOSTheme.surfaceOverlay)
-                .frame(width: 36, height: 4)
-                .padding(.top, BitOSTheme.Spacing.sm)
-            Text(preview.replacesExisting ? "Replace identity?" : "Confirm your identity")
-                .font(.headline)
-            Text(
-                preview.replacesExisting
-                    ? "This REPLACES the identity currently stored on this device. Its secret is overwritten."
-                    : "This is the public identity derived from your key. Verify it before continuing."
-            )
-            .font(.footnote)
-            .foregroundStyle(BitOSTheme.textSecondary)
-            .multilineTextAlignment(.center)
-            Text(preview.npub)
-                .font(.caption.monospaced())
-                .foregroundStyle(BitOSTheme.accent)
-                .padding(BitOSTheme.Spacing.sm)
-                .frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).fill(BitOSTheme.surfaceElevated))
-            Text("Backup warning: if this is a new key, write the secret down now — it cannot be recovered from this device.")
-                .font(.caption2)
-                .foregroundStyle(BitOSTheme.warning)
-                .multilineTextAlignment(.center)
-            HStack(spacing: BitOSTheme.Spacing.base) {
-                Button("Cancel", role: .cancel) { onCancel() }
-                    .buttonStyle(.bordered)
-                Button(preview.replacesExisting ? "Replace" : "Use this identity") { onConfirm() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BitOSTheme.accent)
-                    .disabled(busy)
-            }
-            Spacer()
-        }
-        .padding(BitOSTheme.Spacing.base)
-        .background(BitOSTheme.background)
-    }
 }
 
 /// The legacy fallback-banner tile: decorative geometry only, never remote SVG.

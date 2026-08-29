@@ -5,10 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +43,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,8 +71,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -88,6 +89,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -126,12 +128,11 @@ import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.core.feed.BitzExplore
 import space.bitos.core.feed.BitzSearch
-import space.bitos.core.feed.BitzSort
-import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.feed.NoteShare
 import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.core.model.MediaMetadata
+import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.settings.BitzModeSetting
 import space.bitos.core.settings.SettingsContract
 import java.net.URL
@@ -185,12 +186,12 @@ fun BitzScreen(
     // ── Mode (persisted through the shared settings contract) ─────────
     var mode by remember { mutableStateOf(settingsSnapshot.bitzMode) }
     LaunchedEffect(mode) {
-        // The pills drive the same shared window Home uses; TRENDING and
-        // ZAPPED are view-only sorts (web parity: same verified window,
-        // client-side ranking — performance study §2.9).
+        // Three tabs (legacy Flutter parity): the pills drive the same
+        // shared window Home uses — Following selects the follows
+        // timeline, For-you/Explore the global one.
         val current = viewModel.state.value.timeline
         when (mode) {
-            BitzModeSetting.FOR_YOU, BitzModeSetting.TRENDING, BitzModeSetting.ZAPPED ->
+            BitzModeSetting.FOR_YOU ->
                 if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
             BitzModeSetting.FOLLOWING ->
                 if (current != FeedTimeline.FOLLOWING) viewModel.selectTimeline(FeedTimeline.FOLLOWING)
@@ -202,44 +203,12 @@ fun BitzScreen(
     val videos = remember(state.notes) { state.notes.filter { it.video != null } }
     val spliced = remember { mutableStateListOf<FeedNote>() }
 
-    /** Engagement entry for the shared BitzSort (tallies + zap counts). */
-    fun sortEntry(note: FeedNote, feed: FeedUiState): BitzSort.Entry = BitzSort.Entry(
-        id = note.id,
-        createdAt = note.createdAt,
-        reactions = (feed.tallies[note.id]?.reactions ?: 0).toLong(),
-        reposts = (feed.tallies[note.id]?.reposts ?: 0).toLong(),
-        zapCount = (feed.zapCounts[note.id] ?: 0).toLong(),
-        zapSats = (feed.tallies[note.id]?.zapMillisats ?: 0L) / 1_000L,
-    )
-
-    /** Applies a shared BitzSort id order; unranked notes keep window order at the tail. */
-    fun sortByIds(window: List<FeedNote>, ids: List<String>): List<FeedNote> {
-        val rank = HashMap<String, Int>(ids.size)
-        ids.forEachIndexed { index, id -> rank[id] = index }
-        return window.sortedBy { note -> rank[note.id] ?: ids.size }
+    // The paged list is the active tab's window (legacy `displayedEvents`):
+    // search picks spliced ahead, then the verified video window.
+    val playerNotes = remember(videos, spliced.toList()) {
+        val windowIds = videos.mapTo(HashSet(videos.size)) { it.id }
+        spliced.filterNot { it.id in windowIds } + videos
     }
-
-    fun nowSeconds(): Long = System.currentTimeMillis() / 1_000L
-
-    // TRENDING/ZAPPED are view-only sorts over the same verified window
-    // (performance study §2.9): engagement tallies feed the shared
-    // BitzSort; the underlying timeline/paging lifecycle stays FOR_YOU's.
-    // Recomputed when tallies patch in, so rankings track live counts.
-    val rankedPlayerNotes = remember(mode, videos, spliced.toList(), state.tallies, state.zapCounts) {
-        val window = spliced.filter { s -> videos.none { it.id == s.id } } + videos
-        when (mode) {
-            BitzModeSetting.TRENDING -> sortByIds(
-                window,
-                BitzSort.trending(window.map { note -> sortEntry(note, state) }, nowSeconds()),
-            )
-            BitzModeSetting.ZAPPED -> sortByIds(
-                window,
-                BitzSort.zapped(window.map { note -> sortEntry(note, state) }),
-            )
-            else -> window
-        }
-    }
-    val playerNotes = rankedPlayerNotes
 
     // ── Player pool (bounded three-slot reconciliation) ────────────────
     val pool = remember {
@@ -311,13 +280,11 @@ fun BitzScreen(
     LaunchedEffect(pagerState.settledPage) {
         viewModel.holdNewNotes(pagerState.settledPage != 0)
     }
-    // Player pagination: near the end, fetch one older page. The trigger
-    // distance comes from the shared policy (pages-to-end ~ half the
-    // prefetch buffer, web §2.5 parity).
+    // Player pagination (Flutter `onPageChanged` parity): settle within 2
+    // pages of the active tab's end → one older walk. The walk deepens the
+    // window, so settling again re-triggers naturally on every tab.
     LaunchedEffect(pagerState.settledPage, playerNotes.size) {
-        if (playerNotes.isNotEmpty() &&
-            pagerState.settledPage >= playerNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD / 2
-        ) {
+        if (playerNotes.isNotEmpty() && pagerState.settledPage >= playerNotes.size - 2) {
             viewModel.loadOlder()
         }
     }
@@ -333,10 +300,13 @@ fun BitzScreen(
     }
     LaunchedEffect(mode, gridNearEnd, videos.size, visibleTiles, state.noMoreOlder) {
         if (mode == BitzModeSetting.EXPLORE && gridNearEnd) {
-            // Keep the next relay page warm, but do not silently reveal the
-            // next 18 local tiles. The footer remains a predictable user
-            // action, matching the web and legacy Bitz grids.
-            if (!BitzExplore.hasMore(videos.size, visibleTiles) && !state.noMoreOlder) {
+            // Grid near its end (Flutter `loadMoreExplore` parity): reveal
+            // the next 18 local tiles when hidden ones remain; when the
+            // reveal catches the loaded window, ALSO warm the next relay
+            // page so the footer never hits a cold boundary.
+            if (BitzExplore.hasMore(videos.size, visibleTiles)) {
+                loadMoreCount++
+            } else if (!state.noMoreOlder) {
                 viewModel.loadOlder()
             }
         }
@@ -410,14 +380,12 @@ fun BitzScreen(
             return
         }
         // Web 5-tab swipe cycle (performance study §2.9): Explore →
-        // Following → For you → Trending → Most zapped; the final left
-        // swipe keeps the creator-profile shortcut on the deepest tab.
+        // Following → For you; a left swipe on For you keeps the
+        // creator-profile shortcut (final tab, legacy Flutter parity).
         val order = listOf(
             BitzModeSetting.EXPLORE,
             BitzModeSetting.FOLLOWING,
             BitzModeSetting.FOR_YOU,
-            BitzModeSetting.TRENDING,
-            BitzModeSetting.ZAPPED,
         )
         val index = order.indexOf(mode)
         if (left) {
@@ -445,61 +413,13 @@ fun BitzScreen(
                 sensitiveShowByDefault = sensitiveShowByDefault,
                 revealed = revealed,
                 onOpen = ::openInPlayer,
+                onOpenAuthor = { authorTarget = it },
                 onRevealMore = { loadMoreCount++ },
                 onLoadOlder = viewModel::loadOlder,
+                onRefresh = ::refreshWindow,
                 onHorizontalSwipe = ::handleHorizontalSwipe,
             )
-            BitzModeSetting.TRENDING, BitzModeSetting.ZAPPED -> {
-                when {
-                    state.isLoading && playerNotes.isEmpty() -> BitzLoading()
-                    playerNotes.isEmpty() -> BitzMessage(
-                        title = if (mode == BitzModeSetting.TRENDING) "Nothing trending yet" else "No zapped Bitz yet",
-                        body = "Rankings build from live engagement on the For-you window; tap refresh after watching.",
-                        actionLabel = "Refresh Bitz",
-                        onAction = { refreshWindow() },
-                    )
-                    else -> VerticalPager(state = pagerState) { page ->
-                        val note = playerNotes[page]
-                        BitzVideoPage(
-                            note = note,
-                            state = state,
-                            actions = actions,
-                            pool = pool,
-                            isSettled = pagerState.settledPage == page,
-                            muted = settingsSnapshot.videoMuted,
-                            sensitiveShowByDefault = sensitiveShowByDefault,
-                            revealed = revealed,
-                            onHorizontalSwipe = ::handleHorizontalSwipe,
-                            onToggleMute = {
-                                settingsStore.setRaw(
-                                    SettingsContract.KEY_VIDEO_MUTED,
-                                    if (settingsSnapshot.videoMuted) "0" else "1",
-                                )
-                            },
-                            onLike = viewModel::toggleLike,
-                            onBookmark = viewModel::toggleBookmark,
-                            onComment = { commentsTarget = it },
-                            onRepost = viewModel::repost,
-                            onFollow = viewModel::toggleFollow,
-                            onZap = {
-                                viewModel.loadZaps(it.id)
-                                viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
-                                zapTarget = it
-                            },
-                            onRemix = ::handleRemix,
-                            onChain = {
-                                chainTarget = it
-                                viewModel.loadRemixChain(it)
-                            },
-                            onAuthor = { authorTarget = it },
-                            isMuted = viewModel.isMuted(note.pubkey),
-                            onMuteToggle = { viewModel.toggleMute(note.pubkey) },
-                            onReport = { reason -> viewModel.report(note, reason) },
-                        )
-                    }
-                }
-            }
-            else -> {
+            BitzModeSetting.FOR_YOU, BitzModeSetting.FOLLOWING -> {
                 when {
                     state.isLoading && playerNotes.isEmpty() -> BitzLoading()
                     mode == BitzModeSetting.FOLLOWING && state.accountPubkey == null && playerNotes.isEmpty() -> BitzMessage(
@@ -713,8 +633,6 @@ private fun BitzTopBar(
             ModePill("Explore", mode == BitzModeSetting.EXPLORE) { onSelectMode(BitzModeSetting.EXPLORE) }
             ModePill("Following", mode == BitzModeSetting.FOLLOWING) { onSelectMode(BitzModeSetting.FOLLOWING) }
             ModePill("For you", mode == BitzModeSetting.FOR_YOU) { onSelectMode(BitzModeSetting.FOR_YOU) }
-            ModePill("Trending", mode == BitzModeSetting.TRENDING) { onSelectMode(BitzModeSetting.TRENDING) }
-            ModePill("Most zapped", mode == BitzModeSetting.ZAPPED) { onSelectMode(BitzModeSetting.ZAPPED) }
         }
         Spacer(Modifier.weight(1f))
         // Spec §3.7 record entry: camera capture → trim → publish.
@@ -743,8 +661,14 @@ private fun ModePill(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Explore grid (spec §3.7: 3-col 9:16, cover + duration + author + zaps)
+// Explore tab (legacy Flutter `_ExploreGrid`/`_ExploreTile` parity):
+// video-first 3-column 9:16 grid, caption + author identity + likes in
+// the bottom scrim, blur-covered sensitive tiles, one trailing spinner
+// tile while the next page walks — no footer buttons.
 // ─────────────────────────────────────────────────────────────────────
+
+/** Tile grid Chrome top padding (Flutter 76 under the pill bar + tabs). */
+private val ExploreGridTopPadding = 76.dp
 
 @Composable
 private fun ExploreGrid(
@@ -755,12 +679,25 @@ private fun ExploreGrid(
     sensitiveShowByDefault: Boolean,
     revealed: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
     onOpen: (FeedNote) -> Unit,
+    onOpenAuthor: (String) -> Unit,
     onRevealMore: () -> Unit,
     onLoadOlder: () -> Unit,
+    onRefresh: () -> Unit,
     /** Left/right horizontal swipe on the grid (mode cycling, player parity). */
     onHorizontalSwipe: (Boolean) -> Unit = {},
 ) {
-    val showSkeleton = state.isLoading && videos.isEmpty()
+    // Legacy bitz parity: a centered spinner while the first page loads —
+    // skeleton tiles are a native addition the user never sees land.
+    if (state.isLoading && videos.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = BitOSColors.textTertiary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+        }
+        return
+    }
+    if (videos.isEmpty()) {
+        BitzExploreEmpty(onRefresh = onRefresh)
+        return
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -781,95 +718,89 @@ private fun ExploreGrid(
                 )
             },
     ) {
+        // Flutter RefreshIndicator parity — the grid always claims pulls.
+        PullToRefreshBox(isRefreshing = state.isLoading, onRefresh = onRefresh) {
         LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         state = gridState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        // Flutter bitz grid: padding (10, 76, 10, 16), 4 dp gutters.
+        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = ExploreGridTopPadding, bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (showSkeleton) {
-            items(12) { SkeletonTile() }
-        } else {
-            val tiles = videos.take(visibleTiles)
-            itemsIndexed(tiles, key = { _, note -> note.id }) { _, note ->
-                BitzTile(
-                    note = note,
-                    state = state,
-                    sensitiveShowByDefault = sensitiveShowByDefault,
-                    revealed = revealed,
-                    onOpen = { onOpen(note) },
-                )
-            }
-            item(key = "grid-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(3) }) {
-                BitzExploreFooter(
-                    hasHiddenTiles = BitzExplore.hasMore(videos.size, visibleTiles),
-                    isLoadingOlder = state.isLoadingOlder,
-                    noMoreOlder = state.noMoreOlder,
-                    onRevealMore = onRevealMore,
-                    onLoadOlder = onLoadOlder,
-                )
-            }
+        val tiles = videos.take(visibleTiles)
+        itemsIndexed(tiles, key = { _, note -> note.id }) { _, note ->
+            BitzTile(
+                note = note,
+                state = state,
+                sensitiveShowByDefault = sensitiveShowByDefault,
+                revealed = revealed,
+                onOpen = { onOpen(note) },
+                onOpenAuthor = { onOpenAuthor(note.pubkey) },
+            )
+        }
+        // One trailing spinner tile while the next relay page is walking
+        // (Flutter `_ExploreLoadingTile` parity; no footer buttons).
+        if (state.isLoadingOlder && !state.noMoreOlder) {
+            item(key = "grid-loading") { ExploreLoadingTile() }
         }
     }
+        }
     }
 }
 
+/** Shimmer-less loading tile: soft slab + centered 22 dp spinner. */
 @Composable
-private fun BitzExploreFooter(
-    hasHiddenTiles: Boolean,
-    isLoadingOlder: Boolean,
-    noMoreOlder: Boolean,
-    onRevealMore: () -> Unit,
-    onLoadOlder: () -> Unit,
-) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
-        when {
-            hasHiddenTiles -> androidx.compose.material3.OutlinedButton(
-                onClick = onRevealMore,
-                shape = RoundedCornerShape(50),
-            ) {
-                Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Load more Bitz", fontWeight = FontWeight.W700)
+private fun ExploreLoadingTile() {
+    Box(
+        Modifier
+            .aspectRatio(9f / 16f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x0DFFFFFF)),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = BitOSColors.textTertiary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+    }
+}
+
+/** Empty state (Flutter `_BitsEmptyState` parity): rounded icon box,
+ * bold title, muted hint — pull anywhere to refresh. */
+@Composable
+private fun BitzExploreEmpty(onRefresh: () -> Unit) {
+    PullToRefreshBox(isRefreshing = false, onRefresh = onRefresh) {
+        Box(Modifier.fillMaxSize().padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.06f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(AppIcons.Play, contentDescription = null, tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(32.dp))
+                }
+                Text("No Bitz found", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.W800, color = Color.White)
+                Text(
+                    "Your configured relays did not return kind-1 notes with video links.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xB3F8F8FF),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
-            isLoadingOlder -> androidx.compose.material3.OutlinedButton(
-                onClick = {},
-                enabled = false,
-                shape = RoundedCornerShape(50),
-            ) {
-                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Loading older Bitz", fontWeight = FontWeight.W700)
-            }
-            !noMoreOlder -> androidx.compose.material3.OutlinedButton(
-                onClick = onLoadOlder,
-                shape = RoundedCornerShape(50),
-            ) {
-                Text("Load older Bitz", fontWeight = FontWeight.W700)
-            }
-            else -> Text(
-                "That's all the Bitz for now",
-                style = MaterialTheme.typography.labelMedium,
-                color = BitOSColors.textTertiary,
-            )
         }
     }
 }
 
 @Composable
 private fun SkeletonTile() {
-    val transition = rememberInfiniteTransition(label = "tile-skeleton")
-    val pulse by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.75f,
-        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
-        label = "tile-skeleton-alpha",
-    )
-    Box(Modifier.aspectRatio(9f / 16f).alpha(pulse).background(BitOSColors.surfaceElevated))
+    Box(Modifier.aspectRatio(9f / 16f).background(BitOSColors.surfaceElevated))
 }
 
+/** One 9:16 explore tile (Flutter `_ExploreTile` parity): press
+ *  scale/dim, poster cover, bottom scrim = caption · author identity
+ *  (hex avatar + ⚡ + ✓ NIP-05) · like count. Sensitive tiles blur.
+ *  Tapping opens For-you at that bit; the reveal gate lives there. */
 @Composable
 private fun BitzTile(
     note: FeedNote,
@@ -877,13 +808,36 @@ private fun BitzTile(
     sensitiveShowByDefault: Boolean,
     revealed: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
     onOpen: () -> Unit,
+    /** Author identity row → profile sheet (Flutter `Routes.profileOf`). */
+    onOpenAuthor: () -> Unit = {},
 ) {
     val covered = note.contentWarning && !sensitiveShowByDefault && revealed[note.id] != true
+    // Press feedback (Flutter AnimatedScale 0.97 / opacity 0.85 @90 ms).
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, animationSpec = tween(90), label = "tile-press-scale")
+    val pressAlpha by animateFloatAsState(if (pressed) 0.85f else 1f, animationSpec = tween(90), label = "tile-press-alpha")
+    val profile = state.profiles[note.pubkey]
+    val likes = state.tallies[note.id]?.reactions ?: 0
     Box(
         Modifier
             .aspectRatio(9f / 16f)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = pressAlpha
+            }
+            .clip(RoundedCornerShape(8.dp))
             .background(BitOSColors.surface)
-            .clickable(onClickLabel = "Play video") { onOpen() },
+            .pointerInput(note.id) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onOpen() },
+                )
+            },
     ) {
         PosterImage(url = note.video?.posterUrl, modifier = Modifier.fillMaxSize())
         if (note.video?.posterUrl == null) {
@@ -895,64 +849,126 @@ private fun BitzTile(
             )
         }
         if (covered) {
-            Box(Modifier.fillMaxSize().background(Color(0xD90A0A0F)), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Sensitive content", style = MaterialTheme.typography.labelMedium, color = Color(0xE6FFFFFF))
-                    TextButton(onClick = { revealed[note.id] = true }) {
-                        Text("Show", color = BitOSColors.primary, fontWeight = FontWeight.W600)
-                    }
-                }
+            // Sensitive: blur + dim + eye-off label (Flutter parity); tap
+            // still opens For-you — the reveal gate lives in the player.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .blur(14.dp)
+                    .background(Color.Black.copy(alpha = 0.35f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.VisibilityOff,
+                    contentDescription = "Sensitive content",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         } else {
-            note.video?.durationSeconds?.let { seconds ->
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color(0xB3000000),
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
-                ) {
-                    Text(
-                        MediaMetadata.formatDuration(seconds),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                    )
-                }
+            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+                ExploreTileFooter(
+                    note = note,
+                    profile = profile,
+                    likes = likes,
+                    onOpenAuthor = onOpenAuthor,
+                )
             }
-            Column(
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color(0xCC000000)))
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
+        }
+    }
+}
+
+/** Bottom scrim (Flutter `_ExploreTileFooter` parity): caption (2 lines,
+ *  10 sp w600) · author identity row (hex avatar 20, ⚡ badge, ✓ NIP-05)
+ *  · like count. The identity row opens the author profile. */
+@Composable
+private fun ExploreTileFooter(
+    note: FeedNote,
+    profile: ProfileMetadata?,
+    likes: Int,
+    onOpenAuthor: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Brush.verticalGradient(0f to Color.Transparent, 0.35f to Color(0x4D000000), 1f to Color(0xD9000000)))
+            .padding(6.dp),
+    ) {
+        val caption = remember(note.content) { stripMediaUrlsForCaption(note.content) }
+        if (caption.isNotEmpty()) {
+            Text(
+                caption,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.W600,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 12.sp,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClickLabel = "View author profile") { onOpenAuthor() },
             ) {
+                PubkeyAvatar(
+                    pubkey = note.pubkey,
+                    size = 20,
+                    pictureUrl = profile?.picture,
+                    label = profile?.bestDisplayName,
+                    hasLightning = !profile?.lud16.isNullOrBlank(),
+                )
+                Spacer(Modifier.width(5.dp))
                 Text(
-                    state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey),
+                    profile?.bestDisplayName ?: shortPubkey(note.pubkey),
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.W600,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.W700,
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val zaps = state.zapCounts[note.id] ?: 0
-                val likes = state.tallies[note.id]?.reactions ?: 0
-                if (zaps > 0 || likes > 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (zaps > 0) {
-                            SolarFeedIconImage(SolarFeedIcon.Zap, contentDescription = null, tint = BitOSColors.zap, modifier = Modifier.size(10.dp))
-                            Spacer(Modifier.width(3.dp))
-                            Text(space.bitos.core.feed.BitzFormat.count(zaps.toLong()), style = MaterialTheme.typography.labelSmall, color = Color(0xE6FFFFFF))
-                            if (likes > 0) Spacer(Modifier.width(8.dp))
-                        }
-                        if (likes > 0) {
-                            SolarFeedIconImage(SolarFeedIcon.Heart, contentDescription = null, tint = BitOSColors.like, modifier = Modifier.size(10.dp))
-                            Spacer(Modifier.width(3.dp))
-                            Text(space.bitos.core.feed.BitzFormat.count(likes.toLong()), style = MaterialTheme.typography.labelSmall, color = Color(0xE6FFFFFF))
-                        }
-                    }
+                if (!profile?.nip05.isNullOrBlank()) {
+                    Icon(
+                        Icons.Rounded.CheckCircle,
+                        contentDescription = "NIP-05 identity claim",
+                        tint = BitOSColors.primary,
+                        modifier = Modifier.padding(start = 2.dp).size(11.dp),
+                    )
                 }
+            }
+            if (likes > 0) {
+                Spacer(Modifier.width(4.dp))
+                Icon(AppIcons.Heart, contentDescription = null, tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(11.dp))
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    space.bitos.core.feed.BitzFormat.count(likes.toLong()),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.W700,
+                    color = Color.White.copy(alpha = 0.9f),
+                )
             }
         }
     }
+}
+
+/** Caption text = content minus image/video URLs, whitespace-collapsed
+ *  (Flutter `stripMediaUrls` parity, bounded to 2 shown lines). */
+private fun stripMediaUrlsForCaption(content: String): String {
+    val urlPattern = Regex("https?://\\S+")
+    return content
+        .replace('\u00A0', ' ')
+        .replace(urlPattern, "")
+        .replace(Regex("[ \t]+"), " ")
+        .replace(Regex("\n[ \t]+"), "\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
 }
 
 // ─────────────────────────────────────────────────────────────────────

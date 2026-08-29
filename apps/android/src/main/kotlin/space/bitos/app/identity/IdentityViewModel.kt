@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import space.bitos.core.crypto.SchnorrSigning
 import space.bitos.core.identity.AccountIdentity
+import space.bitos.core.identity.KeyImportForm
+import space.bitos.core.identity.KeyImportVerdict
 import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.core.identity.SignerKind
 import space.bitos.core.nostr.Sha256EventHasher
@@ -21,6 +23,8 @@ data class IdentityPreview(
     val npub: String,
     val secretHex: String,
     val replacesExisting: Boolean,
+    /** True when the key was generated here — the confirm gate offers the one-time backup reveal only then. */
+    val isNewKey: Boolean,
 )
 
 data class IdentityUiState(
@@ -98,39 +102,52 @@ class IdentityViewModel(
                 npub = identity.npub,
                 secretHex = secret,
                 replacesExisting = mutableState.value.account != null,
+                isNewKey = true,
             ),
             importError = null,
         )
     }
 
-    /** Validates an nsec import and prepares it for confirmation. */
+    /** Validates an nsec/hex import and prepares it for confirmation. */
     fun importNsecPreview(input: String) {
-        val trimmed = input.trim()
-        val secret = NostrKeyCodec.parseNsec(trimmed)
-            ?: NostrKeyCodec.parseNpub(trimmed)?.let {
-                mutableState.value = mutableState.value.copy(importError = "That is a public key (npub); import needs the secret (nsec).")
-                null
+        val check = KeyImportForm.check(input)
+        val secret = when (check.verdict) {
+            KeyImportVerdict.READY -> check.secretHex ?: return
+            // Live field feedback already shows the same copy; keep the
+            // submit error in state for the supporting-text slot.
+            else -> {
+                mutableState.value = mutableState.value.copy(importError = check.message)
+                return
             }
-            ?: run {
-                if (mutableState.value.importError == null) {
-                    mutableState.value = mutableState.value.copy(importError = "Not a valid nsec key.")
-                }
-                null
-            }
-        val resolved = secret ?: return
-        val identity = identityFor(resolved) ?: run {
+        }
+        val identity = identityFor(secret) ?: run {
             mutableState.value = mutableState.value.copy(importError = "Key rejected by the signer.")
             return
         }
         mutableState.value = mutableState.value.copy(
             preview = IdentityPreview(
                 npub = identity.npub,
-                secretHex = resolved,
+                secretHex = secret,
                 replacesExisting = mutableState.value.account != null,
+                isNewKey = false,
             ),
             importError = null,
         )
     }
+
+    /** Clears a stale submit error while the user edits the field. */
+    fun clearImportError() {
+        if (mutableState.value.importError != null) {
+            mutableState.value = mutableState.value.copy(importError = null)
+        }
+    }
+
+    /**
+     * nsec encoding of the pending preview secret. Only the confirm-gate
+     * backup reveal may display it; never logged or persisted.
+     */
+    fun previewNsec(): String? =
+        mutableState.value.preview?.let { NostrKeyCodec.nsec(it.secretHex) }
 
     /** Stores the previewed identity; the visible npub is the confirmation. */
     fun confirmPreview() {

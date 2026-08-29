@@ -104,7 +104,6 @@ final class FeedStore {
     private var retryTask: Task<Void, Never>?
     private var retryAttempt = 0
     private var olderCounter = 0
-    private var oldestLoadedAt: Int64?
     private var subscriptionCounter = 0
     private var profileQueue: [String] = []
     private var requestedProfiles: Set<String> = []
@@ -225,7 +224,8 @@ final class FeedStore {
         // exist again after new arrivals push the window deeper.
         isLoading = !hasLoadedAnyEvent
         noMoreOlder = false
-        oldestLoadedAt = nil
+        olderWalkAnchor = nil
+        olderEmptyAttempts = 0
         subscribe()
     }
 
@@ -234,43 +234,99 @@ final class FeedStore {
     func retryNow() {
         retryAttempt = 0
         noMoreOlder = false
-        oldestLoadedAt = nil
+        olderWalkAnchor = nil
+        olderEmptyAttempts = 0
         subscribe()
     }
 
     /**
-     * APP-004 pagination: request one page older than the window's oldest
-     * note (`until` exclusive). One in-flight REQ at a time; a watchdog
-     * marks the feed exhausted (`noMoreOlder`) when a page brings nothing
-     * new, pausing infinite scroll until the next refresh.
+     * APP-004 pagination (Flutter `_fetchReels` parity, shared
+     * `BitzTimelinePolicy` rules through the bridge): one "load more" is a
+     * bounded backwards `until`-walk whose page budget counts only FRESH
+     * playable notes — a relay page of duplicates/text must not strand the
+     * surface at a short list. Pages that land ids but nothing playable
+     * auto-continue (≤ 6 batches × 4 s each); two truly-empty pages or a
+     * relay ignoring `until` exhaust the walk until the next refresh. The
+     * Following tab walks its OWN window — the global cursor is not its
+     * boundary (root cause of "load more does nothing" on that tab).
      */
     func loadOlder() {
         guard !isLoadingOlder, !noMoreOlder else { return }
-        guard let window else { return }
-        let snapshot = window.snapshot()
+        guard let source = olderSourceWindow() else { return }
+        let snapshot = source.snapshot()
         guard !snapshot.isEmpty else { return }
-        if snapshot.count >= Self.olderWindowMax {
+        if (window?.snapshot().count ?? 0) + (followingWindow?.snapshot().count ?? 0) >= Self.olderWindowMax {
             noMoreOlder = true
             return
         }
         guard let oldest = snapshot.map(\.createdAt).min() else { return }
-        guard oldestLoadedAt != oldest else { return } // same page requested
-        oldestLoadedAt = oldest
+        guard olderWalkAnchor != oldest else { return } // same page requested
+        olderWalkAnchor = oldest
+        olderKnownIds = Set(snapshot.map(\.id))
+        olderWindowCount = snapshot.count
+        olderEmptyAttempts = 0
         isLoadingOlder = true
+        walkOlder(cursor: oldest - 1, batches: 0, budget: client.bitzWalkPageBudget())
+    }
+
+    /// Per-tab pagination source: Following walks the follows window.
+    private func olderSourceWindow() -> (any FeedWindowing)? {
+        timeline == .following ? followingWindow : window
+    }
+
+    /// Walk bookkeeping: ids + window size when the walk last checked.
+    private var olderWalkAnchor: Int64?
+    private var olderKnownIds: Set<String> = []
+    private var olderWindowCount = 0
+    private var olderEmptyAttempts = 0
+
+    private func walkOlder(cursor: Int64, batches: Int, budget: Int) {
+        guard batches < Self.walkMaxBatches else {
+            isLoadingOlder = false
+            return
+        }
         olderCounter += 1
-        let request = client.olderFeedRequest(
-            subscriptionId: "bitos-older-\(olderCounter)", until: oldest, limit: 40
-        )
+        let subId = "bitos-older-\(olderCounter)"
+        let knownBefore = olderKnownIds
+        let countBefore = olderWindowCount
+        let request = client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
         Task { [pool] in await pool.broadcast(request) }
-        Task { [weak self, oldest] in
-            try? await Task.sleep(for: .seconds(8))
+        Task { [weak self, cursor, batches, budget] in
+            try? await Task.sleep(for: .milliseconds(Self.walkPageMaxWaitMs))
             guard let self, !Task.isCancelled else { return }
-            guard self.isLoadingOlder else { return }
-            self.isLoadingOlder = false
-            // No progress by deadline: exhausted until the next refresh.
-            if (self.window?.snapshot() ?? []).map(\.createdAt).min() == oldest {
-                self.noMoreOlder = true
+            guard self.isLoadingOlder else { return } // refresh/retry reset mid-walk
+            guard let source = self.olderSourceWindow() else { return }
+            let snapshot = source.snapshot()
+            let idsNow = Set(snapshot.map(\.id))
+            let freshIds = idsNow.subtracting(knownBefore).count
+            let freshPlayable = max(0, snapshot.count - countBefore)
+            let oldestInBatch = snapshot.map(\.createdAt).min()
+            let nextCursor = min(cursor, oldestInBatch ?? cursor) - 1
+            self.publishState()
+            if freshIds == 0 {
+                self.olderEmptyAttempts += 1
+                // Relay ignoring `until` (no advance) or two empty pages.
+                let stalled = oldestInBatch.map { $0 >= cursor } ?? true
+                if stalled || self.olderEmptyAttempts >= 2 {
+                    self.isLoadingOlder = false
+                    self.noMoreOlder = true
+                    self.publishState()
+                    return
+                }
+            } else {
+                self.olderEmptyAttempts = 0
             }
+            self.olderKnownIds.formUnion(idsNow)
+            self.olderWindowCount = snapshot.count
+            // Budget counts FRESH playable notes; duplicates/text pages
+            // keep walking in the background so the user never strands.
+            let remaining = max(0, budget - freshPlayable)
+            if remaining == 0 || batches + 1 >= Self.walkMaxBatches {
+                self.isLoadingOlder = false
+                self.publishState()
+                return
+            }
+            self.walkOlder(cursor: nextCursor, batches: batches + 1, budget: remaining)
         }
     }
 
@@ -900,9 +956,9 @@ final class FeedStore {
         tallies = talliesBuffer
         isLoading = false
         hasLoadedAnyEvent = true
-        // Older page arrived when the window's oldest note moved back.
-        if isLoadingOlder, let loadedAt = oldestLoadedAt,
-           let oldestNow = window?.snapshot().map(\.createdAt).min(), oldestNow < loadedAt {
+        // Older walk finished when the active window's oldest moved back.
+        if isLoadingOlder, let anchor = olderWalkAnchor,
+           let oldestNow = olderSourceWindow()?.snapshot().map(\.createdAt).min(), oldestNow < anchor {
             isLoadingOlder = false
         }
     }
@@ -971,6 +1027,11 @@ final class FeedStore {
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
     private static let olderWindowMax = 200
+
+    /// FED-004 walk bounds (shared `BitzTimelinePolicy` via the bridge):
+    /// ≤ 6 batches per load-more, 4 s hard deadline per batch.
+    private static let walkMaxBatches = 6
+    private static let walkPageMaxWaitMs = 4_000
     private var holdingNewNotes = false
     private var knownNoteIds: Set<String> = []
 }

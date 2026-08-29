@@ -11,6 +11,7 @@ import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.core.feed.AlgorithmSnapshot
 import space.bitos.core.feed.AlgorithmSurface
+import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.feed.EmptyFeedRetry
 import space.bitos.core.feed.FeedAggregator
 import space.bitos.core.feed.FeedFilter
@@ -138,7 +139,8 @@ class FeedRepository(
     private var retryAttempt = 0
     private var subscriptionCounter = 0
     private var olderCounter = 0
-    private var oldestLoadedAt: Long? = null
+    private var olderWalkAnchor: Long? = null
+    private var olderEmptyAttempts = 0
 
     fun start() {
         if (collectJob != null) return
@@ -232,7 +234,7 @@ class FeedRepository(
         // Fresh subscription re-opens the timeline head; older pages may
         // exist again after new arrivals push the window deeper.
         mutableState.value = mutableState.value.copy(isLoading = true, noMoreOlder = false)
-        oldestLoadedAt = null
+        olderWalkAnchor = null
         subscribe()
     }
 
@@ -241,44 +243,91 @@ class FeedRepository(
     fun retryNow() {
         retryAttempt = 0
         mutableState.value = mutableState.value.copy(noMoreOlder = false)
-        oldestLoadedAt = null
+        olderWalkAnchor = null
         subscribe()
     }
 
     /**
-     * APP-004 pagination: request one page older than the window's oldest
-     * note (`until` exclusive by relay convention). One in-flight REQ at a
-     * time; a watchdog marks the feed exhausted ([noMoreOlder]) when a page
-     * brings nothing new, so the surface stops triggering until a refresh.
+     * APP-004 pagination (Flutter `_fetchReels` parity, shared
+     * `BitzTimelinePolicy` rules): one "load more" is a bounded backwards
+     * `until`-walk whose page budget counts only FRESH VIDEO notes — a
+     * relay page of text/duplicates must not strand the surface at a
+     * short list. Pages that move the cursor but add nothing playable
+     * auto-continue (up to 6 batches / 4 s each); a page with no new ids
+     * at all advances a retry counter and exhausts after two empties.
+     * The Following tab walks its OWN window (the global cursor is not
+     * its boundary) — root cause of "load more does nothing" on that tab.
      */
     fun loadOlder() {
         if (mutableState.value.isLoadingOlder || mutableState.value.noMoreOlder) return
-        val snapshot = aggregator.snapshot()
+        val (snapshot, _) = activeWindows()
         if (snapshot.isEmpty()) return
-        if (snapshot.size >= OLDER_WINDOW_MAX) {
+        if (aggregator.snapshot().size + followingWindow.snapshot().size >= OLDER_WINDOW_MAX) {
             mutableState.value = mutableState.value.copy(noMoreOlder = true)
             return
         }
         val oldest = snapshot.minOf { it.createdAt }
-        if (oldest == oldestLoadedAt) return // same page requested already
-        oldestLoadedAt = oldest
+        if (oldest == olderWalkAnchor) return // same page requested already
+        olderWalkAnchor = oldest
+        olderEmptyAttempts = 0
         mutableState.value = mutableState.value.copy(isLoadingOlder = true)
+        walkOlder(cursor = BitzTimelinePolicy.cursor(oldest), batches = 0, freshMedia = 0)
+    }
+
+    /** Per-tab pagination source: Following walks the follows window. */
+    private fun activeWindows(): Pair<List<space.bitos.core.feed.FeedNote>, String> =
+        if (mutableState.value.timeline == FeedTimeline.FOLLOWING) {
+            followingWindow.snapshot() to "following"
+        } else {
+            aggregator.snapshot() to "for-you"
+        }
+
+    private fun walkOlder(cursor: Long, batches: Int, freshMedia: Int) {
+        if (!BitzTimelinePolicy.shouldContinue(freshMedia, batches)) {
+            mutableState.value = mutableState.value.copy(isLoadingOlder = false)
+            return
+        }
+        val windowSizeBefore = activeWindows().first.size
+        val knownIdsBefore = knownNoteIds.size
         olderCounter += 1
+        val subId = "bitos-older-$olderCounter"
         pool.broadcast(
-            NostrEventCodec.encodeRequest(
-                "bitos-older-$olderCounter",
-                space.bitos.core.feed.BitzQuery.olderFilters(oldest),
-            ),
+            NostrEventCodec.encodeRequest(subId, BitzTimelinePolicy.batchFilters(cursor)),
         )
         scope.launch {
-            delay(OLDER_WATCHDOG_MS)
-            // No progress by deadline: exhausted until the next refresh.
-            if (mutableState.value.isLoadingOlder) {
-                val exhausted = aggregator.snapshot().minOfOrNull { it.createdAt } == oldest
-                mutableState.value = mutableState.value.copy(
-                    isLoadingOlder = false,
-                    noMoreOlder = exhausted,
-                )
+            delay(BitzTimelinePolicy.PAGE_MAX_WAIT_MS)
+            // Whatever landed by the deadline decides the next step.
+            val (window, _) = activeWindows()
+            val freshIds = maxOf(0, knownNoteIds.size - knownIdsBefore)
+            val oldestInBatch = window.lastOrNull()?.createdAt
+            val nextCursor = BitzTimelinePolicy.advanceCursor(oldestInBatch, cursor)
+            val freshPlayable = maxOf(0, window.size - windowSizeBefore)
+            when {
+                // Relay ignoring `until` → stop instead of loop.
+                BitzTimelinePolicy.relayStalled(oldestInBatch, cursor, freshIds) -> {
+                    mutableState.value = mutableState.value.copy(isLoadingOlder = false)
+                }
+                // Fresh ids but no playable video yet → same trigger the
+                // Flutter controller has: keep walking in the background
+                // so a swipe near the end never strands the user.
+                freshIds > 0 && freshPlayable == 0 &&
+                    BitzTimelinePolicy.shouldContinue(freshMedia, batches + 1) -> {
+                    walkOlder(nextCursor, batches + 1, freshMedia)
+                }
+                else -> {
+                    if (freshIds == 0) {
+                        olderEmptyAttempts += 1
+                        if (olderEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
+                            // Two empty pages: relays hold nothing older now.
+                            mutableState.value = mutableState.value.copy(
+                                isLoadingOlder = false,
+                                noMoreOlder = true,
+                            )
+                            return@launch
+                        }
+                    }
+                    walkOlder(nextCursor, batches + 1, freshMedia + freshPlayable)
+                }
             }
         }
     }
@@ -796,8 +845,9 @@ class FeedRepository(
             hasLoadedAnyEvent = true,
             // Older page arrived when the window's oldest note moved back.
             isLoadingOlder = run {
-                val loadedAt = oldestLoadedAt
-                val oldestNow = aggregator.snapshot().minOfOrNull { it.createdAt }
+                val loadedAt = olderWalkAnchor
+                val (activeWindow, _) = activeWindows()
+                val oldestNow = activeWindow.minOfOrNull { it.createdAt }
                 if (mutableState.value.isLoadingOlder && loadedAt != null && oldestNow != null && oldestNow < loadedAt) false
                 else mutableState.value.isLoadingOlder
             },
@@ -812,6 +862,9 @@ class FeedRepository(
         const val OLDER_WINDOW_MAX = 200
         const val OLDER_WATCHDOG_MS = 8_000L
         const val OLDER_SUBSCRIPTION_PREFIX = "bitos-older-"
+
+        /** Two consecutive all-duplicate pages = relays exhausted for now. */
+        const val OLDER_EMPTY_EXHAUST = 2
         const val CONTACT_FILTER_PREFIX = """{"kinds":[3],"authors":["""
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
         const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":["""

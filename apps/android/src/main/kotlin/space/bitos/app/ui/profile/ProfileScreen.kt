@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,7 +40,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +52,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
@@ -62,12 +64,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.ui.components.secretKeyReady
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.Language
@@ -221,10 +223,15 @@ fun ProfileScreen(
                     // Avatar band — keeps the hex locked onto the banner edge.
                     // Legacy _ProfileAvatarHero: hex drop shadow (no tint over
                     // the picture — the photo must render untouched).
+                    // requiredSize: the 64dp band is layout reservation only —
+                    // without it Compose coerces the hex to the band height
+                    // (92→64, visibly squashed); the avatar intentionally
+                    // overflows it by 46 like the legacy Positioned(top: -46).
                     Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.TopCenter) {
                         Box(
                             Modifier
                                 .offset(y = (-46).dp)
+                                .requiredSize(92.dp)
                                 .shadow(8.dp, space.bitos.app.ui.components.HexShape()),
                         ) {
                             space.bitos.app.ui.components.PubkeyAvatar(
@@ -448,6 +455,7 @@ fun ProfileScreen(
             item(key = "bottom-space") { Spacer(Modifier.height(32.dp)) }
         }
     } else {
+        val importFocus = remember { FocusRequester() }
         Column(
             Modifier
                 .fillMaxSize()
@@ -474,9 +482,14 @@ fun ProfileScreen(
                 }
                 BrowseOnlyPanel(
                     onCreate = identityViewModel::createKeyPreview,
-                    onImport = { /* import field revealed below */ },
+                    onImport = { importFocus.requestFocus() },
                 )
-                ImportPanel(onSubmit = identityViewModel::importNsecPreview, error = state.importError)
+                ImportPanel(
+                    onSubmit = identityViewModel::importNsecPreview,
+                    error = state.importError,
+                    onEdit = identityViewModel::clearImportError,
+                    focusRequester = importFocus,
+                )
             }
         }
     }
@@ -558,6 +571,8 @@ fun ProfileScreen(
         space.bitos.app.ui.components.ConfirmIdentityDialog(
             npub = preview.npub,
             replacesExisting = preview.replacesExisting,
+            isNewKey = preview.isNewKey,
+            secretNsec = if (preview.isNewKey) identityViewModel.previewNsec() else null,
             busy = state.busy,
             onConfirm = identityViewModel::confirmPreview,
             onDismiss = identityViewModel::cancelPreview,
@@ -589,30 +604,46 @@ private fun BrowseOnlyPanel(onCreate: () -> Unit, onImport: () -> Unit) {
                 }
                 OutlinedButton(onClick = onImport) {
                     androidx.compose.material3.Icon(Icons.Outlined.PersonAddAlt, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Import nsec")
+                    Text("Log in with nsec")
                 }
             }
         }
     }
 }
 
+/**
+ * Secret-key login panel (ID-004): the shared [SecretKeyField] plus the
+ * review action, gated to a valid key by the shared rule.
+ */
 @Composable
-private fun ImportPanel(onSubmit: (String) -> Unit, error: String?) {
+private fun ImportPanel(
+    onSubmit: (String) -> Unit,
+    error: String?,
+    onEdit: () -> Unit,
+    focusRequester: FocusRequester,
+) {
     var input by remember { mutableStateOf("") }
+    val ready = secretKeyReady(input)
     Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surfaceElevated, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-            Text("Import a secret key", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
-            OutlinedTextField(
+            Text("Log in with a secret key", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
+            space.bitos.app.ui.components.SecretKeyField(
                 value = input,
-                onValueChange = { input = it },
-                placeholder = { Text("nsec1…") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                isError = error != null,
-                supportingText = error?.let { { Text(it, color = BitOSColors.error) } },
-                modifier = Modifier.fillMaxWidth(),
+                onValueChange = {
+                    input = it
+                    onEdit()
+                },
+                error = error,
+                onSubmit = { onSubmit(input) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
             )
-            OutlinedButton(onClick = { onSubmit(input) }, enabled = input.isNotBlank()) {
+            Button(
+                onClick = { onSubmit(input) },
+                enabled = ready,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 androidx.compose.material3.Icon(Icons.Outlined.QrCode2, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
                 Text("Review key")
             }

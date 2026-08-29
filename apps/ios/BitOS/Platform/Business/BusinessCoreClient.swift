@@ -114,6 +114,8 @@ protocol BusinessCoreClient: Sendable {
     func emptyFeedRetryDelayMs(attempt: Int) -> Int
     /// APP-004 pagination: one older page — feed kinds before `until`.
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String
+    /// FED-004 walk budget: fresh playable notes one load-more targets.
+    func bitzWalkPageBudget() -> Int
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
     func feedRequest(subscriptionId: String) -> String
@@ -175,6 +177,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String {
         bridge.olderFeedRequest(subscriptionId: subscriptionId, until: until, limit: Int32(limit))
+    }
+
+    func bitzWalkPageBudget() -> Int {
+        Int(bridge.bitzWalkPageBudget())
     }
 
     func profile(from event: VerifiedEvent) -> ProfileMetadata? {
@@ -389,6 +395,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func emptyFeedRetryDelayMs(attempt: Int) -> Int { 2_000 }
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }
+    func bitzWalkPageBudget() -> Int { 18 }
     func profile(from event: VerifiedEvent) -> ProfileMetadata? { nil }
     func feedNote(from event: VerifiedEvent) -> FeedNote {
         FeedNote(id: event.id, pubkey: event.pubkey, content: event.content,

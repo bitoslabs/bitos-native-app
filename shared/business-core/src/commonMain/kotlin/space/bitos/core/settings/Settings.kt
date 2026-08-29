@@ -198,12 +198,12 @@ enum class SensitiveMediaSetting(val wire: String) {
 /**
  * Bitz surface mode (APP-007): the view the reels tab boots into. The
  * choice persists; `for_you` keeps the player as the first-run default.
- * TRENDING/ZAPPED (W2, web parity) are view-only sorts of the same loaded
- * window — switching to them never fetches.
+ * The legacy Flutter app ships exactly these three tabs (For you /
+ * Following / Explore) — W2 `trending`/`zapped` wires are parsed back to
+ * the default so an updated install never crashes on the persisted value.
  */
 enum class BitzModeSetting(val wire: String) {
-    EXPLORE("explore"), FOLLOWING("following"), FOR_YOU("for_you"),
-    TRENDING("trending"), ZAPPED("zapped");
+    EXPLORE("explore"), FOLLOWING("following"), FOR_YOU("for_you");
 
     companion object {
         val DEFAULT = FOR_YOU

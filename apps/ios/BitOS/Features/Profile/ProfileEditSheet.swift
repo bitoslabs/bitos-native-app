@@ -162,11 +162,10 @@ struct ProfileEditSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        // Live header preview (legacy _ProfileHeaderPreview) + web-form
-        // parity fields: labeled uppercase labels, 2-col grids, bio counter,
-        // full kind-0 field set.
+        // Live header preview + legacy form card: single-column full-width
+        // fields, compact system-style inputs, bio counter, full kind-0 set.
         ScrollView {
-            VStack(spacing: BitOSTheme.Spacing.sm) {
+            VStack(spacing: BitOSTheme.Spacing.md) {
                 headerPreview
                 if published {
                     Label { Text("Profile published \u{2713}") } icon: { AppIcons.image(for: AppIcons.checkCircle) }
@@ -176,15 +175,12 @@ struct ProfileEditSheet: View {
                     Text(detail ?? "Relays rejected the profile.").font(.caption).foregroundStyle(BitOSTheme.error)
                 }
 
-                HStack(spacing: BitOSTheme.Spacing.md) {
-                    field("Username", "username", $name)
-                    field("Display name", "Your name", $displayName)
-                }
+                field("Username", "username", $name)
+                field("Display name", "Your name", $displayName)
                 VStack(alignment: .leading, spacing: 4) {
                     fieldLabel("Bio")
-                    TextField("Tell the world about yourself\u{2026}", text: $about, axis: .vertical)
+                    FormTextField(placeholder: "Tell the world about yourself\u{2026}", text: $about, axis: .vertical)
                         .lineLimit(3)
-                        .textFieldStyle(.roundedBorder)
                     Text("\(about.count) / 300 characters")
                         .font(.system(size: 11))
                         .foregroundStyle(BitOSTheme.textTertiary)
@@ -192,22 +188,10 @@ struct ProfileEditSheet: View {
                 if let uploadError {
                     Text(uploadError).font(.system(size: 12)).foregroundStyle(BitOSTheme.error)
                 }
-                HStack(spacing: BitOSTheme.Spacing.md) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        fieldLabel(uploadingTarget == "avatar" ? "Uploading\u{2026}" : "Avatar picture URL")
-                        TextField("https://\u{2026}", text: $picture)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        fieldLabel(uploadingTarget == "banner" ? "Uploading\u{2026}" : "Banner picture URL")
-                        TextField("https://\u{2026}", text: $banner)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-                HStack(spacing: BitOSTheme.Spacing.md) {
-                    field("Website", "https://example.com", $website)
-                    field("NIP-05", "name@example.com", $nip05)
-                }
+                field(uploadingTarget == "avatar" ? "Uploading\u{2026} (avatar URL)" : "Avatar picture URL", "https://\u{2026}", $picture)
+                field(uploadingTarget == "banner" ? "Uploading\u{2026} (banner URL)" : "Banner picture URL", "https://\u{2026}", $banner)
+                field("Website", "https://example.com", $website)
+                field("NIP-05", "name@example.com", $nip05)
                 field("Lightning address", "name@getalby.com", $lud16)
 
                 Text("Publishes a signed profile event to your relays; the change appears once confirmed.")
@@ -267,11 +251,13 @@ struct ProfileEditSheet: View {
                 avatarWithCameraChip
                 identityPreviewRow
             }
-            .offset(y: -36)
-            .padding(.bottom, -36)
+            // Lift exactly half the avatar (88/2): the hexagon's center
+            // sits ON the banner bottom edge — same line as the hero.
+            .offset(y: -44)
+            .padding(.bottom, -44)
         }
         .padding(.top, BitOSTheme.Spacing.sm)
-        .padding(.bottom, BitOSTheme.Spacing.sm + 2)
+        .padding(.bottom, BitOSTheme.Spacing.lg)
         .photosPicker(isPresented: $showAvatarPicker, selection: $avatarItem, matching: .images)
         .photosPicker(isPresented: $showBannerPicker, selection: $bannerItem, matching: .images)
         .onChange(of: avatarItem) { _, item in
@@ -411,8 +397,7 @@ struct ProfileEditSheet: View {
     private func field(_ label: String, _ placeholder: String, _ binding: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             fieldLabel(label)
-            TextField(placeholder, text: binding)
-                .textFieldStyle(.roundedBorder)
+            FormTextField(placeholder: placeholder, text: binding)
         }
     }
 }
@@ -470,5 +455,34 @@ private struct CameraPicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             completion(nil)
         }
+    }
+}
+
+
+/// Compact brand input (legacy Flutter `InputDecorationTheme` parity):
+/// filled surfaceElevated, 12° radius, 2pt accent focused border, 14pt
+/// text, tight h12/v9 padding — the system-design field size.
+struct FormTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    var axis: Axis = .horizontal
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $text, axis: axis == .vertical ? .vertical : .horizontal)
+            .font(.system(size: 14))
+            .foregroundStyle(BitOSTheme.textPrimary)
+            .focused($focused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(minHeight: 44, alignment: axis == .vertical ? .top : .center)
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                    .fill(BitOSTheme.surfaceElevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                    .strokeBorder(focused ? BitOSTheme.accent : BitOSTheme.border, lineWidth: focused ? 2 : 1)
+            )
     }
 }

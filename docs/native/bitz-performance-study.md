@@ -1,15 +1,20 @@
 # Bitz Short-Video Performance Study — Why the Web Feed Is Fast, and the Native Implementation Plan
 
 Status: reference + implementation plan (feeds APP-007 / FED epic)
-Progress: **§4.1 delivered** — shared `BitzTimelinePolicy` (+ walk bounds consts), `BitzSort`
-(trending/zapped), `MediaMetadata` fallback-mirror + rendition-ladder parsing with
-`selectRendition` (§4.5), settings schema **v5** (`trending`/`zapped` wires), bridge
-`bitzTabSortIds`/`mediaPickRenditionUrl`/walk getters; **§4.3 player triggers delivered**;
-**§4.5 delivered both platforms** — player pick → mirror → lower-rendition failover chains
-(Android `VideoPlayerPool`+`MediaSources`, iOS `PlayerPool`); **5-tab pills live both
-platforms** (§2.9); signed protocol fixture `valid-kind22-rendition-ladder` (§4.1 fixture
-rule). Remaining from §4: relay-layer progressive queries (§4.2 repository seam), cold-start
-cache snapshot + tab session (§4.4), §4.7 acceptance runs.
+Progress: **§4.1 delivered** — shared `BitzTimelinePolicy` (walk bounds
+consts + the walk rules BOTH repositories now execute: fresh-playable
+budget 18, ≤6 batches × 4 s, duplicate pages auto-continue, per-tab
+cursors), `MediaMetadata` fallback-mirror + rendition-ladder parsing with
+`selectRendition` (§4.5), bridge `olderFeedRequest` (policy filters) +
+`mediaPickRenditionUrl` + `bitzWalkPageBudget`; **§4.3 player/grid triggers
+delivered** (Flutter `onPageChanged` -2 edge, Explore grid edge reveal +
+relay warm); **§4.5 delivered both platforms** — player pick → mirror →
+rendition failover chains (Android `VideoPlayerPool`+`MediaSources`, iOS
+`PlayerPool`); **tabs = 3 (Explore/Following/For you, legacy Flutter parity
+— §2.9)**; signed protocol fixture `valid-kind22-rendition-ladder`
+(§4.1 fixture rule). Remaining from §4: relay-layer progressive queries
+(§4.2 repository seam), cold-start cache snapshot + tab session (§4.4),
+§4.7 acceptance runs.
 Date: 2026-08-29
 Web app audited at: `../../bitos-nostr-web` (SvelteKit, `src/routes/bitz/+page.svelte` ~2,300 lines)
 Native destination: `apps/ios/BitOS/Features/Bitz/`, `apps/android/.../ui/bitz/`, shared rules in `shared/business-core/.../feed/Bitz.kt`
@@ -67,11 +72,10 @@ t3   SECOND round trip (queryPrimaryFirst, sequential): engagement counts
        → applyActivityToNotes (zap totals, like counts for rail + ranking)
 ```
 
-Why it feels instant: (1) the cache/session paints at t−1 (below), (2) the
+Why it feels fast: (1) the cache/session paints at t−1 (below), (2) the
 first *network* paint happens at the fastest relay's EOSE with rendering
-already possible (engagement numbers arrive later and patch in), (3) ranking
-runs over the already-shown set — tabs (Following / Trending / Most-zapped)
-are **derived sorts of the same loaded list, zero extra fetches**.
+already possible (engagement numbers arrive later and patch in), (3) the
+tab set is small — derived sorts never fetched extra pages natively.
 
 ### 2.2 Pagination — `loadMoreReels()` (the "load more" heart)
 
@@ -191,34 +195,45 @@ On a long grid this skips hundreds of off-screen header requests.
 - **Explore paging math** already shared: `BitzExplore.INITIAL_PAGE = 24`,
   `MORE_PAGE = 18` — web parity confirmed.
 
-### 2.9 Tab system — five surfaces, one window
+### 2.9 Tab system — three surfaces, one window (user decision 2026-08-29)
 
-The web mounts five tabs: **Explore · Following · For you · Trending ·
-Most zapped**. Only the first two change *what is fetched*; the last three
-are orderings of the same loaded window:
+The tab set is the LEGACY FLUTTER set: **Explore · Following · For you**.
+(The web's Trending / Most-zapped tabs were prototyped natively as W2
+view-only sorts and then removed — rankings over a live relay window add
+re-rank churn without new content.) Only the first two tabs change *what
+is fetched*; For-you is the default global window — but EVERY tab owns
+its pagination cursor:
 
-| Tab | Data source | Ordering |
+| Tab | Data source | Load-more walks |
 |---|---|---|
-| Explore | same window, 3-col grid | grid paging (`BitzExplore` 24+18) |
-| Following | `follows` filter on relays | chronological |
-| For you | global media window | chronological (arrival; native adds ranking) |
-| Trending | **same window, zero fetch** | `counts × 0.5^(ageHours / 72)` desc — engagement = reactions + reposts + zaps |
-| Most zapped | **same window, zero fetch** | zap sats desc, newest as tiebreak |
+| Explore | same window, 3-col grid | global window (grid edge reveals tiles + warms the relay page) |
+| Following | `follows` filter on relays | **the follows window** (never the global cursor) |
+| For you | global media window | global window (settle within 2 pages of the end → walk) |
 
-Rules the native port must keep:
+Rules the native port must keep (all delivered):
 
-- **View-only sorts.** Trending/Most-zapped never issue a relay request;
-  they re-rank the verified window client-side as tallies patch in. Rankings
-  therefore track live engagement (a zap landing mid-session re-orders).
+- **Load-more = a bounded backwards walk, not one REQ** (Flutter
+  `_fetchReels` parity): the page budget counts only FRESH playable notes
+  (18), ≤ 6 batches × 4 s deadline; a relay page of duplicates/text
+  auto-continues the walk; two truly-empty pages (or a relay ignoring
+  `until`) exhaust it until refresh. The old native one-shot + watchdog
+  exhausted on the FIRST duplicate page — the reported "load more does
+  nothing on every tab" bug.
+- **Following pages against its own window** — the global oldest
+  `created_at` is not that tab's boundary.
 - **One scroll memory per tab**, not per surface — the pager index is
-  restored on tab return from the in-memory session (§2.5); persistence
-  beyond the run is explicitly not required.
-- **Half-life 72 h** on trending decay: fresh-but-small beats old-but-big
-  after ~3 half-lives, matching the web constant exactly.
-- Native realization (delivered): shared `BitzSort.trending/zapped` +
-  settings v5 modes; pills and 5-step swipe order on both platforms;
-  engagement rows cross the iOS bridge as JSON
-  (`bitzTabSortIds`, mirroring `algorithmRankIds`).
+  restored on tab return from the in-memory session (§2.5).
+- Native realization: shared `BitzTimelinePolicy` walk rules + bridge
+  `olderFeedRequest`/`bitzWalkPageBudget`; Android `FeedRepository`
+  `walkOlder` + iOS `FeedStore.walkOlder`; triggers re-based on the
+  active tab's list (Flutter `onPageChanged`, `-2` edge).
+- **Explore tab UX = legacy Flutter `_ExploreGrid`/`_ExploreTile`**
+  (user decision 2026-08-29): 3-col 9:16 grid (4 dp gutters, top pad 76),
+  tile scrim = caption · author identity (hex avatar, ⚡, ✓ NIP-05) ·
+  likes; sensitive tiles blur (the reveal gate lives in the player);
+  one trailing spinner tile while the walk runs — no footer buttons;
+  loading = centered spinner; empty = `_BitsEmptyState`; all
+  pull-to-refresh. The reveal-then-warm edge paging is unchanged.
 
 ---
 
@@ -252,9 +267,10 @@ Native gaps this plan closes (tracked →):
 | G8 ○ `imeta` poster/thumbnail use | Grid thumbs should use `thumb` when present | APP-007 polish pending |
 | G9 ◐ Engagement second-pass patch-in | Tallies already patch in place on both platforms; the kinds `[7,6,16,9735,1111,1018]` `#e`-batched second pass is not yet issued per page | FED partial |
 
-**Tab-system gap (closed):** the web's 5-tab cycle (Explore · Following ·
-For you · Trending · Most zapped) vs the native 3-tab bar → delivered as
-view-only sorts (§2.9) through shared `BitzSort` + settings v5, both platforms.
+**Tab-system gap (closed, then revised):** the web's 5-tab cycle was
+ported as W2 view-only sorts (§2.9) and later reduced to the legacy
+Flutter 3-tab set by user decision — removed wires migrate to the default
+on read.
 
 Deliberate **non-goals** (web behaviors not to port): localStorage JSON blobs
 (native has the versioned event cache — DAT-001..003), DOM-style render

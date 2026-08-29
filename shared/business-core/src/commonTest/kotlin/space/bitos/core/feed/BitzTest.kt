@@ -1,5 +1,6 @@
 package space.bitos.core.feed
 
+import space.bitos.core.settings.BitzModeSetting
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -202,37 +203,13 @@ class BitzTest {
         assertFalse(BitzTimelinePolicy.relayStalled(oldestInBatch = 120, previousCursor = 100, freshCount = 3))
     }
 
-    // MARK: - Tab sorts (APP-007 W2, web parity)
-
-    private fun sortEntry(
-        id: String,
-        createdAt: Long,
-        reactions: Long = 0,
-        reposts: Long = 0,
-        zapCount: Long = 0,
-        zapSats: Long = 0,
-    ) = BitzSort.Entry(id, createdAt, reactions, reposts, zapCount, zapSats)
-
     @Test
-    fun trendingDecaysEngagementCountsWithThreeDayHalfLife() {
-        val now = 1_000_000L
-        // Same engagement: 12 h old beats 12 days old (0.5^(0.5) vs 0.5^4).
-        val fresh = sortEntry("fresh", createdAt = now - 43_200, reactions = 10)
-        val old = sortEntry("old", createdAt = now - 1_036_800, reactions = 10)
-        assertEquals(listOf("fresh", "old"), BitzSort.trending(listOf(old, fresh), now))
-        // Counts (not sats) drive trending: 3 zap-count events beat 1.
-        val many = sortEntry("many", createdAt = now - 43_200, zapCount = 3)
-        val few = sortEntry("few", createdAt = now - 43_200, zapCount = 1)
-        assertEquals(listOf("many", "few"), BitzSort.trending(listOf(few, many), now))
-    }
-
-    @Test
-    fun zappedRanksBySatsDescendingWithNewestTiebreak() {
-        val now = 1_000_000L
-        val top = sortEntry("top", createdAt = now - 100, zapSats = 2_100)
-        val second = sortEntry("second", createdAt = now - 50, zapSats = 2_100)
-        val third = sortEntry("third", createdAt = now, zapSats = 9)
-        // Equal sats → newer first; raw sats dominate engagement counts.
-        assertEquals(listOf("second", "top", "third"), BitzSort.zapped(listOf(top, second, third)))
+    fun legacyTabWiresParseBackToTheDefault() {
+        // W2 trending/zapped tabs were removed (legacy Flutter parity: 3
+        // tabs). Persisted wires must not crash the parser on old installs.
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("trending"))
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("zapped"))
+        assertEquals(BitzModeSetting.DEFAULT, BitzModeSetting.parse("bogus"))
+        assertEquals(BitzModeSetting.EXPLORE, BitzModeSetting.parse("explore"))
     }
 }

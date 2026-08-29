@@ -22,6 +22,9 @@ struct IdentityPreview: Sendable, Equatable {
     let npub: String
     let secretHex: String
     let replacesExisting: Bool
+    /// True when the key was generated on this device — the confirm gate
+    /// offers the one-time backup reveal only then.
+    let isNewKey: Bool
 }
 
 /** One saved account row (public projection; secrets stay in Keychain slots). */
@@ -110,18 +113,18 @@ final class IdentityStore {
         preview = IdentityPreview(
             npub: identity.npub,
             secretHex: secretHex,
-            replacesExisting: account != nil
+            replacesExisting: account != nil,
+            isNewKey: true
         )
         importError = nil
     }
 
-    /// Validates an nsec import and prepares it for confirmation.
+    /// Validates an nsec/hex import (shared `KeyImportForm` rule) and
+    /// prepares it for confirmation.
     func importKeyPreview(_ input: String) {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let secret = bridge.parseNsec(encoded: trimmed) else {
-            importError = bridge.parseNpub(encoded: trimmed) != nil
-                ? "That is a public key (npub); import needs the secret (nsec)."
-                : "Not a valid nsec key."
+        let wire = bridge.keyImportCheck(raw: input)
+        guard wire.verdict == "READY", let secret = wire.secretHex else {
+            importError = wire.message
             return
         }
         guard let identity = identity(forSecret: secret) else {
@@ -131,9 +134,21 @@ final class IdentityStore {
         preview = IdentityPreview(
             npub: identity.npub,
             secretHex: secret,
-            replacesExisting: account != nil
+            replacesExisting: account != nil,
+            isNewKey: false
         )
         importError = nil
+    }
+
+    /// Clears a stale submit error while the user edits the field.
+    func clearImportError() {
+        importError = nil
+    }
+
+    /// nsec encoding of the pending preview secret. Only the confirm-gate
+    /// backup reveal may display it; never logged or persisted.
+    var previewSecretNsec: String? {
+        preview.flatMap { bridge.nsecEncode(secretHex: $0.secretHex) }
     }
 
     /// Stores the previewed identity; the visible npub is the confirmation.

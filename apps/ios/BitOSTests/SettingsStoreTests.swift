@@ -131,38 +131,21 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(rules.formatDuration(3_723), "1:02:03")
     }
 
-    // MARK: - Bitz tab sorts + rendition pick (settings v5 / FED-004)
+    // MARK: - Bitz mode wires + rendition pick (FED-004)
 
-    func testBitzModeEnumCarriesTrendingAndZappedWires() {
-        // iOS enum rawValues must equal the shared BitzModeSetting wires.
-        XCTAssertEqual(SettingsBitzMode.trending.rawValue, "trending")
-        XCTAssertEqual(SettingsBitzMode.zapped.rawValue, "zapped")
-        // Round-trip through the settings store (schema v5 normalize).
-        store.set(SettingsBitzMode.trending)
-        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "trending")
-        store.set(SettingsBitzMode.zapped)
-        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "zapped")
+    func testBitzModeEnumCarriesLegacyThreeTabs() {
+        // iOS enum rawValues must equal the shared BitzModeSetting wires,
+        // and the removed W2 wires parse back to the default (3-tab parity).
+        XCTAssertEqual(SettingsBitzMode.allCases.count, 3)
+        XCTAssertEqual(SettingsBitzMode.forYou.rawValue, "for_you")
+        XCTAssertEqual(SettingsBitzMode(rawValue: "trending"), .forYou)
+        XCTAssertEqual(SettingsBitzMode(rawValue: "zapped"), .forYou)
+        XCTAssertEqual(SettingsBitzMode(rawValue: "bogus"), .forYou)
+        // Round-trip through the settings store.
+        store.set(SettingsBitzMode.following)
+        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "following")
         store.reload()
-        XCTAssertEqual(store.state.bitzMode, .zapped)
-    }
-
-    func testBitzTabSortsRankTrendingAndZapped() {
-        let rules = BitzBridgeRules()
-        // Trending: engagement decays by 72 h half-life — a 1 h-old note
-        // with 100 reactions (≈99) outranks a 216 h-old note with 600 (75).
-        let entries: [[String: Any]] = [
-            ["id": "stale", "createdAt": 1_000_000 - 216 * 3_600, "reactions": 600, "reposts": 0, "zapCount": 0, "zapSats": 0],
-            ["id": "fresh", "createdAt": 1_000_000 - 3_600, "reactions": 100, "reposts": 0, "zapCount": 0, "zapSats": 0],
-        ]
-        XCTAssertEqual(rules.tabSortIds(mode: .trending, entries: entries, nowSeconds: 1_000_000), ["fresh", "stale"])
-        // Zapped: sats desc, then newest.
-        let zapEntries: [[String: Any]] = [
-            ["id": "small", "createdAt": 5, "reactions": 0, "reposts": 0, "zapCount": 1, "zapSats": 100],
-            ["id": "big", "createdAt": 2, "reactions": 0, "reposts": 0, "zapCount": 9, "zapSats": 9_000],
-        ]
-        XCTAssertEqual(rules.tabSortIds(mode: .zapped, entries: zapEntries, nowSeconds: 1_000_000), ["big", "small"])
-        // Non-ranked modes ask for no ordering.
-        XCTAssertEqual(rules.tabSortIds(mode: .forYou, entries: entries, nowSeconds: 1_000_000), [])
+        XCTAssertEqual(store.state.bitzMode, .following)
     }
 
     func testMediaRenditionPickPrefersTallestFittingFromBridgeSpecs() {

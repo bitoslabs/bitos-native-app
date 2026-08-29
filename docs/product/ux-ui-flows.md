@@ -58,6 +58,31 @@ First signed action
 - Remote/external signer rejection returns to the pending action without data loss.
 - Multi-account switch shows the active identity before signing or paying.
 
+### 4.1 Secret-key login field rules (ID-004, shared `KeyImportForm`)
+
+The import field is one deterministic rule shared by Compose and SwiftUI
+(`shared/business-core/identity/KeyImportForm.kt`): live feedback, submit
+gate and rejection copy are identical on both platforms, and hex64 secret
+keys are accepted alongside `nsec`.
+
+| # | Given / When / Then |
+|---|---|
+| KF-1 | The field is masked by default; a show/hide toggle reveals the value so a pasted 63-character key can be verified, and a one-tap paste affordance appears while the field is empty. |
+| KF-2 | Keyboard settings never mangle a key: no autocapitalization, no autocorrection, ASCII-capable/password keyboard; the keyboard's Done/continue action submits when the key is valid. |
+| KF-3 | Feedback is live and specific before submit: npub-instead-of-nsec, too short/too long, internal whitespace, wrong prefix, invalid checksum — and a green "valid key" state; a submit error clears as soon as the text changes. |
+| KF-4 | The review/submit action is the primary action of its surface and is enabled only when the input resolves to a usable secret (nsec or 64-hex). |
+| KF-5 | Every control (field, paste, reveal, copy) carries an accessibility label; state is never communicated by color alone (icon + text). |
+
+### 4.2 Creation confirmation + one-time backup gate
+
+| # | Given / When / Then |
+|---|---|
+| CB-1 | Confirming any key shows the derived npub (monospace, truncating middle), a copy-npub action, and copy that matches the case: new key, import, or active-account switch ("stays sealed", never "overwritten"). |
+| CB-2 | For a freshly generated key the confirm gate is the backup moment: a "Secret key (backup)" section offers an explicit reveal (never automatic) with monospace nsec, copy action and a never-share warning; the confirm label acknowledges the backup ("I saved my key"). |
+| CB-3 | Imported keys are not offered a backup reveal (the user already holds the key) — the gate asks them to verify the npub instead. |
+| CB-4 | The secret crosses to the view only inside the preview transaction; it is never logged, persisted, or shown outside the confirm gate. |
+
+
 ### 4.1 Profile view & edit flow (APP-013, legacy-Flutter parity)
 
 User stories:

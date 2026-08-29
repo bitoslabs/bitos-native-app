@@ -157,6 +157,20 @@ class BusinessCoreBridgeTest {
         assertFalse(bridge.gifCacheFresh(1_000, 1_000 + 86_400_001))
     }
 
+    @Test
+    fun keyImportCheckWireMatchesSharedVerdicts() {
+        // READY carries the resolved secret; every other verdict carries copy only.
+        val ready = bridge.keyImportCheck("nsec162knc0y70v8576su95ly75rpw2peffdkclvwnu9pktpafe0kquvqh3ydrs")
+        assertEquals("READY", ready.verdict)
+        assertEquals("d2ad3c3c9e7b0f4f6a1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718", ready.secretHex)
+        assertEquals("Valid nsec key.", ready.message)
+        val npubInput = bridge.keyImportCheck("npub194667yy2sqh4h4vlwssg7g5smhmqx4x9hgtfdjun8e46l30kxqqselzc9y")
+        assertEquals("WRONG_KEY_TYPE", npubInput.verdict)
+        assertEquals("That is a public key (npub); import needs the secret (nsec).", npubInput.message)
+        assertNull(npubInput.secretHex)
+        assertEquals("EMPTY", bridge.keyImportCheck("  ").verdict)
+    }
+
     private companion object {
         // Verbatim relay frames from contracts/nostr/fixtures/verification-vectors.json.
         const val VALID_TEXT_NOTE_MESSAGE =

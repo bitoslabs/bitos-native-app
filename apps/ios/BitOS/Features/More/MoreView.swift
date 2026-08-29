@@ -23,7 +23,6 @@ struct MoreView: View {
     @State private var showQr = false
     @State private var showAddAccount = false
     @State private var importText = ""
-    @State private var importError: String?
     @State private var connectionStates: [String: String] = [:]
     @State private var health = RelayHealth(connected: 0, total: 0)
     /** APP-015: the Saved (bookmarks) page. */
@@ -208,8 +207,7 @@ struct MoreView: View {
             .sheet(isPresented: $showAddAccount) {
                 AddAccountSheet(
                     identity: identity,
-                    importText: $importText,
-                    importError: $importError
+                    importText: $importText
                 )
                 .environment(environment)
                 .presentationDetents([.medium])
@@ -343,40 +341,30 @@ private struct AccountSwitcherSheet: View {
 private struct AddAccountSheet: View {
     let identity: IdentityStore
     @Binding var importText: String
-    @Binding var importError: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             Text("Add account")
                 .font(.system(size: 20, weight: .bold))
-            Text("Import an nsec or create a fresh key. Every account already on this device stays sealed.")
+            Text("Log in with an nsec or create a fresh key. Every account already on this device stays sealed.")
                 .font(.system(size: 12))
                 .foregroundStyle(BitOSTheme.textSecondary)
-            TextField("nsec1\u{2026}", text: $importText)
-                .font(.system(size: 13, design: .monospaced))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .textFieldStyle(.roundedBorder)
-            if let importError {
-                Text(importError)
-                    .font(.system(size: 12))
-                    .foregroundStyle(BitOSTheme.error)
-            }
+            SecretKeyField(
+                text: $importText,
+                error: identity.importError,
+                onSubmit: { identity.importKeyPreview(importText) }
+            )
+            .onChange(of: importText) { _, _ in identity.clearImportError() }
             HStack {
                 Button {
                     identity.importKeyPreview(importText)
-                    if identity.importError == nil, identity.preview != nil {
-                        importError = nil
-                    } else {
-                        importError = identity.importError
-                    }
                 } label: {
                     Text("Review key")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(BitOSTheme.accent)
                 }
-                .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!secretKeyReady(importText))
                 Button("Create new key") {
                     identity.createKeyPreview()
                 }
@@ -393,33 +381,13 @@ private struct AddAccountSheet: View {
             get: { identity.preview },
             set: { _ in }
         )) { preview in
-            VStack(spacing: BitOSTheme.Spacing.base) {
-                Text("Confirm your identity")
-                    .font(.system(size: 18, weight: .bold))
-                Text(preview.npub)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(BitOSTheme.accent)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                Text("This account becomes the ACTIVE identity; every saved account stays sealed. Back up new keys now \u{2014} they cannot be recovered from this device.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                HStack {
-                    Button("Cancel") {
-                        identity.cancelPreview()
-                        dismiss()
-                    }
-                    Button("Use this identity") {
-                        identity.confirmPreview()
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BitOSTheme.accent)
-                    .disabled(identity.busy)
-                }
-            }
-            .padding(BitOSTheme.Spacing.base)
+            ConfirmIdentitySheet(
+                preview: preview,
+                secretNsec: preview.isNewKey ? identity.previewSecretNsec : nil,
+                busy: identity.busy,
+                onConfirm: { identity.confirmPreview(); dismiss() },
+                onCancel: { identity.cancelPreview(); dismiss() }
+            )
             .presentationDetents([.medium])
         }
     }

@@ -182,7 +182,13 @@ class BusinessCoreBridge {
 
     /** APP-004 pagination: one older page — feed kinds before `until`. */
     fun olderFeedRequest(subscriptionId: String, until: Long, limit: Int): String =
-        NostrEventCodec.encodeRequest(subscriptionId, space.bitos.core.feed.BitzQuery.olderFilters(until))
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            space.bitos.core.feed.BitzTimelinePolicy.batchFilters(until),
+        )
+
+    /** FED-004 walk bound: page budget counts fresh media only (18). */
+    fun bitzWalkPageBudget(): Int = space.bitos.core.feed.BitzTimelinePolicy.PAGE_FRESH_MEDIA_TARGET
 
     // ── Bitz surface (APP-007) ──────────────────────────────────────────
 
@@ -293,39 +299,6 @@ class BusinessCoreBridge {
     /** APP-007 Explore window: 24 initially, then 18 per explicit load-more. */
     fun bitzExploreVisibleCount(loadMoreCount: Int): Int =
         space.bitos.core.feed.BitzExplore.visibleCount(loadMoreCount)
-
-    /**
-     * Bitz tab sort seam (APP-007 W2, web parity): orders the loaded window
-     * for the Trending / Most-zapped tabs — view-only sorts, zero fetches.
-     * Entries arrive as `[{id,createdAt,reactions,reposts,zapCount,zapSats},…]`
-     * JSON; the ordered ids come back as a JSON array. Malformed JSON → null.
-     */
-    fun bitzTabSortIds(mode: String, entriesJson: String, nowSeconds: Long): String? {
-        val entries = parseBitzSortEntries(entriesJson) ?: return null
-        val ids = when (mode) {
-            "trending" -> space.bitos.core.feed.BitzSort.trending(entries, nowSeconds)
-            "zapped" -> space.bitos.core.feed.BitzSort.zapped(entries)
-            else -> return null
-        }
-        return buildJsonArray { ids.forEach { add(it) } }.toString()
-    }
-
-    private fun parseBitzSortEntries(json: String): List<space.bitos.core.feed.BitzSort.Entry>? = try {
-        val arr = Json.parseToJsonElement(json).jsonArray
-        arr.map { el ->
-            val o = el.jsonObject
-            space.bitos.core.feed.BitzSort.Entry(
-                id = o["id"]?.jsonPrimitive?.content ?: "",
-                createdAt = o["createdAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
-                reactions = o["reactions"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
-                reposts = o["reposts"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
-                zapCount = o["zapCount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
-                zapSats = o["zapSats"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
-            )
-        }
-    } catch (_: Exception) {
-        null
-    }
 
     /** Bitz pagination walk bounds (FED-004): fresh-media budget, max batches. */
     fun bitzWalkMaxBatches(): Int = space.bitos.core.feed.BitzTimelinePolicy.MAX_QUERY_BATCHES
@@ -672,6 +645,17 @@ class BusinessCoreBridge {
 
     /** nsec -> hex64 secret; only for the import transaction. */
     fun parseNsec(encoded: String): String? = space.bitos.core.identity.NostrKeyCodec.parseNsec(encoded)
+
+    /**
+     * Import-field rule wire (ID-004): one classifier for the SwiftUI login
+     * field's live feedback. `secretHex` is non-null iff verdict == "READY".
+     */
+    class KeyImportCheckWire(val verdict: String, val message: String?, val secretHex: String?)
+
+    fun keyImportCheck(raw: String): KeyImportCheckWire {
+        val check = space.bitos.core.identity.KeyImportForm.check(raw)
+        return KeyImportCheckWire(check.verdict.name, check.message, check.secretHex)
+    }
 
     /** hex64 secret -> nsec; only for key-backup display. */
     fun nsecEncode(secretHex: String): String? = space.bitos.core.identity.NostrKeyCodec.nsec(secretHex)
