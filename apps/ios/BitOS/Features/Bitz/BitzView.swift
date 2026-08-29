@@ -101,6 +101,7 @@ struct BitzView: View {
     @State private var topId: String?
     @State private var spliced: [FeedNote] = []
     @State private var loadMoreCount = 0
+    @State private var explorePrefetchStart = 0
     @State private var revealedIds: Set<String> = []
     @State private var wifiUnmetered = false
     @State private var positionMs: Int64 = 0
@@ -352,9 +353,18 @@ struct BitzView: View {
             // shared window Home uses.
             guard let mode else { return }
             switch mode {
-            case .forYou: environment.feedStore.selectTimeline(.forYou)
-            case .following: environment.feedStore.selectTimeline(.following)
-            case .explore: break
+            case .forYou:
+                environment.feedStore.selectTimeline(.forYou)
+                let visibleId = playerNotes.contains(where: { $0.id == topId }) ? topId : playerNotes.first?.id
+                topId = visibleId
+                reconcilePool(visibleId: visibleId)
+            case .following:
+                environment.feedStore.selectTimeline(.following)
+                let visibleId = playerNotes.contains(where: { $0.id == topId }) ? topId : playerNotes.first?.id
+                topId = visibleId
+                reconcilePool(visibleId: visibleId)
+            case .explore:
+                pool.releaseAll()
             }
         }
         .onChange(of: settings.state.videoMuted) { _, muted in
@@ -548,27 +558,25 @@ struct BitzView: View {
         .refreshable { refreshWindow() }
     }
 
+    @ViewBuilder
     private var exploreGrid: some View {
         let visibleCount = rules.exploreVisibleCount(loadMoreCount: loadMoreCount)
         let tiles = videos.prefix(visibleCount)
+        let prefetchUrls = videos.dropFirst(explorePrefetchStart).prefix(12).compactMap { $0.video?.posterUrl }
         let columns = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]
         // Legacy bitz parity: centered spinner while the first page loads;
         // Flutter `_BitsEmptyState` when the window is empty — both keep
         // pull-to-refresh alive.
         if videos.isEmpty && environment.feedStore.isLoading {
-            return AnyView(
-                Color.clear
-                    .overlay { ProgressView().tint(BitOSTheme.textTertiary) }
-                    .refreshable { refreshWindow() }
-            )
-        }
-        if videos.isEmpty {
-            return AnyView(exploreEmptyState)
-        }
-        return AnyView(
+            Color.clear
+                .overlay { ProgressView().tint(BitOSTheme.textTertiary) }
+                .refreshable { refreshWindow() }
+        } else if videos.isEmpty {
+            exploreEmptyState
+        } else {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 4) {
-                    ForEach(Array(tiles), id: \.id) { note in
+                    ForEach(Array(tiles.enumerated()), id: \.element.id) { index, note in
                         BitzTile(
                             note: note,
                             profile: environment.feedStore.profiles[note.pubkey],
@@ -580,6 +588,7 @@ struct BitzView: View {
                             onOpen: { openInPlayer(note) }
                         )
                         .onAppear {
+                            explorePrefetchStart = max(explorePrefetchStart, index + 1)
                             // Grid edge (Flutter `loadMoreExplore` parity):
                             // reveal the next local page when hidden tiles
                             // remain; when the reveal catches the loaded
@@ -607,7 +616,15 @@ struct BitzView: View {
                     .onEnded { value in horizontalSwipeEnded(value) }
             )
             .refreshable { refreshWindow() }
-        )
+            .task(id: prefetchUrls.joined(separator: "|")) {
+                let scale = UIScreen.main.scale
+                let tilePixels = UIScreen.main.bounds.width * scale / 3
+                await environment.posterImages.prefetch(
+                    urlStrings: Array(prefetchUrls),
+                    maxPixelSize: tilePixels * 16 / 9
+                )
+            }
+        }
     }
 
     /// Empty state (Flutter `_BitsEmptyState` parity): rounded icon box,
@@ -665,6 +682,7 @@ struct BitzView: View {
     private func refreshWindow() {
         spliced = []
         loadMoreCount = 0
+        explorePrefetchStart = 0
         environment.feedStore.refresh()
     }
 
@@ -949,7 +967,7 @@ private struct BitzTile: View {
 
     var body: some View {
         ZStack {
-            BitzPosterImage(url: note.video?.posterUrl)
+            BitzPosterImage(url: note.video?.posterUrl, purpose: .grid)
             if note.video?.posterUrl == nil {
                 AppIcons.image(for: AppIcons.play)
                     .font(.title2)
@@ -959,7 +977,7 @@ private struct BitzTile: View {
                 // Sensitive: blurred poster + dim + eye-off label
                 // (Flutter parity); tap still opens For-you — the reveal
                 // gate lives in the player.
-                BitzPosterImage(url: note.video?.posterUrl)
+                BitzPosterImage(url: note.video?.posterUrl, purpose: .grid)
                     .blur(radius: 14)
                 Color.black.opacity(0.35)
                 VStack(spacing: 4) {
@@ -1658,8 +1676,24 @@ private struct BitzChainSheet: View {
     }
 }
 
+private enum BitzPosterPurpose {
+    case grid
+    case screen
+
+    @MainActor
+    var maxPixelSize: CGFloat {
+        let scale = UIScreen.main.scale
+        switch self {
+        case .grid: return UIScreen.main.bounds.width * scale * 16 / 27
+        case .screen: return max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * scale
+        }
+    }
+}
+
 private struct BitzPosterImage: View {
     let url: String?
+    var purpose: BitzPosterPurpose = .screen
+    @Environment(AppEnvironment.self) private var environment
     @State private var image: UIImage?
 
     var body: some View {
@@ -1673,10 +1707,9 @@ private struct BitzPosterImage: View {
         }
         .clipped()
         .task(id: url) {
-            guard let url, let target = URL(string: url) else { return }
             image = nil
-            guard let (data, _) = try? await URLSession.shared.data(from: target) else { return }
-            let loaded = UIImage(data: data)
+            guard let url else { return }
+            let loaded = await environment.posterImages.image(urlString: url, maxPixelSize: purpose.maxPixelSize)
             guard url == self.url else { return }
             image = loaded
         }

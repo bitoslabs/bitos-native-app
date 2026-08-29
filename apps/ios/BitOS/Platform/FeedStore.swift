@@ -179,6 +179,8 @@ final class FeedStore {
 
     func selectTimeline(_ timeline: FeedTimeline) {
         self.timeline = timeline
+        syncPaginationState()
+        publishState()
     }
 
     // MARK: - APP-004: content filter + new-notes hold/reveal
@@ -223,9 +225,7 @@ final class FeedStore {
         // Fresh subscription re-opens the timeline head; older pages may
         // exist again after new arrivals push the window deeper.
         isLoading = !hasLoadedAnyEvent
-        noMoreOlder = false
-        olderWalkAnchor = nil
-        olderEmptyAttempts = 0
+        resetOlderLanes()
         subscribe()
     }
 
@@ -233,9 +233,7 @@ final class FeedStore {
     /// backoff so the next auto-retry is 2 s away, then re-issues the REQ.
     func retryNow() {
         retryAttempt = 0
-        noMoreOlder = false
-        olderWalkAnchor = nil
-        olderEmptyAttempts = 0
+        resetOlderLanes()
         subscribe()
     }
 
@@ -251,56 +249,80 @@ final class FeedStore {
      * boundary (root cause of "load more does nothing" on that tab).
      */
     func loadOlder() {
-        guard !isLoadingOlder, !noMoreOlder else { return }
-        guard let source = olderSourceWindow() else { return }
+        guard loadingOlderTimeline == nil else { return }
+        var lane = olderLanes[timeline] ?? OlderLane()
+        guard !lane.exhausted else { return }
+        guard let source = olderSourceWindow(for: timeline) else { return }
         let snapshot = source.snapshot()
         guard !snapshot.isEmpty else { return }
         if (window?.snapshot().count ?? 0) + (followingWindow?.snapshot().count ?? 0) >= Self.olderWindowMax {
-            noMoreOlder = true
+            lane.exhausted = true
+            olderLanes[timeline] = lane
+            syncPaginationState()
             return
         }
         guard let oldest = snapshot.map(\.createdAt).min() else { return }
-        guard olderWalkAnchor != oldest else { return } // same page requested
-        olderWalkAnchor = oldest
-        olderKnownIds = Set(snapshot.map(\.id))
-        olderWindowCount = snapshot.count
+        guard lane.anchorSeconds != oldest else { return } // same page requested
+        lane.anchorSeconds = oldest
+        olderLanes[timeline] = lane
+        olderKnownIds = Set((olderProgressWindow(for: timeline)?.snapshot() ?? []).map(\.id))
+        olderKnownPlayableIds = Set(snapshot.filter { $0.video != nil }.map(\.id))
         olderEmptyAttempts = 0
-        isLoadingOlder = true
-        walkOlder(cursor: oldest - 1, batches: 0, budget: client.bitzWalkPageBudget())
+        loadingOlderTimeline = timeline
+        syncPaginationState()
+        walkOlder(timeline: timeline, cursor: oldest - 1, batches: 0, budget: client.bitzWalkPageBudget())
     }
 
     /// Per-tab pagination source: Following walks the follows window.
-    private func olderSourceWindow() -> (any FeedWindowing)? {
+    private func olderSourceWindow(for timeline: FeedTimeline) -> (any FeedWindowing)? {
         timeline == .following ? followingWindow : window
     }
 
-    /// Walk bookkeeping: ids + window size when the walk last checked.
-    private var olderWalkAnchor: Int64?
+    /// Generic older requests advance on all returned notes; the Following
+    /// media budget remains scoped to its followed-author window.
+    private func olderProgressWindow(for timeline: FeedTimeline) -> (any FeedWindowing)? {
+        window
+    }
+
+    private struct OlderLane {
+        var anchorSeconds: Int64?
+        var exhausted = false
+    }
+
+    /// Walk bookkeeping is independent for For You and Following.
+    private var olderLanes: [FeedTimeline: OlderLane] = [
+        .forYou: OlderLane(),
+        .following: OlderLane(),
+    ]
+    private var loadingOlderTimeline: FeedTimeline?
     private var olderKnownIds: Set<String> = []
-    private var olderWindowCount = 0
+    private var olderKnownPlayableIds: Set<String> = []
     private var olderEmptyAttempts = 0
 
-    private func walkOlder(cursor: Int64, batches: Int, budget: Int) {
+    private func walkOlder(timeline: FeedTimeline, cursor: Int64, batches: Int, budget: Int) {
         guard batches < Self.walkMaxBatches else {
-            isLoadingOlder = false
+            finishOlderWalk(timeline)
             return
         }
         olderCounter += 1
         let subId = "bitos-older-\(olderCounter)"
         let knownBefore = olderKnownIds
-        let countBefore = olderWindowCount
+        let playableBefore = olderKnownPlayableIds
         let request = client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
         Task { [pool] in await pool.broadcast(request) }
         Task { [weak self, cursor, batches, budget] in
             try? await Task.sleep(for: .milliseconds(Self.walkPageMaxWaitMs))
             guard let self, !Task.isCancelled else { return }
-            guard self.isLoadingOlder else { return } // refresh/retry reset mid-walk
-            guard let source = self.olderSourceWindow() else { return }
+            guard self.loadingOlderTimeline == timeline else { return } // refresh/retry reset mid-walk
+            guard let source = self.olderSourceWindow(for: timeline),
+                  let progress = self.olderProgressWindow(for: timeline) else { return }
             let snapshot = source.snapshot()
-            let idsNow = Set(snapshot.map(\.id))
+            let progressSnapshot = progress.snapshot()
+            let idsNow = Set(progressSnapshot.map(\.id))
+            let playableIdsNow = Set(snapshot.filter { $0.video != nil }.map(\.id))
             let freshIds = idsNow.subtracting(knownBefore).count
-            let freshPlayable = max(0, snapshot.count - countBefore)
-            let oldestInBatch = snapshot.map(\.createdAt).min()
+            let freshPlayable = playableIdsNow.subtracting(playableBefore).count
+            let oldestInBatch = progressSnapshot.map(\.createdAt).min()
             let nextCursor = min(cursor, oldestInBatch ?? cursor) - 1
             self.publishState()
             if freshIds == 0 {
@@ -308,26 +330,46 @@ final class FeedStore {
                 // Relay ignoring `until` (no advance) or two empty pages.
                 let stalled = oldestInBatch.map { $0 >= cursor } ?? true
                 if stalled || self.olderEmptyAttempts >= 2 {
-                    self.isLoadingOlder = false
-                    self.noMoreOlder = true
-                    self.publishState()
+                    var lane = self.olderLanes[timeline] ?? OlderLane()
+                    lane.exhausted = true
+                    self.olderLanes[timeline] = lane
+                    self.finishOlderWalk(timeline)
                     return
                 }
             } else {
                 self.olderEmptyAttempts = 0
             }
             self.olderKnownIds.formUnion(idsNow)
-            self.olderWindowCount = snapshot.count
+            self.olderKnownPlayableIds.formUnion(playableIdsNow)
             // Budget counts FRESH playable notes; duplicates/text pages
             // keep walking in the background so the user never strands.
             let remaining = max(0, budget - freshPlayable)
             if remaining == 0 || batches + 1 >= Self.walkMaxBatches {
-                self.isLoadingOlder = false
-                self.publishState()
+                self.finishOlderWalk(timeline)
                 return
             }
-            self.walkOlder(cursor: nextCursor, batches: batches + 1, budget: remaining)
+            self.walkOlder(timeline: timeline, cursor: nextCursor, batches: batches + 1, budget: remaining)
         }
+    }
+
+    private func finishOlderWalk(_ timeline: FeedTimeline) {
+        if loadingOlderTimeline == timeline { loadingOlderTimeline = nil }
+        syncPaginationState()
+        publishState()
+    }
+
+    private func resetOlderLanes() {
+        olderLanes = [.forYou: OlderLane(), .following: OlderLane()]
+        loadingOlderTimeline = nil
+        olderKnownIds.removeAll()
+        olderKnownPlayableIds.removeAll()
+        olderEmptyAttempts = 0
+        syncPaginationState()
+    }
+
+    private func syncPaginationState() {
+        isLoadingOlder = loadingOlderTimeline == timeline
+        noMoreOlder = olderLanes[timeline]?.exhausted ?? false
     }
 
     // MARK: - Absorption
@@ -956,11 +998,6 @@ final class FeedStore {
         tallies = talliesBuffer
         isLoading = false
         hasLoadedAnyEvent = true
-        // Older walk finished when the active window's oldest moved back.
-        if isLoadingOlder, let anchor = olderWalkAnchor,
-           let oldestNow = olderSourceWindow()?.snapshot().map(\.createdAt).min(), oldestNow < anchor {
-            isLoadingOlder = false
-        }
     }
 
     // MARK: - Persistence (DAT-003)

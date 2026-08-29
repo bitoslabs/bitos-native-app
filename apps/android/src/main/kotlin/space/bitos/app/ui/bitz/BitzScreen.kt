@@ -2,8 +2,6 @@
 package space.bitos.app.ui.bitz
 
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -61,9 +59,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -75,7 +74,6 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -97,8 +95,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import space.bitos.app.R
 import space.bitos.app.data.feed.AuthorRepository
 import space.bitos.app.data.feed.FeedTimeline
@@ -108,6 +107,7 @@ import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.data.settings.SettingsStore
 import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.player.VideoPlayerPool
+import space.bitos.app.player.PosterPrefetcher
 import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
@@ -135,7 +135,6 @@ import space.bitos.core.model.MediaMetadata
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.settings.BitzModeSetting
 import space.bitos.core.settings.SettingsContract
-import java.net.URL
 
 /**
  * Bitz short-video surface (APP-007, spec §3.7). Owns the glass top bar
@@ -176,8 +175,7 @@ fun BitzScreen(
     val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
     // Closure-stable settings view for the pool providers (read live at
     // reconciliation, like FeedScreen).
-    val currentSettings = remember { mutableStateOf(settingsSnapshot) }
-    currentSettings.value = settingsSnapshot
+    val currentSettings = rememberUpdatedState(settingsSnapshot)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -219,6 +217,7 @@ fun BitzScreen(
             mutedProvider = { currentSettings.value.videoMuted },
         )
     }
+    val playerBindings by pool.playerBindings.collectAsStateWithLifecycle()
     DisposableEffect(Unit) {
         onDispose { pool.releaseAll() }
     }
@@ -227,6 +226,27 @@ fun BitzScreen(
     val pagerState = rememberPagerState(pageCount = { playerNotes.size })
     val gridState = rememberLazyGridState()
     var loadMoreCount by rememberSaveable { mutableStateOf(0) }
+    val posterPrefetcher = remember(context) { PosterPrefetcher(context) }
+    DisposableEffect(posterPrefetcher) {
+        onDispose { posterPrefetcher.cancel() }
+    }
+    LaunchedEffect(mode, videos, gridState) {
+        if (mode != BitzModeSetting.EXPLORE) {
+            posterPrefetcher.cancel()
+            return@LaunchedEffect
+        }
+        val widthPx = (context.resources.displayMetrics.widthPixels / 3).coerceAtLeast(1)
+        val heightPx = widthPx * 16 / 9
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .distinctUntilChanged()
+            .collectLatest { lastVisible ->
+                posterPrefetcher.prefetch(
+                    urls = videos.drop(lastVisible + 1).take(12).mapNotNull { it.video?.posterUrl },
+                    widthPx = widthPx,
+                    heightPx = heightPx,
+                )
+            }
+    }
 
     fun refreshWindow() {
         spliced.clear()
@@ -273,8 +293,12 @@ fun BitzScreen(
         mode = next
         settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, next.wire)
     }
-    LaunchedEffect(pagerState.settledPage, playerNotes) {
-        pool.update(pagerState.settledPage, playerNotes)
+    LaunchedEffect(mode, pagerState.settledPage, playerNotes) {
+        if (mode == BitzModeSetting.EXPLORE) {
+            pool.releaseAll()
+        } else {
+            pool.update(pagerState.settledPage, playerNotes)
+        }
     }
     // APP-004 hold rule: arrivals wait while the user is scrolled in.
     LaunchedEffect(pagerState.settledPage) {
@@ -452,6 +476,7 @@ fun BitzScreen(
                             state = state,
                             actions = actions,
                             pool = pool,
+                            player = playerBindings[note.id],
                             isSettled = pagerState.settledPage == page,
                             muted = settingsSnapshot.videoMuted,
                             sensitiveShowByDefault = sensitiveShowByDefault,
@@ -981,6 +1006,7 @@ private fun BitzVideoPage(
     state: FeedUiState,
     actions: LocalActions,
     pool: VideoPlayerPool,
+    player: androidx.media3.exoplayer.ExoPlayer?,
     isSettled: Boolean,
     muted: Boolean,
     sensitiveShowByDefault: Boolean,
@@ -1048,7 +1074,7 @@ private fun BitzVideoPage(
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },
-            update = { view -> view.player = pool.playerFor(note.id) },
+            update = { view -> view.player = player },
             modifier = Modifier.fillMaxSize(),
         )
         if (!covered) {

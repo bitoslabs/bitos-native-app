@@ -1,7 +1,6 @@
 package space.bitos.app.ui.feed
 
 import android.content.Intent
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,13 +50,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -69,9 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedTimeline
 import space.bitos.app.data.feed.FeedUiState
@@ -97,8 +92,6 @@ import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarFeedIcon
 import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
-import java.net.URL
-import android.graphics.BitmapFactory
 
 /**
  * Home surface (FED-002): full-screen vertical pager; only the settled page
@@ -159,8 +152,7 @@ fun FeedScreen(
     // APP-018 functional settings: autoplay policy + playback rate drive the
     // pool live (closure reads the current snapshot on every reconciliation).
     val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
-    val currentSettings = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(settingsSnapshot) }
-    currentSettings.value = settingsSnapshot
+    val currentSettings = androidx.compose.runtime.rememberUpdatedState(settingsSnapshot)
     val feedHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val pool = androidx.compose.runtime.remember {
         VideoPlayerPool(
@@ -169,6 +161,7 @@ fun FeedScreen(
             rateProvider = { currentSettings.value.videoPlaybackRate.rate.toFloat() },
         )
     }
+    val playerBindings by pool.playerBindings.collectAsStateWithLifecycle()
     // Shell split (user decision): Home tab = text notes; Bitz tab = reels.
     val feedNotes = remember(state.notes, videoOnly) {
         if (videoOnly) state.notes.filter { it.video != null } else state.notes.filter { it.video == null }
@@ -275,6 +268,7 @@ fun FeedScreen(
                         else -> if (videoOnly) VerticalPager(state = pagerState) { page ->
                             FeedPage(
                                 note = feedNotes[page], state = state, actions = actions, pool = pool,
+                                player = playerBindings[feedNotes[page].id],
                                 onLike = viewModel::toggleLike, onBookmark = viewModel::toggleBookmark,
                                 onComment = { showCommentsFor = it }, onRepost = viewModel::repost,
                                 onFollow = viewModel::toggleFollow,
@@ -519,6 +513,7 @@ private fun FeedPage(
     state: FeedUiState,
     actions: LocalActions,
     pool: VideoPlayerPool,
+    player: androidx.media3.exoplayer.ExoPlayer?,
     onLike: (space.bitos.core.feed.FeedNote) -> Unit,
     onBookmark: (String) -> Unit,
     onComment: (space.bitos.core.feed.FeedNote) -> Unit,
@@ -531,7 +526,7 @@ private fun FeedPage(
     onReport: (String) -> Unit,
 ) {
     if (note.video != null) {
-        VideoNotePage(note, state, actions, pool, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor, isMuted, onMuteToggle, onReport)
+        VideoNotePage(note, state, actions, pool, player, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor, isMuted, onMuteToggle, onReport)
     } else {
         TextNotePage(note, state, actions, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor)
     }
@@ -561,6 +556,7 @@ private fun VideoNotePage(
     state: FeedUiState,
     actions: LocalActions,
     pool: VideoPlayerPool,
+    player: androidx.media3.exoplayer.ExoPlayer?,
     onLike: (space.bitos.core.feed.FeedNote) -> Unit,
     onBookmark: (String) -> Unit,
     onComment: (space.bitos.core.feed.FeedNote) -> Unit,
@@ -583,7 +579,7 @@ private fun VideoNotePage(
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },
-            update = { view -> view.player = pool.playerFor(note.id) },
+            update = { view -> view.player = player },
             modifier = Modifier.fillMaxSize(),
         )
         // Tap layer: pause/play the settled slot only.
@@ -963,25 +959,16 @@ private fun TextNotePage(
 
 @Composable
 fun PosterImage(url: String?, modifier: Modifier = Modifier) {
-    val bitmap by produceState<Bitmap?>(initialValue = null, url) {
-        value = url?.let { loadBitmap(it) }
-    }
     Box(modifier.background(Brush.linearGradient(listOf(BitOSColors.surface, BitOSColors.surfaceElevated)))) {
-        bitmap?.let { image ->
-            androidx.compose.foundation.Image(
-                bitmap = image.asImageBitmap(),
+        if (url != null) {
+            coil.compose.AsyncImage(
+                model = url,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
         }
     }
-}
-
-private suspend fun loadBitmap(url: String): Bitmap? = withContext(Dispatchers.IO) {
-    runCatching {
-        BitmapFactory.decodeStream(URL(url).openStream())
-    }.getOrNull()
 }
 
 // ---------------------------------------------------------------------

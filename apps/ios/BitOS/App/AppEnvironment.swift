@@ -22,6 +22,7 @@ final class AppEnvironment {
     let algorithmStore: AlgorithmStore
     let privacyPrefs: PrivacyPrefsStore
     let profileLookup: ProfileLookupStore
+    let posterImages: PosterImagePipeline
 
     init(
         relayPool: RelayPool? = nil,
@@ -50,6 +51,7 @@ final class AppEnvironment {
             IdentityKeychain.loadSecret()
         }
         self.profileLookup = ProfileLookupStore(pool: relayPool, client: businessCore)
+        self.posterImages = PosterImagePipeline()
         // Algorithm wire drives the For-You ranking for the process lifetime.
         algorithm.sink = { [weak feedStore] json in
             feedStore?.setAlgorithm(snapshotJson: json)

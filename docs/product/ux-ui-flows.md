@@ -122,6 +122,8 @@ Acceptance criteria:
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
      -> vertical swipe changes active player lease
+     -> nearing the final buffered Bitz loads older videos for that mode
+     -> the final page remains visible until the next verified video appends
      -> tap pause; double tap react; hold speed
      -> caption/sound/author/provenance sheets
      -> comment / repost / bookmark / zap / share / report
@@ -135,6 +137,10 @@ UI anatomy:
 - bottom author, caption, tags, sound and progress;
 - visible content-warning gate before playback;
 - one active audio player; warm next/previous players only;
+- For You and Following paginate independently; exhausting one mode never
+  disables loading in the other;
+- Explore prefetches a bounded adjacent poster window so newly revealed rows do
+  not wait on full-size image decoding;
 - data-saver/quality indication only when it helps the user.
 
 ## 6. Quick create flow
@@ -273,4 +279,3 @@ Attribution does not claim legal permission. Unavailable/unsupported assets offe
 ## 14. UX acceptance artifact
 
 Every feature PR includes its state matrix, primary/secondary/destructive actions, back behavior, permission moment, offline/recovery behavior, accessibility labels/actions and analytics consent impact. A happy-path mock is not a complete flow.
-

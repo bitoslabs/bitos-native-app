@@ -1504,6 +1504,7 @@ private struct LightboxTarget: Identifiable {
 
 private struct PosterImage: View {
     let url: String?
+    @Environment(AppEnvironment.self) private var environment
     @State private var image: UIImage?
 
     var body: some View {
@@ -1525,13 +1526,11 @@ private struct PosterImage: View {
         }
         .task(id: url) {
             image = nil
-            guard let url, let imageURL = URL(string: url) else { return }
-            let loaded: UIImage? = await withCheckedContinuation { continuation in
-                URLSession.shared.dataTask(with: imageURL) { data, _, _ in
-                    continuation.resume(returning: data.flatMap(UIImage.init(data:)))
-                }.resume()
-            }
-            if !Task.isCancelled {
+            guard let url else { return }
+            let bounds = UIScreen.main.bounds
+            let maxPixels = max(bounds.width, bounds.height) * UIScreen.main.scale
+            let loaded = await environment.posterImages.image(urlString: url, maxPixelSize: maxPixels)
+            if !Task.isCancelled, url == self.url {
                 image = loaded
             }
         }

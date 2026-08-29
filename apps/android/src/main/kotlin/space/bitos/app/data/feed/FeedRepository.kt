@@ -139,8 +139,14 @@ class FeedRepository(
     private var retryAttempt = 0
     private var subscriptionCounter = 0
     private var olderCounter = 0
-    private var olderWalkAnchor: Long? = null
-    private var olderEmptyAttempts = 0
+    private data class OlderLane(
+        var anchorSeconds: Long? = null,
+        var exhausted: Boolean = false,
+    )
+
+    /** Pagination is independent per For You / Following window. */
+    private val olderLanes = FeedTimeline.entries.associateWith { OlderLane() }.toMutableMap()
+    private var loadingOlderTimeline: FeedTimeline? = null
 
     fun start() {
         if (collectJob != null) return
@@ -234,7 +240,11 @@ class FeedRepository(
         // Fresh subscription re-opens the timeline head; older pages may
         // exist again after new arrivals push the window deeper.
         mutableState.value = mutableState.value.copy(isLoading = true, noMoreOlder = false)
-        olderWalkAnchor = null
+        olderLanes.values.forEach {
+            it.anchorSeconds = null
+            it.exhausted = false
+        }
+        loadingOlderTimeline = null
         subscribe()
     }
 
@@ -243,7 +253,11 @@ class FeedRepository(
     fun retryNow() {
         retryAttempt = 0
         mutableState.value = mutableState.value.copy(noMoreOlder = false)
-        olderWalkAnchor = null
+        olderLanes.values.forEach {
+            it.anchorSeconds = null
+            it.exhausted = false
+        }
+        loadingOlderTimeline = null
         subscribe()
     }
 
@@ -259,36 +273,54 @@ class FeedRepository(
      * its boundary) — root cause of "load more does nothing" on that tab.
      */
     fun loadOlder() {
-        if (mutableState.value.isLoadingOlder || mutableState.value.noMoreOlder) return
-        val (snapshot, _) = activeWindows()
+        if (loadingOlderTimeline != null) return
+        val timeline = mutableState.value.timeline
+        val lane = olderLanes.getValue(timeline)
+        if (lane.exhausted) return
+        val snapshot = windowFor(timeline).snapshot()
         if (snapshot.isEmpty()) return
         if (aggregator.snapshot().size + followingWindow.snapshot().size >= OLDER_WINDOW_MAX) {
-            mutableState.value = mutableState.value.copy(noMoreOlder = true)
+            lane.exhausted = true
+            publishState()
             return
         }
         val oldest = snapshot.minOf { it.createdAt }
-        if (oldest == olderWalkAnchor) return // same page requested already
-        olderWalkAnchor = oldest
-        olderEmptyAttempts = 0
-        mutableState.value = mutableState.value.copy(isLoadingOlder = true)
-        walkOlder(cursor = BitzTimelinePolicy.cursor(oldest), batches = 0, freshMedia = 0)
+        if (oldest == lane.anchorSeconds) return // same page requested already
+        lane.anchorSeconds = oldest
+        loadingOlderTimeline = timeline
+        publishState()
+        walkOlder(
+            timeline = timeline,
+            cursor = BitzTimelinePolicy.cursor(oldest),
+            batches = 0,
+            freshMedia = 0,
+            emptyAttempts = 0,
+        )
     }
 
     /** Per-tab pagination source: Following walks the follows window. */
-    private fun activeWindows(): Pair<List<space.bitos.core.feed.FeedNote>, String> =
-        if (mutableState.value.timeline == FeedTimeline.FOLLOWING) {
-            followingWindow.snapshot() to "following"
-        } else {
-            aggregator.snapshot() to "for-you"
-        }
+    private fun windowFor(timeline: FeedTimeline): FeedAggregator =
+        if (timeline == FeedTimeline.FOLLOWING) followingWindow else aggregator
 
-    private fun walkOlder(cursor: Long, batches: Int, freshMedia: Int) {
+    /** Generic older REQs advance on every returned feed event; the Following
+     * media budget still counts only notes from the followed-author window. */
+    private fun progressWindowFor(timeline: FeedTimeline): FeedAggregator = aggregator
+
+    private fun walkOlder(
+        timeline: FeedTimeline,
+        cursor: Long,
+        batches: Int,
+        freshMedia: Int,
+        emptyAttempts: Int,
+    ) {
         if (!BitzTimelinePolicy.shouldContinue(freshMedia, batches)) {
-            mutableState.value = mutableState.value.copy(isLoadingOlder = false)
+            finishOlderWalk(timeline)
             return
         }
-        val windowSizeBefore = activeWindows().first.size
-        val knownIdsBefore = knownNoteIds.size
+        val progressBefore = progressWindowFor(timeline).snapshot()
+        val idsBefore = progressBefore.mapTo(HashSet(progressBefore.size)) { it.id }
+        val playableBefore = windowFor(timeline).snapshot()
+        val playableIdsBefore = playableBefore.asSequence().filter { it.video != null }.mapTo(HashSet()) { it.id }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
         pool.broadcast(
@@ -297,39 +329,46 @@ class FeedRepository(
         scope.launch {
             delay(BitzTimelinePolicy.PAGE_MAX_WAIT_MS)
             // Whatever landed by the deadline decides the next step.
-            val (window, _) = activeWindows()
-            val freshIds = maxOf(0, knownNoteIds.size - knownIdsBefore)
-            val oldestInBatch = window.lastOrNull()?.createdAt
+            if (loadingOlderTimeline != timeline) return@launch
+            val progressWindow = progressWindowFor(timeline).snapshot()
+            val freshIds = progressWindow.count { it.id !in idsBefore }
+            val oldestInBatch = progressWindow.minOfOrNull { it.createdAt }
             val nextCursor = BitzTimelinePolicy.advanceCursor(oldestInBatch, cursor)
-            val freshPlayable = maxOf(0, window.size - windowSizeBefore)
+            val playableWindow = windowFor(timeline).snapshot()
+            val freshPlayable = playableWindow.count { it.video != null && it.id !in playableIdsBefore }
             when {
                 // Relay ignoring `until` → stop instead of loop.
                 BitzTimelinePolicy.relayStalled(oldestInBatch, cursor, freshIds) -> {
-                    mutableState.value = mutableState.value.copy(isLoadingOlder = false)
+                    olderLanes.getValue(timeline).exhausted = true
+                    finishOlderWalk(timeline)
                 }
                 // Fresh ids but no playable video yet → same trigger the
                 // Flutter controller has: keep walking in the background
                 // so a swipe near the end never strands the user.
                 freshIds > 0 && freshPlayable == 0 &&
                     BitzTimelinePolicy.shouldContinue(freshMedia, batches + 1) -> {
-                    walkOlder(nextCursor, batches + 1, freshMedia)
+                    walkOlder(timeline, nextCursor, batches + 1, freshMedia, emptyAttempts)
                 }
                 else -> {
+                    var nextEmptyAttempts = emptyAttempts
                     if (freshIds == 0) {
-                        olderEmptyAttempts += 1
-                        if (olderEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
+                        nextEmptyAttempts += 1
+                        if (nextEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
                             // Two empty pages: relays hold nothing older now.
-                            mutableState.value = mutableState.value.copy(
-                                isLoadingOlder = false,
-                                noMoreOlder = true,
-                            )
+                            olderLanes.getValue(timeline).exhausted = true
+                            finishOlderWalk(timeline)
                             return@launch
                         }
                     }
-                    walkOlder(nextCursor, batches + 1, freshMedia + freshPlayable)
+                    walkOlder(timeline, nextCursor, batches + 1, freshMedia + freshPlayable, nextEmptyAttempts)
                 }
             }
         }
+    }
+
+    private fun finishOlderWalk(timeline: FeedTimeline) {
+        if (loadingOlderTimeline == timeline) loadingOlderTimeline = null
+        publishState()
     }
 
     /** ALL-window size of the For You timeline (mutes + protocol payload hidden). */
@@ -843,14 +882,8 @@ class FeedRepository(
             ),
             isLoading = false,
             hasLoadedAnyEvent = true,
-            // Older page arrived when the window's oldest note moved back.
-            isLoadingOlder = run {
-                val loadedAt = olderWalkAnchor
-                val (activeWindow, _) = activeWindows()
-                val oldestNow = activeWindow.minOfOrNull { it.createdAt }
-                if (mutableState.value.isLoadingOlder && loadedAt != null && oldestNow != null && oldestNow < loadedAt) false
-                else mutableState.value.isLoadingOlder
-            },
+            isLoadingOlder = loadingOlderTimeline == mutableState.value.timeline,
+            noMoreOlder = olderLanes.getValue(mutableState.value.timeline).exhausted,
         )
     }
 

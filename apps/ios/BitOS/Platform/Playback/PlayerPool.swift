@@ -1,6 +1,7 @@
 import AVFoundation
 import BusinessCore
 import Foundation
+import Observation
 import UIKit
 
 /**
@@ -17,6 +18,7 @@ import UIKit
  * control happens on the main actor as the feed UI requires.
  */
 @MainActor
+@Observable
 final class PlayerPool {
     private struct Slot {
         let player: AVQueuePlayer
@@ -29,7 +31,8 @@ final class PlayerPool {
     /// settings change applies without rebuilding the pool.
 
     /// Keyed by verified event id; bounded to three entries by update().
-    private var slots: [String: Slot] = [:]
+    @ObservationIgnored private var slots: [String: Slot] = [:]
+    private var bindingRevision = 0
 
     /// FED-004 failover chain per slot: rendition pick first, then imeta
     /// mirrors, then remaining renditions. Walked only on item failure.
@@ -55,8 +58,10 @@ final class PlayerPool {
             .filter { id in notes.first(where: { $0.id == id })?.video != nil }
 
         // Release slots outside the window.
+        var bindingsChanged = false
         for id in slots.keys where !keepIds.contains(id) {
             slots.removeValue(forKey: id)?.player.pause()
+            bindingsChanged = true
             mediaChains.removeValue(forKey: id)
             chainIndexes.removeValue(forKey: id)
             if let observer = failureObservers.removeValue(forKey: id) {
@@ -79,8 +84,10 @@ final class PlayerPool {
             let item = AVPlayerItem(url: videoURL)
             let looper = AVPlayerLooper(player: player, templateItem: item)
             slots[id] = Slot(player: player, looper: looper)
+            bindingsChanged = true
             installFailureObserver(noteId: id, player: player)
         }
+        if bindingsChanged { bindingRevision &+= 1 }
         // Exactly the visible video plays — gated by the autoplay policy,
         // with the persisted playback rate as the default (looping keeps it).
         let autoplay = autoplayAllowed
@@ -101,7 +108,8 @@ final class PlayerPool {
     }
 
     func player(for noteId: String) -> AVQueuePlayer? {
-        slots[noteId]?.player
+        _ = bindingRevision
+        return slots[noteId]?.player
     }
 
     // MARK: FED-004 rendition pick + mirror failover
@@ -134,6 +142,9 @@ final class PlayerPool {
 
     /// On item failure → advance to the next candidate and re-prepare.
     private func installFailureObserver(noteId: String, player: AVQueuePlayer) {
+        if let previous = failureObservers.removeValue(forKey: noteId) {
+            NotificationCenter.default.removeObserver(previous)
+        }
         let observer = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: player.currentItem,
@@ -236,8 +247,15 @@ final class PlayerPool {
     }
 
     func releaseAll() {
+        let hadBindings = !slots.isEmpty
         slots.values.forEach { $0.player.pause() }
         slots.removeAll()
+        if hadBindings { bindingRevision &+= 1 }
+        mediaChains.removeAll()
+        chainIndexes.removeAll()
+        failureObservers.values.forEach(NotificationCenter.default.removeObserver)
+        failureObservers.removeAll()
+        rateBoostNoteId = nil
     }
 
     var slotCount: Int { slots.count }

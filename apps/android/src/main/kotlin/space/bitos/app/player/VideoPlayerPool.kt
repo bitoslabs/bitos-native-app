@@ -5,6 +5,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import space.bitos.core.feed.FeedNote
 
 /**
@@ -44,6 +47,15 @@ class VideoPlayerPool(
 ) {
 
     private val players = LinkedHashMap<String, ExoPlayer>()
+    private val mutablePlayers = MutableStateFlow<Map<String, ExoPlayer>>(emptyMap())
+
+    /**
+     * Observable id-to-player bindings for native video surfaces. Player
+     * preparation happens after composition, so a plain [playerFor] lookup can
+     * leave a PlayerView permanently bound to null while audio is already
+     * playing. Snapshots publish only when slot identity changes.
+     */
+    val playerBindings: StateFlow<Map<String, ExoPlayer>> = mutablePlayers.asStateFlow()
 
     /**
      * FED-004: candidate URLs per note, in failover order. The primary
@@ -67,9 +79,11 @@ class VideoPlayerPool(
         }.filter { it.video != null }
 
         // Release slots outside the window.
+        var bindingsChanged = false
         players.keys.toList().forEach { id ->
             if (keep.none { it.id == id }) {
                 players.remove(id)?.release()
+                bindingsChanged = true
                 mediaSources.remove(id)
                 if (failoverSlot == id) failoverSlot = null
             }
@@ -88,8 +102,10 @@ class VideoPlayerPool(
                     repeatMode = Player.REPEAT_MODE_ONE
                     volume = if (muted) 0f else 1f
                 }
+                bindingsChanged = true
             }
         }
+        if (bindingsChanged) mutablePlayers.value = players.toMap()
         // Exactly the visible video plays — gated by the autoplay policy.
         val autoplay = canAutoplay()
         val rate = rateProvider()
@@ -173,6 +189,7 @@ class VideoPlayerPool(
     fun releaseAll() {
         players.values.forEach(ExoPlayer::release)
         players.clear()
+        mutablePlayers.value = emptyMap()
         mediaSources.clear()
         failoverSlot = null
     }

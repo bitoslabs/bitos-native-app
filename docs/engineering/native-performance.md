@@ -149,6 +149,9 @@ Allocations and Network) and MetricKit diagnostics from internal builds.
 ## 8. Video and image resources
 
 - Only the settled/visible Bitz item may play.
+- Native video surfaces observe id-to-player slot bindings. A pool may prepare
+  after the first UI pass; starting audio without publishing the new surface
+  binding is a playback defect.
 - Preload at most the documented adjacent slots; the player pool remains
   bounded and evicts deterministically.
 - Pause all players when the app backgrounds or the feed destination hides.
@@ -156,7 +159,16 @@ Allocations and Network) and MetricKit diagnostics from internal builds.
 - Use decoded image dimensions appropriate to the rendered size. Do not decode
   an original multi-megapixel avatar for a small feed icon.
 - Cache by canonical URL plus transformation size, with a byte/count limit.
+- Explore warms only the next 12 poster URLs at grid decode size. Moving the
+  window cancels obsolete requests; iOS retains at most 96 decoded posters / 48
+  MiB and Android delegates to Coil's bounded memory/disk caches.
 - Never make autoplay depend on metadata or nonessential enrichment.
+
+Feed pagination is lane-scoped: For You and Following retain separate anchors
+and exhaustion state. An older-page walk stays in flight until its bounded walk
+finishes, counts only newly playable videos toward the Bitz page budget, and
+uses non-video events only to advance the backwards cursor. UI end-of-window
+triggers may repeat safely because repositories reject overlapping walks.
 
 ## 9. State and clean-code rules for fast paths
 
@@ -213,4 +225,3 @@ Every optimization must state:
 - Was a release-build trace captured on a physical device for a performance
   claim?
 - Were relevant architecture, flow and performance documents updated?
-
