@@ -67,8 +67,14 @@ data class FeedUiState(
     val following: Set<String> = emptySet(),
     /** Saved event ids from the account's NIP-51 list (optimistic + relay). */
     val bookmarkedIds: Set<String> = emptySet(),
+    /** APP-015 saved notes (newest-saved first; window + by-id refetch). */
+    val bookmarkedNotes: List<FeedNote> = emptyList(),
     /** Zap counts per target event id from verified kind-9735 receipts. */
     val zapCounts: Map<String, Int> = emptyMap(),
+    /** APP-014 paid-matching: verified embedded 9734 request ids per target. */
+    val zapRequestIds: Map<String, Set<String>> = emptyMap(),
+    /** APP-009 live per-note tallies (reactions/reposts/zaps+msat, shared rule). */
+    val tallies: Map<String, space.bitos.core.feed.NoteTally> = emptyMap(),
     /** Muted authors' notes are filtered from all windows (device-local). */
     val muted: Set<String> = emptySet(),
     /** Blocked authors (NIP-51 10004 head) — filtered like mutes, relay-derived. */
@@ -103,8 +109,18 @@ class FeedRepository(
     private val blockCandidates = mutableListOf<NostrEvent>()
     private var followingSubscribed = false
     private val commentThreads = mutableMapOf<String, LinkedHashMap<String, FeedNote>>()
+
+    /** APP-007 Chain: fetched remix ancestors (bounded; tags feed the walk). */
+    private val remixChainEvents = LinkedHashMap<String, NostrEvent>()
+    private var chainCounter = 0
+
+    /** APP-015: saved-note bodies for ids outside the live feed window. */
+    private val bookmarkedNoteMap = LinkedHashMap<String, FeedNote>()
     private val bookmarkCandidates = mutableListOf<NostrEvent>()
     private val zapCounts = mutableMapOf<String, Int>()
+    private val zapRequestIdsBuffer = LinkedHashMap<String, LinkedHashSet<String>>()
+    private val talliesBuffer = LinkedHashMap<String, space.bitos.core.feed.NoteTally>()
+    private val tallyTargets = LinkedHashSet<String>()
     private val bookmarked = linkedSetOf<String>()
     private val profiles = mutableMapOf<String, ProfileMetadata>()
     private val profileQueue = ArrayDeque<String>()
@@ -142,7 +158,15 @@ class FeedRepository(
                     event.kind == space.bitos.core.model.BlockList.KIND -> absorbBlockList(event)
                     event.kind == space.bitos.core.model.ZapReceipt.RECEIPT_KIND -> absorbZapReceipt(event)
                     event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
-                    event.kind == space.bitos.core.model.NostrKinds.REPOST -> absorbNote(event)
+                    event.kind == space.bitos.core.model.NostrKinds.REPOST -> {
+                        // APP-009: reposts targeting a thread note count live.
+                        tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
+                        absorbNote(event)
+                    }
+                    event.kind == NostrKinds.GENERIC_REACTION -> {
+                        // APP-009: kind-7 reactions tally per thread note.
+                        tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
+                    }
                     FeedNote.isFeedKind(event.kind) -> absorbNote(event)
                 }
             }
@@ -259,6 +283,9 @@ class FeedRepository(
     private fun allWindowSize(): Int =
         aggregator.snapshot().count { it.pubkey !in mutedPubkeys && !it.isProtocolPayload }
 
+    private fun space.bitos.core.model.NostrEvent.eTaggedIds(): List<String> =
+        tags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }
+
     private fun connectedRelayCount(): Int =
         pool.states.values.count { it == RelayConnectionState.CONNECTED }
 
@@ -305,6 +332,17 @@ class FeedRepository(
 
     private fun absorbZapReceipt(event: NostrEvent) {
         val target = space.bitos.core.model.ZapReceipt.targetEventId(event) ?: return
+        // APP-009: live zap tallies per thread note (root or reply).
+        tallyTargetFor(listOf(target))?.let { tallyId ->
+            val invoice = event.tags.firstOrNull { it.firstOrNull() == "bolt11" }?.getOrNull(1)
+            mergeTally(tallyId, event.kind, space.bitos.core.model.Bolt11.amountMillisats(invoice ?: ""))
+        }
+        // APP-014: retain the embedded 9734 request id so the zap sheet can
+        // match ITS receipt exactly (not just any zap to the same note).
+        space.bitos.core.model.ZapReceipt.embeddedRequestId(event)?.let { requestId ->
+            zapRequestIdsBuffer.getOrPut(target) { LinkedHashSet() }.add(requestId)
+            if (zapRequestIdsBuffer.size > ZAP_TARGETS_MAX) zapRequestIdsBuffer.remove(zapRequestIdsBuffer.keys.first())
+        }
         // Verified receipts count once per unique event id (fan-in dedupe by
         // aggregator-style keys is overkill for a bounded count window).
         zapCounts[target] = (zapCounts[target] ?: 0) + 1
@@ -340,8 +378,30 @@ class FeedRepository(
         cache.clearAllCache()
     }
 
+    /**
+     * APP-009: resolves the tally target — the event's FIRST e-tag when it
+     * names a known note in an open thread window (root or any reply), so
+     * reply rows carry live deltas too. Returns null when it targets
+     * nothing we're tracking.
+     */
+    private fun tallyTargetFor(eTaggedIds: List<String>): String? {
+        for (id in eTaggedIds) {
+            if (id in tallyTargets) return id
+            // Replies of an open thread: the comment window knows them.
+            if (commentThreads.values.any { window -> id in window }) return id
+        }
+        return null
+    }
+
+    private fun mergeTally(target: String, kind: Int, amountMillisats: Long?) {
+        talliesBuffer[target] = space.bitos.core.feed.NoteTallies.merge(talliesBuffer[target], kind, amountMillisats)
+        space.bitos.core.feed.NoteTallies.evict(tallyTargets, target)
+        publishState()
+    }
+
     /** Loads the reply thread for one note (NIP-01 tagged #e filter). */
     fun loadComments(targetEventId: String) {
+        space.bitos.core.feed.NoteTallies.evict(tallyTargets, targetEventId)
         if (commentThreads.containsKey(targetEventId)) {
             publishState()
             return
@@ -413,7 +473,71 @@ class FeedRepository(
         absorbReply(note)
         enqueueProfile(event.pubkey.value)
         persist(event)
+        // APP-007 Chain: by-id fetches for the remix ancestry land here too.
+        synchronized(remixChainEvents) {
+            remixChainEvents[note.id] = event
+            if (remixChainEvents.size > CHAIN_ANCESTORS_MAX) {
+                remixChainEvents.remove(remixChainEvents.keys.first())
+            }
+        }
+        // APP-015: keep saved-note bodies for the bookmarks page.
+        if (note.id in bookmarked) {
+            bookmarkedNoteMap[note.id] = note
+            if (bookmarkedNoteMap.size > space.bitos.core.model.BookmarkList.MAX_BOOKMARKS) {
+                bookmarkedNoteMap.remove(bookmarkedNoteMap.keys.first())
+            }
+        }
         publishState()
+    }
+
+    /**
+     * APP-015 page: re-fetch saved notes that are missing from the local
+     * map (newest 100 ids, shared codec REQ); arrivals fill the map via
+     * absorbNote and republish.
+     */
+    fun loadBookmarked() {
+        val missing = bookmarked.filter { it !in bookmarkedNoteMap }.takeLast(BOOKMARK_FETCH_MAX)
+        if (missing.isNotEmpty()) {
+            pool.broadcast(
+                NostrEventCodec.encodeRequest(
+                    "bitos-saved-notes".take(64),
+                    """{"ids":[${missing.joinToString(separator = "\",\"", prefix = "\"", postfix = "\"")}],"limit":$BOOKMARK_FETCH_MAX}""",
+                ),
+            )
+        }
+        publishState()
+    }
+
+    /**
+     * APP-007 Chain sheet: walks the remix ancestry one ancestor at a time
+     * (shared `RemixChain` rule — cycle-safe, hex-validated, ≤32) fetching
+     * each ancestor's tags with a bounded single-id REQ + wait.
+     */
+    suspend fun loadRemixChain(
+        rootId: String,
+        source: space.bitos.core.feed.RemixRules.Source,
+    ): space.bitos.core.feed.RemixChain.Outcome =
+        space.bitos.core.feed.RemixChain.walk(rootId, source) { id ->
+            chainCounter += 1
+            pool.broadcast(
+                NostrEventCodec.encodeRequest(
+                    "bitos-chain-$chainCounter".take(64),
+                    """{"ids":["$id"],"limit":1}""",
+                ),
+            )
+            awaitRemixAncestor(id)?.tags
+        }
+
+    /** Ancestor note for the sheet rows (tap-through opens its thread). */
+    fun remixAncestorNote(id: String): FeedNote? =
+        synchronized(remixChainEvents) { remixChainEvents[id] }?.let(FeedNote::from)
+
+    private suspend fun awaitRemixAncestor(id: String): NostrEvent? {
+        repeat(CHAIN_AWAIT_POLLS) {
+            synchronized(remixChainEvents) { remixChainEvents[id] }?.let { return it }
+            kotlinx.coroutines.delay(CHAIN_AWAIT_INTERVAL_MS)
+        }
+        return null
     }
 
     // -----------------------------------------------------------------
@@ -599,7 +723,15 @@ class FeedRepository(
             },
             following = followingAuthors.toSet(),
             bookmarkedIds = bookmarked.toSet(),
+            bookmarkedNotes = if (bookmarked.isEmpty()) {
+                emptyList()
+            } else {
+                val byId = aggregator.snapshot().associateBy { it.id }
+                bookmarked.toList().asReversed().mapNotNull { id -> bookmarkedNoteMap[id] ?: byId[id] }
+            },
             zapCounts = zapCounts.toMap(),
+            zapRequestIds = zapRequestIdsBuffer.mapValues { it.value.toSet() },
+            tallies = talliesBuffer.toMap(),
             muted = mutedPubkeys,
             blocked = blockedPubkeys,
             relayHealth = RelayHealth(
@@ -633,7 +765,7 @@ class FeedRepository(
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
         const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,22],"authors":["""
         const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
-        const val COMMENT_FILTER_PREFIX = """{"kinds":[1],"#e":["""
+        const val COMMENT_FILTER_PREFIX = """{"kinds":[1,7,6,9735],"#e":["""
         const val BOOKMARK_FILTER_PREFIX = """{"kinds":[30003],"authors":["""
         const val BOOKMARK_FILTER_SUFFIX = """],"#d":[""],"limit":1}"""
         const val ZAP_FILTER_PREFIX = """{"kinds":[9735],"#e":["""
@@ -642,6 +774,14 @@ class FeedRepository(
         const val COMMENT_FILTER_SUFFIX = """],"limit":50}"""
         const val COMMENT_TARGETS_MAX = 16
         const val COMMENT_PER_TARGET_MAX = 100
+
+        /** APP-007 Chain: ancestor cache + per-hop fetch wait (3 s). */
+        const val CHAIN_ANCESTORS_MAX = 48
+        const val CHAIN_AWAIT_POLLS = 20
+        const val CHAIN_AWAIT_INTERVAL_MS = 150L
+
+        /** APP-015: by-id re-fetch bound for the bookmarks page. */
+        const val BOOKMARK_FETCH_MAX = 100
     }
 }
 

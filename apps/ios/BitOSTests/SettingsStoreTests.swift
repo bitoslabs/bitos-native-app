@@ -77,4 +77,57 @@ final class SettingsStoreTests: XCTestCase {
              "algorithm", "security", "media", "language", "relays", "help", "about"]
         )
     }
+
+    // MARK: - Bitz surface keys (APP-007, schema v4)
+
+    func testBitzModeAndVideoMutePersistAndClearWithCache() {
+        // Defaults: player surface, politely muted autoplay.
+        XCTAssertEqual(store.state.bitzMode, .forYou)
+        XCTAssertTrue(store.state.videoMuted)
+        // Typed writes persist canonical wire and republish state.
+        store.set(SettingsBitzMode.explore)
+        store.setVideoMuted(false)
+        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "explore")
+        XCTAssertEqual(defaults.string(forKey: "bitos_video_muted"), "0")
+        XCTAssertEqual(store.state.bitzMode, .explore)
+        XCTAssertFalse(store.state.videoMuted)
+        // Corrupt values self-heal through the shared rules.
+        defaults.set("reels", forKey: "bitos_bitz_mode")
+        defaults.set("loud", forKey: "bitos_video_muted")
+        store.reload()
+        XCTAssertEqual(store.state.bitzMode, .forYou)
+        XCTAssertTrue(store.state.videoMuted)
+        // Content prefs: clear with cache (not device globals).
+        store.clearCache()
+        XCTAssertNil(defaults.string(forKey: "bitos_bitz_mode"))
+        XCTAssertNil(defaults.string(forKey: "bitos_video_muted"))
+        XCTAssertEqual(store.state.bitzMode, .forYou)
+        XCTAssertTrue(store.state.videoMuted)
+    }
+
+    // MARK: - Bitz shared-rule seam (search merge, share copy, duration)
+
+    func testBitzBridgeRulesMergeDedupeAndFormat() throws {
+        let rules = BitzBridgeRules()
+        let local = FeedNote(
+            id: "a", pubkey: "aa", content: "orange pill bitcoin", createdAt: 1, kind: 22,
+            replyTo: nil, hashtags: [], mentions: [], mediaUrls: [], isProtocolPayload: false
+        )
+        let relayDupe = FeedNote(
+            id: "a", pubkey: "aa", content: "orange pill bitcoin", createdAt: 1, kind: 22,
+            replyTo: nil, hashtags: [], mentions: [], mediaUrls: [], isProtocolPayload: false
+        )
+        let relayNew = FeedNote(
+            id: "b", pubkey: "bb", content: "bitcoin beach", createdAt: 2, kind: 22,
+            replyTo: nil, hashtags: [], mentions: [], mediaUrls: [], isProtocolPayload: false
+        )
+        XCTAssertEqual(rules.mergedResultIds(query: "bitcoin", local: [local], relay: [relayDupe, relayNew], profiles: [:]), ["a", "b"])
+        // Blank query = idle: stray relay echoes never repopulate results.
+        XCTAssertEqual(rules.mergedResultIds(query: "  ", local: [local], relay: [relayNew], profiles: [:]), [])
+        // Share copy carries the excerpt + attribution.
+        XCTAssertTrue(rules.shareText(content: "hello world", authorNpub: "npub1abc").hasSuffix("— npub1abc · BitOS"))
+        // Duration labels are locale-free.
+        XCTAssertEqual(rules.formatDuration(59), "0:59")
+        XCTAssertEqual(rules.formatDuration(3_723), "1:02:03")
+    }
 }

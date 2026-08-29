@@ -226,7 +226,7 @@ class SettingsTest {
 
     @Test
     fun schemaIsVersioned() {
-        assertEquals(3, SettingsContract.SCHEMA_VERSION)
+        assertEquals(4, SettingsContract.SCHEMA_VERSION)
     }
 
     // MARK: - Sensitive-media default (v3, APP-018 privacy)
@@ -247,5 +247,53 @@ class SettingsTest {
         assertEquals("cover", SettingsRules.normalize(SettingsContract.KEY_SENSITIVE_MEDIA, "garbage"))
         // Content preference: NOT protected from clear-cache.
         assertFalse(SettingsContract.KEY_SENSITIVE_MEDIA in SettingsContract.CLEAR_CACHE_PROTECTED_KEYS)
+    }
+
+    // MARK: - Bitz surface keys (v4, APP-007)
+
+    @Test
+    fun bitzModeAndVideoMuteDecodeNormalizeAndRoundTrip() {
+        // Defaults: player surface, politely muted autoplay (legacy web parity).
+        val defaults = SettingsCodec.decode(emptyMap())
+        assertEquals(BitzModeSetting.FOR_YOU, defaults.bitzMode)
+        assertTrue(defaults.videoMuted)
+        // Decode every mode + unmuted wire value.
+        assertEquals(
+            BitzModeSetting.EXPLORE,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "explore")).bitzMode,
+        )
+        assertEquals(
+            BitzModeSetting.FOLLOWING,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "following")).bitzMode,
+        )
+        assertFalse(
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_VIDEO_MUTED to "0")).videoMuted,
+        )
+        // Corrupt values self-heal to defaults.
+        assertEquals(
+            BitzModeSetting.DEFAULT,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "reels")).bitzMode,
+        )
+        assertTrue(SettingsCodec.decode(mapOf(SettingsContract.KEY_VIDEO_MUTED to "loud")).videoMuted)
+        // Normalize: enums canonicalize (invalid → default), mute is boolean.
+        assertEquals("explore", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "explore"))
+        assertEquals("for_you", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "garbage"))
+        assertEquals("1", SettingsRules.normalize(SettingsContract.KEY_VIDEO_MUTED, "true"))
+        assertEquals("0", SettingsRules.normalize(SettingsContract.KEY_VIDEO_MUTED, "0"))
+        assertNull(SettingsRules.normalize(SettingsContract.KEY_VIDEO_MUTED, "maybe"))
+        // Both keys round-trip and clear with cache (content prefs, not device globals).
+        val snapshot = SettingsCodec.decode(
+            mapOf(
+                SettingsContract.KEY_BITZ_MODE to "following",
+                SettingsContract.KEY_VIDEO_MUTED to "0",
+            ),
+        )
+        for (key in listOf(SettingsContract.KEY_BITZ_MODE, SettingsContract.KEY_VIDEO_MUTED)) {
+            val wire = SettingsCodec.encode(key, snapshot)
+            assertTrue(wire != null, "encode($key) must produce a value")
+            assertEquals(wire, SettingsCodec.encode(key, SettingsCodec.decode(mapOf(key to wire!!))))
+        }
+        assertFalse(SettingsContract.KEY_BITZ_MODE in SettingsContract.CLEAR_CACHE_PROTECTED_KEYS)
+        assertFalse(SettingsContract.KEY_VIDEO_MUTED in SettingsContract.CLEAR_CACHE_PROTECTED_KEYS)
     }
 }

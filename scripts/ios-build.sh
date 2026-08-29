@@ -58,4 +58,4 @@ bitos_ios_sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
 find apps/ios/BitOS -name '*.swift' -print0 | \
     xargs -0 xcrun swiftc -typecheck -swift-version 6 -strict-concurrency=complete \
         -sdk "$bitos_ios_sdk" -target arm64-apple-ios17.0-simulator \
-        -F build/BusinessCore.xcframework/ios-arm64
+        -F build/BusinessCore.xcframework/ios-arm64_x86_64-simulator

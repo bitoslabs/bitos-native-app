@@ -9,8 +9,10 @@ struct ProfileView: View {
     @State private var confirmRemove = false
     @State private var showEdit = false
     @State private var showSettings = false
+    @State private var showZaps = false
     @State private var showQr = false
     @Environment(AppEnvironment.self) private var environment
+    @Environment(IdentityStore.self) private var identity
     @Environment(SettingsStore.self) private var settings
 
     init(store: IdentityStore) {
@@ -23,6 +25,26 @@ struct ProfileView: View {
                 VStack(spacing: BitOSTheme.Spacing.md) {
                     if let account = store.account {
                         accountPanel(account)
+                        // APP-014: zap wallet entry.
+                        Button {
+                            showZaps = true
+                        } label: {
+                            HStack {
+                                Text("⚡ Zap wallet")
+                                    .font(.system(size: 14, weight: .bold))
+                                Spacer()
+                                Text("Ledger")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(BitOSTheme.textTertiary)
+                            }
+                            .padding(BitOSTheme.Spacing.md)
+                            .background(
+                                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                                    .strokeBorder(BitOSTheme.divider)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open zap wallet")
                     } else {
                         browsePanel
                         importPanel
@@ -42,7 +64,11 @@ struct ProfileView: View {
                     .accessibilityLabel("Settings")
                 }
             }
-            .sheet(isPresented: $showSettings) {
+            .fullScreenCover(isPresented: $showZaps) {
+            ZapsView { showZaps = false }
+                .environment(identity)
+        }
+        .sheet(isPresented: $showSettings) {
                 NavigationStack { SettingsView() }
                     .environment(environment)
             }

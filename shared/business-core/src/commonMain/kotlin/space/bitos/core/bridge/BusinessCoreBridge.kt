@@ -71,12 +71,19 @@ class BusinessCoreBridge {
         val posterUrl: String? = null,
         val videoWidth: Int? = null,
         val videoHeight: Int? = null,
+        /** NIP-92 imeta duration in whole seconds; null = unknown. */
+        val durationSeconds: Long? = null,
         val contentWarning: Boolean = false,
         /** APP-009 NIP-10 thread anchors (root / immediate parent). */
         val threadRootId: String? = null,
         val threadParentId: String? = null,
         /** APP-008 poll labels (index order; empty = not a poll). */
         val pollOptions: List<String> = emptyList(),
+        /** APP-007 remix source (id + author pubkey); nulls = original work. */
+        val remixOfEventId: String? = null,
+        val remixOfPubkey: String? = null,
+        /** APP-007 `license` tag (remix advisory gate); null = permissive. */
+        val license: String? = null,
     )
 
     /**
@@ -131,7 +138,7 @@ class BusinessCoreBridge {
             mediaUrls = note.mediaUrls,
             isProtocolPayload = note.protocolPayload,
             video = note.videoUrl?.let {
-                MediaMetadata(url = it, mimeType = note.videoMime, posterUrl = note.posterUrl, width = note.videoWidth, height = note.videoHeight)
+                MediaMetadata(url = it, mimeType = note.videoMime, posterUrl = note.posterUrl, width = note.videoWidth, height = note.videoHeight, durationSeconds = note.durationSeconds)
             },
             repostedBy = note.repostedBy,
             contentWarning = note.contentWarning,
@@ -156,6 +163,127 @@ class BusinessCoreBridge {
     /** APP-004 pagination: one older page — feed kinds before `until`. */
     fun olderFeedRequest(subscriptionId: String, until: Long, limit: Int): String =
         NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[1,22],"limit":$limit,"until":$until}""")
+
+    // ── Bitz surface (APP-007) ──────────────────────────────────────────
+
+    /** Deterministic share copy for the Share action (note + video rail). */
+    fun noteShareText(content: String, authorNpub: String): String =
+        space.bitos.core.feed.NoteShare.text(content, authorNpub)
+
+    /** Locale-free `m:ss` / `h:mm:ss` duration label for explore tiles. */
+    fun formatDurationSeconds(seconds: Long): String =
+        space.bitos.core.model.MediaMetadata.formatDuration(seconds)
+
+    /** APP-007 compact rail-count label (legacy `_formatCount` parity). */
+    fun bitzFormatCount(value: Long): String = space.bitos.core.feed.BitzFormat.count(value)
+
+    /** APP-007 compact zap-sats label from summed millisats (null = hide). */
+    fun bitzFormatSats(zapMillisats: Long): String? = space.bitos.core.feed.BitzFormat.sats(zapMillisats)
+
+    /**
+     * T16 deep-link seam: classifies one inbound URI through the shared
+     * rule as `{"kind":"author"|"note"|"lightning","value":"…"}`; null =
+     * not a BitOS deep link.
+     */
+    fun deepLinkJson(uri: String): String? {
+        val target = space.bitos.core.nostr.DeepLinks.classify(uri) ?: return null
+        val (kind, value) = when (target) {
+            is space.bitos.core.nostr.DeepLinks.Target.Author -> "author" to target.pubkeyHex
+            is space.bitos.core.nostr.DeepLinks.Target.Note -> "note" to target.reference
+            is space.bitos.core.nostr.DeepLinks.Target.Lightning -> "lightning" to target.invoiceUri
+        }
+        val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+        return "{\"kind\":\"$kind\",\"value\":\"$escaped\"}"
+    }
+
+    // ── Remix attribution (APP-007, legacy web remix.ts parity) ────────
+
+    /** Whether the source's license asks before remixing (advisory gate). */
+    fun remixRequiresAsk(license: String?): Boolean =
+        space.bitos.core.feed.RemixRules.requiresAsk(license)
+
+    /**
+     * APP-007 Chain seam: first remix source of a tag set (JSON
+     * `[[name, …], …]`) packed as `eventId|pubkey` (pubkey empty when the
+     * tag set carries no p attribution); null = original work.
+     */
+    fun remixSourceOfTags(tagsJson: String): String? {
+        val tags = try {
+            Json.parseToJsonElement(tagsJson).jsonArray.map { el ->
+                el.jsonArray.map { it.jsonPrimitive.content }
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        val source = space.bitos.core.feed.RemixRules.sourceOf(tags) ?: return null
+        return source.eventId + "|" + (source.pubkey ?: "")
+    }
+
+    /** Wire tags for a remix publish (remix marker + p attribution), JSON. */
+    fun remixTagsJson(eventId: String, pubkey: String?, relaysJson: String): String =
+        space.bitos.core.feed.RemixRules.tagsFor(
+            eventId,
+            pubkey,
+            parseStringList(relaysJson),
+        ).joinToString(prefix = "[", postfix = "]") { tag ->
+            tag.joinToString(prefix = "[", separator = ",", postfix = "]") { value ->
+                "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+            }
+        }
+
+    /** `["attribution", "remix of <label>"]` as a one-tag JSON array. */
+    fun remixAttributionTagJson(label: String): String {
+        val tag = space.bitos.core.feed.RemixRules.attributionTag(label)
+        return "[[\"attribution\",\"" + tag[1].replace("\\", "\\\\").replace("\"", "\\\"") + "\"]]"
+    }
+
+    /** Merge seed tags with the composer's derived tags (dedup by name+param). */
+    fun mergeTagsJson(baseJson: String, derivedJson: String): String =
+        space.bitos.core.feed.RemixRules.mergeTagsJson(baseJson, derivedJson)
+
+    private fun parseStringList(json: String): List<String> = try {
+        Json.parseToJsonElement(json).jsonArray.mapNotNull { it.jsonPrimitive.content }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Bitz search seam for the Swift surface: filters the local window and
+     * merges relay results (id-deduped, local-first, bounded) through the
+     * shared policy, returning matched rows as `[{id,content,authorName},…]`
+     * JSON. Blank/oversized query → `[]` (idle); malformed JSON input → null.
+     */
+    fun bitzSearchResults(query: String, localJson: String, relayJson: String): String? {
+        val local = parseBitzEntries(localJson) ?: return null
+        val relay = parseBitzEntries(relayJson) ?: return null
+        val merged = space.bitos.core.feed.BitzSearch.results(query, local, relay)
+        return buildJsonArray {
+            merged.forEach { entry ->
+                add(
+                    buildJsonObject {
+                        put("id", entry.id)
+                        put("content", entry.content)
+                        put("authorName", entry.authorName)
+                    },
+                )
+            }
+        }.toString()
+    }
+
+    private fun parseBitzEntries(json: String): List<space.bitos.core.feed.BitzSearch.Entry>? = try {
+        val arr = Json.parseToJsonElement(json).jsonArray
+        arr.map { el ->
+            val o = el.jsonObject
+            space.bitos.core.feed.BitzSearch.Entry(
+                id = o["id"]?.jsonPrimitive?.content ?: "",
+                content = o["content"]?.jsonPrimitive?.content ?: "",
+                authorName = o["authorName"]?.jsonPrimitive?.content ?: "",
+            )
+        }
+    } catch (_: Exception) {
+        null
+    }
+
 
     fun isProfileKind(kind: Int): Boolean = kind == NostrKinds.PROFILE_METADATA
 
@@ -192,10 +320,14 @@ class BusinessCoreBridge {
             posterUrl = note.video?.posterUrl,
             videoWidth = note.video?.width,
             videoHeight = note.video?.height,
+            durationSeconds = note.video?.durationSeconds,
             contentWarning = note.contentWarning,
             threadRootId = note.threadRootId,
             threadParentId = note.threadParentId,
             pollOptions = note.poll?.options?.map { it.label } ?: emptyList(),
+            remixOfEventId = note.remixOfEventId,
+            remixOfPubkey = note.remixOfPubkey,
+            license = note.license,
         )
     }
 
@@ -264,6 +396,8 @@ class BusinessCoreBridge {
         val timeZone: String,
         val dateFormat: String,
         val sensitiveMedia: String,
+        val bitzMode: String,
+        val videoMuted: Boolean,
     )
 
     fun settingsSchemaVersion(): Int = space.bitos.core.settings.SettingsContract.SCHEMA_VERSION
@@ -291,6 +425,8 @@ class BusinessCoreBridge {
             timeZone = s.timeZone,
             dateFormat = s.dateFormat.wire,
             sensitiveMedia = s.sensitiveMedia.wire,
+            bitzMode = s.bitzMode.wire,
+            videoMuted = s.videoMuted,
         )
     }
 
@@ -324,6 +460,9 @@ class BusinessCoreBridge {
         space.bitos.core.settings.SettingsContract.KEY_DEFAULT_ZAP_AMOUNT,
         space.bitos.core.settings.SettingsContract.KEY_TIME_ZONE,
         space.bitos.core.settings.SettingsContract.KEY_DATE_FORMAT,
+        space.bitos.core.settings.SettingsContract.KEY_SENSITIVE_MEDIA,
+        space.bitos.core.settings.SettingsContract.KEY_BITZ_MODE,
+        space.bitos.core.settings.SettingsContract.KEY_VIDEO_MUTED,
     )
 
     /** Keys removable on "Clear cache" (device globals stay). */
@@ -544,11 +683,249 @@ class BusinessCoreBridge {
     /** APP-014 zap-sheet presentation rules (shared `ZapFormat`). */
     fun zapEmoji(sats: Long): String = space.bitos.core.model.ZapFormat.emoji(sats)
 
+    /** APP-010 People-tab rows (shared fan-in) as JSON [{pubkey,name,nip05,picture,notes}]. */
+    fun searchPeopleJson(resultsJson: String, profilesJson: String): String {
+        // Reconstruct from bridge Note projections + profile maps.
+        val notes = try {
+            Json.parseToJsonElement(resultsJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                space.bitos.core.feed.FeedNote(
+                    id = obj.getValue("id").jsonPrimitive.content,
+                    pubkey = obj.getValue("pubkey").jsonPrimitive.content,
+                    content = "",
+                    createdAt = 0,
+                    kind = 1,
+                    replyTo = null,
+                    hashtags = (obj["hashtags"]?.jsonArray)?.map { it.jsonPrimitive.content } ?: emptyList(),
+                    mentions = emptyList(),
+                    mediaUrls = emptyList(),
+                    isProtocolPayload = false,
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val profiles = try {
+            Json.parseToJsonElement(profilesJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                val pubkey = obj["pubkey"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                pubkey to space.bitos.core.model.ProfileMetadata(
+                    pubkey = space.bitos.core.model.Pubkey.parse(pubkey) ?: return@mapNotNull null,
+                    name = obj["name"]?.jsonPrimitive?.content,
+                    displayName = obj["displayName"]?.jsonPrimitive?.content,
+                    about = null,
+                    picture = obj["picture"]?.jsonPrimitive?.content,
+                    nip05 = obj["nip05"]?.jsonPrimitive?.content,
+                    lud16 = null,
+                )
+            }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        return space.bitos.core.feed.SearchResults.people(notes, profiles).joinToString(prefix = "[", separator = ",", postfix = "]") { person ->
+            buildJsonObject {
+                put("pubkey", person.pubkey)
+                put("name", person.displayName)
+                put("nip05", person.nip05 ?: "")
+                put("picture", person.picture ?: "")
+                put("notes", person.noteCount)
+            }.toString()
+        }
+    }
+
+    /** APP-010 Hashtag-tab rows as JSON [{tag,count}]. */
+    fun searchHashtagsJson(resultsJson: String): String {
+        val notes = try {
+            Json.parseToJsonElement(resultsJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                space.bitos.core.feed.FeedNote(
+                    id = obj.getValue("id").jsonPrimitive.content,
+                    pubkey = obj.getValue("pubkey").jsonPrimitive.content,
+                    content = "",
+                    createdAt = 0,
+                    kind = 1,
+                    replyTo = null,
+                    hashtags = (obj["hashtags"]?.jsonArray)?.map { it.jsonPrimitive.content } ?: emptyList(),
+                    mentions = emptyList(),
+                    mediaUrls = emptyList(),
+                    isProtocolPayload = false,
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.feed.SearchResults.hashtags(notes).joinToString(prefix = "[", separator = ",", postfix = "]") { hit ->
+            buildJsonObject {
+                put("tag", hit.tag)
+                put("count", hit.count)
+            }.toString()
+        }
+    }
+
+    /** APP-002 onboarding pages (shared contract) for the iOS carousel. */
+    fun onboardingContent(): List<Map<String, Any>> =
+        space.bitos.core.settings.OnboardingContent.pages.map { page ->
+            mapOf(
+                "id" to page.id,
+                "icon" to page.iconToken,
+                "title" to page.title,
+                "body" to page.body,
+            )
+        }
+
+    /** APP-020 static pages (legacy copy verbatim from the shared contract). */
+    fun staticAboutHeadline(): String = space.bitos.core.settings.StaticPagesContent.ABOUT_HEADLINE
+    fun staticAboutSubtitle(): String = space.bitos.core.settings.StaticPagesContent.ABOUT_SUBTITLE
+    fun staticAboutHeroBody(): String = space.bitos.core.settings.StaticPagesContent.ABOUT_HERO_BODY
+    fun staticAboutFeatures(): List<Map<String, Any>> =
+        space.bitos.core.settings.StaticPagesContent.aboutFeatures.map { mapOf("title" to it.title, "body" to it.body) }
+
+    fun staticPrivacyTitle(): String = space.bitos.core.settings.StaticPagesContent.PRIVACY_TITLE
+    fun staticPrivacyUpdated(): String = space.bitos.core.settings.StaticPagesContent.PRIVACY_UPDATED
+    fun staticPrivacyIntro(): String = space.bitos.core.settings.StaticPagesContent.PRIVACY_INTRO
+    fun staticPrivacySummaryTitle(): String = space.bitos.core.settings.StaticPagesContent.PRIVACY_SUMMARY_TITLE
+    fun staticPrivacySummaryBody(): String = space.bitos.core.settings.StaticPagesContent.PRIVACY_SUMMARY_BODY
+    fun staticPrivacySections(): List<Map<String, Any>> =
+        space.bitos.core.settings.StaticPagesContent.privacySections.map { mapOf("title" to it.title, "body" to it.body) }
+
+    fun staticTermsTitle(): String = space.bitos.core.settings.StaticPagesContent.TERMS_TITLE
+    fun staticTermsUpdated(): String = space.bitos.core.settings.StaticPagesContent.TERMS_UPDATED
+    fun staticTermsIntro(): String = space.bitos.core.settings.StaticPagesContent.TERMS_INTRO
+    fun staticTermsSummaryTitle(): String = space.bitos.core.settings.StaticPagesContent.TERMS_SUMMARY_TITLE
+    fun staticTermsSummaryBody(): String = space.bitos.core.settings.StaticPagesContent.TERMS_SUMMARY_BODY
+    fun staticTermsSections(): List<Map<String, Any>> =
+        space.bitos.core.settings.StaticPagesContent.termsSections.map { mapOf("title" to it.title, "body" to it.body) }
+
+    /** APP-009: bolt11 HRP msat for zap tallies; 0 when unparseable. */
+    fun bolt11AmountMillisats(invoice: String): Long =
+        space.bitos.core.model.Bolt11.amountMillisats(invoice) ?: 0L
+
     fun zapFormatSats(sats: Long): String = space.bitos.core.model.ZapFormat.sats(sats)
 
     /** APP-014 invoice expiry (epoch seconds); 0 when unparseable. */
     fun bolt11ExpirySeconds(invoice: String): Long =
         space.bitos.core.model.Bolt11.expirySeconds(invoice) ?: 0L
+
+    // ── APP-014 sent-zap ledger + paid matching (iOS seam) ───────────
+
+    /** Records JSON [{id,sats,to,at,note?,memo?}] → versioned ledger wire. */
+    fun sentZapsEncode(recordsJson: String): String {
+        val records = sentZapRecordsFromJson(recordsJson)
+        return space.bitos.core.model.SentZapLedger.encode(records)
+    }
+
+    /** Ledger wire → normalized records JSON (null when corrupt). */
+    fun sentZapsDecode(wire: String): String? {
+        val records = space.bitos.core.model.SentZapLedger.decode(wire)
+        return sentZapRecordsJson(records)
+    }
+
+    /** Merge local sent records with received zaps → entries JSON
+     * (newest first; shared merge rule). receivedJson: [{sats,from,at,note?}]. */
+    fun zapLedgerEntries(sentRecordsJson: String, receivedJson: String): String {
+        val sent = sentZapRecordsFromJson(sentRecordsJson)
+        val received = try {
+            val array = Json.parseToJsonElement(receivedJson).jsonArray
+            List(array.size) { index ->
+                val obj = array[index].jsonObject
+                Quadruple(
+                    (obj["sats"]?.jsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+                    (obj["from"]?.jsonPrimitive)?.content ?: "",
+                    (obj["at"]?.jsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+                    (obj["note"]?.jsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val entries = space.bitos.core.model.SentZapLedger.ledger(
+            sent = sent,
+            receivedSats = received.map { it.first },
+            receivedFrom = received.map { it.second },
+            receivedAt = received.map { it.third },
+            receivedNote = received.map { it.fourth },
+        )
+        return entries.joinToString(prefix = "[", separator = ",", postfix = "]") { entry ->
+            buildJsonObject {
+                put("direction", if (entry.direction == space.bitos.core.model.SentZapLedger.Direction.RECEIVED) "received" else "sent")
+                put("sats", entry.sats)
+                put("peer", entry.peerPubkey)
+                put("at", entry.createdAt)
+                put("memo", entry.memo ?: "")
+                put("note", entry.targetNoteId ?: "")
+            }.toString()
+        }
+    }
+
+    /** Entries JSON → totals {received,sent,avg,net} (shared rule). */
+    fun zapLedgerTotals(entriesJson: String): String? {
+        val entries = try {
+            Json.parseToJsonElement(entriesJson).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                space.bitos.core.model.SentZapLedger.LedgerEntry(
+                    direction = if ((obj["direction"]?.jsonPrimitive)?.content == "received") {
+                        space.bitos.core.model.SentZapLedger.Direction.RECEIVED
+                    } else {
+                        space.bitos.core.model.SentZapLedger.Direction.SENT
+                    },
+                    sats = (obj["sats"]?.jsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null,
+                    peerPubkey = (obj["peer"]?.jsonPrimitive)?.content ?: "",
+                    createdAt = (obj["at"]?.jsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+                    memo = (obj["memo"]?.jsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                    targetNoteId = (obj["note"]?.jsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                )
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        val totals = space.bitos.core.model.SentZapLedger.totals(entries)
+        return buildJsonObject {
+            put("received", totals.receivedSats)
+            put("sent", totals.sentSats)
+            put("avg", totals.averageSats)
+            put("net", totals.netSats)
+        }.toString()
+    }
+
+    /** Paid-matching key from a verified 9735 relay frame (embedded 9734
+     * canonical id through the client gate); null when absent/invalid. */
+    fun embeddedZapRequestId(message: String, relayUrl: String): String? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        } ?: return null
+        return space.bitos.core.model.ZapReceipt.embeddedRequestId(event)
+    }
+
+    private fun sentZapRecordsFromJson(recordsJson: String): List<space.bitos.core.model.SentZapRecord> = try {
+        Json.parseToJsonElement(recordsJson).jsonArray.mapNotNull { element ->
+            val obj = element.jsonObject
+            space.bitos.core.model.SentZapRecord(
+                id = (obj["id"]?.jsonPrimitive)?.content ?: return@mapNotNull null,
+                amountSats = (obj["sats"]?.jsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null,
+                recipientPubkey = (obj["to"]?.jsonPrimitive)?.content ?: return@mapNotNull null,
+                createdAt = (obj["at"]?.jsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null,
+                targetNoteId = (obj["note"]?.jsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+                memo = (obj["memo"]?.jsonPrimitive)?.content?.takeIf { it.isNotEmpty() },
+            )
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    private fun sentZapRecordsJson(records: List<space.bitos.core.model.SentZapRecord>): String =
+        records.joinToString(prefix = "[", separator = ",", postfix = "]") { record ->
+            buildJsonObject {
+                put("id", record.id)
+                put("sats", record.amountSats)
+                put("to", record.recipientPubkey)
+                put("at", record.createdAt)
+                put("note", record.targetNoteId ?: "")
+                put("memo", record.memo ?: "")
+            }.toString()
+        }
 
     /**
      * APP-008 composer-draft persistence seam: encode the draft wire
@@ -843,7 +1220,7 @@ class BusinessCoreBridge {
 
     /** REQ for replies to one event (NIP-01 tagged #e filter). */
     fun commentsRequest(subscriptionId: String, targetEventId: String): String =
-        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE}],"#e":["$targetEventId"],"limit":50}""")
+        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},7,6,${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#e":["$targetEventId"],"limit":50}""")
 
     /**
      * APP-009 root resolution: `note1`/`nevent1`/`naddr1` (± `nostr:`
@@ -991,8 +1368,10 @@ class BusinessCoreBridge {
         val linkNips: String,
         val linkNostr: String,
         val linkSource: String,
-        val supportLud16: String,
+        val supportNpub: String,
         val supportTiersSats: List<Long>,
+        val recommendedTierSats: Long,
+        val contributorNpubs: List<String>,
         val contributeNote: String,
     )
 
@@ -1008,8 +1387,11 @@ class BusinessCoreBridge {
         linkNips = space.bitos.core.settings.AppFacts.LINK_NIPS,
         linkNostr = space.bitos.core.settings.AppFacts.LINK_NOSTR,
         linkSource = space.bitos.core.settings.AppFacts.LINK_SOURCE,
-        supportLud16 = space.bitos.core.settings.AppFacts.SUPPORT_LUD16,
-        supportTiersSats = space.bitos.core.settings.AppFacts.SUPPORT_TIERS_SATS.map { it.toLong() },
+        supportNpub = space.bitos.core.settings.AppFacts.SUPPORT_NPUB,
+        supportTiersSats = space.bitos.core.settings.AppFacts.SUPPORT_TIERS.map { it.sats.toLong() },
+        recommendedTierSats = space.bitos.core.settings.AppFacts.SUPPORT_TIERS
+            .firstOrNull { it.recommended }?.sats?.toLong() ?: 0,
+        contributorNpubs = space.bitos.core.settings.AppFacts.CONTRIBUTOR_NPUBS,
         contributeNote = space.bitos.core.settings.AppFacts.CONTRIBUTE_NOTE,
     )
 
@@ -1362,6 +1744,15 @@ class BusinessCoreBridge {
     /** bolt11 payment request from a callback response, or null. */
     fun lnurlParseInvoice(body: String): String? =
         space.bitos.core.model.LnurlPay.parseInvoice(body)?.paymentRequest
+
+    /** APP-014 LUD-21: the invoice's verify URL (null when the provider
+     * does not support LUD-21). */
+    fun lnurlInvoiceVerifyUrl(body: String): String? =
+        space.bitos.core.model.LnurlPay.parseInvoice(body)?.verifyUrl
+
+    /** LUD-21 settle classification for a verify poll response body. */
+    fun lnurlVerifySettled(body: String): Boolean =
+        space.bitos.core.model.LnurlPay.verifySettled(body)
 
     /** Composes the unsigned Blossom kind-24242 upload auth and returns its id. */
     fun composeUploadAuthEventId(
@@ -1847,3 +2238,6 @@ class FeedWindow(maxItems: Int) {
         videoHeight = video?.height,
     )
 }
+
+/** Local 4-tuple for the ledger bridge parsing. */
+private data class Quadruple(val first: Long, val second: String, val third: Long, val fourth: String?)

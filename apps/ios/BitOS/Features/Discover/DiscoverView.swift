@@ -1,3 +1,4 @@
+import BusinessCore
 import SwiftUI
 
 private let topics = ["bitcoin", "lightning", "nostr", "memes", "video"]
@@ -7,6 +8,8 @@ private let topics = ["bitcoin", "lightning", "nostr", "memes", "video"]
 struct DiscoverView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var input = ""
+    // APP-010 results tabs: Posts · People · Hashtags (shared fan-in).
+    @State private var tab = 0
 
     var body: some View {
         NavigationStack {
@@ -24,13 +27,91 @@ struct DiscoverView: View {
                 if input.trimmingCharacters(in: .whitespaces).isEmpty {
                     TopicChips { topic in input = "#\(topic)" }
                 } else {
-                    SearchResults
+                    VStack(spacing: 0) {
+                        tabRow
+                        switch tab {
+                        case 1: PeopleTab(people: peopleRows)
+                        case 2: HashtagsTab(hits: hashtagHits) { input = "#\($0)" }
+                        default: SearchResults
+                        }
+                    }
                 }
             }
             .background(BitOSTheme.background)
             .navigationTitle("Discover")
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var resultsJson: String {
+        let items: [String] = environment.searchStore.results.map { note in
+            let obj: [String: Any] = ["id": note.id, "pubkey": note.pubkey, "hashtags": note.hashtags]
+            if let data = try? JSONSerialization.data(withJSONObject: obj),
+               let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return ""
+        }.filter { !$0.isEmpty }
+        return "[" + items.joined(separator: ",") + "]"
+    }
+
+    private var profilesJson: String {
+        let items: [String] = environment.searchStore.profiles.values.map { profile in
+            var obj: [String: Any] = ["pubkey": profile.pubkey]
+            if let n = profile.name { obj["name"] = n }
+            if let d = profile.displayName { obj["displayName"] = d }
+            if let p = profile.picture { obj["picture"] = p }
+            if let n5 = profile.nip05 { obj["nip05"] = n5 }
+            if let data = try? JSONSerialization.data(withJSONObject: obj),
+               let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return ""
+        }.filter { !$0.isEmpty }
+        return "[" + items.joined(separator: ",") + "]"
+    }
+
+    private var peopleRows: [PersonRow] {
+        guard let json = (BusinessCoreBridge().searchPeopleJson(resultsJson: resultsJson, profilesJson: profilesJson) as String?),
+              let data = json.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.compactMap { obj in
+            guard let pubkey = obj["pubkey"] as? String else { return nil }
+            return PersonRow(
+                pubkey: pubkey,
+                name: (obj["name"] as? String) ?? "",
+                nip05: (obj["nip05"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                notes: (obj["notes"] as? NSNumber)?.intValue ?? 0
+            )
+        }
+    }
+
+    private var hashtagHits: [HashtagRow] {
+        guard let json = (BusinessCoreBridge().searchHashtagsJson(resultsJson: resultsJson) as String?),
+              let data = json.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.compactMap { obj in
+            guard let tag = obj["tag"] as? String else { return nil }
+            return HashtagRow(tag: tag, count: (obj["count"] as? NSNumber)?.intValue ?? 0)
+        }
+    }
+
+    private var tabRow: some View {
+        let tabs: [(String, Int)] = [
+            ("Posts", environment.searchStore.results.count),
+            ("People", peopleRows.count),
+            ("Hashtags", hashtagHits.count),
+        ]
+        return HStack(spacing: BitOSTheme.Spacing.md) {
+            ForEach(Array(tabs.enumerated()), id: \.offset) { index, entry in
+                Button("\(entry.0) \(entry.1)") { tab = index }
+                    .font(.system(size: 13, weight: tab == index ? .heavy : .semibold))
+                    .foregroundStyle(tab == index ? BitOSTheme.accent : BitOSTheme.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .padding(.vertical, BitOSTheme.Spacing.xs)
     }
 
     private var SearchResults: some View {
@@ -145,5 +226,82 @@ private struct SearchCard: View {
         .padding(BitOSTheme.Spacing.base)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.surface))
+    }
+}
+
+
+// MARK: - APP-010 results tabs
+
+struct PersonRow: Identifiable, Equatable {
+    let pubkey: String
+    let name: String
+    let nip05: String?
+    let notes: Int
+    var id: String { pubkey }
+}
+
+struct HashtagRow: Identifiable, Equatable {
+    let tag: String
+    let count: Int
+    var id: String { tag }
+}
+
+private struct PeopleTab: View {
+    let people: [PersonRow]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: BitOSTheme.Spacing.sm) {
+                ForEach(people) { person in
+                    HStack(spacing: BitOSTheme.Spacing.md) {
+                        PubkeyAvatarView(pubkey: person.pubkey, size: 44)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(person.name.isEmpty ? FeedFormat.shortPubkey(person.pubkey) : person.name)
+                                .font(.system(size: 14, weight: .bold))
+                            if let nip05 = person.nip05 {
+                                Text(nip05).font(.system(size: 11)).foregroundStyle(BitOSTheme.accent)
+                            }
+                            Text("\(person.notes) note\(person.notes == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(BitOSTheme.textTertiary)
+                        }
+                        Spacer()
+                    }
+                    .padding(BitOSTheme.Spacing.md)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.surface))
+                }
+            }
+            .padding(BitOSTheme.Spacing.screen)
+        }
+    }
+}
+
+private struct HashtagsTab: View {
+    let hits: [HashtagRow]
+    let onPick: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: BitOSTheme.Spacing.sm) {
+                ForEach(hits) { hit in
+                    Button { onPick(hit.tag) } label: {
+                        HStack {
+                            Text("#\(hit.tag)")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(BitOSTheme.accent)
+                            Spacer()
+                            Text("\(hit.count) note\(hit.count == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(BitOSTheme.textTertiary)
+                        }
+                        .padding(BitOSTheme.Spacing.md)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.surface))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Search hashtag \(hit.tag)")
+                }
+            }
+            .padding(BitOSTheme.Spacing.screen)
+        }
     }
 }

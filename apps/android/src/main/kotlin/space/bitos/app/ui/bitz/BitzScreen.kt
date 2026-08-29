@@ -1,0 +1,1549 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+package space.bitos.app.ui.bitz
+
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import space.bitos.app.R
+import space.bitos.app.data.feed.AuthorRepository
+import space.bitos.app.data.feed.FeedTimeline
+import space.bitos.app.data.feed.FeedUiState
+import space.bitos.app.data.feed.SearchRepository
+import space.bitos.app.data.publish.NotePublisher
+import space.bitos.app.data.settings.SettingsStore
+import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.player.VideoPlayerPool
+import space.bitos.app.ui.components.AppMenuDropdown
+import space.bitos.app.ui.components.AppMenuEntry
+import space.bitos.app.ui.components.AppMenuItem
+import space.bitos.app.ui.components.PubkeyAvatar
+import space.bitos.app.ui.components.SensitiveCover
+import space.bitos.app.ui.feed.HomeViewModel
+import space.bitos.app.ui.feed.LocalActions
+import space.bitos.app.ui.feed.PosterImage
+import space.bitos.app.ui.feed.ZapContent
+import space.bitos.app.ui.feed.CommentContent
+import space.bitos.app.ui.profile.AuthorProfileContent
+import space.bitos.app.ui.theme.AppIcons
+import space.bitos.app.ui.theme.BitOSColors
+import space.bitos.app.ui.theme.BitOSSpacing
+import space.bitos.app.ui.theme.SolarFeedIcon
+import space.bitos.app.ui.theme.SolarFeedIconImage
+import space.bitos.app.ui.components.formatTimeAgo
+import space.bitos.app.ui.components.shortPubkey
+import space.bitos.core.feed.BitzExplore
+import space.bitos.core.feed.BitzSearch
+import space.bitos.core.feed.FeedNote
+import space.bitos.core.feed.NoteShare
+import space.bitos.core.identity.NostrKeyCodec
+import space.bitos.core.model.MediaMetadata
+import space.bitos.core.settings.BitzModeSetting
+import space.bitos.core.settings.SettingsContract
+import java.net.URL
+
+/**
+ * Bitz short-video surface (APP-007, spec §3.7). Owns the glass top bar
+ * with the persisted Explore · Following · For-you pills, the 3-column
+ * explore grid, the snap player with inline controls (scrubber, ±10 s,
+ * mute memory, double-tap like, sensitive gate) and the full-screen search
+ * overlay. Deterministic rules (mode wire, search policy, paging bounds,
+ * share copy, duration labels) come from `space.bitos.core.feed.Bitz` —
+ * this screen only renders and dispatches.
+ *
+ * One shared HomeViewModel window feeds this surface and Home; the pool
+ * reconciles against THIS surface's paged list, so filtered neighbors are
+ * always the on-screen neighbors.
+ */
+@Composable
+fun BitzScreen(
+    viewModel: HomeViewModel,
+    identityViewModel: IdentityViewModel,
+    notePublisher: NotePublisher,
+    authorRepository: AuthorRepository,
+    settingsStore: SettingsStore,
+    searchRepository: SearchRepository,
+    retapTick: Int = 0,
+    sensitiveShowByDefault: Boolean = false,
+    onOpenProfile: () -> Unit = {},
+    onOpenComposer: () -> Unit = {},
+    /** Spec §3.7 record entry: opens the Create hub (camera/import). */
+    onOpenCreate: () -> Unit = {},
+    /** APP-007 remix: opens the composer seeded with remix attribution tags. */
+    onOpenRemixComposer: (List<List<String>>) -> Unit = {},
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val actions by viewModel.localActions.collectAsStateWithLifecycle()
+    val publishState by notePublisher.state.collectAsStateWithLifecycle()
+    val authorState by authorRepository.state.collectAsStateWithLifecycle()
+    val zapState by viewModel.zapState.collectAsStateWithLifecycle()
+    val identityState by identityViewModel.state.collectAsStateWithLifecycle()
+    val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
+    // Closure-stable settings view for the pool providers (read live at
+    // reconciliation, like FeedScreen).
+    val currentSettings = remember { mutableStateOf(settingsSnapshot) }
+    currentSettings.value = settingsSnapshot
+
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // ── Mode (persisted through the shared settings contract) ─────────
+    var mode by remember { mutableStateOf(settingsSnapshot.bitzMode) }
+    LaunchedEffect(mode) {
+        // The pills drive the same shared window Home uses.
+        val current = viewModel.state.value.timeline
+        when (mode) {
+            BitzModeSetting.FOR_YOU ->
+                if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
+            BitzModeSetting.FOLLOWING ->
+                if (current != FeedTimeline.FOLLOWING) viewModel.selectTimeline(FeedTimeline.FOLLOWING)
+            BitzModeSetting.EXPLORE -> Unit
+        }
+    }
+
+    // ── Window + splice (search picks land ahead of the window) ────────
+    val videos = remember(state.notes) { state.notes.filter { it.video != null } }
+    val spliced = remember { mutableStateListOf<FeedNote>() }
+    val playerNotes = remember(videos, spliced.toList()) {
+        spliced.filter { s -> videos.none { it.id == s.id } } + videos
+    }
+
+    // ── Player pool (bounded three-slot reconciliation) ────────────────
+    val pool = remember {
+        VideoPlayerPool(
+            context = context,
+            canAutoplay = { autoplayAllowed(context, currentSettings.value.mediaAutoPlay) },
+            rateProvider = { currentSettings.value.videoPlaybackRate.rate.toFloat() },
+            mutedProvider = { currentSettings.value.videoMuted },
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { pool.releaseAll() }
+    }
+    LaunchedEffect(settingsSnapshot.videoMuted) { pool.applyMuted(settingsSnapshot.videoMuted) }
+
+    val pagerState = rememberPagerState(pageCount = { playerNotes.size })
+    val gridState = rememberLazyGridState()
+    var loadMoreCount by rememberSaveable { mutableStateOf(0) }
+
+    fun refreshWindow() {
+        spliced.clear()
+        loadMoreCount = 0
+        viewModel.refresh()
+    }
+
+    // ── Remix (web remix.ts parity: advisory license gate → seeded composer)
+    var remixAskTarget by remember { mutableStateOf<FeedNote?>(null) }
+
+    fun remixSeedTags(note: FeedNote): List<List<String>> {
+        val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
+        val base: List<List<String>> = space.bitos.core.feed.RemixRules.tagsFor(note.id, note.pubkey)
+        return base + listOfNotNull(space.bitos.core.feed.RemixRules.attributionTag(label))
+    }
+
+    fun handleRemix(note: FeedNote) {
+        // Restrictive licenses ask (advisory, never hidden) — web parity.
+        if (space.bitos.core.feed.RemixRules.requiresAsk(note.license)) {
+            remixAskTarget = note
+        } else {
+            onOpenRemixComposer(remixSeedTags(note))
+        }
+    }
+
+    fun selectMode(next: BitzModeSetting) {
+        if (mode == next) {
+            // Re-tap on the active pill: back to top; at top, refresh.
+            if (next == BitzModeSetting.EXPLORE) {
+                if (gridState.firstVisibleItemIndex != 0) {
+                    scope.launch { gridState.animateScrollToItem(0) }
+                } else {
+                    refreshWindow()
+                }
+            } else {
+                if (pagerState.currentPage != 0) {
+                    scope.launch { pagerState.animateScrollToPage(0) }
+                } else {
+                    refreshWindow()
+                }
+            }
+            return
+        }
+        mode = next
+        settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, next.wire)
+    }
+    LaunchedEffect(pagerState.settledPage, playerNotes) {
+        pool.update(pagerState.settledPage, playerNotes)
+    }
+    // APP-004 hold rule: arrivals wait while the user is scrolled in.
+    LaunchedEffect(pagerState.settledPage) {
+        viewModel.holdNewNotes(pagerState.settledPage != 0)
+    }
+    // Player pagination: near the end, fetch one older page.
+    LaunchedEffect(pagerState.settledPage, playerNotes.size) {
+        if (playerNotes.isNotEmpty() && pagerState.settledPage >= playerNotes.size - 3) {
+            viewModel.loadOlder()
+        }
+    }
+
+    // ── Explore paging (shared bounds: 24 + 18/load-more) ─────────────
+    val visibleTiles = BitzExplore.visibleCount(loadMoreCount)
+    val gridNearEnd by remember {
+        derivedStateOf {
+            val info = gridState.layoutInfo
+            info.totalItemsCount > 0 &&
+                (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 6
+        }
+    }
+    LaunchedEffect(mode, gridNearEnd) {
+        if (mode == BitzModeSetting.EXPLORE && gridNearEnd) {
+            if (BitzExplore.hasMore(videos.size, visibleTiles)) {
+                loadMoreCount++
+            } else {
+                viewModel.loadOlder()
+            }
+        }
+    }
+
+    // ── Shell re-tap (APP-003): same semantics as the active pill. ────
+    LaunchedEffect(retapTick) {
+        if (retapTick == 0) return@LaunchedEffect
+        if (mode == BitzModeSetting.EXPLORE) {
+            if (gridState.firstVisibleItemIndex != 0) {
+                scope.launch { gridState.animateScrollToItem(0) }
+            } else {
+                refreshWindow()
+            }
+        } else {
+            if (pagerState.currentPage != 0) {
+                scope.launch { pagerState.animateScrollToPage(0) }
+            } else {
+                refreshWindow()
+            }
+        }
+    }
+
+    // Jump requests (explore tile / search pick) resolve once the paged
+    // list reflects them.
+    var pendingJumpId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingJumpId, playerNotes) {
+        val id = pendingJumpId ?: return@LaunchedEffect
+        val index = playerNotes.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            pagerState.scrollToPage(index)
+            pendingJumpId = null
+        }
+    }
+
+    fun openInPlayer(note: FeedNote) {
+        if (note.id in videos.map { it.id }) {
+            mode = BitzModeSetting.FOR_YOU
+            settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, BitzModeSetting.FOR_YOU.wire)
+            pendingJumpId = note.id
+        } else {
+            if (spliced.size >= BitzSearch.RESULT_LIMIT) spliced.removeAt(spliced.lastIndex)
+            if (spliced.size >= 8) spliced.removeAt(spliced.lastIndex)
+            spliced.add(0, note)
+            mode = BitzModeSetting.FOR_YOU
+            settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, BitzModeSetting.FOR_YOU.wire)
+            pendingJumpId = note.id
+        }
+    }
+
+    // ── Sheets (same patterns as the Home surface) ─────────────────────
+    var commentsTarget by remember { mutableStateOf<FeedNote?>(null) }
+    var zapTarget by remember { mutableStateOf<FeedNote?>(null) }
+    var authorTarget by remember { mutableStateOf<String?>(null) }
+    val revealed = remember { mutableStateMapOf<String, Boolean>() }
+    var showSearch by remember { mutableStateOf(false) }
+    // APP-007 Chain: the note whose ancestry the sheet is showing.
+    var chainTarget by remember { mutableStateOf<FeedNote?>(null) }
+    val chainState by viewModel.remixChainState.collectAsStateWithLifecycle()
+
+    Box(Modifier.fillMaxSize().background(BitOSColors.background)) {
+        when (mode) {
+            BitzModeSetting.EXPLORE -> ExploreGrid(
+                state = state,
+                videos = videos,
+                visibleTiles = visibleTiles,
+                gridState = gridState,
+                sensitiveShowByDefault = sensitiveShowByDefault,
+                revealed = revealed,
+                onOpen = ::openInPlayer,
+            )
+            else -> {
+                when {
+                    state.isLoading && playerNotes.isEmpty() -> BitzLoading()
+                    mode == BitzModeSetting.FOLLOWING && state.accountPubkey == null && playerNotes.isEmpty() -> BitzMessage(
+                        title = "Following needs an identity",
+                        body = "Create, import or connect a Nostr identity to build a following timeline.",
+                    )
+                    mode == BitzModeSetting.FOLLOWING && playerNotes.isEmpty() -> BitzMessage(
+                        title = "Nothing from your follows yet",
+                        body = "Follow more creators and their short videos will land here.",
+                        // Legacy parity: Explore CTA + Refresh.
+                        actionLabel = "Explore Bitz",
+                        onAction = { selectMode(BitzModeSetting.EXPLORE) },
+                        secondaryLabel = "Refresh Bitz",
+                        onSecondary = { refreshWindow() },
+                    )
+                    playerNotes.isEmpty() -> BitzMessage(
+                        title = "No Bitz found",
+                        body = if (state.relayHealth.isLive) {
+                            "Connected relays have not returned verified videos yet. Retrying every few seconds."
+                        } else {
+                            "Relays are connecting. Bitz fills once a connection succeeds."
+                        },
+                        actionLabel = "Refresh Bitz",
+                        onAction = { refreshWindow() },
+                    )
+                    else -> VerticalPager(state = pagerState) { page ->
+                        val note = playerNotes[page]
+                        BitzVideoPage(
+                            note = note,
+                            state = state,
+                            actions = actions,
+                            pool = pool,
+                            isSettled = pagerState.settledPage == page,
+                            muted = settingsSnapshot.videoMuted,
+                            sensitiveShowByDefault = sensitiveShowByDefault,
+                            revealed = revealed,
+                            onToggleMute = {
+                                settingsStore.setRaw(
+                                    SettingsContract.KEY_VIDEO_MUTED,
+                                    if (settingsSnapshot.videoMuted) "0" else "1",
+                                )
+                            },
+                            onLike = viewModel::toggleLike,
+                            onBookmark = viewModel::toggleBookmark,
+                            onComment = { commentsTarget = it },
+                            onRepost = viewModel::repost,
+                            onFollow = viewModel::toggleFollow,
+                            onZap = {
+                                viewModel.loadZaps(it.id)
+                                viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                                zapTarget = it
+                            },
+                            onRemix = ::handleRemix,
+                            onChain = {
+                                chainTarget = it
+                                viewModel.loadRemixChain(it)
+                            },
+                            onAuthor = { authorTarget = it },
+                            isMuted = viewModel.isMuted(note.pubkey),
+                            onMuteToggle = { viewModel.toggleMute(note.pubkey) },
+                            onReport = { reason -> viewModel.report(note, reason) },
+                        )
+                    }
+                }
+            }
+        }
+
+        // Glass top chrome floats over the media (spec §3.7). Refresh is NOT
+        // a header button: re-tap the active Bitz tab (bottom bar) or
+        // long-press it to refresh (user decision 2026-08-28).
+        BitzTopBar(
+            mode = mode,
+            onSelectMode = ::selectMode,
+            onSearch = { showSearch = true },
+            onRecord = onOpenCreate,
+        )
+
+        // New-video FAB (composer entry, legacy parity).
+        androidx.compose.material3.ExtendedFloatingActionButton(
+            onClick = onOpenComposer,
+            icon = {
+                Icon(painterResource(R.drawable.solar_pen_linear), contentDescription = null)
+            },
+            text = { Text("New note") },
+            containerColor = BitOSColors.primary,
+            contentColor = Color(0xFF0A0A0F),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+    }
+
+    authorTarget?.let { _ ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
+            AuthorProfileContent(
+                state = authorState,
+                feedState = state,
+                onOpen = authorRepository::open,
+                onFollow = viewModel::toggleFollow,
+                onClose = { authorRepository.close(); authorTarget = null },
+            )
+        }
+    }
+
+    zapTarget?.let { target ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { viewModel.dismissZap(); zapTarget = null }) {
+            ZapContent(
+                note = target,
+                lud16 = state.profiles[target.pubkey]?.lud16,
+                state = zapState,
+                profileName = state.profiles[target.pubkey]?.bestDisplayName,
+                hasIdentity = identityState.account != null,
+                zapCount = state.zapCounts[target.id] ?: 0,
+                paidRequestIds = state.zapRequestIds[target.id] ?: emptySet(),
+                onPaid = { sats, memo -> viewModel.onZapPaid(target, sats, memo) },
+                onAmountSelected = viewModel::selectZapAmount,
+                onZap = { sats, comment, anonymous ->
+                    viewModel.selectZapAmount(sats)
+                    viewModel.zap(target, comment, anonymous)
+                },
+                onClose = { viewModel.dismissZap(); zapTarget = null },
+            )
+        }
+    }
+
+    commentsTarget?.let { target ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { commentsTarget = null }) {
+            CommentContent(
+                note = target,
+                feedState = state,
+                identityViewModel = identityViewModel,
+                publisherState = publishState,
+                onLoadComments = viewModel::loadComments,
+                onReply = { text, note -> viewModel.reply(text, note) },
+                onClose = { commentsTarget = null },
+            )
+        }
+    }
+
+    // APP-007 Chain: remix ancestry (web RemixChainDialog parity).
+    chainTarget?.let { target ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { chainTarget = null }) {
+            BitzChainContent(
+                rootId = target.id,
+                state = state,
+                chainState = chainState,
+                onOpenAncestor = { id ->
+                    viewModel.remixAncestorNote(id)?.let { ancestor ->
+                        chainTarget = null
+                        commentsTarget = ancestor
+                    }
+                },
+                onClose = { chainTarget = null },
+            )
+        }
+    }
+
+    if (showSearch) {
+        BitzSearchOverlay(
+            state = state,
+            searchRepository = searchRepository,
+            sensitiveShowByDefault = sensitiveShowByDefault,
+            onOpenNote = ::openInPlayer,
+            onDismiss = { showSearch = false },
+        )
+    }
+
+    // Remix advisory (bitz/all-reserved · bitz/source-permission).
+    remixAskTarget?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { remixAskTarget = null },
+            title = { Text("Remix anyway?") },
+            text = {
+                Text(
+                    "This creator marked this bitz \"${target.license}\".\n\n" +
+                        "Credit is added automatically when you publish.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    remixAskTarget = null
+                    onOpenRemixComposer(remixSeedTags(target))
+                }) { Text("Remix", color = BitOSColors.primary) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { remixAskTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Glass top chrome (spec §3.7): pills · record · search
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun BitzTopBar(
+    mode: BitzModeSetting,
+    onSelectMode: (BitzModeSetting) -> Unit,
+    onSearch: () -> Unit,
+    onRecord: () -> Unit,
+) {
+    Surface(color = Color(0x590A0A0F), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(start = BitOSSpacing.sm, end = 2.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.weight(0.7f))
+            Surface(shape = RoundedCornerShape(50), color = Color(0x66000000)) {
+                Row {
+                    ModePill("Explore", mode == BitzModeSetting.EXPLORE) { onSelectMode(BitzModeSetting.EXPLORE) }
+                    ModePill("Following", mode == BitzModeSetting.FOLLOWING) { onSelectMode(BitzModeSetting.FOLLOWING) }
+                    ModePill("For you", mode == BitzModeSetting.FOR_YOU) { onSelectMode(BitzModeSetting.FOR_YOU) }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            // Spec §3.7 record entry: camera capture → trim → publish.
+            IconButton(onClick = onRecord) {
+                Icon(AppIcons.Camera, contentDescription = "Record Bitz", tint = Color.White)
+            }
+            IconButton(onClick = onSearch) {
+                Icon(AppIcons.Search, contentDescription = "Search Bitz", tint = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModePill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .padding(2.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) BitOSColors.primary else Color.Transparent)
+            .clickable(onClickLabel = "Show $label videos") { onClick() }
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.W700 else FontWeight.W600,
+            color = if (selected) Color(0xFF0A0A0F) else Color(0xE6FFFFFF),
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Explore grid (spec §3.7: 3-col 9:16, cover + duration + author + zaps)
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ExploreGrid(
+    state: FeedUiState,
+    videos: List<FeedNote>,
+    visibleTiles: Int,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    sensitiveShowByDefault: Boolean,
+    revealed: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
+    onOpen: (FeedNote) -> Unit,
+) {
+    val showSkeleton = state.isLoading && videos.isEmpty()
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        state = gridState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (showSkeleton) {
+            items(12) { SkeletonTile() }
+        } else {
+            val tiles = videos.take(visibleTiles)
+            itemsIndexed(tiles, key = { _, note -> note.id }) { _, note ->
+                BitzTile(
+                    note = note,
+                    state = state,
+                    sensitiveShowByDefault = sensitiveShowByDefault,
+                    revealed = revealed,
+                    onOpen = { onOpen(note) },
+                )
+            }
+            if (state.isLoadingOlder || BitzExplore.hasMore(videos.size, visibleTiles)) {
+                item(key = "grid-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(3) }) {
+                    Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkeletonTile() {
+    val transition = rememberInfiniteTransition(label = "tile-skeleton")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+        label = "tile-skeleton-alpha",
+    )
+    Box(Modifier.aspectRatio(9f / 16f).alpha(pulse).background(BitOSColors.surfaceElevated))
+}
+
+@Composable
+private fun BitzTile(
+    note: FeedNote,
+    state: FeedUiState,
+    sensitiveShowByDefault: Boolean,
+    revealed: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
+    onOpen: () -> Unit,
+) {
+    val covered = note.contentWarning && !sensitiveShowByDefault && revealed[note.id] != true
+    Box(
+        Modifier
+            .aspectRatio(9f / 16f)
+            .background(BitOSColors.surface)
+            .clickable(onClickLabel = "Play video") { onOpen() },
+    ) {
+        PosterImage(url = note.video?.posterUrl, modifier = Modifier.fillMaxSize())
+        if (note.video?.posterUrl == null) {
+            Icon(
+                AppIcons.Play,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.align(Alignment.Center).size(30.dp),
+            )
+        }
+        if (covered) {
+            Box(Modifier.fillMaxSize().background(Color(0xD90A0A0F)), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Sensitive content", style = MaterialTheme.typography.labelMedium, color = Color(0xE6FFFFFF))
+                    TextButton(onClick = { revealed[note.id] = true }) {
+                        Text("Show", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+                    }
+                }
+            }
+        } else {
+            note.video?.durationSeconds?.let { seconds ->
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xB3000000),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                ) {
+                    Text(
+                        MediaMetadata.formatDuration(seconds),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            Column(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color(0xCC000000)))
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.W600,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val zaps = state.zapCounts[note.id] ?: 0
+                val likes = state.tallies[note.id]?.reactions ?: 0
+                if (zaps > 0 || likes > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (zaps > 0) {
+                            SolarFeedIconImage(SolarFeedIcon.Zap, contentDescription = null, tint = BitOSColors.zap, modifier = Modifier.size(10.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text(space.bitos.core.feed.BitzFormat.count(zaps.toLong()), style = MaterialTheme.typography.labelSmall, color = Color(0xE6FFFFFF))
+                            if (likes > 0) Spacer(Modifier.width(8.dp))
+                        }
+                        if (likes > 0) {
+                            SolarFeedIconImage(SolarFeedIcon.Heart, contentDescription = null, tint = BitOSColors.like, modifier = Modifier.size(10.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text(space.bitos.core.feed.BitzFormat.count(likes.toLong()), style = MaterialTheme.typography.labelSmall, color = Color(0xE6FFFFFF))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Player page: gestures, controls, caption, action rail
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun BitzVideoPage(
+    note: FeedNote,
+    state: FeedUiState,
+    actions: LocalActions,
+    pool: VideoPlayerPool,
+    isSettled: Boolean,
+    muted: Boolean,
+    sensitiveShowByDefault: Boolean,
+    revealed: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
+    onToggleMute: () -> Unit,
+    onLike: (FeedNote) -> Unit,
+    onBookmark: (String) -> Unit,
+    onComment: (FeedNote) -> Unit,
+    onRepost: (FeedNote) -> Unit,
+    onFollow: (String) -> Unit,
+    onZap: (FeedNote) -> Unit,
+    onRemix: (FeedNote) -> Unit,
+    onChain: (FeedNote) -> Unit,
+    onAuthor: (String) -> Unit,
+    isMuted: Boolean,
+    onMuteToggle: () -> Unit,
+    onReport: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val npub = remember(note.pubkey) { NostrKeyCodec.npub(note.pubkey) ?: note.pubkey }
+    var likeBurst by remember { mutableStateOf(false) }
+    var seekHint by remember { mutableStateOf<String?>(null) }
+    /** Double-tap thirds + long-press 2× state (legacy parity). */
+    var surfaceWidthPx by remember { mutableStateOf(0) }
+    var fastForward by remember { mutableStateOf(false) }
+    var positionMs by remember(note.id) { mutableStateOf(0L) }
+    var durationMs by remember(note.id) { mutableStateOf(0L) }
+    val covered = note.contentWarning && !sensitiveShowByDefault && revealed[note.id] != true
+
+    if (isSettled) {
+        LaunchedEffect(note.id) {
+            while (true) {
+                positionMs = pool.positionMs(note.id)
+                durationMs = pool.durationMs(note.id)
+                delay(500)
+            }
+        }
+    }
+    LaunchedEffect(likeBurst) {
+        if (likeBurst) {
+            delay(700)
+            likeBurst = false
+        }
+    }
+    LaunchedEffect(seekHint) {
+        if (seekHint != null) {
+            delay(800)
+            seekHint = null
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        PosterImage(url = note.video!!.posterUrl, modifier = Modifier.fillMaxSize())
+        // Surface: aspect-fill video, no built-in controls.
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                }
+            },
+            update = { view -> view.player = pool.playerFor(note.id) },
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (!covered) {
+            // Gestures (legacy Flutter parity): tap pause/play; double-tap by
+            // thirds — left −10 s, center like, right +10 s; long-press = 2×.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { surfaceWidthPx = it.width }
+                    .pointerInput(note.id) {
+                        detectTapGestures(
+                            onTap = { pool.togglePlay(note.id) },
+                            onDoubleTap = { offset ->
+                                val width = surfaceWidthPx
+                                when {
+                                    width <= 0 -> {
+                                        onLike(note)
+                                        likeBurst = true
+                                    }
+                                    offset.x < width / 3f -> {
+                                        pool.seekBy(note.id, -10_000)
+                                        seekHint = "10 seconds back"
+                                    }
+                                    offset.x > width * 2f / 3f -> {
+                                        pool.seekBy(note.id, 10_000)
+                                        seekHint = "10 seconds forward"
+                                    }
+                                    else -> {
+                                        onLike(note)
+                                        likeBurst = true
+                                    }
+                                }
+                            },
+                            onLongPress = {
+                                fastForward = true
+                                pool.setRateOverride(note.id, 2f)
+                            },
+                            onPress = {
+                                awaitRelease()
+                                if (fastForward) {
+                                    fastForward = false
+                                    pool.setRateOverride(note.id, null)
+                                }
+                            },
+                        )
+                    },
+            )
+        }
+        // Long-press fast-forward indicator (legacy 2× pill).
+        if (fastForward) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = BitOSColors.primary,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = BitOSSpacing.xl, end = BitOSSpacing.base),
+            ) {
+                Text(
+                    "2×",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.W800,
+                    color = Color(0xFF0A0A0F),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                )
+            }
+        }
+        // Double-tap heart burst.
+        AnimatedVisibility(
+            visible = likeBurst,
+            enter = scaleIn() + fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Icon(AppIcons.Heart, contentDescription = null, tint = BitOSColors.like, modifier = Modifier.size(96.dp))
+        }
+        // Seek-hint overlay for the ±10 s pills.
+        seekHint?.let { hint ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xB3000000),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
+        if (covered) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                SensitiveCover(onReveal = { revealed[note.id] = true })
+            }
+        }
+        BitzCaption(
+            note = note,
+            state = state,
+            onFollow = onFollow,
+            onAuthor = onAuthor,
+            modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(bottom = 48.dp),
+        )
+        BitzActionRail(
+            note = note,
+            state = state,
+            actions = actions,
+            npub = npub,
+            context = context,
+            clipboard = clipboard,
+            onLike = onLike,
+            onBookmark = onBookmark,
+            onComment = onComment,
+            onRepost = onRepost,
+            onZap = onZap,
+            onRemix = onRemix,
+            onChain = onChain,
+            isMuted = isMuted,
+            onMuteToggle = onMuteToggle,
+            onReport = onReport,
+            modifier = Modifier.align(Alignment.CenterEnd),
+        )
+        VideoControlsRow(
+            positionMs = positionMs,
+            durationMs = durationMs,
+            muted = muted,
+            onToggleMute = onToggleMute,
+            onBack10 = {
+                pool.seekBy(note.id, -10_000)
+                seekHint = "10 seconds back"
+            },
+            onForward10 = {
+                pool.seekBy(note.id, 10_000)
+                seekHint = "10 seconds forward"
+            },
+            onScrub = { absolute ->
+                pool.seekTo(note.id, absolute)
+                positionMs = absolute
+            },
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        )
+    }
+}
+
+/** Compact bottom controls: mute memory, ±10 s pills, scrubber (spec §3.7). */
+@Composable
+private fun VideoControlsRow(
+    positionMs: Long,
+    durationMs: Long,
+    muted: Boolean,
+    onToggleMute: () -> Unit,
+    onBack10: () -> Unit,
+    onForward10: () -> Unit,
+    onScrub: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    Row(
+        modifier = modifier.background(Color(0x42000000)).padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onToggleMute, modifier = Modifier.size(32.dp)) {
+            Icon(
+                if (muted) AppIcons.Mute else AppIcons.SoundOn,
+                contentDescription = if (muted) "Unmute video" else "Mute video",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        IconButton(onClick = onBack10, modifier = Modifier.size(32.dp)) {
+            Icon(AppIcons.Back10, contentDescription = "Seek 10 seconds back", tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+        Slider(
+            value = fraction,
+            onValueChange = { fraction ->
+                if (durationMs > 0) onScrub((fraction * durationMs).toLong())
+            },
+            enabled = durationMs > 0,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = BitOSColors.primary,
+                activeTrackColor = BitOSColors.primary,
+                inactiveTrackColor = Color(0x66FFFFFF),
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 6.dp)
+                .height(24.dp)
+                .semantics { contentDescription = "Video position" },
+        )
+        IconButton(onClick = onForward10, modifier = Modifier.size(32.dp)) {
+            Icon(AppIcons.Forward10, contentDescription = "Seek 10 seconds forward", tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun BitzCaption(
+    note: FeedNote,
+    state: FeedUiState,
+    onFollow: (String) -> Unit,
+    onAuthor: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val profile = state.profiles[note.pubkey]
+    Column(
+        modifier = modifier
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.45f to Color.Transparent,
+                    1f to Color(0xCC000000),
+                ),
+            )
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.lg),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable(onClickLabel = "View author profile") { onAuthor(note.pubkey) },
+        ) {
+            PubkeyAvatar(pubkey = note.pubkey, size = 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank())
+            Spacer(Modifier.width(BitOSSpacing.sm))
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        profile?.bestDisplayName ?: shortPubkey(note.pubkey),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!profile?.nip05.isNullOrBlank()) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = "NIP-05 identity claim",
+                            tint = BitOSColors.primary,
+                            modifier = Modifier.padding(start = 4.dp).size(14.dp),
+                        )
+                    }
+                }
+                Text(
+                    formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xB3F8F8FF),
+                )
+            }
+            Spacer(Modifier.width(BitOSSpacing.sm))
+            BitzFollowChip(isFollowing = note.pubkey in state.following, onToggle = { onFollow(note.pubkey) })
+        }
+        Spacer(Modifier.height(BitOSSpacing.sm))
+        note.repostedBy?.let { _ ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Reposted", style = MaterialTheme.typography.labelSmall, color = BitOSColors.repost)
+            }
+            Spacer(Modifier.height(2.dp))
+        }
+        Text(
+            note.content,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (note.hashtags.isNotEmpty()) {
+            Spacer(Modifier.height(BitOSSpacing.xs))
+            Text(
+                note.hashtags.take(4).joinToString(" ") { "#$it" },
+                style = MaterialTheme.typography.labelMedium,
+                color = BitOSColors.accent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BitzFollowChip(isFollowing: Boolean, onToggle: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (isFollowing) Color.Transparent else BitOSColors.primaryContainer,
+        contentColor = if (isFollowing) Color(0xB3F8F8FF) else BitOSColors.primary,
+        modifier = Modifier.clickable(onClickLabel = if (isFollowing) "Unfollow author" else "Follow author") { onToggle() },
+    ) {
+        Text(
+            if (isFollowing) "Following" else "Follow",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = BitOSSpacing.md, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun BitzActionRail(
+    note: FeedNote,
+    state: FeedUiState,
+    actions: LocalActions,
+    npub: String,
+    context: android.content.Context,
+    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    onLike: (FeedNote) -> Unit,
+    onBookmark: (String) -> Unit,
+    onComment: (FeedNote) -> Unit,
+    onRepost: (FeedNote) -> Unit,
+    onZap: (FeedNote) -> Unit,
+    onRemix: (FeedNote) -> Unit,
+    onChain: (FeedNote) -> Unit,
+    isMuted: Boolean,
+    onMuteToggle: () -> Unit,
+    onReport: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isLiked = note.id in actions.liked
+    val isBookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked
+    // Legacy parity: counts replace the label when > 0 (K/M + zap sats).
+    val tally = state.tallies[note.id]
+    val likeCount = (tally?.reactions ?: 0) + if (isLiked && (tally?.reactions ?: 0) == 0) 1 else 0
+    val commentCount = state.comments[note.id]?.size ?: 0
+    val zapSats = space.bitos.core.feed.BitzFormat.sats(tally?.zapMillisats ?: 0)
+        ?: state.zapCounts[note.id]?.takeIf { it > 0 }?.let { space.bitos.core.feed.BitzFormat.count(it.toLong()) }
+    Column(
+        modifier = modifier.padding(end = BitOSSpacing.base),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Web-parity order (legacy bitz rail): Remix first (violet), then
+        // Zap · Like · Comments · Repost · Save; Share lives in the ⋯ menu.
+        BitzRailButton(AppIcons.Sparkles, "Remix", Color(0xFF8B5CF6)) { onRemix(note) }
+        // Chain: only when this note declares a remix source (web parity).
+        if (note.remixOfEventId != null) {
+            BitzRailButton(AppIcons.AppsGrid, "Chain", Color.White) { onChain(note) }
+        }
+        BitzRailButton(SolarFeedIcon.Zap, zapSats ?: "Zap", BitOSColors.zap) { onZap(note) }
+        BitzRailButton(
+            icon = if (isLiked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
+            label = if (likeCount > 0) space.bitos.core.feed.BitzFormat.count(likeCount.toLong()) else if (isLiked) "Unlike" else "Like",
+            tint = if (isLiked) BitOSColors.like else Color.White,
+        ) { onLike(note) }
+        BitzRailButton(
+            SolarFeedIcon.Comment,
+            if (commentCount > 0) space.bitos.core.feed.BitzFormat.count(commentCount.toLong()) else "Comments",
+            Color.White,
+        ) { onComment(note) }
+        BitzRailButton(
+            SolarFeedIcon.Repost,
+            (tally?.reposts ?: 0).takeIf { it > 0 }?.let { space.bitos.core.feed.BitzFormat.count(it.toLong()) } ?: "Repost",
+            Color.White,
+        ) { onRepost(note) }
+        BitzRailButton(
+            icon = if (isBookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+            label = if (isBookmarked) "Saved" else "Save",
+            tint = if (isBookmarked) BitOSColors.bookmark else Color.White,
+        ) { onBookmark(note.id) }
+        BitzMoreMenu(
+            note = note,
+            npub = npub,
+            context = context,
+            isMuted = isMuted,
+            clipboard = clipboard,
+            onMuteToggle = onMuteToggle,
+            onReport = onReport,
+        )
+    }
+}
+
+@Composable
+private fun BitzMoreMenu(
+    note: FeedNote,
+    npub: String,
+    context: android.content.Context,
+    isMuted: Boolean,
+    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    onMuteToggle: () -> Unit,
+    onReport: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        BitzRailButton(SolarFeedIcon.More, "More options", Color.White) { expanded = true }
+        AppMenuDropdown(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            entries = listOf(
+                AppMenuEntry.Item(AppMenuItem("mute", if (isMuted) "Unmute author" else "Mute author")),
+                AppMenuEntry.Item(AppMenuItem("share", "Share")),
+                AppMenuEntry.Item(AppMenuItem("copy-id", "Copy note ID")),
+                AppMenuEntry.Divider,
+                AppMenuEntry.Item(AppMenuItem("report-spam", "Report as spam", destructive = true)),
+                AppMenuEntry.Item(AppMenuItem("report-illicit", "Report as illicit", destructive = true)),
+                AppMenuEntry.Item(AppMenuItem("report-harassment", "Report as harassment", destructive = true)),
+            ),
+            onSelect = { id ->
+                when (id) {
+                    "mute" -> onMuteToggle()
+                    "share" -> {
+                        // Web-parity: Share lives in the overflow, not the rail.
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, NoteShare.text(note.content, npub))
+                        }
+                        context.startActivity(Intent.createChooser(send, null))
+                    }
+                    "copy-id" -> clipboard.setText(AnnotatedString(note.id))
+                    "report-spam" -> onReport("spam")
+                    "report-illicit" -> onReport("illicit")
+                    "report-harassment" -> onReport("harassment")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun BitzRailButton(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.semantics { contentDescription = label },
+    ) {
+        IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+            SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
+    }
+}
+
+@Composable
+private fun BitzRailButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.semantics { contentDescription = label },
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = Color(0x33000000),
+            modifier = Modifier.clickable(onClickLabel = label) { onClick() },
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.padding(10.dp).size(24.dp))
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Search overlay (spec §3.7: instant local + debounced NIP-50, deduped)
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun BitzSearchOverlay(
+    state: FeedUiState,
+    searchRepository: SearchRepository,
+    sensitiveShowByDefault: Boolean,
+    onOpenNote: (FeedNote) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchState by searchRepository.state.collectAsStateWithLifecycle()
+    // Fire on every keystroke; the repository applies the shared 400 ms
+    // relay debounce (BitzSearch.RELAY_DEBOUNCE_MS parity).
+    LaunchedEffect(query) { searchRepository.search(query) }
+
+    val localEntries = remember(state.notes, state.profiles) {
+        state.notes
+            .filter { it.video != null }
+            .map { BitzSearch.Entry(it.id, it.content, state.profiles[it.pubkey]?.bestDisplayName ?: "") }
+    }
+    val relayEntries = remember(searchState.results, searchState.profiles) {
+        searchState.results
+            .filter { it.video != null }
+            .map { BitzSearch.Entry(it.id, it.content, searchState.profiles[it.pubkey]?.bestDisplayName ?: "") }
+    }
+    val merged = remember(query, localEntries, relayEntries) {
+        BitzSearch.results(query, localEntries, relayEntries)
+    }
+    val noteById = remember(state.notes, searchState.results) {
+        (state.notes + searchState.results).associateBy { it.id }
+    }
+    val overlayRevealed = remember { mutableStateMapOf<String, Boolean>() }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color(0xF20A0A0F)).systemBarsPadding()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(end = BitOSSpacing.sm, top = BitOSSpacing.sm),
+                ) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        placeholder = { Text("Search Bitz") },
+                        leadingIcon = { Icon(AppIcons.Search, contentDescription = null, tint = BitOSColors.textSecondary) },
+                        modifier = Modifier.weight(1f).padding(start = BitOSSpacing.base),
+                    )
+                    TextButton(onClick = onDismiss) { Text("Cancel", color = BitOSColors.primary) }
+                }
+                when {
+                    query.isBlank() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Search captions and creators",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BitOSColors.textTertiary,
+                        )
+                    }
+                    merged.isEmpty() && searchState.isSearching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                    }
+                    merged.isEmpty() && searchState.hasSearched -> Box(Modifier.fillMaxSize().padding(BitOSSpacing.xxl), contentAlignment = Alignment.Center) {
+                        Text(
+                            "No videos match \"${query.trim()}\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BitOSColors.textSecondary,
+                        )
+                    }
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        itemsIndexed(merged, key = { _, entry -> entry.id }) { _, entry ->
+                            val note = noteById[entry.id] ?: return@itemsIndexed
+                            BitzTile(
+                                note = note,
+                                state = state,
+                                sensitiveShowByDefault = sensitiveShowByDefault,
+                                revealed = overlayRevealed,
+                                onOpen = {
+                                    onDismiss()
+                                    onOpenNote(note)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// States
+// ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun BitzLoading() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+    }
+}
+
+@Composable
+private fun BitzMessage(
+    title: String,
+    body: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
+) {
+    Box(Modifier.fillMaxSize().padding(BitOSSpacing.xxl), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = Color(0xB3F8F8FF), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            if (actionLabel != null && onAction != null) {
+                androidx.compose.material3.Button(
+                    onClick = onAction,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = BitOSColors.primary,
+                        contentColor = Color(0xFF0A0A0F),
+                    ),
+                ) {
+                    Text(actionLabel, fontWeight = FontWeight.W600)
+                }
+            }
+            if (secondaryLabel != null && onSecondary != null) {
+                androidx.compose.material3.OutlinedButton(onClick = onSecondary) {
+                    Text(secondaryLabel, color = BitOSColors.primary, fontWeight = FontWeight.W600)
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Chain sheet (APP-007, web RemixChainDialog parity)
+// ─────────────────────────────────────────────────────────────────────
+
+/** Rows paged 8-per-"Show more" like the legacy dialog. */
+private const val CHAIN_PAGE_SIZE = 8
+
+@Composable
+private fun BitzChainContent(
+    rootId: String,
+    state: FeedUiState,
+    chainState: space.bitos.app.ui.feed.RemixChainUiState,
+    onOpenAncestor: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    var visibleRows by rememberSaveable(rootId) { mutableStateOf(CHAIN_PAGE_SIZE) }
+    Column(Modifier.fillMaxWidth().padding(BitOSSpacing.base)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (chainState.outcome is space.bitos.core.feed.RemixChain.Outcome.Completed) {
+                    "${chainState.outcome.steps.size} remix source${if (chainState.outcome.steps.size == 1) "" else "s"} traced"
+                } else {
+                    "Remix chain"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                color = BitOSColors.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.TextButton(onClick = onClose) { Text("Close", color = BitOSColors.primary) }
+        }
+        when {
+            chainState.isLoading -> Box(Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xxl), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                    Text("Tracing the chain…", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+                }
+            }
+            chainState.outcome == space.bitos.core.feed.RemixChain.Outcome.Cycle -> Text(
+                "Couldn't read the full chain — the lineage loops or a relay failed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.textSecondary,
+                modifier = Modifier.padding(vertical = BitOSSpacing.md),
+            )
+            else -> {
+                val completed = chainState.outcome as space.bitos.core.feed.RemixChain.Outcome.Completed
+                if (completed.steps.isEmpty()) {
+                    Text(
+                        "No remix ancestry found on your relays.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.textSecondary,
+                        modifier = Modifier.padding(vertical = BitOSSpacing.md),
+                    )
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm), modifier = Modifier.heightIn(max = 420.dp)) {
+                        items(completed.steps.take(visibleRows), key = { it.eventId }) { step ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable(onClickLabel = "Open remix source") { onOpenAncestor(step.eventId) }
+                                    .padding(horizontal = BitOSSpacing.sm, vertical = 6.dp),
+                            ) {
+                                val profile = step.pubkey?.let { state.profiles[it] }
+                                PubkeyAvatar(
+                                    pubkey = step.pubkey ?: "",
+                                    size = 32,
+                                    label = profile?.bestDisplayName,
+                                    hasLightning = !profile?.lud16.isNullOrBlank(),
+                                )
+                                Spacer(Modifier.width(BitOSSpacing.md))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        profile?.bestDisplayName ?: (step.pubkey?.let { shortPubkey(it) } ?: "Unknown author"),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = BitOSColors.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        when (step.depth) {
+                                            0 -> "Direct source"
+                                            else -> "${step.depth} steps back"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = BitOSColors.textTertiary,
+                                    )
+                                }
+                                if (step.depth == 0) {
+                                    Surface(shape = RoundedCornerShape(8.dp), color = BitOSColors.primaryContainer) {
+                                        Text(
+                                            "Source",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = BitOSColors.primary,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (visibleRows < completed.steps.size) {
+                            item(key = "chain-more") {
+                                androidx.compose.material3.TextButton(
+                                    onClick = { visibleRows += CHAIN_PAGE_SIZE },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(
+                                        "Show more (${completed.steps.size - visibleRows} older)",
+                                        color = BitOSColors.primary,
+                                    )
+                                }
+                            }
+                        }
+                        if (completed.truncated) {
+                            item(key = "chain-truncated") {
+                                Text(
+                                    "Chain longer than ${space.bitos.core.feed.RemixChain.MAX_DEPTH} — oldest steps hidden.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textTertiary,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** APP-018: persisted autoplay policy → can the visible video start? */
+private fun autoplayAllowed(
+    context: android.content.Context,
+    policy: space.bitos.core.settings.MediaAutoPlaySetting,
+): Boolean = when (policy) {
+    space.bitos.core.settings.MediaAutoPlaySetting.ALWAYS -> true
+    space.bitos.core.settings.MediaAutoPlaySetting.NEVER -> false
+    space.bitos.core.settings.MediaAutoPlaySetting.WIFI -> runCatching {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }.getOrDefault(false)
+}

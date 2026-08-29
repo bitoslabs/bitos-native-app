@@ -35,6 +35,9 @@ import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.Color
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.core.feed.FeedNote
@@ -62,6 +65,8 @@ fun CommentContent(
     // flattened descendants behind depth indents.
     val thread = feedState.threads[note.id].orEmpty()
     val noteById = remember(comments) { comments.associateBy { it.id } }
+    // APP-009 live deltas (shared NoteTally): reactions/reposts/zaps.
+    val tally = feedState.tallies[note.id]
 
     androidx.compose.runtime.LaunchedEffect(note.id) { onLoadComments(note.id) }
 
@@ -84,6 +89,14 @@ fun CommentContent(
         }
         Spacer(Modifier.height(BitOSSpacing.md))
 
+        RootCard(
+            note = note,
+            profile = feedState.profiles[note.pubkey],
+            replyCount = comments.size,
+            tally = tally,
+        )
+        Spacer(Modifier.height(BitOSSpacing.md))
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -97,6 +110,7 @@ fun CommentContent(
                         profile = feedState.profiles[reply.pubkey],
                         depth = item.depth,
                         orphan = item.orphan,
+                        tally = feedState.tallies[reply.id],
                     )
                 }
             }
@@ -127,10 +141,10 @@ fun CommentContent(
             )
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
+                space.bitos.app.ui.components.BitosPlainTextField(
                     value = text,
                     onValueChange = { if (it.length <= NoteComposer.MAX_NOTE_LENGTH) text = it },
-                    placeholder = { Text("Write a reply…") },
+                    placeholder = "Write a reply…",
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
@@ -144,12 +158,87 @@ fun CommentContent(
     }
 }
 
+/**
+ * APP-009 root card: author row + body + the full action row with live
+ * tallies (reply count · like+z · repost · zap+sats) per spec §3.9.
+ */
+@Composable
+private fun RootCard(
+    note: FeedNote,
+    profile: space.bitos.core.model.ProfileMetadata?,
+    replyCount: Int,
+    tally: space.bitos.core.feed.NoteTally?,
+) {
+    var showRaw by remember { mutableStateOf(false) }
+    if (showRaw) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showRaw = false },
+            title = { Text("Raw note") },
+            text = {
+                Text(
+                    "id: ${note.id}\nauthor: ${note.pubkey}\nkind: ${note.kind}\nat: ${note.createdAt}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { showRaw = false }) { Text("Close") }
+            },
+        )
+    }
+    Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.surface) {
+        Column(Modifier.padding(BitOSSpacing.md)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PubkeyAvatar(pubkey = note.pubkey, size = 40, label = profile?.bestDisplayName)
+                Spacer(Modifier.width(BitOSSpacing.sm))
+                Column {
+                    Text(
+                        profile?.bestDisplayName ?: shortPubkey(note.pubkey),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.W700,
+                    )
+                    Text(
+                        formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textTertiary,
+                    )
+                }
+            }
+            Spacer(Modifier.height(BitOSSpacing.sm))
+            Text(note.content, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(BitOSSpacing.md))
+            // Live action row (APP-009 §3.9).
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+                TallyAction(space.bitos.app.ui.theme.AppIcons.Comment, "$replyCount", BitOSColors.reply)
+                TallyAction(space.bitos.app.ui.theme.AppIcons.Heart, tally?.reactions?.toString() ?: "0", BitOSColors.like)
+                TallyAction(space.bitos.app.ui.theme.AppIcons.Repost, tally?.reposts?.toString() ?: "0", BitOSColors.repost)
+                val sats = ((tally?.zapMillisats ?: 0L) / 1000L).let { if (it > 0) space.bitos.core.model.ZapFormat.sats(it) else "" }
+                TallyAction(space.bitos.app.ui.theme.AppIcons.Zap, listOfNotNull("${tally?.zaps ?: 0}", sats.ifEmpty { null }).joinToString(" · "), BitOSColors.zap)
+                Spacer(Modifier.weight(1f))
+                androidx.compose.material3.TextButton(onClick = { showRaw = true }) {
+                    Text("⋯", color = BitOSColors.textSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TallyAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, fontWeight = FontWeight.W600)
+    }
+}
+
 @Composable
 private fun ReplyRow(
     reply: FeedNote,
     profile: space.bitos.core.model.ProfileMetadata?,
     depth: Int,
     orphan: Boolean,
+    tally: space.bitos.core.feed.NoteTally? = null,
 ) {
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -193,6 +282,19 @@ private fun ReplyRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = BitOSColors.textTertiary,
                     )
+                }
+                // APP-009: live per-reply deltas (reactions · zaps+sats).
+                if (tally != null && (tally.reactions > 0 || tally.zaps > 0)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+                        if (tally.reactions > 0) {
+                            TallyAction(space.bitos.app.ui.theme.AppIcons.Heart, "${'$'}{tally.reactions}", BitOSColors.like)
+                        }
+                        if (tally.zaps > 0) {
+                            val sats = tally.zapMillisats / 1000
+                            val label = if (sats > 0) "${'$'}{tally.zaps} · ${'$'}{space.bitos.core.model.ZapFormat.sats(sats)}" else "${'$'}{tally.zaps}"
+                            TallyAction(space.bitos.app.ui.theme.AppIcons.Zap, label, BitOSColors.zap)
+                        }
+                    }
                 }
             }
         }

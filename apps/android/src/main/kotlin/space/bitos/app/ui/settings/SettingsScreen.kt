@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package space.bitos.app.ui.settings
 
 import androidx.compose.foundation.background
@@ -54,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
+import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.app.R
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -94,6 +97,7 @@ fun SettingsScreen(
     algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
     privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
+    profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
     initialSection: String? = null,
     onBack: () -> Unit = {},
 ) {
@@ -113,6 +117,7 @@ fun SettingsScreen(
             algorithmStore = algorithmStore,
             homeViewModel = homeViewModel,
             privacyPrefs = privacyPrefs,
+            profileLookup = profileLookup,
         )
         return
     }
@@ -330,6 +335,7 @@ private fun SettingsDetail(
     algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
     privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
+    profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
 ) {
     val snapshot by store.snapshot.collectAsStateWithLifecycle()
 
@@ -356,7 +362,7 @@ private fun SettingsDetail(
             "lightning" -> LightningDetail(snapshot, store)
             "privacy" -> PrivacyDetail(snapshot, store, homeViewModel, identityViewModel, notePublisher, relayManager, privacyPrefs)
             "relays" -> RelaysDetail(feedRepository, relayManager, identityViewModel, notePublisher)
-            "help" -> HelpDetail()
+            "help" -> HelpDetail(profileLookup)
             else -> PendingDetail(sectionKey)
         }
     }
@@ -1331,8 +1337,10 @@ private val helpFaq: List<Pair<String, String>> =
     space.bitos.core.settings.AppFacts.FAQ.map { it.question to it.answer }
 
 @Composable
-private fun HelpDetail() {
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+private fun HelpDetail(profileLookup: space.bitos.app.data.feed.ProfileLookupStore) {
     var expanded by remember { mutableStateOf<String?>(null) }
+    var showDonate by remember { mutableStateOf(false) }
 
     DetailCard("Support the project") {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -1340,29 +1348,21 @@ private fun HelpDetail() {
                 space.bitos.core.settings.AppFacts.CONTRIBUTE_NOTE,
                 fontSize = 13.sp, color = BitOSColors.textSecondary,
             )
-            if (space.bitos.core.settings.AppFacts.SUPPORT_LUD16.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Zap the team · " + space.bitos.core.settings.AppFacts.SUPPORT_LUD16,
-                    fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = BitOSColors.textTertiary,
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { showDonate = true }) {
+                Icon(
+                    androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                    contentDescription = null,
+                    tint = BitOSColors.primary,
+                    modifier = Modifier.size(16.dp),
                 )
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (tier in space.bitos.core.settings.AppFacts.SUPPORT_TIERS_SATS) {
-                        Text(
-                            "$tier ⚡",
-                            fontSize = 13.sp, fontWeight = FontWeight.W600, color = BitOSColors.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(BitOSColors.primaryContainer)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                        )
-                    }
-                }
+                Spacer(Modifier.width(6.dp))
+                Text("Donate sats", color = BitOSColors.primary, fontWeight = FontWeight.W600)
             }
         }
     }
-    Footnote("Support tiers activate when the project lightning address is configured.")
+    Footnote("Donations go straight to the project's Lightning address — no custodian.")
+
 
     DetailCard("FAQ") {
         for ((question, answer) in helpFaq) {
@@ -1391,11 +1391,57 @@ private fun HelpDetail() {
         }
     }
 
+    // ── Contributors (legacy ContributorsWidget parity) ────────────────
+    val contributorPubkeys = remember {
+        space.bitos.core.settings.AppFacts.CONTRIBUTOR_NPUBS.mapNotNull { NostrKeyCodec.parseNpub(it) }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) { profileLookup.lookup(contributorPubkeys) }
+    val contributorProfiles by profileLookup.profiles.collectAsStateWithLifecycle()
+    DetailCard("Contributors") {
+        if (contributorPubkeys.isEmpty()) {
+            Text("—", fontSize = 13.sp, color = BitOSColors.textSecondary, modifier = Modifier.padding(12.dp))
+        } else {
+            for ((npub, hex) in space.bitos.core.settings.AppFacts.CONTRIBUTOR_NPUBS.zip(contributorPubkeys)) {
+                val profile = contributorProfiles[hex]
+                val name = profile?.bestDisplayName?.takeIf { it.isNotBlank() }
+                    ?: (npub.take(14) + "…" + npub.takeLast(10))
+                val clipboard = LocalClipboardManager.current
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PubkeyAvatar(pubkey = hex, size = 36)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(name, fontSize = 14.sp, fontWeight = FontWeight.W600, color = BitOSColors.textPrimary, maxLines = 1)
+                        Text("Contributor", fontSize = 11.sp, color = BitOSColors.textTertiary)
+                    }
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(npub)) }) {
+                        Text("Copy npub", fontSize = 12.sp, color = BitOSColors.primary)
+                    }
+                }
+            }
+        }
+    }
+
     DetailCard("Links") {
         LinkRow("Nostr Improvement Possibilities", space.bitos.core.settings.AppFacts.LINK_NIPS)
         LinkRow("What is Nostr?", space.bitos.core.settings.AppFacts.LINK_NOSTR)
         if (space.bitos.core.settings.AppFacts.LINK_SOURCE.isNotEmpty()) {
             LinkRow("Source code", space.bitos.core.settings.AppFacts.LINK_SOURCE)
+        }
+    }
+
+    if (showDonate) {
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showDonate = false }) {
+            space.bitos.app.ui.components.SupportDonateSheet(
+                supportNpub = space.bitos.core.settings.AppFacts.SUPPORT_NPUB,
+                tiers = space.bitos.core.settings.AppFacts.SUPPORT_TIERS.map { it.sats to it.recommended },
+                profileLookup = profileLookup,
+                onDismiss = { showDonate = false },
+            )
         }
     }
 }

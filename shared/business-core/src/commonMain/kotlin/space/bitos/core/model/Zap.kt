@@ -207,10 +207,11 @@ object LnurlPay {
         }
     }
 
-    data class Invoice(val paymentRequest: String) {
+    data class Invoice(val paymentRequest: String, val verifyUrl: String? = null) {
         init {
             require(paymentRequest.startsWith("lnbc", ignoreCase = true)) { "not a bolt11 invoice" }
             require(paymentRequest.length in 20..4096)
+            verifyUrl?.let { require(it.startsWith("https://") && it.length <= 2048) }
         }
     }
 
@@ -254,9 +255,22 @@ object LnurlPay {
         val pr = (root["pr"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null
         // Explicit relay errors are surfaced as null (caller shows failure).
         if ((root["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "ERROR") return null
-        Invoice(pr)
+        Invoice(pr, (root["verify"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotEmpty() })
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * LUD-21 verify-body classification (legacy `pollVerify` parity):
+     * settled only when `status == "OK" && settled == true`. Corrupt
+     * bodies are NOT settled — the next poll retries.
+     */
+    fun verifySettled(body: String): Boolean = try {
+        val root = json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject
+        (root?.get("status") as? kotlinx.serialization.json.JsonPrimitive)?.content == "OK" &&
+            (root?.get("settled") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+    } catch (_: Exception) {
+        false
     }
 
     private fun encodeQuery(value: String): String = buildString {

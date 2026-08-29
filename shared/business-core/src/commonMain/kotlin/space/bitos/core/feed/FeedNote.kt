@@ -32,6 +32,12 @@ data class FeedNote(
     val contentWarning: Boolean = false,
     /** APP-008 poll projection (kind-1 + poll_option tags; null = not a poll). */
     val poll: space.bitos.core.model.Poll? = null,
+    /** APP-007 remix source (remix tag), null = original work. */
+    val remixOfEventId: String? = null,
+    /** APP-007 remix source author (first p tag alongside the remix marker). */
+    val remixOfPubkey: String? = null,
+    /** APP-007 `license` tag value (remix advisory gate), null = permissive. */
+    val license: String? = null,
 ) {
     companion object {
         private val hashtagPattern = Regex("(?:^|\\s)#([\\p{L}\\p{N}_-]{2,60})")
@@ -60,26 +66,30 @@ data class FeedNote(
             val nip22Parent = event.tags.firstOrNull { it.firstOrNull() == "e" }?.getOrNull(1)
                 ?: event.tags.firstOrNull { it.firstOrNull() == "E" }?.getOrNull(1)
             // APP-009: marker-aware thread anchors (root/parent per NIP-10).
-            val (threadRootId, threadParentId) = ThreadAssembly.rootAndParent(event.tags)
+        val (threadRootId, threadParentId) = ThreadAssembly.rootAndParent(event.tags)
+        val remixSource = RemixRules.sourceOf(event.tags)
 
-            return FeedNote(
-                id = event.id.value,
-                pubkey = event.pubkey.value,
-                content = event.content,
-                createdAt = event.createdAt,
-                kind = event.kind,
-                replyTo = replyTag?.getOrNull(1) ?: nip22Parent,
-                threadRootId = threadRootId,
-                threadParentId = threadParentId,
-                poll = space.bitos.core.model.PollContract.poll(event),
-                hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
-                mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
-                mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
-                    .map { it.value }.distinct().take(8).toList(),
-                isProtocolPayload = protocolPayloadPattern.containsMatchIn(event.content),
-                video = MediaMetadata.fromEvent(event),
-                contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
-            )
+        return FeedNote(
+            id = event.id.value,
+            pubkey = event.pubkey.value,
+            content = event.content,
+            createdAt = event.createdAt,
+            kind = event.kind,
+            replyTo = replyTag?.getOrNull(1) ?: nip22Parent,
+            threadRootId = threadRootId,
+            threadParentId = threadParentId,
+            poll = space.bitos.core.model.PollContract.poll(event),
+            hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
+            mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
+            mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
+                .map { it.value }.distinct().take(8).toList(),
+            isProtocolPayload = protocolPayloadPattern.containsMatchIn(event.content),
+            video = MediaMetadata.fromEvent(event),
+            contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
+            remixOfEventId = remixSource?.eventId,
+            remixOfPubkey = remixSource?.pubkey,
+            license = RemixRules.licenseOf(event.tags),
+        )
         }
 
         fun isFeedKind(kind: Int): Boolean = kind == NostrKinds.SHORT_TEXT_NOTE || kind == NostrKinds.VIDEO

@@ -75,6 +75,9 @@ fun ProfileScreen(
     algorithmStore: space.bitos.app.data.feed.AlgorithmStore,
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
     privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
+    /** APP-014: opens the zap wallet (local sent ledger + received). */
+    onOpenZaps: () -> Unit = {},
+    profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
 ) {
     var showSettings by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     if (showSettings) {
@@ -88,6 +91,7 @@ fun ProfileScreen(
             algorithmStore = algorithmStore,
             homeViewModel = homeViewModel,
             privacyPrefs = privacyPrefs,
+            profileLookup = profileLookup,
             onBack = { showSettings = false },
         )
         return
@@ -187,6 +191,17 @@ fun ProfileScreen(
                     Text(it, fontSize = 13.sp, color = BitOSColors.textSecondary, maxLines = 4)
                 }
             }
+
+            // APP-014: zap wallet entry (sent ledger + received receipts).
+            androidx.compose.material3.OutlinedButton(
+                onClick = onOpenZaps,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = BitOSSpacing.screen),
+            ) {
+                Text("⚡ Zap wallet", fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
+                Spacer(Modifier.weight(1f))
+                Text("Ledger", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+            }
+            Spacer(Modifier.height(BitOSSpacing.sm))
 
             // Stats (legacy `_FollowStats` parity, live window data).
             Row(

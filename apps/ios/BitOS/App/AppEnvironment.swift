@@ -9,6 +9,7 @@ import Observation
 final class AppEnvironment {
     let relayPool: RelayPool
     let feedStore: FeedStore
+    let sentZaps: SentZapsStore
     let businessCore: any BusinessCoreClient
     let identityStore: IdentityStore
     let notePublisher: NotePublisher
@@ -18,6 +19,7 @@ final class AppEnvironment {
     let relayManager: RelayManagerStore
     let algorithmStore: AlgorithmStore
     let privacyPrefs: PrivacyPrefsStore
+    let profileLookup: ProfileLookupStore
 
     init(
         relayPool: RelayPool = AppEnvironment.bootRelayPool(),
@@ -36,6 +38,7 @@ final class AppEnvironment {
         let algorithm = AlgorithmStore()
         self.algorithmStore = algorithm
         self.privacyPrefs = PrivacyPrefsStore()
+        self.profileLookup = ProfileLookupStore(pool: relayPool, client: businessCore)
         // Algorithm wire drives the For-You ranking for the process lifetime.
         algorithm.sink = { [weak feedStore] json in
             feedStore?.setAlgorithm(snapshotJson: json)

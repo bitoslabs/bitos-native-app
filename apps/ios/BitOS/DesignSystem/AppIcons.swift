@@ -125,4 +125,9 @@ enum AppIcons {
     static let video = "video.fill"
     static let play = "play.fill"
     static let pause = "pause.fill"
+
+    // ── Bitz player controls (spec §3.7) ─────────────────────────────
+    static let soundOn = "speaker.wave.2.fill"        // unmuted state
+    static let back10 = "gobackward.10"               // −10 s seek pill
+    static let forward10 = "goforward.10"             // +10 s seek pill
 }

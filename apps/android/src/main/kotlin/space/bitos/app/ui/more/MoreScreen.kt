@@ -69,7 +69,12 @@ fun MoreScreen(
     onOpenProfile: () -> Unit,
     onOpenDiscover: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenStaticAbout: () -> Unit = onOpenSettings,
+    onOpenStaticPrivacy: () -> Unit = onOpenSettings,
+    onOpenStaticTerms: () -> Unit = onOpenSettings,
     onOpenLightning: () -> Unit,
+    /** APP-015: opens the Saved (bookmarks) page. */
+    onOpenSaved: () -> Unit = {},
     onClose: () -> Unit,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
@@ -83,6 +88,10 @@ fun MoreScreen(
     var showSwitcher by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var showAddAccount by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var showQr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    /** Branded switch overlay target (legacy overlay parity). */
+    var switchTarget by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<space.bitos.core.identity.RegisteredAccount?>(null)
+    }
     var importInput by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     var importError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
@@ -195,15 +204,13 @@ fun MoreScreen(
             MoreTile(icon = Icons.Outlined.Settings, label = "Settings", caption = "Preferences & relays", onClick = onOpenSettings)
         }
 
+        GroupLabel("Library")
+        HubCard {
+            MoreTile(icon = Icons.Outlined.Bookmark, label = "Saved", caption = "Your bookmarked notes", onClick = onOpenSaved)
+        }
+
         GroupLabel("Coming soon")
         HubCard {
-            MoreTile(
-                icon = Icons.Outlined.Bookmark,
-                label = "Saved",
-                caption = "Bookmarks page (APP-015 remainder)",
-                onClick = {},
-                enabled = false,
-            )
             MoreTile(
                 icon = Icons.Outlined.Bolt,
                 label = "Zap ledger",
@@ -215,8 +222,8 @@ fun MoreScreen(
 
         GroupLabel("About")
         HubCard {
-            MetaRow(label = "About BitOS", onClick = onOpenSettings)
-            MetaRow(label = "Privacy", onClick = onOpenSettings)
+            MetaRow(label = "About BitOS", onClick = onOpenStaticAbout)
+            MetaRow(label = "Privacy", onClick = onOpenStaticPrivacy)
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -260,7 +267,8 @@ fun MoreScreen(
                                     RoundedCornerShape(14.dp),
                                 )
                                 .clickable(enabled = !isActive && !identity.busy) {
-                                    identityViewModel.switchTo(acct.pubkeyHex)
+                                    showSwitcher = false // sheet closes; the full-page overlay takes over
+                                    switchTarget = acct
                                 }
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -402,6 +410,18 @@ fun MoreScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },
+        )
+    }
+
+    switchTarget?.let { target ->
+        val fromPubkey = (activePubkey ?: account?.pubkeyHex)
+        space.bitos.app.ui.components.AccountSwitchOverlay(
+            fromPubkey = fromPubkey,
+            toPubkey = target.pubkeyHex,
+            toName = target.displayName ?: target.npub.take(10) + "…",
+            hapticsEnabled = { settingsStore.snapshot.value.hapticEnabled },
+            switchAction = { identityViewModel.switchTo(target.pubkeyHex) },
+            onFinished = { switchTarget = null },
         )
     }
 

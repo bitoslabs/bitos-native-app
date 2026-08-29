@@ -18,6 +18,10 @@ struct MediaPublishUiState: Sendable, Equatable {
  */
 struct ImportMediaSheet: View {
     let onClose: () -> Void
+    /** Freshly captured take from the camera flow (record → trim); the
+     *  sheet opens straight into the caption/publish state for it. */
+    var capturedData: Data? = nil
+    var capturedMime: String = "video/mp4"
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
     @State private var state = MediaPublishUiState()
@@ -25,6 +29,7 @@ struct ImportMediaSheet: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var pickedData: Data?
     @State private var pickedMime = "video/mp4"
+    @State private var seededCapture = false
 
     private let maxBytes = 64 * 1024 * 1024
 
@@ -37,6 +42,16 @@ struct ImportMediaSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Close") { onClose() } }
+                }
+                .onAppear {
+                    guard !seededCapture, let capturedData else { return }
+                    seededCapture = true
+                    if capturedData.count > maxBytes {
+                        state.failure = "Recording exceeds the 64MB limit."
+                    } else {
+                        pickedData = capturedData
+                        pickedMime = capturedMime
+                    }
                 }
         }
         .preferredColorScheme(.dark)

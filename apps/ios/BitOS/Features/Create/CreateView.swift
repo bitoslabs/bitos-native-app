@@ -77,9 +77,16 @@ struct CreateView: View {
                 )
             }
             .sheet(isPresented: $showImport) {
-                ImportMediaSheet(onClose: { showImport = false })
-                    .environment(identity)
-                    .presentationDetents([.medium, .large])
+                ImportMediaSheet(
+                    onClose: {
+                        showImport = false
+                        capturedData = nil
+                    },
+                    capturedData: capturedData,
+                    capturedMime: capturedMime
+                )
+                .environment(identity)
+                .presentationDetents([.medium, .large])
             }
         }
     }

@@ -10,6 +10,9 @@ struct ZapUiState: Sendable, Equatable {
     var invoice: String?
     var failure: String?
     var busy = false
+    /** APP-014 LUD-21: provider verify URL + settle signal. */
+    var verifyUrl: String?
+    var verifySettled = false
 }
 
 /**
@@ -22,6 +25,10 @@ struct ZapSheet: View {
     let profiles: [String: ProfileMetadata]
     let initialAmountSats: Int
     var zapCount: Int = 0
+    /** APP-014: verified request ids that landed for this note (paid match). */
+    var paidRequestIds: Set<String> = []
+    /** APP-014: records into the sent ledger when payment confirms. */
+    var onPaid: (Int, String) -> Void = { _, _ in }
     let onClose: () -> Void
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
@@ -32,6 +39,8 @@ struct ZapSheet: View {
     @State private var copiedKind: String?
     @State private var paid = false
     @State private var zapCountAtInvoice = -1
+    @State private var requestId: String?
+    @State private var verifyTask: Task<Void, Never>?
     @State private var nowSeconds = Int64(Date.now.timeIntervalSince1970)
     private let bridge = BusinessCoreBridge()
 
@@ -40,11 +49,16 @@ struct ZapSheet: View {
 
     /// APP-018 functional setting: opens on the persisted default zap amount.
     init(note: FeedNote, profiles: [String: ProfileMetadata],
-         initialAmountSats: Int = 21, zapCount: Int = 0, onClose: @escaping () -> Void) {
+         initialAmountSats: Int = 21, zapCount: Int = 0,
+         paidRequestIds: Set<String> = [],
+         onPaid: @escaping (Int, String) -> Void = { _, _ in },
+         onClose: @escaping () -> Void) {
         self.note = note
         self.profiles = profiles
         self.initialAmountSats = initialAmountSats
         self.zapCount = zapCount
+        self.paidRequestIds = paidRequestIds
+        self.onPaid = onPaid
         self.onClose = onClose
         _state = State(initialValue: ZapUiState(amountSats: initialAmountSats))
     }
@@ -74,11 +88,23 @@ struct ZapSheet: View {
         .preferredColorScheme(.dark)
         .onAppear { environment.feedStore.loadZaps(targetEventId: note.id) }
         .onChange(of: zapCount) { _, count in
-            // Paid: a verified 9735 for this note landed after the invoice.
+            // Paid: EXACT request-id match when we signed a 9734;
+            // unsigned/anonymous keeps the count signal.
             if !paid && state.invoice != nil && zapCountAtInvoice >= 0 && count > zapCountAtInvoice {
                 paid = true
             }
         }
+        .onChange(of: paidRequestIds) { _, ids in
+            if !paid, state.invoice != nil, let requestId, ids.contains(requestId) {
+                paid = true
+            }
+        }
+        .onChange(of: state.verifySettled) { _, settled in
+            if settled && !paid && state.invoice != nil {
+                paid = true
+            }
+        }
+        .onDisappear { verifyTask?.cancel() }
         .onChange(of: state.invoice) { _, invoice in
             if invoice != nil { zapCountAtInvoice = zapCount }
         }
@@ -91,6 +117,7 @@ struct ZapSheet: View {
         }
         .task(id: paid) {
             guard paid else { return }
+            onPaid(amount, comment.trimmingCharacters(in: .whitespacesAndNewlines))
             try? await Task.sleep(nanoseconds: Self.autoCloseNanos)
             onClose()
         }
@@ -192,12 +219,35 @@ struct ZapSheet: View {
                     createdAtSeconds: now, signatureHex: signature
                    ) {
                     nostrJson = frame
+                    requestId = eventId
                 }
             }
             let invoice = try await fetchInvoice(payRequest: payRequest, amountMillisats: Int64(amount) * 1000, nostrJson: nostrJson, lud16: lud16)
             state.phase = .invoice
-            state.invoice = invoice
+            state.invoice = invoice.bolt11
+            state.verifyUrl = invoice.verifyUrl
             state.busy = false
+            // LUD-21 settle polling (legacy `pollVerify` parity): the QR /
+            // external-wallet payment signal — races the 9735 watch.
+            if let verifyUrl = invoice.verifyUrl {
+                verifyTask?.cancel()
+                let expiry = bridge.bolt11ExpirySeconds(invoice: invoice.bolt11)
+                let clientBridge = bridge
+                verifyTask = Task { @MainActor in
+                    while !Task.isCancelled,
+                          expiry <= 0 || Int64(Date.now.timeIntervalSince1970) < expiry {
+                        try? await Task.sleep(for: .seconds(3))
+                        guard !Task.isCancelled else { return }
+                        if let (data, response) = try? await URLSession.shared.data(from: URL(string: verifyUrl)!),
+                           (response as? HTTPURLResponse)?.statusCode == 200,
+                           let body = String(data: data, encoding: .utf8),
+                           clientBridge.lnurlVerifySettled(body: body) {
+                            state.verifySettled = true
+                            return
+                        }
+                    }
+                }
+            }
         } catch {
             state.phase = .failed
             state.failure = error.localizedDescription
@@ -215,13 +265,16 @@ struct ZapSheet: View {
         return try LnurlPayParams(jsonBody: String(data: data, encoding: .utf8) ?? "", bridge: bridge)
     }
 
-    private func fetchInvoice(payRequest: LnurlPayParams, amountMillisats: Int64, nostrJson: String?, lud16: String) async throws -> String {
+    private func fetchInvoice(payRequest: LnurlPayParams, amountMillisats: Int64, nostrJson: String?, lud16: String) async throws -> (bolt11: String, verifyUrl: String?) {
         guard let url = payRequest.callbackUrl(amountMillisats: amountMillisats, nostrJson: nostrJson, lud16: lud16, bridge: bridge) else {
             throw LnurlError(message: "amount out of range")
         }
         let (data, response) = try await URLSession.shared.data(from: url)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw LnurlError(message: "LNURL server unreachable") }
-        return try InvoiceResponse(jsonBody: String(data: data, encoding: .utf8) ?? "", bridge: bridge).paymentRequest
+        let body = String(data: data, encoding: .utf8) ?? ""
+        let parsed = try InvoiceResponse(jsonBody: body, bridge: bridge)
+        let verifyUrl = (bridge.lnurlInvoiceVerifyUrl(body: body) as String?).flatMap { URL(string: $0) == nil ? nil : $0 }
+        return (parsed.paymentRequest, verifyUrl)
     }
 }
 
@@ -334,7 +387,7 @@ private struct AmountStepView: View {
                 }
             }
             HStack {
-                TextField("Custom amount", text: $custom)
+                BitosField("Custom amount", text: $custom)
                     .keyboardType(.numberPad)
                     .onChange(of: custom) { _, value in
                         custom = String(value.filter(\.isNumber).prefix(8))
@@ -345,7 +398,7 @@ private struct AmountStepView: View {
             .padding(.horizontal, BitOSTheme.Spacing.md)
             .padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 12).fill(BitOSTheme.surfaceElevated))
-            TextField("Add a comment… (\(comment.count)/200)", text: $comment)
+            BitosField("Add a comment… (\(comment.count)/200)", text: $comment)
                 .onChange(of: comment) { _, value in
                     if value.count > 200 { comment = String(value.prefix(200)) }
                 }

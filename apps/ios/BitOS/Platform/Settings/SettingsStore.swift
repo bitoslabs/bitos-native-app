@@ -103,6 +103,20 @@ enum SettingsDateFormat: String, CaseIterable, Identifiable {
     }
 }
 
+/// Bitz surface mode (APP-007): the view the reels tab boots into.
+enum SettingsBitzMode: String, CaseIterable, Identifiable {
+    case explore, following
+    case forYou = "for_you"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .explore: "Explore"
+        case .following: "Following"
+        case .forYou: "For you"
+        }
+    }
+}
+
 import SwiftUI
 
 /// Theme preference → SwiftUI color scheme (nil = follow system).
@@ -137,6 +151,9 @@ struct SettingsState: Equatable {
     var timeZone = "auto"
     var dateFormat: SettingsDateFormat = .mdy
     var sensitiveMedia: SettingsSensitiveMedia = .cover
+    var bitzMode: SettingsBitzMode = .forYou
+    /// Autoplay starts politely muted (legacy web parity); persists.
+    var videoMuted = true
 }
 
 /**
@@ -182,7 +199,9 @@ final class SettingsStore {
             defaultZapAmount: Int(snapshot.defaultZapAmount),
             timeZone: snapshot.timeZone,
             dateFormat: SettingsDateFormat(rawValue: snapshot.dateFormat) ?? .mdy,
-            sensitiveMedia: SettingsSensitiveMedia(rawValue: snapshot.sensitiveMedia) ?? .cover
+            sensitiveMedia: SettingsSensitiveMedia(rawValue: snapshot.sensitiveMedia) ?? .cover,
+            bitzMode: SettingsBitzMode(rawValue: snapshot.bitzMode) ?? .forYou,
+            videoMuted: snapshot.videoMuted
         )
     }
 
@@ -207,6 +226,10 @@ final class SettingsStore {
     func set(_ rate: SettingsPlaybackRate) { setRaw(rate.rawValue, forKey: "bitos_video_playback_rate") }
     func set(_ format: SettingsDateFormat) { setRaw(format.rawValue, forKey: "bitos_date_format") }
     func set(_ sensitive: SettingsSensitiveMedia) { setRaw(sensitive.rawValue, forKey: "bitos_sensitive_media") }
+    func set(_ mode: SettingsBitzMode) { setRaw(mode.rawValue, forKey: "bitos_bitz_mode") }
+
+    /** APP-007 mute memory: video autoplay starts muted; choice persists. */
+    func setVideoMuted(_ muted: Bool) { setRaw(muted ? "1" : "0", forKey: "bitos_video_muted") }
 
     /** Accent palette value (`#RRGGBB`); shared rule canonicalizes to uppercase. */
     func setAccentColor(hex: String) { setRaw(hex, forKey: "bitos_accent_color") }

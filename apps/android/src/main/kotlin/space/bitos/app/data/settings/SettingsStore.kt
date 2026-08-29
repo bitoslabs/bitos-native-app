@@ -97,6 +97,8 @@ object SettingsContractKeys {
         SettingsContract.KEY_TIME_ZONE,
         SettingsContract.KEY_DATE_FORMAT,
         SettingsContract.KEY_SENSITIVE_MEDIA,
+        SettingsContract.KEY_BITZ_MODE,
+        SettingsContract.KEY_VIDEO_MUTED,
     )
 
     const val PREFS_NAME = "bitos_settings"

@@ -15,16 +15,36 @@ data class MediaMetadata(
     val posterUrl: String?,
     val width: Int?,
     val height: Int?,
+    /** NIP-92 imeta `duration` (whole seconds, 1..[MAX_DURATION_SECONDS]); null = unknown. */
+    val durationSeconds: Long? = null,
 ) {
     companion object {
         private const val MAX_URL_LENGTH = 2048
         private const val MAX_DIMENSION = 100_000
+
+        /** 4 h — longer imeta durations are hostile data, not real clips. */
+        const val MAX_DURATION_SECONDS = 14_400L
         private val httpUrl = Regex("^https?://\\S+$", RegexOption.IGNORE_CASE)
         private val videoMime = Regex("^video/[\\w.+-]+$", RegexOption.IGNORE_CASE)
         private val imageMime = Regex("^image/[\\w.+-]+$", RegexOption.IGNORE_CASE)
         private val videoExt = Regex("\\.(mp4|webm|mov|m4v)(?:[?#]\\S*)?$", RegexOption.IGNORE_CASE)
         private val imageExt = Regex("\\.(jpe?g|png|webp|avif)(?:[?#]\\S*)?$", RegexOption.IGNORE_CASE)
         private val videoInContent = Regex("https?://\\S+\\.(?:mp4|webm|mov|m4v)(?:[?#]\\S*)?", RegexOption.IGNORE_CASE)
+
+        /** Locale-free duration label: `0:59`, `12:05`, `1:02:03`. */
+        fun formatDuration(seconds: Long): String {
+            val total = if (seconds < 0) 0 else seconds
+            val hours = total / 3_600
+            val minutes = (total % 3_600) / 60
+            val secs = total % 60
+            return if (hours > 0) {
+                "$hours:" + two(minutes) + ":" + two(secs)
+            } else {
+                "$minutes:" + two(secs)
+            }
+        }
+
+        private fun two(value: Long): String = if (value < 10) "0$value" else value.toString()
 
         /** First video attachment with its poster, or null when the event carries none. */
         fun fromEvent(event: NostrEvent): MediaMetadata? {
@@ -33,6 +53,7 @@ data class MediaMetadata(
             var posterUrl: String? = null
             var width: Int? = null
             var height: Int? = null
+            var durationSeconds: Long? = null
 
             for (tag in event.tags) {
                 when (tag.firstOrNull()) {
@@ -47,6 +68,7 @@ data class MediaMetadata(
                                 val dim = fields["dim"]?.let(::parseDim)
                                 width = dim?.first
                                 height = dim?.second
+                                durationSeconds = fields["duration"]?.let(::parseDuration)
                             }
                             isImage(url, mime) && posterUrl == null -> posterUrl = url
                         }
@@ -71,8 +93,11 @@ data class MediaMetadata(
                 videoMime = null
             }
             if (videoUrl == null) return null
-            return MediaMetadata(videoUrl, videoMime, posterUrl, width, height)
+            return MediaMetadata(videoUrl, videoMime, posterUrl, width, height, durationSeconds)
         }
+
+        private fun parseDuration(raw: String): Long? =
+            raw.toLongOrNull()?.takeIf { it in 1..MAX_DURATION_SECONDS }
 
         private fun parseImetaFields(tag: List<String>): Map<String, String> {
             val fields = mutableMapOf<String, String>()

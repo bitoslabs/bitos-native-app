@@ -22,6 +22,11 @@ class BitOsApplication : Application() {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** One-shot kind-0 lookups (support/contributors widgets). */
+    val profileLookup: space.bitos.app.data.feed.ProfileLookupStore by lazy {
+        space.bitos.app.data.feed.ProfileLookupStore(applicationScope, relayPool)
+    }
+
     /** Interaction-gate store (APP-018a row 2 — origin parity). */
     val privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore by lazy {
         space.bitos.app.data.settings.PrivacyPrefsStore(this)
@@ -67,6 +72,10 @@ class BitOsApplication : Application() {
 
     val notePublisher: space.bitos.app.data.publish.NotePublisher by lazy {
         space.bitos.app.data.publish.NotePublisher(applicationScope, relayPool)
+    }
+
+    val sentZapsStore: space.bitos.app.data.zap.SentZapsStore by lazy {
+        space.bitos.app.data.zap.SentZapsStore(this)
     }
 
     val composerDraftStore: space.bitos.app.data.publish.ComposerDraftStore by lazy {

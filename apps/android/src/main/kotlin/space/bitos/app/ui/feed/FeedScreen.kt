@@ -117,6 +117,8 @@ fun FeedScreen(
     onOpenProfile: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
     onOpenHub: () -> Unit = {},
+    /** Opens the Create hub (record/import) — iOS app-bar camera parity. */
+    onOpenCreate: () -> Unit = {},
     /** APP-008: opens the full-page composer (legacy CreateView parity). */
     onOpenComposer: () -> Unit = {},
     /** APP-003/APP-004: bumped when the user re-taps the ACTIVE shell tab
@@ -141,6 +143,7 @@ fun FeedScreen(
     val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
     val currentSettings = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(settingsSnapshot) }
     currentSettings.value = settingsSnapshot
+    val feedHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val pool = androidx.compose.runtime.remember {
         VideoPlayerPool(
             context = context,
@@ -168,8 +171,8 @@ fun FeedScreen(
     DisposableEffect(Unit) {
         onDispose { pool.releaseAll() }
     }
-    LaunchedEffect(pagerState.settledPage, state.notes) {
-        pool.update(pagerState.settledPage, state)
+    LaunchedEffect(pagerState.settledPage, feedNotes) {
+        pool.update(pagerState.settledPage, feedNotes)
     }
     // APP-004: arrivals are held while the user is scrolled into the ACTIVE
     // surface (list first row / pager page 0 = top); at top auto-reveals.
@@ -231,6 +234,7 @@ fun FeedScreen(
                 onFilter = viewModel::selectFilter,
                 onOpenDiscover = onOpenDiscover,
                 onOpenHub = onOpenHub,
+                onOpenCreate = onOpenCreate,
             )
             // Float within the feed area, below (not over) the tabs. This
             // keeps the control visible while preserving tab hit targets.
@@ -263,8 +267,14 @@ fun FeedScreen(
                             )
                         } else NotesList(
                             notes = feedNotes, state = state, actions = actions, viewModel = viewModel,
+                            compact = settingsSnapshot.compactMode,
                             listState = listState, onComment = { showCommentsFor = it }, onZap = { viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
-                            onAuthor = { authorTarget = it }, onLike = viewModel::toggleLike,
+                            onAuthor = { authorTarget = it }, onLike = { note ->
+                                if (settingsSnapshot.hapticEnabled) {
+                                    feedHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                                viewModel.toggleLike(note)
+                            },
                             onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
                             sensitiveShowByDefault = sensitiveShowByDefault,
                             mediaPreview = settingsSnapshot.mediaPreview,
@@ -326,6 +336,8 @@ fun FeedScreen(
                 profileName = state.profiles[target.pubkey]?.bestDisplayName,
                 hasIdentity = identityViewModel.state.value.account != null,
                 zapCount = state.zapCounts[target.id] ?: 0,
+                paidRequestIds = state.zapRequestIds[target.id] ?: emptySet(),
+                onPaid = { sats, memo -> viewModel.onZapPaid(target, sats, memo) },
                 onAmountSelected = viewModel::selectZapAmount,
                 onZap = { sats, comment, anonymous ->
                     viewModel.selectZapAmount(sats)
@@ -840,6 +852,7 @@ private suspend fun loadBitmap(url: String): Bitmap? = withContext(Dispatchers.I
 private fun NotesList(
     notes: List<FeedNote>,
     state: FeedUiState,
+    compact: Boolean = false,
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
     actions: LocalActions,
@@ -869,6 +882,7 @@ private fun NotesList(
                 onReport = { reason -> viewModel.report(note, reason) },
                 sensitiveShowByDefault = sensitiveShowByDefault,
                 mediaPreview = mediaPreview,
+                compact = compact,
             )
         }
         // APP-004 pagination: footer spinner while an older page loads.
@@ -898,6 +912,7 @@ private fun NoteCardRow(
     onReport: (String) -> Unit,
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
+    compact: Boolean = false,
 ) {
     val profile = state.profiles[note.pubkey]
     val bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked
@@ -914,11 +929,11 @@ private fun NoteCardRow(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.screen, vertical = BitOSSpacing.md),
-        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            .padding(horizontal = BitOSSpacing.screen, vertical = if (compact) 4.dp else BitOSSpacing.md),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else BitOSSpacing.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PubkeyAvatar(pubkey = note.pubkey, size = 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank()).let {
+            PubkeyAvatar(pubkey = note.pubkey, size = if (compact) 28 else 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank()).let {
                 Box(Modifier.clickable(onClickLabel = "Open author") { onAuthor() }) { it }
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
@@ -1057,6 +1072,7 @@ private fun FeedHeader(
     onFilter: (FeedFilter) -> Unit,
     onOpenDiscover: () -> Unit,
     onOpenHub: () -> Unit,
+    onOpenCreate: () -> Unit = {},
 ) {
     var filterExpanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Column {
@@ -1099,6 +1115,11 @@ private fun FeedHeader(
             }
             IconButton(onClick = onOpenDiscover) {
                 Icon(AppIcons.Search, contentDescription = "Search", tint = BitOSColors.textSecondary)
+            }
+            // iOS app-bar parity: the camera icon opens the Create hub
+            // (record Bitz / import media) instead of nothing.
+            IconButton(onClick = onOpenCreate) {
+                Icon(AppIcons.Camera, contentDescription = "Create video", tint = BitOSColors.textSecondary)
             }
             // Solar widget-linear opens the account hub; media import stays
             // in Create so the header remains focused on feed navigation.

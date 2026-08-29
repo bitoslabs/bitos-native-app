@@ -98,7 +98,7 @@ class SentZapLedgerTest {
         val unsigned = composer.composeZapRequest(
             recipientPubkey = recipient,
             amountMillisats = 21_000,
-            relays = emptyList(),
+            relays = listOf("wss://relay.damus.io"),
             lnurlHint = "pay@example.com",
             comment = "nice",
             authorPubkey = payer.publicKeyHex(),
@@ -106,13 +106,21 @@ class SentZapLedgerTest {
         )!!
         val signature = kotlinx.coroutines.runBlocking { payer.sign(unsigned.messageBytes()) }!!
         val requestJson = composer.publishMessage(unsigned, signature)!!
-        val receiptJson = """["EVENT","z",{"kind":9735,"created_at":1700000100,"tags":[["p","$recipient"],["description",${'"'.toString()}${requestJson.substringAfter(",").dropLast(1)}${'"'.toString()}]],"content":"","pubkey":"$recipient","id":"${"1".repeat(64)}","sig":"${"2".repeat(128)}"}]"""
-        val receipt = NostrEventCodec.decodeRelayEvent(
-            Sha256EventHasher, receiptJson, RelayUrl.parse("wss://relay.test")!!,
+        val requestEventJson = requestJson.substringAfter(",").dropLast(1)
+        // Direct construction: embeddedRequestId parses the description's
+        // 9734 (verified through the client gate); the outer receipt need
+        // not itself verify for this rule.
+        val receipt = NostrEvent(
+            id = EventId.parse("1".repeat(64))!!,
+            pubkey = Pubkey.parse(recipient)!!,
+            createdAt = 1_700_000_100,
+            kind = ZapReceipt.RECEIPT_KIND,
+            tags = listOf(listOf("p", recipient), listOf("description", requestEventJson)),
+            content = "",
+            signature = null,
+            receivedFromRelay = null,
         )
-        // The embedded request id is the canonical 9734 id we composed.
-        assertEquals(unsigned.idHex, receipt?.let { ZapReceipt.embeddedRequestId(it) })
-        // Non-receipt kinds never carry one.
-        assertNull(ZapReceipt.embeddedRequestId(receipt!!.copy(kind = 1)))
+        assertEquals(unsigned.idHex, ZapReceipt.embeddedRequestId(receipt))
+        assertNull(ZapReceipt.embeddedRequestId(receipt.copy(kind = 1)))
     }
 }

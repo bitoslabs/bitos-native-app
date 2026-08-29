@@ -32,6 +32,8 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
     @Environment(SettingsStore.self) private var settings
+    /// Like-tick drives sensory feedback (gated by the haptics preference).
+    @State private var likeTick = 0
 
     /// APP-018: persisted autoplay policy → can the visible video start?
     private func autoplayAllowed() -> Bool {
@@ -159,6 +161,7 @@ struct HomeView: View {
     private func like(_ note: FeedNote) {
         let turningOn = !store.localActions.liked.contains(note.id)
         store.localActions.toggleLike(note.id)
+        if turningOn { likeTick += 1 } // sensory feedback trigger
         // Signed accounts publish a real kind-7 reaction on like; unlikes
         // stay local until reaction deletion (kind 5) lands with SOC-002.
         guard turningOn, environment.identityStore.account != nil else { return }
@@ -168,6 +171,9 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             feedSurface
+        }
+        .sensoryFeedback(.impact, trigger: likeTick) { _, _ in
+            settings.state.hapticEnabled
         }
         .preferredColorScheme(.dark)
     }
@@ -315,6 +321,17 @@ struct HomeView: View {
                     profiles: store.profiles,
                     initialAmountSats: settings.state.defaultZapAmount,
                     zapCount: store.zapCounts[target.id] ?? 0,
+                    paidRequestIds: store.zapRequestIds[target.id] ?? [],
+                    onPaid: { sats, memo in
+                        environment.sentZaps.record(.init(
+                            id: "zap-\(target.id)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                            amountSats: Int64(sats),
+                            recipientPubkey: target.pubkey,
+                            createdAt: Int64(Date.now.timeIntervalSince1970),
+                            targetNoteId: target.id,
+                            memo: memo.isEmpty ? nil : memo
+                        ))
+                    },
                     onClose: { zapTarget = nil }
                 )
                 .environment(identity)
@@ -824,10 +841,13 @@ private struct NoteCardRow: View {
     @State private var revealed = false
     @State private var lightboxUrl: String?
 
+    /// APP-018 functional setting: compact mode tightens card density.
+    private var compact: Bool { settings.state.compactMode }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: compact ? 2 : BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
+                PubkeyAvatarView(pubkey: note.pubkey, size: compact ? 28 : 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
                     .onTapGesture(perform: onAuthor)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
@@ -1068,7 +1088,7 @@ private struct VideoNotePage: View {
 }
 
 /// Aspect-fill, no built-in controls: playback control is the tap layer.
-private struct PlayerSurface: UIViewControllerRepresentable {
+struct PlayerSurface: UIViewControllerRepresentable {
     let player: AVQueuePlayer?
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {

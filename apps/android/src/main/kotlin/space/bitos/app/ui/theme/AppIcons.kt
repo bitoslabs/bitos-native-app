@@ -40,6 +40,10 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -87,6 +91,12 @@ object AppIcons {
     val ReportIllicit = Icons.Rounded.ErrorOutline
     val ReportHarassment = Icons.Rounded.PanTool
     val Block = Icons.Rounded.Close             // Solar: closest: closeCircle
+
+    // ── Bitz player controls (spec §3.7) ─────────────────────────────
+    val SoundOn = Icons.AutoMirrored.Rounded.VolumeUp   // unmuted state
+    val Pause = Icons.Rounded.Pause
+    val Back10 = Icons.Rounded.Replay10    // −10 s seek pill
+    val Forward10 = Icons.Rounded.Forward10 // +10 s seek pill
 
     // ── Identity / navigation ────────────────────────────────────────
     val User = Icons.Rounded.Person             // Solar: user

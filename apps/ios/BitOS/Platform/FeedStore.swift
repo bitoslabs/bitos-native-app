@@ -8,6 +8,14 @@ enum FeedTimeline: Hashable, Sendable {
     case following
 }
 
+/// APP-009 live per-note tallies (shared `NoteTally` mirror).
+struct NoteTallyMirror: Sendable, Equatable {
+    var reactions: Int = 0
+    var reposts: Int = 0
+    var zaps: Int = 0
+    var zapMillisats: Int64 = 0
+}
+
 /// APP-009 X-style display item (shared `ThreadAssembly` through the
 /// bridge): top-level at depth 0, descendants flattened behind indents.
 struct ThreadDisplayItem: Sendable, Equatable, Identifiable {
@@ -65,7 +73,13 @@ final class FeedStore {
     private(set) var threads: [String: [ThreadDisplayItem]] = [:]
     private(set) var following: Set<String> = []
     private(set) var bookmarkedIds: Set<String> = []
+    /// APP-015 saved notes (newest-saved first; window + by-id refetch).
+    private(set) var bookmarkedNotes: [FeedNote] = []
     private(set) var zapCounts: [String: Int] = [:]
+    /** APP-014: verified embedded 9734 request ids per target (paid match). */
+    private(set) var zapRequestIds: [String: Set<String>] = [:]
+    /** APP-009 live per-note tallies (reactions/reposts/zaps+msat). */
+    private(set) var tallies: [String: NoteTallyMirror] = [:]
     private(set) var muted: Set<String> = []
 
     /// Blocked authors (NIP-51 kind-10004 head) — filtered like mutes.
@@ -82,6 +96,9 @@ final class FeedStore {
     private var commentThreads: [String: [FeedNote]] = [:]
     private var bookmarked: [String] = []
     private var zapCountsBuffer: [String: Int] = [:]
+    private var zapRequestIdsBuffer: [String: Set<String>] = [:]
+    private var talliesBuffer: [String: NoteTallyMirror] = [:]
+    private var tallyTargets: Set<String> = []
     private var collectTask: Task<Void, Never>?
     private var healthTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
@@ -267,13 +284,42 @@ final class FeedStore {
     private func absorb(_ frame: RelayFrame) {
         guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue) else { return }
 
-        if event.kind == 3 {
+        if event.kind == 7 || event.kind == 6 {
+            // APP-009: live tallies per thread note (root or reply).
+            let eTagged = event.tags.filter { $0.first == "e" }.compactMap { $0.dropFirst().first }
+            if let target = eTagged.lazy.compactMap({ self.tallyTarget(for: $0) }).first {
+                var tally = talliesBuffer[target] ?? NoteTallyMirror()
+                if event.kind == 7 { tally.reactions += 1 }
+                else { tally.reposts += 1 }
+                talliesBuffer[target] = tally
+            }
+        } else if event.kind == 3 {
             absorbContactList(frame)
         } else if event.kind == 9735 {
             let target = event.tags.first { $0.first == "e" }?.dropFirst().first
             if let target {
                 zapCountsBuffer[target, default: 0] += 1
+                // APP-009: live zap tally per thread note (+ summed msat).
+                if let tallyId = tallyTarget(for: target) {
+                    var tally = talliesBuffer[target] ?? NoteTallyMirror()
+                    tally.zaps += 1
+                    let invoice = event.tags.first { $0.first == "bolt11" }?.dropFirst().first
+                    if let invoice, let msat = bridgeFacade().bolt11AmountMillisats(invoice: invoice) as? Int64 {
+                        tally.zapMillisats += msat
+                    }
+                    talliesBuffer[target] = tally
+                }
                 if zapCountsBuffer.count > 16 { zapCountsBuffer.removeValue(forKey: zapCountsBuffer.keys.first!) }
+                // APP-014: retain the embedded 9734 request id for exact
+                // paid matching in the zap sheet.
+                if let requestId = bridgeFacade().embeddedZapRequestId(
+                    message: frame.message, relayUrl: frame.relay.rawValue
+                ) as String? {
+                    var ids = zapRequestIdsBuffer[target] ?? []
+                    ids.insert(requestId)
+                    if ids.count > 8 { ids = Set(ids.suffix(8)) }
+                    zapRequestIdsBuffer[target] = ids
+                }
             }
         } else if event.kind == 30003 {
             absorbBookmarkList(frame)
@@ -310,6 +356,130 @@ final class FeedStore {
             commentThreads[target] = thread
         }
         enqueueProfile(event.pubkey)
+        // APP-007 Chain: by-id fetches for the remix ancestry land here too.
+        remixAncestorEvents[note.id] = event
+        if remixAncestorEvents.count > 48, let oldest = remixAncestorEvents.keys.first {
+            remixAncestorEvents.removeValue(forKey: oldest)
+        }
+        // APP-015: keep saved-note bodies for the bookmarks page.
+        if bookmarked.contains(note.id) {
+            bookmarkedNoteBodies[note.id] = note
+        }
+    }
+
+    // MARK: - Bookmarks page (APP-015)
+
+    /// Saved-note bodies outside the live feed window (by-id re-fetch).
+    private var bookmarkedNoteBodies: [String: FeedNote] = [:]
+
+    /// Spec §3.15: re-fetch saved notes missing from the local map on open.
+    func loadBookmarked() {
+        let missing = bookmarked.filter { bookmarkedNoteBodies[$0] == nil }.suffix(100)
+        if !missing.isEmpty,
+           let request = (bridgeFacade().eventsByIdsRequest(
+               subscriptionId: "bitos-saved-notes",
+               ids: Array(missing)
+           ) as String?) {
+            Task { [pool] in await pool.broadcast(request) }
+        }
+        publishState()
+    }
+
+    // MARK: - Remix chain (APP-007, web remixChainOf parity)
+
+    struct RemixChainStep: Equatable {
+        let eventId: String
+        let pubkey: String?
+        let depth: Int
+    }
+
+    struct RemixChainUiState: Equatable {
+        var isLoading = false
+        var rootId: String?
+        var steps: [RemixChainStep] = []
+        var truncated = false
+        var isCycle = false
+        var isCompleted = false
+    }
+
+    private(set) var remixChainState = RemixChainUiState()
+    private var remixAncestorEvents: [String: VerifiedEvent] = [:]
+    private var chainCounter = 0
+    private var chainTask: Task<Void, Never>?
+
+    /** Walks the remix ancestry of [note] (cycle-safe, hex-validated, ≤32). */
+    func loadRemixChain(note: FeedNote) {
+        guard let sourceId = note.remixOfEventId else { return }
+        let rootId = note.id
+        remixChainState = RemixChainUiState(isLoading: true, rootId: rootId)
+        chainTask?.cancel()
+        chainTask = Task { [weak self] in
+            await self?.runRemixChainWalk(rootId: rootId, sourceId: sourceId, sourcePubkey: note.remixOfPubkey)
+        }
+    }
+
+    /** Ancestor note for sheet row tap-through (opens its thread). */
+    func remixAncestorNote(id: String) -> FeedNote? {
+        remixAncestorEvents[id].map { client.feedNote(from: $0) }
+    }
+
+    private func runRemixChainWalk(rootId: String, sourceId: String, sourcePubkey: String?) async {
+        var steps: [RemixChainStep] = []
+        var visited: Set<String> = [rootId]
+        var currentId: String? = sourceId
+        var currentPubkey = sourcePubkey
+        var truncated = false
+        var isCycle = false
+        while let id = currentId {
+            guard Self.isLowercaseHex64(id) else { break }
+            if visited.contains(id) {
+                isCycle = true
+                break
+            }
+            visited.insert(id)
+            steps.append(RemixChainStep(eventId: id, pubkey: currentPubkey, depth: steps.count))
+            if steps.count >= 32 {
+                truncated = true
+                break
+            }
+            guard let tags = await fetchRemixAncestorTags(id) else { break } // natural end
+            if let data = try? JSONSerialization.data(withJSONObject: tags),
+               let tagsJson = String(data: data, encoding: .utf8),
+               let packed = (bridgeFacade().remixSourceOfTags(tagsJson: tagsJson) as String?) {
+                let parts = packed.split(separator: "|", maxSplits: 1).map(String.init)
+                currentId = parts.first
+                currentPubkey = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+            } else {
+                currentId = nil
+            }
+        }
+        remixChainState = RemixChainUiState(
+            isLoading: false,
+            rootId: rootId,
+            steps: steps,
+            truncated: truncated,
+            isCycle: isCycle,
+            isCompleted: true
+        )
+    }
+
+    /// Single-id REQ + bounded wait (3 s); tags of the ancestor or nil.
+    private func fetchRemixAncestorTags(_ id: String) async -> [[String]]? {
+        chainCounter += 1
+        let request = bridgeFacade().threadRootRequestById(
+            subscriptionId: String("bitos-chain-\(chainCounter)".prefix(64)),
+            eventId: id
+        )
+        Task { [pool] in await pool.broadcast(request) }
+        for _ in 0..<20 {
+            if let event = remixAncestorEvents[id] { return event.tags }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return nil
+    }
+
+    private static func isLowercaseHex64(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { "0123456789abcdef".contains($0) }
     }
 
     /**
@@ -394,7 +564,20 @@ final class FeedStore {
     }
 
     /// Loads the reply thread for one note (NIP-01 tagged #e filter).
+    /// APP-009: the tally target — the id when it names a known note in an
+    /// open thread window (root or any reply), so reply rows carry deltas.
+    private func tallyTarget(for id: String) -> String? {
+        if tallyTargets.contains(id) { return id }
+        for window in commentThreads.values where window.contains(where: { $0.id == id }) {
+            return id
+        }
+        return nil
+    }
+
     func loadComments(targetEventId: String) {
+        // APP-009: reactions/reposts/zaps targeting this thread tally live.
+        tallyTargets.insert(targetEventId)
+        if tallyTargets.count > 32 { tallyTargets.removeFirst() }
         guard commentThreads[targetEventId] == nil else {
             publishState()
             return
@@ -622,7 +805,18 @@ final class FeedStore {
         threads = assembled
         following = followingAuthors
         bookmarkedIds = Set(bookmarked)
+        // APP-015: newest-saved first; window notes fill ids not yet fetched.
+        if bookmarked.isEmpty {
+            bookmarkedNotes = []
+        } else {
+            let byId = (window?.snapshot() ?? []).reduce(into: [String: FeedNote]()) { map, note in
+                map[note.id] = note
+            }
+            bookmarkedNotes = bookmarked.reversed().compactMap { bookmarkedNoteBodies[$0] ?? byId[$0] }
+        }
         zapCounts = zapCountsBuffer
+        zapRequestIds = zapRequestIdsBuffer
+        tallies = talliesBuffer
         isLoading = false
         hasLoadedAnyEvent = true
         // Older page arrived when the window's oldest note moved back.

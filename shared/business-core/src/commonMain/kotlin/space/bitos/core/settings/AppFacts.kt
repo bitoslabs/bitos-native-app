@@ -13,7 +13,7 @@ package space.bitos.core.settings
  * payment targets are never shown.
  */
 object AppFacts {
-    const val SCHEMA_VERSION = 1
+    const val SCHEMA_VERSION = 2
 
     const val APP_NAME = "BitOS"
     const val TAGLINE =
@@ -45,11 +45,27 @@ object AppFacts {
     /** Project source repository; empty hides the Source row. */
     const val LINK_SOURCE = ""
 
-    /** Support-zap lightning address (LUD-16); empty hides the donate tiers. */
-    const val SUPPORT_LUD16 = ""
+    /**
+     * Official support npub (legacy `SupportController.supportNpub` parity):
+     * donate flow = fetch its kind-0 → lud16 → LNURL-pay invoice.
+     */
+    const val SUPPORT_NPUB =
+        "npub12l8q8wph9ygk0hv00pf8g558pvftr0hav2r8npfq66nm04sswnwsylp57e"
 
-    /** Legacy support tiers (SupportWidget parity). */
-    val SUPPORT_TIERS_SATS: List<Int> = listOf(21, 100, 1000)
+    /** Web-parity donate tiers; `recommended` marks the highlighted tile. */
+    data class SupportTier(val sats: Int, val recommended: Boolean = false)
+
+    val SUPPORT_TIERS: List<SupportTier> = listOf(
+        SupportTier(sats = 1_000),          // coffee
+        SupportTier(sats = 5_000, recommended = true),  // expert
+        SupportTier(sats = 21_000),         // production
+        SupportTier(sats = 100_000),        // premium
+    )
+
+    /** Web-parity contributor list (kind-0 rows in the help section). */
+    val CONTRIBUTOR_NPUBS: List<String> = listOf(
+        "npub1ujh9lp7vw38yatm0vsxy7xuwxl3j98qvnyatyyg9xszufpyxn2fskqagph",
+    )
 
     /** Contribute copy (legacy open-source card + ContributorsWidget spirit). */
     const val CONTRIBUTE_NOTE =

@@ -99,6 +99,10 @@ fun CreateNoteScreen(
     notePublisher: NotePublisher,
     homeViewModel: HomeViewModel,
     draftStore: space.bitos.app.data.publish.ComposerDraftStore? = null,
+    /** Seeded content (remix entry): ignores the saved draft entirely. */
+    initialText: String = "",
+    /** Seed tags (remix/attribution) merged into the published tag set. */
+    baseTags: List<List<String>> = emptyList(),
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -107,12 +111,15 @@ fun CreateNoteScreen(
     val feedState by homeViewModel.state.collectAsStateWithLifecycle()
     val publishState by notePublisher.state.collectAsStateWithLifecycle()
 
+    // Seeded (remix) sessions never touch the user's regular draft.
+    val seeded = initialText.isNotEmpty() || baseTags.isNotEmpty()
+
     // APP-008 draft persistence: restore once, autosave every change,
     // clear on publish/new post; discard-confirm on close.
-    val restored = remember { draftStore?.load() }
+    val restored = if (seeded) null else draftStore?.load()
     var showDiscardConfirm by remember { mutableStateOf(false) }
 
-    var field by remember { mutableStateOf(TextFieldValue(restored?.text ?: "")) }
+    var field by remember { mutableStateOf(TextFieldValue(if (seeded) initialText else restored?.text ?: "")) }
     val trackedMentions = remember { mutableStateListOf<Pair<String, String>>().also { list -> restored?.trackedMentions?.forEach { (n, u) -> list += n to u } } }
     val remoteImageUrls = remember { mutableStateListOf<String>().also { list -> restored?.remoteUrls?.let(list::addAll) } }
     val pickedKeys = remember { mutableStateListOf<String>() } // uri#mime
@@ -154,7 +161,7 @@ fun CreateNoteScreen(
         trackedMentions = trackedMentions.toList(),
         powTarget = powTarget,
     )
-    LaunchedEffect(draft) { draftStore?.save(draft) }
+    LaunchedEffect(draft) { if (!seeded) draftStore?.save(draft) }
 
     fun pickMention(suggestion: ComposerRules.MentionSuggestion) {
         val cursor = field.selection.end
@@ -193,7 +200,12 @@ fun CreateNoteScreen(
                 uploadStatus = "Publishing…"
                 val rewritten = ComposerRules.rewriteMentions(field.text, trackedMentions)
                 val content = ComposerRules.composeContent(rewritten, remoteImageUrls + uploadedUrls)
-                val tags = ComposerRules.deriveTags(content, contentWarningReason.takeIf { contentWarningOn })
+                // Seed tags (remix/attribution) ride first, deduped against
+                // the composer's derived tags by shared rule.
+                val tags = space.bitos.core.feed.RemixRules.mergeTags(
+                    baseTags,
+                    ComposerRules.deriveTags(content, contentWarningReason.takeIf { contentWarningOn }),
+                )
                 val outcome = powOutcome
                 if (outcome != null) {
                     notePublisher.publishPowNoteWith(
@@ -207,7 +219,7 @@ fun CreateNoteScreen(
                     )
                 }
                 published = true
-                draftStore?.clear()
+                if (!seeded) draftStore?.clear()
             } catch (failure: Exception) {
                 errorMessage = failure.message ?: "Publish failed."
             } finally {
@@ -293,11 +305,11 @@ fun CreateNoteScreen(
                         Text("Now", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
                     }
                 }
-                OutlinedTextField(
-                    value = field,
-                    onValueChange = { field = it },
-                    placeholder = { Text("What's happening?") },
-                    minLines = 4,
+                space.bitos.app.ui.components.BitosPlainTextField(
+                    value = field.text,
+                    onValueChange = { field = TextFieldValue(it, TextRange(it.length)) },
+                    placeholder = "What's happening?",
+                    singleLine = false,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 // Mention autocomplete (≤6, web `candidates` parity).
@@ -363,11 +375,11 @@ fun CreateNoteScreen(
                                     color = Color(0xFFF5A623),
                                 )
                             }
-                            OutlinedTextField(
+                            space.bitos.app.ui.components.BitosPlainTextField(
                                 value = contentWarningReason,
                                 onValueChange = { contentWarningReason = it.take(120) },
-                                placeholder = { Text("Why is this sensitive? (optional)") },
-                                textStyle = MaterialTheme.typography.bodySmall,
+                                placeholder = "Why is this sensitive? (optional)",
+                                singleLine = false,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -520,11 +532,10 @@ fun CreateNoteScreen(
             onDismissRequest = { showUrlDialog = false },
             title = { Text("Add image URL") },
             text = {
-                OutlinedTextField(
+                space.bitos.app.ui.components.BitosTextField(
                     value = url,
                     onValueChange = { url = it },
-                    placeholder = { Text("https://example.com/image.jpg") },
-                    singleLine = true,
+                    placeholder = "https://example.com/image.jpg",
                 )
             },
             confirmButton = {
@@ -712,23 +723,23 @@ private fun PollComposerSheet(
                 enabled = canPost,
             ) { Text("Post") }
         }
-        OutlinedTextField(
+        space.bitos.app.ui.components.BitosTextField(
             value = question,
             onValueChange = { question = it.take(space.bitos.core.model.PollContract.MAX_QUESTION) },
-            label = { Text("Question (${question.length}/280)") },
+            placeholder = "Question (${question.length}/280)",
             singleLine = false,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
         options.forEachIndexed { index, value ->
-            OutlinedTextField(
+            space.bitos.app.ui.components.BitosTextField(
                 value = value,
                 onValueChange = { next ->
                     options = options.toMutableList().also { list ->
                         list[index] = next.take(space.bitos.core.model.PollContract.MAX_OPTION)
                     }
                 },
-                label = { Text("Choice ${index + 1}") },
+                placeholder = "Choice ${index + 1}",
                 singleLine = true,
                 trailingIcon = if (options.size > space.bitos.core.model.PollContract.MIN_OPTIONS) {
                     {

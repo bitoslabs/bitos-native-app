@@ -63,14 +63,23 @@ private val quickActions = listOf(
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun CreateScreen(mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel) {
+fun CreateScreen(
+    mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel,
+    onClose: () -> Unit = {},
+) {
     var showCamera by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var showImport by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val mediaState by mediaPublishViewModel.state.collectAsStateWithLifecycle()
 
     if (showCamera) {
         CameraScreen(
-            onCaptured = { bytes, mime -> mediaPublishViewModel.mediaCaptured(bytes, mime); showCamera = false },
+            onCaptured = { bytes, mime ->
+                mediaPublishViewModel.mediaCaptured(bytes, mime)
+                showCamera = false
+                // Record → trim → caption/publish: the trimmed take flows
+                // straight into the import sheet's publish path.
+                showImport = true
+            },
             onCancel = { showCamera = false },
         )
         return
@@ -84,7 +93,12 @@ fun CreateScreen(mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishView
             .padding(BitOSSpacing.screen),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        Text("Create", style = MaterialTheme.typography.headlineMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Create", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            androidx.compose.material3.TextButton(onClick = onClose) {
+                Text("Done", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+            }
+        }
         Spacer(Modifier.height(BitOSSpacing.xs))
         quickActions.forEachIndexed { index, action ->
             Surface(

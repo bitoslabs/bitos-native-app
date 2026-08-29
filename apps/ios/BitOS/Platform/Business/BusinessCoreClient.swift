@@ -39,6 +39,11 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     var threadParentId: String? = nil
     /** APP-008 poll labels (index order; empty = not a poll). */
     var pollOptions: [String] = []
+    /** APP-007 remix source (id + author); nulls = original work. */
+    var remixOfEventId: String? = nil
+    var remixOfPubkey: String? = nil
+    /** APP-007 `license` tag (remix advisory gate); nil = permissive. */
+    var license: String? = nil
 }
 
 /// Display-oriented media attachment (mirror of the shared `MediaMetadata`).
@@ -48,6 +53,8 @@ struct MediaMetadata: Sendable, Equatable {
     let posterUrl: String?
     let width: Int?
     let height: Int?
+    /// NIP-92 imeta duration in whole seconds; nil = unknown.
+    var durationSeconds: Int64? = nil
 }
 
 /// Bounded kind-0 profile projection (mirror of `BusinessCoreBridge.Profile`).
@@ -190,13 +197,17 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
                     mimeType: note.videoMime,
                     posterUrl: note.posterUrl,
                     width: note.videoWidth?.intValue,
-                    height: note.videoHeight?.intValue
+                    height: note.videoHeight?.intValue,
+                    durationSeconds: note.durationSeconds?.int64Value
                 )
             },
             contentWarning: note.contentWarning,
             threadRootId: note.threadRootId,
             threadParentId: note.threadParentId,
-            pollOptions: note.pollOptions.map { $0 as String }
+            pollOptions: note.pollOptions.map { $0 as String },
+            remixOfEventId: note.remixOfEventId,
+            remixOfPubkey: note.remixOfPubkey,
+            license: note.license
         )
     }
 
@@ -280,7 +291,8 @@ private final class SharedFeedWindow: FeedWindowing {
                         mimeType: note.videoMime,
                         posterUrl: note.posterUrl,
                         width: note.videoWidth?.intValue,
-                        height: note.videoHeight?.intValue
+                        height: note.videoHeight?.intValue,
+                        durationSeconds: note.durationSeconds?.int64Value
                     )
                 },
                 contentWarning: note.contentWarning
@@ -312,10 +324,14 @@ private extension FeedNote {
             posterUrl: video?.posterUrl,
             videoWidth: video?.width.map { KotlinInt(value: Int32(truncatingIfNeeded: $0)) },
             videoHeight: video?.height.map { KotlinInt(value: Int32(truncatingIfNeeded: $0)) },
+            durationSeconds: video?.durationSeconds.map { KotlinLong(value: $0) },
             contentWarning: contentWarning,
             threadRootId: threadRootId,
             threadParentId: threadParentId,
-            pollOptions: pollOptions
+            pollOptions: pollOptions,
+            remixOfEventId: remixOfEventId,
+            remixOfPubkey: remixOfPubkey,
+            license: license
         )
     }
 }
@@ -356,7 +372,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         FeedNote(id: event.id, pubkey: event.pubkey, content: event.content,
                  createdAt: event.createdAt, kind: event.kind, replyTo: nil,
                  hashtags: [], mentions: [], mediaUrls: [], isProtocolPayload: false,
-                 video: MediaMetadata(url: "", mimeType: nil, posterUrl: nil, width: nil, height: nil))
+                 video: MediaMetadata(url: "", mimeType: nil, posterUrl: nil, width: nil, height: nil, durationSeconds: nil))
     }
     func feedRequest(subscriptionId: String) -> String { "" }
     func profileRequest(subscriptionId: String, authors: [String]) -> String { "" }

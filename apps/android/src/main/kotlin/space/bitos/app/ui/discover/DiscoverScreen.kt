@@ -73,21 +73,12 @@ fun DiscoverScreen(
     LaunchedEffect(input) { search.search(input) }
 
     Column(Modifier.fillMaxSize().background(BitOSColors.background)) {
-        OutlinedTextField(
+        space.bitos.app.ui.components.BitosTextField(
             value = input,
             onValueChange = { if (it.length <= 200) input = it },
-            placeholder = { Text("Search notes, #hashtags, npub…") },
+            placeholder = "Search notes, #hashtags, npub…",
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = BitOSColors.textTertiary) },
             singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = BitOSColors.primary,
-                unfocusedBorderColor = BitOSColors.border,
-                focusedTextColor = BitOSColors.textPrimary,
-                unfocusedTextColor = BitOSColors.textPrimary,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { search.search(input) }),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = BitOSSpacing.screen, vertical = BitOSSpacing.md),
@@ -161,11 +152,83 @@ private fun SearchResults(
     notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
 ) {
     var threadTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<FeedNote?>(null) }
+    // APP-010 results tabs: Posts · People · Hashtags (shared fan-in rule).
+    var tab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    val people = androidx.compose.runtime.remember(state.results, state.profiles) {
+        space.bitos.core.feed.SearchResults.people(state.results, state.profiles)
+    }
+    val hashtags = androidx.compose.runtime.remember(state.results) {
+        space.bitos.core.feed.SearchResults.hashtags(state.results)
+    }
     if (state.isSearching && state.results.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
         }
         return
+    }
+
+    Column {
+        // Tab row with live counts.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = BitOSSpacing.screen),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
+        ) {
+            listOf(
+                "Posts" to state.results.size,
+                "People" to people.size,
+                "Hashtags" to hashtags.size,
+            ).forEachIndexed { index, (label, count) ->
+                androidx.compose.material3.TextButton(onClick = { tab = index }) {
+                    Text(
+                        "$label $count",
+                        fontWeight = if (tab == index) androidx.compose.ui.text.font.FontWeight.W800 else androidx.compose.ui.text.font.FontWeight.W600,
+                        color = if (tab == index) BitOSColors.primary else BitOSColors.textSecondary,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+        when (tab) {
+            1 -> PeopleTab(people = people, homeViewModel = homeViewModel)
+            2 -> HashtagsTab(hits = hashtags, onPick = { tag -> /* router hop next */ })
+            else -> PostsTab(
+                state = state,
+                homeViewModel = homeViewModel,
+                identityViewModel = identityViewModel,
+                notePublisher = notePublisher,
+                threadTarget = threadTarget,
+                onThreadTarget = { threadTarget = it },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PostsTab(
+    state: SearchUiState,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel?,
+    identityViewModel: space.bitos.app.identity.IdentityViewModel?,
+    notePublisher: space.bitos.app.data.publish.NotePublisher?,
+    threadTarget: FeedNote?,
+    onThreadTarget: (FeedNote?) -> Unit,
+) {
+    val thread = threadTarget
+    if (thread != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
+        val homeState by homeViewModel.state.collectAsStateWithLifecycle()
+        val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { onThreadTarget(null) }) {
+            space.bitos.app.ui.feed.CommentContent(
+                note = thread,
+                feedState = homeState,
+                identityViewModel = identityViewModel,
+                publisherState = publisherState,
+                onLoadComments = { target -> homeViewModel.loadComments(target) },
+                onReply = { text, target -> homeViewModel.reply(text, target) },
+                onClose = { onThreadTarget(null) },
+            )
+        }
     }
 
     LazyColumn(
@@ -204,28 +267,105 @@ private fun SearchResults(
                 onOpen = {
                     if (homeViewModel != null && identityViewModel != null && notePublisher != null) {
                         homeViewModel.loadComments(note.id)
-                        threadTarget = note
+                        onThreadTarget(note)
                     }
                 },
             )
         }
     }
 
-    // APP-009: thread sheet reuses the feed's X-style CommentContent.
-    if (threadTarget != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
-        val target = threadTarget!!
-        val homeState by homeViewModel.state.collectAsStateWithLifecycle()
-        val publisherState by notePublisher.state.collectAsStateWithLifecycle()
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
-            space.bitos.app.ui.feed.CommentContent(
-                note = target,
-                feedState = homeState,
-                identityViewModel = identityViewModel,
-                publisherState = publisherState,
-                onLoadComments = { homeViewModel.loadComments(it) },
-                onReply = { text, note -> homeViewModel.reply(text, note) },
-                onClose = { threadTarget = null },
-            )
+}
+
+/** APP-010 People tab: follow/unfollow rows from the shared fan-in. */
+@Composable
+private fun PeopleTab(
+    people: List<space.bitos.core.feed.SearchResults.PeopleRow>,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel?,
+) {
+    val homeState = if (homeViewModel != null) {
+        homeViewModel.state.collectAsStateWithLifecycle().value
+    } else {
+        space.bitos.app.data.feed.FeedUiState()
+    }
+    LazyColumn(
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = BitOSSpacing.screen,
+            vertical = BitOSSpacing.sm,
+        ),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        items(people, key = { it.pubkey }) { person ->
+            Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.surface) {
+                Row(
+                    Modifier.padding(BitOSSpacing.md).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    space.bitos.app.ui.components.PubkeyAvatar(pubkey = person.pubkey, size = 44)
+                    Spacer(Modifier.width(BitOSSpacing.md))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            person.displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
+                            maxLines = 1,
+                        )
+                        if (person.nip05 != null) {
+                            Text(person.nip05!!, style = MaterialTheme.typography.labelSmall, color = BitOSColors.primary, maxLines = 1)
+                        }
+                        Text(
+                            "${person.noteCount} note" + if (person.noteCount == 1) "" else "s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BitOSColors.textTertiary,
+                        )
+                    }
+                    val following = person.pubkey in homeState.following
+                    androidx.compose.material3.TextButton(onClick = { homeViewModel?.toggleFollow(person.pubkey) }) {
+                        Text(
+                            if (following) "Following" else "Follow",
+                            color = if (following) BitOSColors.textTertiary else BitOSColors.primary,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** APP-010 Hashtags tab: ranked hits from the shared fan-in. */
+@Composable
+private fun HashtagsTab(hits: List<space.bitos.core.feed.SearchResults.HashtagHit>, onPick: (String) -> Unit) {
+    LazyColumn(
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = BitOSSpacing.screen,
+            vertical = BitOSSpacing.sm,
+        ),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        items(hits, key = { it.tag }) { hit ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = BitOSColors.surface,
+                modifier = Modifier.clickable(onClickLabel = "Search #${'$'}{hit.tag}") { onPick(hit.tag) },
+            ) {
+                Row(
+                    Modifier.padding(BitOSSpacing.md).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "#${'$'}{hit.tag}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
+                        color = BitOSColors.primary,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${'$'}{hit.count} note" + if (hit.count == 1) "" else "s",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textTertiary,
+                    )
+                }
+            }
         }
     }
 }

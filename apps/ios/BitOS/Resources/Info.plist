@@ -23,5 +23,25 @@
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
+    <!-- T16 deep links (spec §1.2): nostr: entities + lightning: invoices. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>space.bitos.app.nostr</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>nostr</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>space.bitos.app.lightning</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>lightning</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

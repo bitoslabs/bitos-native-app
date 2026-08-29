@@ -68,6 +68,12 @@ data class ZapUiState(
     val invoice: String? = null,
     val failure: String? = null,
     val busy: Boolean = false,
+    /** APP-014: our 9734 request id — the paid watcher matches it exactly. */
+    val requestId: String? = null,
+    /** APP-014 LUD-21: the provider verify URL (settle polling). */
+    val verifyUrl: String? = null,
+    /** True when the verify poll saw the invoice settled. */
+    val verifySettled: Boolean = false,
 )
 
 enum class ZapPhase { PICK_AMOUNT, FETCHING, INVOICE, FAILED }
@@ -90,6 +96,8 @@ fun ZapContent(
     profileName: String?,
     hasIdentity: Boolean,
     zapCount: Int,
+    paidRequestIds: Set<String> = emptySet(),
+    onPaid: (Long, String) -> Unit = { _, _ -> },
     onAmountSelected: (Long) -> Unit,
     onZap: (Long, String, Boolean) -> Unit,
     onClose: () -> Unit,
@@ -118,17 +126,24 @@ fun ZapContent(
             }
         }
     }
-    // Paid: a verified 9735 receipt for this note landed after the invoice
-    // (count-based first signal; request-id matching rides the ledger work).
-    LaunchedEffect(zapCount, state.invoice) {
-        if (!paid && state.invoice != null && zapCountAtInvoice.value >= 0 &&
-            zapCount > zapCountAtInvoice.value
+    // Paid: EXACT request-id match when we signed a 9734 (the receipt's
+    // embedded request id equals ours); anonymous/unsigned zaps fall back
+    // to the count signal.
+    LaunchedEffect(paidRequestIds, zapCount, state.verifySettled, state.invoice) {
+        if (paid || state.invoice == null) return@LaunchedEffect
+        // First signal wins (legacy parity): exact request-id receipt,
+        // LUD-21 verify settle, or the count fallback.
+        val requestId = state.requestId
+        if (state.verifySettled ||
+            (requestId != null && requestId in paidRequestIds) ||
+            (zapCountAtInvoice.value >= 0 && zapCount > zapCountAtInvoice.value)
         ) {
             paid = true
         }
     }
     LaunchedEffect(paid) {
         if (paid) {
+            onPaid(amount, comment.trim())
             delay(AUTO_CLOSE_MS)
             onClose()
         }
@@ -305,21 +320,19 @@ private fun AmountStep(
                 )
             }
         }
-        OutlinedTextField(
+        space.bitos.app.ui.components.BitosTextField(
             value = custom,
             onValueChange = onCustom,
-            placeholder = { Text("Custom amount") },
-            suffix = { Text(ZapFormat.emoji(amount), fontSize = 16.sp) },
+            placeholder = "Custom amount",
+            trailingIcon = { Text(ZapFormat.emoji(amount), fontSize = 16.sp) },
             singleLine = true,
-            shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
+        space.bitos.app.ui.components.BitosTextField(
             value = comment,
             onValueChange = onComment,
-            placeholder = { Text("Add a comment… (${comment.length}/200)") },
+            placeholder = "Add a comment… (${comment.length}/200)",
             singleLine = true,
-            shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth(),
         )
         if (hasIdentity) {

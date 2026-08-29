@@ -97,6 +97,14 @@ object EventRefs {
         is EventRef.ByCoordinate -> """{"kinds":[${ref.kind}],"authors":["${ref.pubkey}"],"#d":["${ref.d}"],"limit":1}"""
     }
 
+    /** nprofile TLV type-0 pubkey (deep-link author routing). */
+    fun tlvPubkey(encoded: String): String? {
+        if (!encoded.startsWith("nprofile1")) return null
+        val bytes = Nip27.decodeBech32("nprofile", encoded) ?: return null
+        return tlv(bytes).firstOrNull { it.type == 0 }?.value
+            ?.takeIf { it.size == 32 }?.let(::hex)
+    }
+
     // ── minimal TLV (NIP-19): [type][length][value]… ───────────────────
 
     private data class TlvEntry(val type: Int, val value: ByteArray)

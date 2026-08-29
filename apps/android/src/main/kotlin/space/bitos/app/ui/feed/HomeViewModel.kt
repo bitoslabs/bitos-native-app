@@ -1,6 +1,8 @@
 package space.bitos.app.ui.feed
 
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,13 +24,20 @@ class HomeViewModel(
     private val identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
     private val notifications: space.bitos.app.data.feed.NotificationRepository? = null,
     private val muteStore: space.bitos.app.data.feed.MuteStore? = null,
+    private val sentZaps: space.bitos.app.data.zap.SentZapsStore? = null,
 ) : ViewModel() {
 
     private val mutableLocalActions = MutableStateFlow(LocalActions())
     private val mutableZap = MutableStateFlow(space.bitos.app.ui.feed.ZapUiState())
     val zapState: StateFlow<space.bitos.app.ui.feed.ZapUiState> = mutableZap.asStateFlow()
     private val lnurlClient = space.bitos.app.data.zap.LnurlPayClient()
+    private var verifyJob: kotlinx.coroutines.Job? = null
     val localActions: StateFlow<LocalActions> = mutableLocalActions.asStateFlow()
+
+    // APP-007 Chain sheet: one walk at a time, keyed to the tapped note.
+    private val mutableRemixChain = MutableStateFlow(RemixChainUiState())
+    val remixChainState: StateFlow<RemixChainUiState> = mutableRemixChain.asStateFlow()
+    private var chainJob: kotlinx.coroutines.Job? = null
 
     val state: StateFlow<FeedUiState> = repository.state
 
@@ -50,6 +59,24 @@ class HomeViewModel(
     fun selectTimeline(timeline: FeedTimeline) {
         repository.selectTimeline(timeline)
     }
+
+    /** APP-007 Chain: walk the remix ancestry of [note] (shared rule). */
+    fun loadRemixChain(note: space.bitos.core.feed.FeedNote) {
+        val sourceId = note.remixOfEventId ?: return
+        val source = space.bitos.core.feed.RemixRules.Source(sourceId, note.remixOfPubkey, emptyList())
+        chainJob?.cancel()
+        mutableRemixChain.value = RemixChainUiState(isLoading = true, rootId = note.id)
+        chainJob = viewModelScope.launch {
+            val outcome = repository.loadRemixChain(note.id, source)
+            mutableRemixChain.value = RemixChainUiState(isLoading = false, rootId = note.id, outcome = outcome)
+        }
+    }
+
+    /** Ancestor lookup for sheet row tap-through (opens its thread). */
+    fun remixAncestorNote(id: String): space.bitos.core.feed.FeedNote? = repository.remixAncestorNote(id)
+
+    /** APP-015: re-fetch saved notes missing from the local map. */
+    fun loadBookmarked() = repository.loadBookmarked()
 
     // APP-004: content-filter window + new-notes hold/reveal.
     fun selectFilter(filter: space.bitos.core.feed.FeedFilter) = repository.selectFilter(filter)
@@ -128,6 +155,23 @@ class HomeViewModel(
         mutableZap.value = mutableZap.value.copy(amountSats = sats)
     }
 
+    /** APP-014: record a paid zap into the local sent ledger. */
+    fun onZapPaid(note: space.bitos.core.feed.FeedNote, amountSats: Long, memo: String = "") {
+        val store = sentZaps ?: return
+        store.record(
+            space.bitos.core.model.SentZapRecord(
+                id = mutableZap.value.requestId
+                    ?: note.id + ":" + amountSats + ":" + (System.currentTimeMillis() / 1000),
+                amountSats = amountSats,
+                recipientPubkey = note.pubkey,
+                createdAt = System.currentTimeMillis() / 1000,
+                targetNoteId = note.id,
+                memo = memo.takeIf { it.isNotBlank() },
+            ),
+        )
+        currentZapRequestId = null
+    }
+
     fun dismissZap() {
         mutableZap.value = space.bitos.app.ui.feed.ZapUiState()
     }
@@ -148,12 +192,33 @@ class HomeViewModel(
             try {
                 val payRequest = lnurlClient.fetchPayRequest(lud16)
                 val nostrJson = if (anonymous) null else signedZapRequest(payRequest, amountSats, lud16, note, comment)
+                // APP-014: remember the 9734 id — the paid watcher matches
+                // the receipt whose embedded request id equals it exactly.
+                mutableZap.value = mutableZap.value.copy(requestId = currentZapRequestId)
                 val invoice = lnurlClient.fetchInvoice(payRequest, amountSats * 1000, nostrJson, lud16)
                 mutableZap.value = mutableZap.value.copy(
                     phase = space.bitos.app.ui.feed.ZapPhase.INVOICE,
-                    invoice = invoice,
+                    invoice = invoice.paymentRequest,
+                    verifyUrl = invoice.verifyUrl,
                     busy = false,
                 )
+                // LUD-21 settle polling (legacy `pollVerify` parity): the
+                // payment signal for QR/external-wallet flows — races the
+                // 9735 receipt watch; first signal wins.
+                val verifyUrl = invoice.verifyUrl
+                if (verifyUrl != null) {
+                    val expiry = space.bitos.core.model.Bolt11.expirySeconds(invoice.paymentRequest) ?: 0L
+                    verifyJob?.cancel()
+                    verifyJob = viewModelScope.launch {
+                        while (isActive && System.currentTimeMillis() / 1000 < expiry) {
+                            delay(3_000)
+                            if (lnurlClient.fetchVerifySettled(verifyUrl)) {
+                                mutableZap.value = mutableZap.value.copy(verifySettled = true)
+                                break
+                            }
+                        }
+                    }
+                }
             } catch (failure: Exception) {
                 mutableZap.value = mutableZap.value.copy(
                     phase = space.bitos.app.ui.feed.ZapPhase.FAILED,
@@ -163,6 +228,8 @@ class HomeViewModel(
             }
         }
     }
+
+    private var currentZapRequestId: String? = null
 
     private suspend fun signedZapRequest(
         payRequest: space.bitos.core.model.LnurlPay.PayRequest,
@@ -182,6 +249,7 @@ class HomeViewModel(
             authorPubkey = signer.publicKeyHex(),
             targetEventId = note.id,
         ) ?: return null
+        currentZapRequestId = unsigned.idHex
         val signature = signer.sign(unsigned.messageBytes()) ?: return null
         return if (payRequest.allowsNostr) composer.publishMessage(unsigned, signature) else null
     }
@@ -257,4 +325,11 @@ class HomeViewModel(
 data class LocalActions(
     val liked: Set<String> = emptySet(),
     val bookmarked: Set<String> = emptySet(),
+)
+
+/** APP-007 Chain sheet state: one walk, keyed to the tapped note id. */
+data class RemixChainUiState(
+    val isLoading: Boolean = false,
+    val rootId: String? = null,
+    val outcome: space.bitos.core.feed.RemixChain.Outcome? = null,
 )

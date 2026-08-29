@@ -175,9 +175,8 @@ struct InboxView: View {
             }
             .accessibilityLabel(searchOpen ? "Close search" : "Search notifications")
             if searchOpen {
-                TextField("Search names and notes…", text: $query)
+                BitosField("Search names and notes…", text: $query)
                     .font(.system(size: 13))
-                    .textFieldStyle(.plain)
                     .padding(.vertical, 6)
                     .padding(.horizontal, BitOSTheme.Spacing.sm)
                     .background(

@@ -17,13 +17,17 @@ struct MoreView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showSettingsSection: String?
+    @State private var showStatic: String?
     @State private var showSwitcher = false
+    @State private var switchTarget: RegisteredAccountRow?
     @State private var showQr = false
     @State private var showAddAccount = false
     @State private var importText = ""
     @State private var importError: String?
     @State private var connectionStates: [String: String] = [:]
     @State private var health = RelayHealth(connected: 0, total: 0)
+    /** APP-015: the Saved (bookmarks) page. */
+    @State private var showSaved = false
 
     var body: some View {
         NavigationStack {
@@ -115,11 +119,22 @@ struct MoreView: View {
                         showSettingsSection = "about"
                     }
                 }
+                Section("Library") {
+                    tile("Saved", caption: "Your bookmarked notes", symbol: AppIcons.bookmark) {
+                        showSaved = true
+                    }
+                }
                 Section("Coming soon") {
-                    Label("Saved — bookmarks page (APP-015)", image: "SolarBookmarkLinear")
-                        .foregroundStyle(BitOSTheme.textSecondary)
                     Label("Zap ledger — wallet page (APP-014)", image: "SolarBoltLinear")
                         .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                Section("About") {
+                    Button("About BitOS") { showStatic = "about" }
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Button("Privacy Policy") { showStatic = "privacy" }
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Button("Terms of Service") { showStatic = "terms" }
+                        .foregroundStyle(BitOSTheme.textPrimary)
                 }
             }
             .navigationTitle("More")
@@ -134,6 +149,29 @@ struct MoreView: View {
                 set: { if !$0 { showSettingsSection = nil } }
             )) {
                 SettingsSectionView(sectionKey: showSettingsSection ?? "about")
+            }
+            // APP-020: static pages cover.
+            .fullScreenCover(item: Binding(
+                get: { showStatic.map { StaticPageTarget(page: $0) } },
+                set: { showStatic = $0?.page }
+            )) { target in
+                StaticPagesScreen(initialPage: target.page) { showStatic = nil }
+            }
+            // APP-015: the Saved page is a full-screen cover over the hub.
+            .fullScreenCover(isPresented: $showSaved) {
+                BookmarksView()
+                    .environment(environment)
+            }
+            .fullScreenCover(item: $switchTarget) { target in
+                AccountSwitchOverlayView(
+                    fromPubkey: identity.activeRegistryPubkey ?? identity.account?.pubkeyHex,
+                    toPubkey: target.pubkeyHex,
+                    toName: target.displayName ?? (String(target.npub.prefix(10)) + "\u{2026}"),
+                    switchAction: { identity.switchTo(pubkeyHex: target.pubkeyHex) },
+                    onFinished: {
+                        switchTarget = nil
+                    }
+                )
             }
             .sheet(isPresented: $showQr) {
                 VStack(spacing: BitOSTheme.Spacing.base) {
@@ -159,6 +197,7 @@ struct MoreView: View {
                 AccountSwitcherSheet(
                     identity: identity,
                     settings: settings,
+                    onSwitchTarget: { showSwitcher = false; switchTarget = $0 },
                     onAddAccount: { showSwitcher = false; showAddAccount = true },
                     onManage: { showSwitcher = false; onOpenProfile() }
                 )
@@ -223,60 +262,67 @@ struct MoreView: View {
 private struct AccountSwitcherSheet: View {
     let identity: IdentityStore
     let settings: SettingsStore
+    let onSwitchTarget: (RegisteredAccountRow) -> Void
+    @Environment(AppEnvironment.self) private var environment
     let onAddAccount: () -> Void
     let onManage: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            Capsule()
-                .fill(BitOSTheme.surfaceOverlay)
-                .frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity)
-            HStack {
-                Text("Switch account")
-                    .font(.system(size: 20, weight: .bold))
-                Spacer()
-                Text("\(identity.registeredAccounts.count) saved on this device")
-                    .font(.system(size: 11))
-                    .foregroundStyle(BitOSTheme.textTertiary)
-            }
+            dragHandle
+            header
             if identity.registeredAccounts.isEmpty {
                 Text("No saved accounts yet.")
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.textSecondary)
             } else {
-                ForEach(identity.registeredAccounts) { acct in
-                    let isActive = acct.pubkeyHex == (identity.activeRegistryPubkey ?? identity.account?.pubkeyHex)
-                    Button {
-                        guard !isActive, !identity.busy else { return }
-                        identity.switchTo(pubkeyHex: acct.pubkeyHex)
-                    } label: {
-                        HStack(spacing: 12) {
-                            PubkeyAvatarView(pubkey: acct.pubkeyHex, size: 40)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(acct.displayName ?? "Account")
-                                    .font(.system(size: 15, weight: isActive ? .bold : .medium))
-                                    .foregroundStyle(BitOSTheme.textPrimary)
-                                Text(settings.shortNpub(acct.npub))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(BitOSTheme.textSecondary)
-                            }
-                            Spacer()
-                            if isActive {
-                                Text("Active")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(BitOSTheme.accent)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
+                accountList
             }
             Divider()
+            footer
+            Spacer(minLength: 8)
+        }
+        .padding(BitOSTheme.Spacing.base)
+        .background(BitOSTheme.background)
+    }
+
+    private var dragHandle: some View {
+        Capsule()
+            .fill(BitOSTheme.surfaceOverlay)
+            .frame(width: 36, height: 4)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Switch account")
+                .font(.system(size: 20, weight: .bold))
+            Spacer()
+            Text("\(identity.registeredAccounts.count) saved on this device")
+                .font(.system(size: 11))
+                .foregroundStyle(BitOSTheme.textTertiary)
+        }
+    }
+
+    private var accountList: some View {
+        ForEach(Array(identity.registeredAccounts), id: \.pubkeyHex) { acct in
+            SwitcherAccountRow(
+                acct: acct,
+                isActive: acct.pubkeyHex == (identity.activeRegistryPubkey ?? identity.account?.pubkeyHex),
+                busy: identity.busy,
+                profile: environment.feedStore.profiles[acct.pubkeyHex],
+                shortNpub: settings.shortNpub(acct.npub),
+                onTap: { onSwitchTarget(acct) }
+            )
+        }
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
             Button {
                 onAddAccount()
             } label: {
-                Text("+ Add account")
+                Label("+ Add account", image: "SolarUserLinear")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(BitOSTheme.accent)
             }
@@ -284,15 +330,12 @@ private struct AccountSwitcherSheet: View {
             Button {
                 onManage()
             } label: {
-                Text("Manage accounts (You tab)")
+                Label("Manage accounts (You tab)", image: "SolarSettingsLinear")
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.textSecondary)
             }
             .buttonStyle(.plain)
-            Spacer(minLength: 8)
         }
-        .padding(BitOSTheme.Spacing.base)
-        .background(BitOSTheme.background)
     }
 }
 
@@ -380,4 +423,108 @@ private struct AddAccountSheet: View {
             .presentationDetents([.medium])
         }
     }
+}
+
+
+/// Legacy `_AccountRow` parity: rounded card, kind-0 badges (NIP-05 ✓,
+/// ⚡ lud16 chip), spinner-while-switching / check-if-active / chevron.
+private struct SwitcherAccountRow: View {
+    let acct: RegisteredAccountRow
+    let isActive: Bool
+    let busy: Bool
+    let profile: ProfileMetadata?
+    let shortNpub: String
+    let onTap: () -> Void
+
+    var body: some View {
+        let name = acct.displayName
+            ?? profile.map(\.bestDisplayName).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "Account"
+        let nip05 = profile?.nip05.flatMap { $0.isEmpty ? nil : $0 }
+        let hasLightning = !(profile?.lud16 ?? "").isEmpty
+        Button(action: onTap) {
+            rowContent(name: name, nip05: nip05, hasLightning: hasLightning)
+        }
+        .buttonStyle(.plain)
+        .disabled(isActive || busy)
+    }
+
+    private func rowContent(name: String, nip05: String?, hasLightning: Bool) -> some View {
+        HStack(spacing: 12) {
+            avatar(hasLightning: hasLightning)
+            identityBlock(name: name, nip05: nip05)
+            Spacer()
+            trailing
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(isActive ? BitOSTheme.accent.opacity(0.06) : BitOSTheme.surface.opacity(0.4))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(
+                    isActive ? BitOSTheme.accent.opacity(0.25) : BitOSTheme.border.opacity(0.35),
+                    lineWidth: 1
+                )
+        )
+    }
+
+    private func avatar(hasLightning: Bool) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            PubkeyAvatarView(pubkey: acct.pubkeyHex, size: 40)
+            if hasLightning {
+                Text("\u{26A1}")
+                    .font(.system(size: 7))
+                    .frame(width: 14, height: 14)
+                    .background(Circle().fill(BitOSTheme.zap))
+                    .overlay(Circle().strokeBorder(BitOSTheme.background, lineWidth: 1))
+            }
+        }
+    }
+
+    private func identityBlock(name: String, nip05: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(name)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .lineLimit(1)
+                if nip05 != nil {
+                    Image(systemName: AppIcons.check)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(BitOSTheme.success)
+                }
+            }
+            Text(shortNpub)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if let nip05 {
+                Text(nip05)
+                    .font(.system(size: 10))
+                    .foregroundStyle(BitOSTheme.success)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if busy && !isActive {
+            ProgressView().controlSize(.small)
+        } else if isActive {
+            Image(systemName: AppIcons.check)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(BitOSTheme.accent)
+        } else {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(BitOSTheme.textTertiary)
+        }
+    }
+}
+
+private struct StaticPageTarget: Identifiable {
+    let page: String
+    var id: String { page }
 }

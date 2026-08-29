@@ -50,25 +50,25 @@ Wave legend per spec §8. W0 foundation is prior work.
 | ID | Surface (spec §) | Wave | iOS | Android | SHARED | Notes / next increment |
 |:--|:--|:--|:--|:--|:--|:--|
 | APP-001 | Boot, Auth & Identity §3.1 | W1 | ◐ | ◐ | ✅ | create/import/backup gate exist; app icon + native launch live; branded boot splash (animated gradient border, no spin) disabled at app entry — native system splash → shell directly for fast access (user decision 2026-08-28), component retained (APP-022); missing: switcher overlay polish, masked key echo, guest entry |
-| APP-002 | Onboarding carousel §3.2 | W1 | ☐ | ☐ | n/a | 4 pages + dots + skip |
+| APP-002 | Onboarding carousel §3.2 | W1 | ✅ | ✅ | ✅ | 4-page carousel live both platforms over shared `OnboardingContent` (legacy copy verbatim, icon tokens); animated dots + step counter + Next/Get Started/Skip; `hasOnboarded` first-launch gate |
 | APP-003 | App shell §3.3 | W1 | ◐ | ◐ | n/a | tabs+retention done; re-tap-to-top/refresh on Home+Bitz shipped (X pattern: scroll-to-top, at-top → refresh); badges, lazy mount audit remain |
 | APP-004 | Home feed surface §3.4 | W1 | ✅ | ✅ | ✅ | V1 complete: wordmark/apps-grid header, underline tabs + live counts, X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain |
 | APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
 | APP-006 | Stories §3.6 | W3 | ☐ | ☐ | ☐ | NIP-38/40 models + composer |
-| APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ◐ | player+rail live; explore grid, tabs, search overlay, comments sheet remain |
+| APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), rendition fallbacks, W2/W3 chips |
 | APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation) + POLL sheet shipped (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision); PoW gated while picks pending; GIF picker + draft persistence remain |
 | APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ◐ | comments exist; X-style threading, naddr resolution, live deltas, reply-bar options remain |
 | APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
 | APP-011 | Messages/DMs §3.11 | W2 | ☐ | ☐ | ☐ | NIP-17/44 chat first; calls/groups W3 |
 | APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
 | APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page upgraded (hero cover+avatar, name/npub/NIP-05/about, stats, Edit+Settings, Notes/Replies/Bitz/Reposts window tabs) + view+edit live; hero glass, stats sheets, tabs, completion card remain |
-| APP-014 | Zaps wallet §3.14 | W1 | ◐ | ◐ | ◐ | LNURL dialog live; ledger page, LUD-21 poll, tier presets remain; NWC W4 |
-| APP-015 | Bookmarks §3.15 | W1 | ◐ | ◐ | ✅ | optimistic toggle+publish live; list page remains |
+| APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; LUD-21 verify poll remains; NWC W4 |
+| APP-015 | Bookmarks §3.15 | W1 | ✅ | ✅ | ✅ | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test |
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
 | APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero + multi-account switch row + Following/Relays stat tiles + tile groups (live surfaces only) + honest coming-soon tiles + meta rows; remains: QR dialog, wallet tile (APP-014), Communities/Meme tiles (W3/W4), bookmark page link (APP-015) |
 | APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), theme/font/accent application (APP-023), i18n strings (APP-024) |
 | APP-019 | Studio §3.19 | W4 | ◐ | ◐ | ◐ | camera/trim/publish live (CAP/PUB); editor W4 |
-| APP-020 | Static pages §3.20 | W1 | ☐ | ☐ | n/a | about/privacy/terms |
+| APP-020 | Static pages §3.20 | W1 | ✅ | ✅ | ✅ | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens |
 | APP-021 | Trending sounds §3.21 | W3 | ☐ | ☐ | ☐ | needs shared-sounds (kind 30078) |
 | APP-022 | Component library §4 | W1 | ◐ | ◐ | n/a | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain |
 | APP-023 | Tokens & theming §2 | W1 | ◐ | ◐ | n/a | dark tokens live; launch chain (system splash + boot splash) forced dark-only in BOTH system modes to match the dark-only shell — light-mode light-splash→black-shell cut fixed; light mode, accents, font scale remain (restore #F4F7FB splash + light launch art when light tokens land) |
@@ -92,9 +92,9 @@ Wave legend per spec §8. W0 foundation is prior work.
 
 ### APP-002 — Onboarding (spec §3.2)
 
-- [ ] 4-page carousel (welcome / keys / relays / zap) + visuals
-- [ ] Step counter, dots, Next/Back/Skip
-- [ ] `hasOnboarded` persistence; skip → auth
+- [x] 4-page carousel (welcome / keys / decentralized / zap) — shared `OnboardingContent` contract (legacy copy verbatim, 3 common tests); icon medallions (icon-token through AppIcons), page-rise animation (iOS)
+- [x] Step counter ("n of 4"), animated dot indicator (24↔8, spring), Next → Get Started, Skip → shell (both platforms)
+- [x] `hasOnboarded` persistence (SharedPreferences `bitos_onboarding` / UserDefaults `bitos_has_onboarded`) — first-launch gate before the shell; skip → shell (auth is the You tab in this shell)
 
 ### APP-003 — App shell (spec §3.3)
 
@@ -145,16 +145,16 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-007 — Bitz reels (spec §3.7)
 
 - [x] Snap player + author row + action rail + autoplay gating + player pools (W0)
-- [ ] Glass top bar: wordmark, pill tabs (Explore/Following/For you, persisted, re-tap=top), search + refresh
-- [ ] Explore grid: 3-col 9:16, 24+18 paging, tile footers (counts/duration), skeleton tiles, sensitive covers
-- [ ] Video controls: scrubber + seek hint, ±10 s pills, mute memory, hairline progress
-- [ ] Double-tap like; swipe next/prev; tap pause
-- [ ] Search overlay: local instant + NIP-50 debounced 400 ms (stale cancel), dedup grid, idle/searching/none states
-- [ ] Comments sheet: two-level threading, like/zap/reply rows, composer (GIF/URL/gallery/PoW + previews)
-- [ ] ⋯ menu: mute/copy/raw JSON/report/delete-own
-- [ ] Mode-aware empty states; record entry → camera
+- [x] Glass top bar: wordmark, pill tabs (Explore/Following/For you, persisted, re-tap=top), search + refresh — new dedicated surface per platform (Android `ui/bitz/BitzScreen.kt`, iOS `Features/Bitz/BitzView.swift`), mode persisted through settings schema v4 `bitos_bitz_mode` (shared `BitzModeSetting`); pills drive the same shared feed window (Following/For-you select the repo timeline)
+- [x] Explore grid: 3-col 9:16, 24+18 paging (shared `BitzExplore` bounds), tile footers (author + zap count + imeta `duration` badge via shared `formatDuration`), 12 skeleton tiles, sensitive covers w/ per-session reveal; tap → player jumps to that reel
+- [x] Video controls: scrubber + seek-hint overlay, ±10 s pills, mute memory (persisted `bitos_video_muted`, DEFAULT muted — legacy web polite autoplay parity), hairline progress (slider track); pools gained seek/position/mute APIs (list-based reconciliation fixes the W0 filtered-neighbor bug)
+- [x] Double-tap like (heart burst) ; tap pause; vertical swipe = pager
+- [x] Search overlay: full-screen glass, instant local matches + NIP-50 through the repo's 400 ms debounce, id-deduped local-first merge (shared `BitzSearch.results` — blank query stays idle even on stray relay echoes), idle/searching/none states, tap splices into the player (≤8) + jumps
+- [ ] Comments sheet: two-level threading, like/zap/reply rows, composer (GIF/URL/gallery/PoW + previews) — existing CommentSheet still opens (Android renders the shared tree; iOS flat → audit T10)
+- [x] ⋯ menu: mute/copy note ID/report (raw JSON + delete-own remain W2); Share is REAL now — deterministic `NoteShare.text` through the system sheet (fixed the audit 9.4-3 no-op)
+- [x] Mode-aware empty states (skeleton grid, relay-empty retry, Following-needs-identity); record entry → camera remains (audit T4 re-wires the capture pipeline)
 - [ ] W2/W3: PoW + remix + sound + split chips; author mode; Trending/Most-zapped tabs; dwell ranking feed
-- [ ] TEST: rendition fallback order; search cancel; comment tree guard
+- [ ] TEST: rendition fallback order (imeta `fallback` parsing not yet on the read path); search cancel; comment tree guard — shared BitzTest covers merge/bounds/duration/share (8) + SettingsTest v4 keys; iOS SettingsStoreTests gained the adapter + bridge-rule tests
 
 ### APP-008 — Composer (spec §3.8)
 
@@ -176,8 +176,8 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] Root fetch + comments list + reply publish (W0)
 - [x] Root resolution: shared `EventRefs` parses note1/nevent1/naddr1 (± `nostr:`, TLV author + ≤4 relay hints, lenient-but-strict → null on invalid) + `requestFilter` (by id / newest NIP-33 `#d` version); Discover search treats a ref query as a root fetch and opens the thread sheet on arrival (both platforms)
 - [x] X-style threading: shared `ThreadAssembly` — NIP-10 root/parent anchors (`rootAndParent`: markers win, legacy first/last positional), chronological children, depth cap 8 flattening, cycle guard (visited-set; unreachable cycles surface as orphans), missing-parent replies surface at top level flagged, window ≤200 — `FeedNote` carries `threadRootId`/`threadParentId` from the projection; Android `threads` state + indented rows w/ conversation rail + orphan note; iOS `ThreadDisplayItem` via bridge `threadItemsJson` (stable JSON shape) + same rendering
-- [ ] Root action row full (reply count, like+z, zap+sats, repost, share, ⋯ raw/delete-own)
-- [ ] Live deltas on root AND replies (9735 parsing)
+- [x] Root action row full (reply count, like+count, repost+count, zap "N · 21K" sats, ⋯ raw-note dialog) — live via shared `NoteTally`; share/delete-own kind-5 remain
+- [x] Live deltas: shared `NoteTally`/`NoteTallies` (kind-7/6/9735 merge + summed zap msat, ≤32 bounded window; 3 common tests) — thread REQ widened to kinds [1,7,6,9735]; root card AND reply rows show live counts on both platforms — replies render inline reactions/zaps+sats deltas
 - [ ] Reply bar: media chips, GIF/URL/gallery/PoW options, participant p-tags
 - [ ] States: loading/invalid/not-found + contextual back (ref search covers invalid: no REQ issued; not-found copy pending)
 - [x] TEST: `ThreadAssemblyTest` (10: markers, positional forms, chronological order, cycle×2 fixtures, orphan surfacing, depth cap, window bound) + `EventRefTest` (5: note/nevent/naddr round-trips built with the internal TLV encoder, invalid → null, request filters); shared lanes 230/230
@@ -185,7 +185,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-010 — Discover (spec §3.10)
 
 - [x] Search (NIP-50) + topic chips + npub resolve (W0)
-- [ ] Results tabs: Posts / People / Hashtags (+follow toggles)
+- [x] Results tabs: Posts / People / Hashtags — shared `SearchResults` fan-in (3 common tests); Android tab row + People rows (Follow/Following via feed VM) + Hashtags rows (tap → re-search); iOS mirror via bridge JSON
 - [ ] Trending mosaic grid + skeleton 18 + load-more + error/empty
 - [ ] User rows: NIP-05 badge, follow/unfollow
 - [ ] Fullscreen image viewer (zoom, author bar, follow, open-note bar)
@@ -200,7 +200,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [ ] Chat: header (avatar/name→profile, NIP-05, call buttons placeholder), bubbles, day dividers, delivery states
 - [ ] Message body: media detection (image/video/file), inline player, lightbox, links, encrypted indicator
 - [ ] Input bar: autogrow, attach image/file, emoji, send, previews + progress
-- [ ] SHARED: NIP-17 gift-wrap + NIP-44 v2 (audited impl) + NIP-04 fallback; per-convo protocol negotiation
+- [x] SHARED: NIP-44 v2 (`Nip44` — ECDH conv key + HKDF + pure-Kotlin ChaCha20 + power-of-two padding + HMAC-SHA256, 8 tests) + NIP-17 gift-wrap (`SecureDmComposer` — rumor→seal→wrap with throwaway key + randomized timestamps, 5 tests) — 323/323 shared lanes green; NIP-04 fallback + protocol negotiation follow
 - [ ] TEST: encrypt/decrypt vectors; delivery state machine
 - [ ] W3 calls (post SOC-010 review): ringer, panel, quality HUD, outcomes
 - [ ] W3 groups NIP-29: list/join/messages/members/admin/leave
@@ -250,7 +250,16 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-015 — Bookmarks (spec §3.15)
 
 - [x] NIP-51 30003 compose/publish/reconcile + optimistic toggle (W0)
-- [ ] Page: saved list (compact cards, newest-saved first), unbookmark, empty, relay re-fetch on open
+- [x] Page (2026-08-29, both platforms): saved list as compact rows
+      (avatar + name/NIP-05 + time + 2-line excerpt), newest-saved first
+      (reversed save order, window notes + by-id refetch merge), unbookmark
+      action per row (existing optimistic toggle + 30003 publish), empty
+      state, "Loading N saved notes…" pending row, relay re-fetch on open
+      (≤100 ids REQ — Android hand-built filter / iOS shared
+      `eventsByIdsRequest`); entry = More hub Library "Saved" tile (was the
+      disabled coming-soon row); row tap → thread sheet. Follow-up: repo
+      contract test for the by-id fill path (reuses the verified absorb
+      path; BookmarkList rules already covered in common tests).
 
 ### APP-016 — Communities (spec §3.16) — W3
 
@@ -349,6 +358,194 @@ push toggles), relays live status dots, zap sats display.**
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-08-29 — T16 ✅ INBOUND DEEP LINKS (spec §1.2; audit §9.6 T17-class
+  item). SHARED: new `nostr/DeepLink.kt` — `DeepLinks.classify(uri)` →
+  Author (npub + nprofile via a new `EventRefs.tlvPubkey` type-0 reader) /
+  Note (note1/nevent1/naddr1 ± `nostr:`, validated by EventRefs before
+  routing — hostile ids never reach a relay REQ) / Lightning (invoice URI,
+  bounded ≤2 KB); bridge `deepLinkJson` seam; DeepLinkTest (5) green on
+  both lanes. ANDROID: manifest gained `nostr` + `lightning`
+  BROWSABLE/DEFAULT VIEW intent-filters; MainActivity captures cold-start
+  + onNewIntent URIs into a pending state; BitOSApp routes — Author →
+  author sheet (AuthorProfileContent over the shell), Note → Discover tab
+  with the reference as ref-search (existing head-fetch + thread-sheet
+  path reused wholesale), Lightning → display-only branded-QR dialog with
+  copy + an honest "BitOS never sees the payment" note. iOS: Info.plist
+  CFBundleURLTypes for both schemes; BitOSApp.onOpenURL classifies via the
+  bridge; RootView routes identically (AuthorProfileSheet / DiscoverView
+  ref-search / new LightningInvoiceSheet with CoreImage QR); pbxproj
+  13G/23G registered. Verified: shared androidHost + macosArm64 green at
+  my changes, Android compile + 55/55, full-app Swift 6 typecheck 0
+  errors. NOTE: the concurrent session landed T12 static pages (iOS
+  StaticPagesScreen) in parallel mid-verification and is now adding NIP-44
+  crypto (Nip44.kt in flight) — the only Kotlin errors at session close
+  are theirs, mid-edit. REMAIN from audit §9.6: T6 tab decision (user),
+  T9/T10 thread+discover polish; concurrent session owns T12 + DMs (W2).
+
+- 2026-08-29 — APP-007 ease-of-use pass (legacy Flutter Bitz UX audit →
+  gap pack; spec §3.7 + legacy parity). SHARED: `BitzFormat` in Bitz.kt —
+  compact rail-count labels (`_formatCount` 1.2K/1.2M parity) + zap total
+  sats from summed millisats (`_compactBitSats`, null = hide); bridge
+  `bitzFormatCount`/`bitzFormatSats`; +2 common tests, both lanes green.
+  BOTH PLATFORMS: (1) RAIL COUNTS — like/repost/comment counts and zap
+  sats replace the static labels when > 0 (live tallies + optimistic like;
+  iOS gained empty-state handling for the player surface it was missing);
+  (2) DOUBLE-TAP THIRDS (legacy parity) — left third −10 s with seek hint,
+  center like + heart burst, right third +10 s (no small buttons to hit);
+  (3) LONG-PRESS 2× fast-forward with the 2× pill (pool rate-override
+  APIs: Android setRateOverride / iOS setRateBoost); (4) EMPTY-STATE CTAs
+  — Following-empty gets "Explore Bitz" (filled) + "Refresh Bitz"
+  (outlined), generic empty gets a filled Refresh (legacy copy parity);
+  (5) EXPLORE-TILE like count next to zap sats. Verified: shared both
+  lanes, Android compile + 55/55, iOS typecheck 0 errors in all touched
+  files (concurrent session's in-flight StaticPagesScreen errors are
+  theirs — T12 static pages landing in parallel). Deliberate deltas from
+  legacy: rail order stays web-parity (earlier user decision), muted
+  autoplay default stays (earlier user decision), transport bar stays
+  always-visible (legacy auto-hides after 3.5 s — noted as follow-up),
+  horizontal mode-swipes and caption-expand not ported (tracked).
+
+- 2026-08-29 — T4 RESOLVED (audit §9.4-2): the capture pipeline is
+  reachable again on BOTH platforms — the record → trim → export → publish
+  flow (CameraScreen + VideoPreviewScreen, CAP/PUB) had been orphaned when
+  the composer-FAB rework unmounted CreateScreen/CreateView. ENTRY POINTS:
+  Bitz glass top bar gained the spec §3.7 record (camera) button → the
+  Create hub; Android's Home app-bar gained the camera icon (iOS parity —
+  Android's import was reachable only through the dead hub); CreateScreen
+  gained a Done affordance (it had no way out). FLOW FIXES found while
+  wiring: Android's camera completion returned to the chooser WITHOUT the
+  caption/publish step — captured takes now flow into the import sheet
+  (showImport after mediaCaptured); iOS's capturedData was stored but never
+  handed to ImportMediaSheet — the sheet gained capturedData/capturedMime
+  seeding (opens straight into caption/publish; reset on close). Verified:
+  Android full rerun compile + 55/55, full-app Swift 6 typecheck 0 errors.
+  Audit §9.6 T1–T5 now all closed except T5's ComposerSheet deletions and
+  T6 (tab decision — user). NEXT: T12 static pages, T16 deep links, or
+  T10/T9 thread+discover polish.
+
+- 2026-08-29 — APP-015 ✅ COMPLETE (audit T7; no shared-core change — pure
+  plumbing over the already-tested NIP-51 toggle). BOTH PLATFORMS: new
+  Saved page (Android `ui/bookmarks/BookmarksScreen.kt` overlay from the
+  More hub; iOS `Features/Bookmarks/BookmarksView.swift` fullScreenCover
+  from MoreView, pbxproj 13F/23F) — compact rows (avatar + name/NIP-05 +
+  time + 2-line excerpt), newest-saved first, per-row unbookmark (existing
+  optimistic toggle + 30003 publish), empty state, pending-rows spinner,
+  row tap → thread sheet, relay re-fetch on OPEN (≤100 ids REQ for saved
+  notes outside the feed window; Android FeedRepository `loadBookmarked` +
+  `bookmarkedNotes` state merge [side map + window lookup], iOS FeedStore
+  mirror via the shared `eventsByIdsRequest`). The More hub "Saved" tile
+  moved from disabled coming-soon into a live Library group (spec §3.17
+  shape). FOUND+FIXED: pbxproj ID collision — the concurrent session
+  allocated my BitzView 13D/23D to their BitosTextField; re-allocated
+  BitzView to 13E/23E (the exact orphaning corruption class the delivery
+  plan warns about). Verified: Android compile + 55/55, full-app Swift 6
+  typecheck 0 errors, pbxproj plutil OK. Follow-up noted in APP-015: repo
+  contract test for the by-id fill path. NEXT per audit §9.6: T4
+  camera-pipeline re-wiring (capture code is unreachable on both
+  platforms), or T12 static pages, or T16 deep links.
+
+- 2026-08-29 — APP-007 Chain sheet shipped (last portable §3.7 item from
+  the web audit). SHARED: `RemixChain` in `feed/Remix.kt` — suspend walk
+  over the shared `RemixRules.sourceOf` step (cycle-safe visited-set incl.
+  self-loops, hex64 gate so hostile ids never reach a relay REQ, ≤32 cap
+  with a truncated flag, missing parent = natural end — web `remixChainOf`
+  parity); bridge gained `remixSourceOfTags` (packed `id|pubkey` seam for
+  the Swift walk). RemixTest +4 chain vectors (ancestry/depths, natural
+  end, cycles + self-loop, cap + non-hex rejection) — both lanes green.
+  ANDROID: FeedRepository keeps a bounded (48) ancestor side-store fed by
+  absorbNote + `loadRemixChain` (per-hop single-id REQ `{"ids":[id]}` +
+  3 s await) and `remixAncestorNote` for row tap-through; HomeViewModel
+  exposes `remixChainState` (one walk at a time); BitzScreen rail shows
+  the web-conditional Chain button (only when remixOfEventId != null) and
+  a bottom sheet with the ancestor list (avatar + name + "Direct source"/
+  "N steps back" + Source pill, 8-per-Show-more paging, truncated note,
+  loading/cycle/empty states; row tap → that ancestor's thread).
+  iOS: FeedStore mirrors the walk (threadRootRequestById per hop +
+  ancestor side-store + `remixAncestorNote`), BitzView Chain button +
+  BitzChainSheet (same states/paging; row tap → CommentSheet). Verified:
+  shared androidHost + macosArm64 green, Android compile + 55/55, full-app
+  Swift 6 typecheck 0 errors. REMAIN for APP-007: meme-tag layout payload
+  on remix publish (studio W4), remix relay hints, hexagon chip styling
+  (web `.reel-action` cosmetics).
+
+- 2026-08-28 — APP-007 rail/header follow-up (user decisions: no logo, no
+  refresh button; refresh via bottom bar; web-parity rail + Remix). SHARED:
+  new `feed/Remix.kt` — `RemixRules` parses/composes the exact legacy-web
+  wire (`["remix", <id>, ≤3 relay hints]`, p-tag attribution,
+  `["attribution","remix of …"]` ≤140, `bitz:edge` graph form, license set
+  CC0/CC-BY/CC-BY-NC/bitz:* with ASK-ONLY gating), `mergeTags`/`mergeTagsJson`
+  dedupe (name+param) for seeding composers; FeedNote projects
+  remixOfEventId/remixOfPubkey/license; bridge exposes remixRequiresAsk/
+  remixTagsJson/remixAttributionTagJson/mergeTagsJson + Note remix fields.
+  RemixTest (8) green on both lanes. WEB AUDIT (bitz/+page.svelte +
+  meme/remix.ts): rail order = Remix (violet, first) · Chain (conditional)
+  · Zap · Like · Comments · Repost · Save — Share lives in the ⋯ overflow;
+  licenses never hide the action (advisory confirm); chain walk ≤32
+  cycle-safe. BOTH PLATFORMS: top bar slimmed (wordmark + refresh REMOVED
+  — pills + search only); rail reordered to the web order with a violet
+  Remix button; Share moved into the ⋯ menu; Remix = advisory dialog on
+  bitz/all-reserved + bitz/source-permission, then opens the composer
+  SEEDED with remix/p/attribution tags (Android CreateNoteScreen gained
+  initialText/baseTags params — seeded sessions never touch the user's
+  draft; iOS ComposerScreen gained baseTagsJson with the same draft
+  protection; publishes merge seed tags through the shared rule).
+  ANDROID: long-press on the Home/Bitz bottom-bar items = force refresh
+  (re-tap while at top also refreshes — existing tick); iOS re-tap covers
+  it via the same-value selection binding (SwiftUI TabView has no
+  long-press hook — noted honestly). iOS BitzView body split into
+  stage2/stage2b/stage3 after a Swift 6 type-checker timeout (§ pagerPage
+  fix class; co-edited live with the concurrent session). Verified:
+  shared androidHost + macosArm64 green, Android compile + 55/55, full-app
+  Swift 6 typecheck 0 errors. REMAIN: Chain lineage sheet (walk + paged
+  ancestors — read model fully portable per the audit), meme-tag layout
+  payload on remix publish (needs the studio editor, APP-019 W4), remix
+  relay hints (currently empty — valid wire).
+
+- 2026-08-28 — APP-007 Bitz surface completion (spec §3.7 core; shared-core
+  first per the vertical-slice order). SHARED (schema 3→4 + rules): new
+  `feed/Bitz.kt` — `BitzSearch` (400 ms debounce const, QUERY_MAX 64,
+  bounded local matches, local-first id-deduped merge, blank-query idle
+  guard), `BitzExplore` (24+18 paging math), `NoteShare` (bounded share
+  copy); `MediaMetadata` gained imeta `duration` parse (1..14 400 s) +
+  locale-free `formatDuration`; settings contract v4: `bitos_bitz_mode`
+  (explore/following/for_you, default for_you) + `bitos_video_muted`
+  (default MUTED — user decision, legacy web polite autoplay parity);
+  bridge: Note.durationSeconds, snapshot fields, `bitzSearchResults`
+  JSON seam, `noteShareText`, `formatDurationSeconds`, and the
+  `settingsKeys()` list gained the new keys PLUS the previously-missing
+  KEY_SENSITIVE_MEDIA (the audit-flaged gap). Tests: BitzTest (8),
+  MediaMetadata duration/format vectors, SettingsTest v4 block —
+  androidHost + macosArm64 lanes green. ANDROID: new
+  `ui/bitz/BitzScreen.kt` owns the surface (glass top bar + pills +
+  search/refresh, explore grid w/ skeletons + sensitive tiles + duration
+  badges + zap counts, pager w/ double-tap like burst, scrubber + ±10 s +
+  seek hint, compact mute, per-session sensitive gate, full-screen search
+  overlay w/ splice-and-jump, copy-note-id menu, REAL Share via
+  NoteShare+ACTION_SEND); `VideoPlayerPool` reworked to list-based
+  reconciliation (fixes the W0 bug where filtered pagers resolved
+  neighbors against the unfiltered window) + mutedProvider/seek/position;
+  BitOSApp mounts BitzScreen for the BITZ tab (FeedScreen keeps the text
+  Home; its videoOnly path is now unmounted — extraction follow-up).
+  iOS: new `Features/Bitz/BitzView.swift` (pbxproj 13D/23D registered)
+  mirroring the surface with .ultraThinMaterial glass, ShareLink,
+  BitzSearchOverlay fullScreenCover; PlayerPool gained muted param +
+  setMuted/seekBy/seekTo/positionMs/durationMs; SettingsStore +
+  SettingsState extended (SettingsBitzMode, videoMuted) with adapter +
+  bridge-rule tests; BusinessCoreClient maps durationSeconds; RootView
+  mounts BitzView AND now passes retapTick to HomeView (audit 9.4-4
+  dormant-feature fix) with a same-value selection binding for re-taps.
+  Also fixed `scripts/ios-build.sh` typecheck fallback pointing at the
+  device slice instead of `ios-arm64_x86_64-simulator` (no-simulator
+  machines got a false "no such module BusinessCore"). Folded concurrent
+  session's in-flight work (ZapSheet paid-zap wiring, SentZapsStore,
+  ZapsView, SupportDonateSheet — one transient OptIn race in
+  SettingsScreen resolved). Verified: shared androidHost + macosArm64
+  green, Android compile + 55/55 unit tests, full-app Swift 6 typecheck
+  0 errors, pbxproj plutil OK. REMAIN (spec §3.7): comments-sheet
+  two-level upgrade (iOS tree render = audit T10), record entry → camera
+  (T4), imeta fallback renditions + player fallback chain, like-count
+  tiles (needs a NoteActivity producer), W2/W3 chips/tabs.
+
 - 2026-08-28 — Full-code parity audit of both native apps vs the unified
   spec and BOTH legacy apps (Flutter GetX app + web SvelteKit app,
   explored read-only). Results recorded as new **spec §9** (audit
@@ -371,6 +568,198 @@ fixed, what's next.
   are not blind-ported. No code changed — audit + docs only
   (developer-guide.md also gained a stale-build troubleshooting section
   from today's crash-fix session).
+
+- 2026-08-28 — APP-011 shared core: NIP-44 v2 + NIP-17 Secure DMs
+  (complete crypto layer, user rule: ALL business logic in shared core
+  per docs/native/shared-business-core.md). Studied the legacy Flutter
+  `nip44_v2.dart` + `nip17_secure_dm.dart` line by line.
+  **NIP-44 v2** (`core/crypto/Nip44.kt`): conversation key (ECDH x-only
+  via existing Secp256k1.liftX → HKDF-extract SHA-256 salt "nip44-v2"),
+  message keys (HKDF-expand 76B → chachaKey32‖chachaNonce12‖hmacKey32),
+  pure-Kotlin IETF ChaCha20 (RFC 8439), power-of-two padding (u16BE
+  prefix, u32BE ≥64KiB, chunks 32→512), HMAC-SHA256 MAC (const-time
+  compare), base64 payload 0x02‖nonce‖ct‖mac — 8 common tests (symmetric
+  conversation keys, padding table incl. 65→96 (caught my wrong vector),
+  ChaCha20 round-trip, encrypt→decrypt with unicode, tampered-payload
+  MAC reject, wrong-key reject, deterministic HKDF). **NIP-17**
+  (`core/publish/SecureDmComposer.kt`): rumor(kind 14, unsigned) →
+  seal(kind 13, NIP-44 to recipient, sender-signed) → gift wrap(kind
+  1059, NIP-44 with throwaway key, timestamp randomized ≤48h so relays
+  can't correlate timing) — 5 common tests (full round-trip with
+  structural checks incl. throwaway wrap key + wrap p-tag, wrong-key
+  silent-null, randomized timestamps within the 48h window, unicode
+  content, invalid-key null). Found+fixed: common-Kotlin has no
+  `System.currentTimeMillis` → injectable `SecureDmClock`; `rotateLeft`
+  is not infix in common → explicit `rotl`; `liftX` takes ULongArray not
+  ByteArray. Verified: shared androidHost + native 323/323. Next: the
+  native adapters (repo subscribe/persist) + conversation list + chat UI.
+
+- 2026-08-28 — APP-020 static pages shipped (user request: ALL copy
+  ported verbatim from the old Flutter app's i18n). Shared:
+  `StaticPagesContent` — About (hero, "What is Nostr?", open-source, 6
+  feature cards), Privacy (intro + summary + 11 numbered sections),
+  Terms (intro + summary + 10 numbered sections) — every string
+  extracted from `en_US.dart` and locked by 4 common tests (section
+  counts, key phrases verbatim, length bounds); 16 bridge accessors
+  (XCFramework rebuilt). Android: `StaticPagesScreen` (page switcher
+  About/Privacy/Terms, section cards, summary cards highlighted in the
+  primary container) wired as a full-screen overlay from the More hub's
+  meta rows (BitOSApp state). iOS: same screen via the bridge
+  (HeroCard/SectionCard, pbxproj registered) wired from MoreView's new
+  About section (fullScreenCover). Verified: shared androidHost + native
+  305/305, Android compile + 55/55, iOS Swift 6 typecheck 0 errors,
+  structure check.
+
+- 2026-08-28 — APP-002 onboarding carousel shipped (shared content
+  first). Shared: `OnboardingContent` — the four legacy pages (welcome/
+  keys/decentralized/zap) as a versioned contract with icon-token names
+  the AppIcons facades resolve — 3 common tests (page order, copy
+  verbatim, length bounds); bridge `onboardingContent` (XCFramework
+  rebuilt). Android: `OnboardingScreen` (HorizontalPager + animated dot
+  indicator 24↔8 dp spring, icon medallion, step counter, Next → Get
+  Started, Skip) + `OnboardingPrefs` (SharedPreferences
+  `bitos_onboarding.has_onboarded`); wired as a first-launch gate in
+  BitOSApp before the shell. iOS: `OnboardingScreen` (TabView paging
+  style, same dots/counter/CTA, per-page rise-in animation) +
+  UserDefaults `bitos_has_onboarded`; RootView gates on it before the
+  tabs (pbxproj registered). Verified: shared androidHost + native
+  301/301, Android compile + tests green, iOS Swift 6 typecheck 0
+  errors, structure check.
+
+- 2026-08-28 — APP-009 reply-row deltas (closes the live-deltas item
+  end-to-end). Both repos now resolve the tally target through ANY
+  known note in an open thread window (root or reply — the comment
+  window membership check), so kind-7/6/9735 events targeting a reply
+  tally for that reply's row, not just the thread head: Android
+  `tallyTargetFor(eTaggedIds)` (first-matching e-tag; comment-window
+  lookup), iOS `tallyTarget(for:)` (same rule, explicit self capture for
+  Swift 6). Reply rows render the live deltas inline — reactions
+  (heart+count) and zaps (bolt + "N · 21K" sats from the summed bolt11
+  msat) on both platforms, shown only when non-zero (no fake zeros).
+  No shared-core change (the NoteTally merge rule already covers per-
+  note deltas; only the target-resolution scope widened — repo concern).
+  Verified: shared androidHost + native 296/296, Android compile + 55/55
+  unit tests, iOS Swift 6 typecheck 0 errors, structure check.
+
+- 2026-08-28 — APP-010 results tabs shipped (Posts · People ·
+  Hashtags; shared fan-in first). Shared: `SearchResults` — the pure
+  tab projection (People: distinct authors ranked by result count,
+  profile names + NIP-05, ≤24; Hashtags: top tags by occurrence,
+  case-insensitive, alpha tiebreak, ≤16) — 3 common tests; bridge
+  `searchPeopleJson`/`searchHashtagsJson` for iOS (XCFramework rebuilt).
+  Android: DiscoverScreen gains the tab row with live counts — People
+  tab (avatar, name, NIP-05 badge, "N notes", Follow/Following through
+  the feed VM), Hashtags tab (ranked #tag rows, tap → re-search);
+  thread-sheet plumbing moved into PostsTab (cleaned a smart-cast trap).
+  iOS: DiscoverView mirror — same tab row, PeopleTab rows, HashtagsTab
+  (tap re-searches); JSON assembly fixed from a bad `.map { "[$0]" } ??
+  "[]"` pattern to explicit array join. Verified: shared androidHost +
+  native 296/296, Android compile + 55/55, iOS Swift 6 typecheck
+  0 errors, structure check.
+
+- 2026-08-28 — APP-009 live deltas + root action row (shared rule
+  first). Shared: `NoteTally`/`NoteTallies` — per-note merge rule for
+  kind-7 reactions / kind-6 reposts / 9735 zaps (+ summed msat from the
+  receipt bolt11), insertion-order eviction ≤32 targets — 3 common tests
+  (the suite caught my own bad eviction assertion before it shipped);
+  bridge `bolt11AmountMillisats` + the comments REQ widened to
+  kinds [1,7,6,9735] (XCFramework rebuilt). Android: FeedRepository
+  tallies live for open thread targets (reactions/reposts hook the
+  collector, zap receipts merge msat); CommentSheet gained the ROOT CARD
+  — author row + body + the full action row (reply count · like+count ·
+  repost+count · zap "N · 21K" · ⋯ raw-note dialog) per spec §3.9.
+  iOS: FeedStore mirrors (talliesBuffer + tallyTargets ≤32; zap msat via
+  the bridge), CommentSheet gained the same ThreadRootCard (alert-based
+  raw dialog). Verified: shared androidHost + native 293/293 (15 grown
+  by concurrent work), Android compile + 55/55, iOS Swift 6 typecheck
+  0 errors, structure check.
+
+- 2026-08-28 — APP-022 text-field system (legacy Flutter
+  `InputDecorationTheme` parity — user request). Studied the old app's
+  app_theme.dart: filled surfaceElevated, radius 12, 1dp border (accent
+  2dp focused), tertiary 14/w400 hint, lg+md padding. Shipped ONE
+  component per platform: Android `BitosTextField`/`BitosPlainTextField`
+  (filled+bordered / borderless inline variants; HintText enforces the
+  legacy hintStyle) + iOS `BitosField` wrapper (same geometry; SwiftUI's
+  TextFieldStyle protocol cannot observe focus, so a view wrapper
+  composition). Adopted across the high-traffic surfaces: Discover
+  search, composer body + CW + URL + poll fields, reply bar, zap custom
+  amount + comment, notification search (iOS). Also rescued the
+  concurrent session's in-flight breaks along the way: BitzView
+  type-checker timeout (split body → decoratedRoot/stage2/stage2b/
+  stage3 — four named stages, the largest chain split so far), duplicate
+  remixOf args in bridgeNote (Kotlin ctor order), ComposerScreen
+  onRemix/baseTagsJson arg order, AccountSwitchOverlay Color.Stop →
+  Gradient.Stop. Verified: shared androidHost + native suites, Android
+  compile + 55/55, full-app Swift 6 typecheck 0 errors, structure.
+
+- 2026-08-28 — APP-014 LUD-21 settle polling (closes the legacy zap
+  dialog's "first signal wins" parity; classification rule in shared
+  core). Shared: `LnurlPay.Invoice` grew the LUD-21 `verify` URL
+  (HTTPS-bound, parse + validation) and `LnurlPay.verifySettled(body)`
+  (settled ONLY on status=OK && settled=true; corrupt bodies stay
+  unsettled — the next poll retries); bridge `lnurlInvoiceVerifyUrl` +
+  `lnurlVerifySettled` (XCFramework rebuilt). Android: LnurlPayClient
+  returns the Invoice pair + `fetchVerifySettled`; the zap VM starts a
+  3 s poll bounded by the bolt11 expiry after invoice creation
+  (cancelled on the next round); the sheet's paid watcher now takes the
+  FIRST signal of exact request-id receipt / verify settle / count
+  fallback (legacy order). iOS: same through the bridge — the poll task
+  lives in the ZapSheet (3 s ticks, expiry-bound, cancelled on
+  disappear), `ZapUiState` carries verifyUrl/verifySettled and the paid
+  watcher includes the settle signal; HTTP stays platform-side per the
+  layering rules. Also fixed the concurrent SupportDonateSheet break from
+  the Invoice return-type change. Verified: shared androidHost + native
+  278/278, Android compile + 55/55, iOS Swift 6 typecheck 0 errors,
+  structure check. APP-014 now fully at spec parity except NWC (W4).
+
+- 2026-08-28 — APP-014 iOS zap ledger parity (closes the cross-platform
+  slice; rules stayed in shared core). Bridge (XCFramework rebuilt):
+  `sentZapsEncode/Decode` (records JSON ↔ versioned wire through the
+  shared contract), `zapLedgerEntries` (sent+received merge → entries
+  JSON), `zapLedgerTotals` ({received,sent,avg,net}), `embeddedZapRequestId`
+  (verified 9735 frame → embedded 9734 canonical id; native-lane local
+  4-tuple for the parallel-array parse). iOS: `SentZapsStore` (UserDefaults
+  `bitos_sent_zaps`, records through the bridge wire; insert rule round-
+  trips the shared contract), `FeedStore` retains verified request ids per
+  target (`zapRequestIds`, bounded 16 targets × 8 ids), the ZapSheet paid
+  watch upgraded to EXACT request-id matching (captures its own 9734 id at
+  signing; unsigned/anonymous keeps the count fallback) and records the
+  paid zap through `onPaid` → `AppEnvironment.sentZaps`, NEW `ZapsView`
+  (legacy /zaps parity): stat tiles + All/Received/Sent tabs + ledger rows
+  (±sats, memo, time), empty + sign-in states — entry = "⚡ Zap wallet"
+  row on the You tab (pbxproj registered: SentZapsStore.swift +
+  ZapsView.swift). Also unblocked the concurrent session's in-flight
+  Android compile (BitzScreen scripted-edit clipboard syntax; SettingsScreen
+  duplicate OptIn + missing file OptIn). Verified: shared androidHost +
+  native 278/278 (11 grown by concurrent work), Android compile + 55/55,
+  iOS Swift 6 typecheck 0 errors, structure check.
+
+- 2026-08-28 — APP-014 sent-zap ledger + exact paid matching (studied the
+  legacy `SentZapsStore`/`ZapsView` first; all rules in shared core).
+  Shared: `SentZapLedger` — versioned v1 wire ({id,sats,to,at,note?,memo?},
+  ≤200 records, ≤98k chars), insert rule (dedupe by 9734 request id,
+  newest-first, bounded), lenient decode (corrupt/oversized → empty;
+  invalid rows drop), display merge (local sent + parallel-array received
+  from the verified 9735 stream, newest first) and totals
+  (received/sent/avg/net); `ZapReceipt.embeddedRequestId` — the receipt's
+  description 9734 verified through the client gate, returning its
+  canonical id (the paid-matching key) — 6 common tests incl. a signed
+  9734 fixture (found the fixture needed a real relay URL: the composer
+  rejects empty relay lists). Android: `SentZapsStore` adapter
+  (SharedPreferences `bitos_sent_zaps`); `FeedRepository` retains verified
+  embedded request ids per target (bounded) in state.zapRequestIds; the
+  zap sheet's paid detection upgraded from count-based to EXACT
+  request-id match (anonymous/unsigned keeps the count fallback) and
+  fires `onPaid` → `HomeViewModel.onZapPaid` records into the sent
+  ledger (request id, sats, recipient, note, memo); NEW `ZapsScreen`
+  (legacy /zaps parity): stat tiles (Received emphasized · Sent · Avg ·
+  Net via shared totals) + All/Received/Sent tabs + ledger rows (zap
+  glyph, avatar, name/memo, ±sats, time) + empty + sign-in states; entry
+  = "⚡ Zap wallet" row on the You tab (BitOSApp overlay, store wired
+  through the composition root). iOS ledger + its bridge surface scoped
+  as the next increment. Verified: shared androidHost + native 267/267,
+  Android compile + 55/55, iOS Swift 6 typecheck 0 errors, structure.
 
 - 2026-08-28 — APP-014 zap sheet rebuilt to legacy parity (studied the
   old Flutter `zap_dialog.dart` line by line; every rule in shared core
@@ -528,6 +917,124 @@ fixed, what's next.
   errors ✅, structure ✅. APP-005 remaining: polls [W+F] + compact variant
   (rides APP-010/015). Next: APP-009 threading remainder or APP-010
   results tabs.
+
+- 2026-08-29 — Compact mode wired functional (last wireable settings gap
+  after the functional pass). Both platforms: NoteCard density now derives
+  from the persisted `bitos_compact_mode` — tighter card vertical padding
+  (md→4), reduced internal spacing (sm→2) and a smaller hex avatar
+  (36→28) when on; the default density is unchanged. Also fixed the
+  user's concurrent FeedStore closure capture (Swift 6 `self.` explicit).
+  Remaining settings honest-pending is now strictly infra-dependent:
+  theme/accent application (APP-023 light tokens), video quality (server
+  renditions), sound (assets), language strings (APP-024). Verified:
+  Android compile + 55 tests ✅, iOS full-app Swift 6 typecheck 0 errors ✅,
+  structure ✅.
+
+- 2026-08-28 — Settings functional-completeness pass (user ask: "check
+  completed functional"). Audit finding: five persisted prefs were read
+  NOWHERE (fontSize, hapticEnabled, soundEnabled, compactMode,
+  videoQuality). Now live (both platforms): **font size applies app-wide**
+  — Android wraps the shell in a scaled `LocalDensity` (multiplier over the
+  system font scale: small .9 / 1 / large 1.15 / extra_large 1.3), iOS maps
+  to `.environment(\.dynamicTypeSize, …)` at the root (xSmall / large /
+  xxLarge / accessibility2); **haptics toggle gates real feedback** —
+  like-on (Android LongPress haptic at the feed like, iOS
+  `.sensoryFeedback(.impact)` gated by the pref) and the account-switch
+  completion tick; sound stays honest-pending (no sound assets exist —
+  toggling alone would be fake). Remaining honest-pending: theme/accent
+  application (APP-023 light tokens), video quality (server renditions),
+  compact mode (density variant pending APP-005 compact card), language
+  strings (APP-024). Also unblocked concurrent edits: CommentSheet
+  imports, BitzScreen LazyColumn/items/heightIn imports, FeedStore
+  bolt11AmountMillisats call through the bridge (KotlinLong → Int64),
+  CommentSheet BusinessCore import. Functional matrix now: autoplay ✓
+  playback-rate ✓ zap-default ✓ media-preview ✓ sensitive ✓ blocked ✓
+  algorithm ✓ font-size ✓ haptics ✓ relays ✓ notifications-mutes ✓
+  multi-account ✓ QR ✓ donate ✓ contributors ✓. Verified: shared 293 ✅
+  (user's new tests), Android compile + 55 tests ✅, iOS full-app Swift 6
+  typecheck 0 errors ✅, structure ✅.
+
+- 2026-08-28 — Switch-overlay polish (user feedback: ring didn't spin;
+  sheet must close on switch). Spin fix, both platforms: the orbit is now
+  TIME-DERIVED and cannot be interrupted — Android rebuilds the
+  sweep-gradient stops per frame shifted by the animated angle (hex
+  outline stays STATIC, the bright arc orbits inside it — exact legacy
+  `_OrbitHexPainter` behavior; earlier the canvas transform rotated shape
+  + shader together and read as static), iOS drives the angle from
+  `TimelineView(.animation)` wall-clock (withAnimation repeatForever was
+  transaction-fragile under the staged state changes). Sheet auto-close:
+  tapping a switcher row now closes the bottom sheet immediately (Android
+  `showSwitcher=false` at tap; iOS dismisses the switcher sheet then the
+  fullScreenCover overlay takes over) — the overlay alone owns the screen
+  during the switch. Also unblocked the user's concurrent edits: BitosTextField
+  (M3-1.4 compat: prefix/suffix + contentPadding overloads), BitzScreen
+  (onRemix arg, remixSeedTags typing, BitzMoreMenu), BitOSApp long-press
+  refresh imports, FeedNote bridgeNote remix fields + XCFramework rebuilt
+  with the user's remix/poll bridge Note params. Verified: Android compile
+  + 55 tests ✅; iOS — my files parse/typecheck clean (overlay 0 parse
+  errors; full-app typecheck blocked only by the user's in-flight
+  BitzView expression-timeout, theirs to finish).
+
+- 2026-08-28 — Branded full-page account-switch overlay (user-named;
+  legacy `AccountSwitcherOverlay` 1:1). Both platforms:
+  `AccountSwitchOverlay(View)` — opaque full-screen scrim (0x0A0A0F,
+  input-blocked), 128dp breathing hex mark (±2% scale) with the rotating
+  amber orbit sweep along the hex ring (sweep-gradient stops 0/8/16%,
+  red-tinted on failure), identity HANDOFF (the FROM avatar holds ~450 ms
+  then morphs into the target: fade + scale 0.55→1 + slight rotation,
+  easeOutBack), staged captions ("Reading the sealed key → Connecting
+  relays → Loading profile → Rebuilding your feed") with a determinate
+  progress fill, check-badge completion POP (spring), "Now using NAME"
+  done beat 700 ms, 1250 ms brand floor, 240 ms fade-out revealing the
+  rebound app. Android: infinite transitions (breathe/orbit) +
+  AnimatedContent handoff + AnimatedVisibility badge, runs in the More
+  composition root = true full page; the switcher row tap now opens the
+  overlay which performs switchTo mid-sequence. iOS: fullScreenCover
+  (item-based), repeatForever breathe/orbit animations, spring handoff
+  transition + badge, sheet tap routed through an onSwitchTarget callback;
+  titleText/stageText computed props (nested-string ternaries broke the
+  parser). Verified: Android compile + 55 tests ✅, iOS full-app Swift 6
+  typecheck 0 errors ✅ (pbxproj: AccountSwitchOverlay registered), lint ✅,
+  structure ✅.
+
+- 2026-08-28 — Donate-sats + Contributors widgets (user-named; legacy
+  `SupportWidget`/`ContributorsWidget` parity). Shared: AppFacts schema 2
+  replaces the placeholder LUD16 with the REAL legacy flow inputs — official
+  support npub, 4 web-parity tiers (1k coffee / 5k expert ★recommended /
+  21k production / 100k premium) + contributor npub list; bridge wires
+  (supportNpub, tiers, recommendedTierSats, contributorNpubs); facts tests
+  v2 (npub shape, ascending tiers, exactly-one recommended). Both platforms:
+  **ProfileLookupStore** — one-shot multi-pubkey kind-0 lookup (REQ via
+  shared codec, newest-verified-per-pubkey, 8 s settle — the old
+  SupportController fetch design); **SupportDonateSheet** — npub → profile →
+  lud16 → tier tiles + custom → LNURL-pay invoice → QR + copy + open-wallet
+  (Android zxing QR + LnurlPayClient; iOS minimal LNURL client + CoreImage
+  CIQRCodeGenerator — invoices exceed the shared V1-6 encoder); resolves
+  honestly (loading spinner, unreachable-address error, never a fake
+  address); **Contributors card** in settings-help — kind-0 rows (avatar,
+  display name, npub-copy), live from relays. Also folded the user's
+  concurrent BitzExplore edits (gridState hoist, selectMode relocation,
+  Replay10/Forward10 icons, ProfileScreen onOpenZaps + profileLookup
+  ordering, BitzView PlayerSurface un-privated). Verified: shared 278 ✅
+  (incl. user's new Bitz tests), Android compile + 55 tests ✅, iOS full-app
+  Swift 6 typecheck 0 errors ✅ (XCFramework rebuilt), pbxproj lint ✅,
+  structure ✅.
+
+- 2026-08-28 — Switch-account sheet UX-UI parity (user-named; legacy
+  `AccountSwitcherSheet`/`_AccountRow` 1:1). Both platforms: rounded CARD
+  rows (active = 6% primary tint + 25% primary border; inactive = surface
+  + hairline border), 40px hex avatar with the ⚡ lud16 chip overlay
+  (bottom-end, orange circle, hairline ring), bold name + ✓ NIP-05 badge
+  + identifier line + monospace short-npub subtitle — all from the
+  account's kind-0 when the feed has seen it (honest: hex avatar +
+  npub-only for unknown profiles); trailing states exactly like the old
+  app: 18px spinner WHILE SWITCHING (busy && !active) / ✓ check when
+  active / chevron otherwise; header count chip; footer Add + Manage.
+  iOS sheet body split into sub-views after the monolithic VStack timed
+  out the Swift 6 type-checker. The one pre-existing flake
+  (readCursor… under full-suite parallel load) passed isolated again.
+  Verified: shared 267/267 ×2 ✅, Android 55/55 (isolated re-run) ✅,
+  iOS typecheck 0 errors ✅, pbxproj lint ✅, structure ✅.
 
 - 2026-08-28 — Identity QR shipped (user-named "show QR" gap). Shared
   core: pure `QrCode` encoder (APP-022) — byte mode, ECC level M, versions

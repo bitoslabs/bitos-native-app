@@ -17,7 +17,7 @@ package space.bitos.core.settings
  * fall back to defaults.
  */
 object SettingsContract {
-    const val SCHEMA_VERSION = 3
+    const val SCHEMA_VERSION = 4
 
     // ── Storage keys (legacy bitos_* names) ────────────────────────────
     const val KEY_THEME_MODE = "bitos_theme_mode"
@@ -39,6 +39,8 @@ object SettingsContract {
     const val KEY_TIME_ZONE = "bitos_time_zone"
     const val KEY_DATE_FORMAT = "bitos_date_format"
     const val KEY_SENSITIVE_MEDIA = "bitos_sensitive_media"
+    const val KEY_BITZ_MODE = "bitos_bitz_mode"
+    const val KEY_VIDEO_MUTED = "bitos_video_muted"
 
     /** Max stored string length (size-bounded persistence rule). */
     const val MAX_VALUE_LENGTH = 64
@@ -194,6 +196,20 @@ enum class SensitiveMediaSetting(val wire: String) {
 }
 
 /**
+ * Bitz surface mode (APP-007): the view the reels tab boots into. The
+ * choice persists; `for_you` keeps the player as the first-run default.
+ */
+enum class BitzModeSetting(val wire: String) {
+    EXPLORE("explore"), FOLLOWING("following"), FOR_YOU("for_you");
+
+    companion object {
+        val DEFAULT = FOR_YOU
+        fun parse(raw: String?): BitzModeSetting =
+            entries.firstOrNull { it.wire == raw } ?: DEFAULT
+    }
+}
+
+/**
  * Fully decoded settings state. Snapshots are immutable; adapters apply a
  * change by producing the next snapshot and persisting the normalized wire
  * value through [SettingsRules].
@@ -219,6 +235,10 @@ data class SettingsSnapshot(
     val timeZone: String = "auto",
     val dateFormat: DateFormatSetting = DateFormatSetting.DEFAULT,
     val sensitiveMedia: SensitiveMediaSetting = SensitiveMediaSetting.DEFAULT,
+    val bitzMode: BitzModeSetting = BitzModeSetting.DEFAULT,
+    /** Autoplay starts politely muted (legacy web reels parity); the user's
+     *  unmute choice persists. */
+    val videoMuted: Boolean = true,
 )
 
 /**
@@ -251,6 +271,8 @@ object SettingsCodec {
         timeZone = bounded(kv[SettingsContract.KEY_TIME_ZONE])?.takeIf { it.isNotBlank() } ?: "auto",
         dateFormat = DateFormatSetting.parse(bounded(kv[SettingsContract.KEY_DATE_FORMAT])),
         sensitiveMedia = SensitiveMediaSetting.parse(bounded(kv[SettingsContract.KEY_SENSITIVE_MEDIA])),
+        bitzMode = BitzModeSetting.parse(bounded(kv[SettingsContract.KEY_BITZ_MODE])),
+        videoMuted = bool(kv[SettingsContract.KEY_VIDEO_MUTED], default = true),
     )
 
     /** Canonical wire value for a typed snapshot field, by storage key. */
@@ -274,6 +296,8 @@ object SettingsCodec {
         SettingsContract.KEY_TIME_ZONE -> snapshot.timeZone
         SettingsContract.KEY_DATE_FORMAT -> snapshot.dateFormat.wire
         SettingsContract.KEY_SENSITIVE_MEDIA -> snapshot.sensitiveMedia.wire
+        SettingsContract.KEY_BITZ_MODE -> snapshot.bitzMode.wire
+        SettingsContract.KEY_VIDEO_MUTED -> snapshot.videoMuted.wireBool
         else -> null
     }
 
@@ -327,6 +351,8 @@ object SettingsRules {
                 DateFormatSetting.parse(rawValue).wire
             SettingsContract.KEY_SENSITIVE_MEDIA ->
                 SensitiveMediaSetting.parse(rawValue).wire
+            SettingsContract.KEY_BITZ_MODE ->
+                BitzModeSetting.parse(rawValue).wire
             SettingsContract.KEY_NOTIFICATIONS_ENABLED,
             SettingsContract.KEY_SOUND_ENABLED,
             SettingsContract.KEY_HAPTIC_ENABLED,
@@ -334,6 +360,7 @@ object SettingsRules {
             SettingsContract.KEY_FEED_MEDIA_PREVIEW,
             SettingsContract.KEY_FEED_SHOW_REACTIONS,
             SettingsContract.KEY_FEED_SHOW_PROTOCOL_NOTES,
+            SettingsContract.KEY_VIDEO_MUTED,
             -> when (rawValue) {
                 "1", "true" -> "1"
                 "0", "false" -> "0"

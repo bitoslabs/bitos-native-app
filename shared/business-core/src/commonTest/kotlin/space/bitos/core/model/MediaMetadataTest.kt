@@ -41,6 +41,44 @@ class MediaMetadataTest {
         assertEquals("https://cdn.example/poster.jpg", media.posterUrl)
         assertEquals(1080, media.width)
         assertEquals(1920, media.height)
+        assertEquals(4200L, media.durationSeconds)
+    }
+
+    @Test
+    fun parsesAndBoundsImetaDuration() {
+        // NIP-92 imeta `duration` (whole seconds) rides along with the video.
+        fun videoWithDuration(duration: String): Long? =
+            MediaMetadata.fromEvent(
+                event(
+                    NostrKinds.VIDEO,
+                    listOf(listOf("imeta", "url https://x/v.mp4", "m video/mp4", "duration $duration")),
+                ),
+            )?.durationSeconds
+
+        assertEquals(59L, videoWithDuration("59"))
+        assertEquals(14_400L, videoWithDuration("14400"))
+        // Malformed / zero / negative / beyond the 4 h bound → unknown.
+        assertNull(videoWithDuration("soon"))
+        assertNull(videoWithDuration("0"))
+        assertNull(videoDurationUnknownLegacyTag())
+        assertNull(videoWithDuration("14401"))
+    }
+
+    /** Positional url/m pairs carry no duration; the value stays unknown. */
+    private fun videoDurationUnknownLegacyTag(): Long? =
+        MediaMetadata.fromEvent(
+            event(NostrKinds.VIDEO, listOf(listOf("url", "https://x/clip.mp4"))),
+        )?.durationSeconds
+
+    @Test
+    fun formatsDurationLocaleFree() {
+        assertEquals("0:00", MediaMetadata.formatDuration(0))
+        assertEquals("0:59", MediaMetadata.formatDuration(59))
+        assertEquals("1:00", MediaMetadata.formatDuration(60))
+        assertEquals("12:05", MediaMetadata.formatDuration(725))
+        assertEquals("1:02:03", MediaMetadata.formatDuration(3723))
+        // Negative input clamps instead of printing a minus.
+        assertEquals("0:00", MediaMetadata.formatDuration(-1))
     }
 
     @Test

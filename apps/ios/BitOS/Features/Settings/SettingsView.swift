@@ -1233,7 +1233,9 @@ private struct PublishStatusLine: View {
 // MARK: - Help (static FAQ, legacy parity)
 
 private struct HelpSection: View {
+    @Environment(AppEnvironment.self) private var environment
     @State private var expanded: Set<String> = []
+    @State private var showDonate = false
     private let bridge = BusinessCoreBridge()
 
     private var faq: [(String, String)] {
@@ -1248,27 +1250,20 @@ private struct HelpSection: View {
                     Text(facts.contributeNote)
                         .font(.system(size: 13))
                         .foregroundStyle(BitOSTheme.textSecondary)
-                    if !facts.supportLud16.isEmpty {
-                        Text("Zap the team · \(facts.supportLud16)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(BitOSTheme.textTertiary)
-                        HStack(spacing: 8) {
-                            ForEach(facts.supportTiersSats, id: \.self) { tier in
-                                Text("\(tier) \u{26A1}")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(BitOSTheme.accent)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(BitOSTheme.accent.opacity(0.15), in: Capsule())
-                            }
-                        }
+                    Button {
+                        showDonate = true
+                    } label: {
+                        Label("Donate sats", image: "SolarBoltLinear")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.accent)
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.vertical, 4)
             } header: {
                 Text("Support the project")
             } footer: {
-                Text("Support tiers activate when the project lightning address is configured.")
+                Text("Donations go straight to the project\u{2019}s Lightning address \u{2014} no custodian.")
             }
             Section("FAQ") {
                 ForEach(faq, id: \.0) { question, answer in
@@ -1300,6 +1295,13 @@ private struct HelpSection: View {
                     .padding(.vertical, 4)
                 }
             }
+            Section("Contributors") {
+                let bridge = BusinessCoreBridge()
+                let contributorHexes = facts.contributorNpubs.map { bridge.parseNpub(encoded: $0) }
+                ForEach(Array(zip(facts.contributorNpubs, contributorHexes)), id: \.0) { npub, hex in
+                    contributorRow(npub: npub, hex: hex)
+                }
+            }
             Section("Links") {
                 factLink("Nostr Improvement Possibilities", url: facts.linkNips)
                 factLink("What is Nostr?", url: facts.linkNostr)
@@ -1309,6 +1311,44 @@ private struct HelpSection: View {
             }
         }
         .tint(BitOSTheme.accent)
+        .sheet(isPresented: $showDonate) {
+            SupportDonateSheet(
+                supportNpub: facts.supportNpub,
+                tiers: facts.supportTiersSats.map { (sats: Int($0), recommended: Int($0) == Int(facts.recommendedTierSats)) }
+                    .map { (sats: Int($0.0), recommended: $0.1) },
+                lookup: environment.profileLookup,
+                onDismiss: { showDonate = false }
+            )
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var facts: BusinessCoreBridge.AppFactsWire { BusinessCoreBridge().appFacts() }
+
+    private func contributorRow(npub: String, hex: String?) -> some View {
+        let profile = hex.flatMap { environment.profileLookup.profiles[$0] }
+        let name = profile.map(\.bestDisplayName).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (String(npub.prefix(14)) + "\u{2026}" + String(npub.suffix(10)))
+        return HStack(spacing: 10) {
+            if let hex {
+                PubkeyAvatarView(pubkey: hex, size: 36)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .lineLimit(1)
+                Text("Contributor")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+            Spacer()
+            Button("Copy npub") {
+                UIPasteboard.general.string = npub
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(BitOSTheme.accent)
+        }
     }
 
     private func factLink(_ label: String, url: String) -> some View {

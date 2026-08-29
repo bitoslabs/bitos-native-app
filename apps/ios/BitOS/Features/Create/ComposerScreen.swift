@@ -18,9 +18,15 @@ struct ComposerScreen: View {
 
     let onClose: () -> Void
 
+    /** APP-007 remix entry: seed tags (JSON `[[name, …], …]`) merged into
+     *  the published set; a seeded session never touches the saved draft. */
+    var baseTagsJson: String = "[]"
+
     private let bridge = BusinessCoreBridge()
     private let uploader = BlossomUploader()
     private let blossomServer = "https://blossom.primal.net"
+
+    private var seeded: Bool { baseTagsJson != "[]" && !baseTagsJson.isEmpty }
 
     struct PickedImage: Identifiable {
         let id = UUID()
@@ -130,14 +136,14 @@ struct ComposerScreen: View {
                 pickerItem = nil
             }
         }
-        .onChange(of: text) { _, _ in refreshSuggestions(); saveDraft() }
-        .onChange(of: remoteImageUrls) { _, _ in saveDraft() }
-        .onChange(of: contentWarningReason) { _, _ in saveDraft() }
-        .onChange(of: contentWarningOn) { _, _ in saveDraft() }
+        .onChange(of: text) { _, _ in refreshSuggestions(); if !seeded { saveDraft() } }
+        .onChange(of: remoteImageUrls) { _, _ in if !seeded { saveDraft() } }
+        .onChange(of: contentWarningReason) { _, _ in if !seeded { saveDraft() } }
+        .onChange(of: contentWarningOn) { _, _ in if !seeded { saveDraft() } }
         .onAppear {
             guard !restoredDraft else { return }
             restoredDraft = true
-            restoreDraft()
+            if !seeded { restoreDraft() }
         }
         .sheet(isPresented: $powSheet) {
             powSheetContent
@@ -339,7 +345,7 @@ struct ComposerScreen: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(BitOSTheme.warning)
             }
-            TextField("Why is this sensitive? (optional)", text: $contentWarningReason)
+            BitosField("Why is this sensitive? (optional)", text: $contentWarningReason)
                 .font(.footnote)
                 .onChange(of: contentWarningReason) { _, value in
                     if value.count > 120 { contentWarningReason = String(value.prefix(120)) }
@@ -585,6 +591,7 @@ struct ComposerScreen: View {
     }
 
     private func saveDraft() {
+        guard !seeded else { return }
         let tracked = trackedMentions.map { ["n": $0.name, "u": $0.npub] as [String: String] }
         guard let trackedData = try? JSONSerialization.data(withJSONObject: tracked),
               let trackedJson = String(data: trackedData, encoding: .utf8),
@@ -601,6 +608,7 @@ struct ComposerScreen: View {
     }
 
     private func restoreDraft() {
+        guard !seeded else { return }
         guard let wire = UserDefaults.standard.string(forKey: draftKey),
               let map = bridge.composerDraftDecode(json: wire) as? [String: Any] else { return }
         text = (map["text"] as? String) ?? ""
@@ -617,6 +625,7 @@ struct ComposerScreen: View {
     }
 
     private func clearDraft() {
+        guard !seeded else { return }
         UserDefaults.standard.removeObject(forKey: draftKey)
     }
 
@@ -680,16 +689,20 @@ struct ComposerScreen: View {
                 content: contentWithMedia,
                 contentWarningReason: contentWarningOn ? contentWarningReason : nil
             ) ?? "[]"
+            // Seed tags (remix/attribution) merge first, deduped by shared rule.
+            let mergedTagsJson = seeded
+                ? bridge.mergeTagsJson(baseJson: baseTagsJson, derivedJson: tagsJson)
+                : tagsJson
             if let outcome = powOutcome {
                 await environment.notePublisher.publishPowNote(
                     content: contentWithMedia,
                     nonce: outcome.nonce,
                     targetDifficulty: Int32(outcome.targetDifficulty),
                     createdAt: outcome.createdAt,
-                    tagsJson: tagsJson
+                    tagsJson: mergedTagsJson
                 )
             } else {
-                await environment.notePublisher.publishNote(content: contentWithMedia, tagsJson: tagsJson)
+                await environment.notePublisher.publishNote(content: contentWithMedia, tagsJson: mergedTagsJson)
             }
             if environment.notePublisher.result == .published {
                 published = true
@@ -737,7 +750,7 @@ private struct PollComposerSheet: View {
                 .disabled(!canPost)
                 .accessibilityLabel("Post poll")
             }
-            TextField("Question (\(question.count)/280)", text: $question)
+            BitosField("Question (\(question.count)/280)", text: $question, axis: .vertical)
                 .lineLimit(2...4)
                 .onChange(of: question) { _, value in
                     if value.count > 280 { question = String(value.prefix(280)) }

@@ -41,11 +41,17 @@ class LnurlPayClient(
         amountMillisats: Long,
         nostrEventJson: String?,
         lud16: String,
-    ): String = withContext(Dispatchers.IO) {
+    ): LnurlPay.Invoice = withContext(Dispatchers.IO) {
         val url = LnurlPay.buildCallbackUrl(payRequest, amountMillisats, nostrEventJson, lud16)
             ?: throw ZapFailure("amount out of range")
         val body = get(url) ?: throw ZapFailure("LNURL server unreachable")
-        LnurlPay.parseInvoice(body)?.paymentRequest ?: throw ZapFailure("no invoice returned")
+        LnurlPay.parseInvoice(body) ?: throw ZapFailure("no invoice returned")
+    }
+
+    /** LUD-21 settle classification (shared rule; host-side HTTP here). */
+    suspend fun fetchVerifySettled(verifyUrl: String): Boolean = withContext(Dispatchers.IO) {
+        val body = get(verifyUrl) ?: return@withContext false
+        LnurlPay.verifySettled(body)
     }
 
     private fun get(url: String): String? = runCatching {
