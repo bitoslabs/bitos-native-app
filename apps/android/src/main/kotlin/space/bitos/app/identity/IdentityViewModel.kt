@@ -214,7 +214,7 @@ class IdentityViewModel(
     }
 
     /** Publishes a kind-0 profile through the receipt machine. */
-    fun publishProfile(name: String, displayName: String, about: String, nip05: String, lud16: String) {
+    fun publishProfile(name: String, displayName: String, about: String, nip05: String, lud16: String, picture: String = "", banner: String = "", website: String = "") {
         val publisher = this.notePublisher ?: run {
             mutableProfileEdit.value = ProfileEditState(error = "Publisher unavailable.")
             return
@@ -225,9 +225,11 @@ class IdentityViewModel(
                 name = name,
                 displayName = displayName,
                 about = about,
-                picture = "",
+                picture = picture,
                 nip05 = nip05,
                 lud16 = lud16,
+                banner = banner,
+                website = website,
                 signerProvider = { createSigner() },
                 writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
             )

@@ -57,6 +57,7 @@ struct ComposerScreen: View {
     @State private var powSheet = false
     @State private var emojiSheet = false
     @State private var pollSheet = false
+    @State private var gifSheet = false
     @State private var urlAlert = false
     @State private var urlField = ""
     @State private var pickerItem: PhotosPickerItem?
@@ -94,10 +95,9 @@ struct ComposerScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") {
+                    SheetCloseButton {
                         if !published && !draftIsEmpty { showDiscardConfirm = true } else { onClose() }
                     }
-                    .foregroundStyle(BitOSTheme.textSecondary)
                     .confirmationDialog("Discard draft?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
                         Button("Discard", role: .destructive) {
                             clearDraft()
@@ -136,7 +136,11 @@ struct ComposerScreen: View {
                 pickerItem = nil
             }
         }
-        .onChange(of: text) { _, _ in refreshSuggestions(); if !seeded { saveDraft() } }
+        .onChange(of: text) { _, _ in
+            refreshSuggestions()
+            if !errorMessage.isEmpty { errorMessage = "" }
+            if !seeded { saveDraft() }
+        }
         .onChange(of: remoteImageUrls) { _, _ in if !seeded { saveDraft() } }
         .onChange(of: contentWarningReason) { _, _ in if !seeded { saveDraft() } }
         .onChange(of: contentWarningOn) { _, _ in if !seeded { saveDraft() } }
@@ -160,6 +164,15 @@ struct ComposerScreen: View {
             }
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $gifSheet) {
+            GifPickerSheet(
+                onPick: { gif in
+                    if canAddImage { remoteImageUrls.append(gif.url) }
+                },
+                onDismiss: { gifSheet = false }
+            )
+            .presentationDetents([.large, .medium])
+        }
         .alert("Add image URL", isPresented: $urlAlert) {
             TextField("https://example.com/image.jpg", text: $urlField)
                 .keyboardType(.URL)
@@ -176,6 +189,16 @@ struct ComposerScreen: View {
     }
 
     // MARK: - Editor
+
+    /// Pinned error banner text: the local error wins over the publish
+    /// failure; cleared on the next edit (legacy parity).
+    private var bannerMessage: String {
+        if !errorMessage.isEmpty { return errorMessage }
+        if let result = environment.notePublisher.result, result != .published, !published {
+            return publishFailureText(result)
+        }
+        return ""
+    }
 
     private var editorContent: some View {
         VStack(spacing: 0) {
@@ -205,19 +228,20 @@ struct ComposerScreen: View {
                     if contentWarningOn {
                         contentWarningField
                     }
-                    if !errorMessage.isEmpty {
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(BitOSTheme.error)
-                    }
-                    if let result = environment.notePublisher.result, result != .published, !published {
-                        Text(publishFailureText(result))
-                            .font(.footnote)
-                            .foregroundStyle(BitOSTheme.error)
-                    }
                 }
                 .padding(.horizontal, BitOSTheme.Spacing.screen)
                 .padding(.vertical, BitOSTheme.Spacing.md)
+            }
+            // Error banner (legacy parity): full-width tinted strip above
+            // the upload status / toolbar, cleared on the next edit.
+            if !bannerMessage.isEmpty {
+                Text(bannerMessage)
+                    .font(.footnote)
+                    .foregroundStyle(BitOSTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, BitOSTheme.Spacing.base)
+                    .padding(.vertical, BitOSTheme.Spacing.sm)
+                    .background(BitOSTheme.error.opacity(0.1))
             }
             if !uploadStatus.isEmpty {
                 HStack(spacing: BitOSTheme.Spacing.sm) {
@@ -289,17 +313,26 @@ struct ComposerScreen: View {
         )
     }
 
+    /// Media grid: real thumbnails (legacy parity), removable.
     private var mediaGrid: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 ForEach(pickedImages) { picked in
-                    mediaThumb(label: "image") {
+                    mediaThumb {
                         pickedImages.removeAll { $0.id == picked.id }
+                    } content: {
+                        if let image = UIImage(data: picked.data) {
+                            Image(uiImage: image).resizable().scaledToFill()
+                        } else {
+                            brokenThumbPlaceholder
+                        }
                     }
                 }
                 ForEach(remoteImageUrls, id: \.self) { url in
-                    mediaThumb(label: String(url.split(separator: "/").last ?? "").prefix(14).description) {
+                    mediaThumb {
                         remoteImageUrls.removeAll { $0 == url }
+                    } content: {
+                        RemoteMediaThumb(url: url)
                     }
                 }
             }
@@ -307,22 +340,22 @@ struct ComposerScreen: View {
         .frame(height: 96)
     }
 
-    private func mediaThumb(label: String, onRemove: @escaping () -> Void) -> some View {
+    private var brokenThumbPlaceholder: some View {
+        ZStack {
+            BitOSTheme.surfaceElevated
+            AppIcons.image(for: AppIcons.brokenImage)
+                .font(.system(size: 18))
+                .foregroundStyle(BitOSTheme.textTertiary)
+        }
+    }
+
+    /// Removable 96 pt tile; the caller supplies the real media content.
+    private func mediaThumb(onRemove: @escaping () -> Void, @ViewBuilder content: () -> some View) -> some View {
         ZStack(alignment: .topTrailing) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(BitOSTheme.surfaceElevated)
                 .frame(width: 96, height: 96)
-                .overlay {
-                    VStack(spacing: 2) {
-                        AppIcons.image(for: AppIcons.photo)
-                            .font(.system(size: 18))
-                            .foregroundStyle(BitOSTheme.textTertiary)
-                        Text(label)
-                            .font(.system(size: 9))
-                            .foregroundStyle(BitOSTheme.textTertiary)
-                            .lineLimit(1)
-                    }
-                }
+                .overlay { content().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous)) }
             Button(action: onRemove) {
                 Image(systemName: AppIcons.close)
                     .font(.system(size: 9, weight: .bold))
@@ -364,6 +397,8 @@ struct ComposerScreen: View {
 
     private var toolbar: some View {
         HStack(spacing: 2) {
+            // Legacy toolbar order (minus Meme Studio, which awaits the
+            // studio phase): image · URL · GIF · poll · PoW · CW · hashtag · emoji.
             toolbarButton(AppIcons.photo, "Attach image", enabled: canAddImage, active: mediaCount > 0, badge: mediaCount > 0 ? "\(mediaCount)" : nil) {
                 emojiSheet = false
                 powSheet = false
@@ -371,15 +406,16 @@ struct ComposerScreen: View {
                 pickerPrompt = true
             }
             toolbarButton(AppIcons.globe, "Add image URL", enabled: canAddImage) { urlAlert = true }
+            toolbarGlyphButton("GIF", "Add GIF", enabled: canAddImage) { gifSheet = true }
+            toolbarButton("chart.bar", "Create poll") { pollSheet = true }
+            toolbarButton(AppIcons.qrCode, "Proof of work", enabled: pickedImages.isEmpty, active: powOutcome != nil || powTarget > 0,
+                          badge: powOutcome.map { "\($0.targetDifficulty)" } ?? (powTarget > 0 ? "\(powTarget)" : nil)) { powSheet = true }
             toolbarButton(AppIcons.mute, "Content warning", active: contentWarningOn) {
                 contentWarningOn.toggle()
                 if !contentWarningOn { contentWarningReason = "" }
             }
             toolbarButton("number", "Insert hashtag") { insertAtEnd { bridge.composerInsertHashtag(text: $0, cursor: Int32($0.count)) } }
             toolbarButton("face.smiling", "Insert emoji") { emojiSheet = true }
-            toolbarButton(AppIcons.qrCode, "Proof of work", enabled: pickedImages.isEmpty, active: powOutcome != nil || powTarget > 0,
-                          badge: powOutcome.map { "\($0.targetDifficulty)" } ?? (powTarget > 0 ? "\(powTarget)" : nil)) { powSheet = true }
-            toolbarButton("chart.bar", "Create poll") { pollSheet = true }
             Spacer(minLength: BitOSTheme.Spacing.sm)
             charCounter
         }
@@ -391,6 +427,20 @@ struct ComposerScreen: View {
     }
 
     @State private var pickerPrompt = false
+
+    /// Text-glyph toolbar button (GIF has no SF Symbol; the legacy app
+    /// renders a text-like glyph too).
+    private func toolbarGlyphButton(_ glyph: String, _ label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(glyph)
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(enabled ? BitOSTheme.textSecondary : BitOSTheme.textTertiary.opacity(0.4))
+                .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
 
     private func toolbarButton(_ symbol: String, _ label: String, enabled: Bool = true, active: Bool = false, badge: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -799,6 +849,29 @@ private struct PollComposerSheet: View {
 }
 
 // MARK: - Published state
+
+/// Remote media tile: broken-image fallback on failure (legacy parity).
+private struct RemoteMediaThumb: View {
+    let url: String
+
+    var body: some View {
+        AsyncImage(url: URL(string: url)) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFill()
+            case .failure:
+                ZStack {
+                    BitOSTheme.surfaceElevated
+                    AppIcons.image(for: AppIcons.brokenImage)
+                        .font(.system(size: 18))
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                }
+            default:
+                BitOSTheme.surfaceElevated
+            }
+        }
+    }
+}
 
     private var publishedState: some View {
         VStack(spacing: BitOSTheme.Spacing.md) {

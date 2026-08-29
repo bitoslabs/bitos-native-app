@@ -20,6 +20,8 @@ import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Gif
+import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.HowToVote
@@ -118,6 +120,8 @@ object AppIcons {
     val Photo = Icons.Rounded.PhotoLibrary
     val Video = Icons.Rounded.Videocam
     val Play = Icons.Rounded.PlayArrow
+    val Gif = Icons.Rounded.Gif                       // GIF picker (legacy parity)
+    val BrokenImage = Icons.Rounded.BrokenImage       // failed media tile
 
     /** Convenience for components taking optional leading icons. */
     val none: ImageVector? = null

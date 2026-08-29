@@ -1,6 +1,7 @@
 package space.bitos.app.ui.create
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,7 +54,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -135,6 +139,7 @@ fun CreateNoteScreen(
     var showPow by remember { mutableStateOf(false) }
     var showUrlDialog by remember { mutableStateOf(false) }
     var showPoll by remember { mutableStateOf(false) }
+    var showGif by remember { mutableStateOf(false) }
     val uploader = remember { BlossomUploader() }
 
     val counter = remember(field.text) { ComposerRules.counterState(field.text.length) }
@@ -305,11 +310,16 @@ fun CreateNoteScreen(
                         Text("Now", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
                     }
                 }
+                // Selection-aware field: @-mention detection, toolbar
+                // inserts and mention picks operate at the real caret.
                 space.bitos.app.ui.components.BitosPlainTextField(
-                    value = field.text,
-                    onValueChange = { field = TextFieldValue(it, TextRange(it.length)) },
+                    value = field,
+                    onValueChange = { next ->
+                        field = next
+                        if (errorMessage.isNotEmpty()) errorMessage = ""
+                    },
                     placeholder = "What's happening?",
-                    singleLine = false,
+                    minLines = 4,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 // Mention autocomplete (≤6, web `candidates` parity).
@@ -347,14 +357,22 @@ fun CreateNoteScreen(
                         }
                     }
                 }
-                // Media grid: remote URLs + local picks, removable.
+                // Media grid: real thumbnails (legacy parity), removable.
                 if (mediaCount > 0) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
                         items(remoteImageUrls.toList()) { url ->
-                            MediaThumb(label = url.substringAfterLast('/').take(14)) { remoteImageUrls.remove(url) }
+                            MediaThumb(onRemove = { remoteImageUrls.remove(url) }) {
+                                RemoteMediaTile(url)
+                            }
                         }
                         items(pickedKeys.toList()) { key ->
-                            MediaThumb(label = "image") { pickedKeys.remove(key) }
+                            MediaThumb(onRemove = { pickedKeys.remove(key) }) {
+                                space.bitos.app.ui.components.LocalUriImage(
+                                    uri = android.net.Uri.parse(key.substringBeforeLast('|')),
+                                    resolver = context.contentResolver,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
                         }
                     }
                 }
@@ -385,22 +403,26 @@ fun CreateNoteScreen(
                         }
                     }
                 }
-                if (errorMessage.isNotEmpty()) {
-                    Text(errorMessage, style = MaterialTheme.typography.bodySmall, color = BitOSColors.error)
+            }
+            // Error banner (legacy parity): full-width tinted strip above
+            // the upload status / toolbar, cleared on the next edit.
+            val publishFailureMessage = (publishState.result)?.takeIf { it != PublishResult.PUBLISHED }?.let { result ->
+                when (result) {
+                    PublishResult.SIGNING_REFUSED -> "Signing refused — add an identity first."
+                    PublishResult.REJECTED -> "Relays rejected the note."
+                    PublishResult.TIMEOUT -> "No relay receipt before timeout."
+                    else -> "Publish failed."
                 }
-                (publishState.result)?.let { result ->
-                    if (result != PublishResult.PUBLISHED) {
-                        Text(
-                            when (result) {
-                                PublishResult.SIGNING_REFUSED -> "Signing refused — add an identity first."
-                                PublishResult.REJECTED -> "Relays rejected the note."
-                                PublishResult.TIMEOUT -> "No relay receipt before timeout."
-                                else -> "Publish failed."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = BitOSColors.error,
-                        )
-                    }
+            }
+            val bannerMessage = errorMessage.ifEmpty { publishFailureMessage ?: "" }
+            if (bannerMessage.isNotEmpty()) {
+                Surface(color = BitOSColors.error.copy(alpha = 0.1f), modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        bannerMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.error,
+                        modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                    )
                 }
             }
             if (uploadStatus.isNotEmpty()) {
@@ -425,6 +447,7 @@ fun CreateNoteScreen(
                 counter = counter,
                 onPickImage = { if (canAddImage) galleryPicker.launch("image/*") },
                 onAddUrl = { showUrlDialog = true },
+                onGif = { if (canAddImage) showGif = true },
                 onToggleCw = { contentWarningOn = !contentWarningOn; if (!contentWarningOn) contentWarningReason = "" },
                 onHashtag = { insert(ComposerRules::insertHashtag) },
                 onEmoji = { showEmoji = true },
@@ -526,6 +549,13 @@ fun CreateNoteScreen(
         )
     }
 
+    if (showGif) {
+        GifPickerSheet(
+            onPick = { gif -> if (canAddImage) remoteImageUrls += gif.url },
+            onDismiss = { showGif = false },
+        )
+    }
+
     if (showUrlDialog) {
         var url by remember { mutableStateOf("") }
         AlertDialog(
@@ -554,30 +584,54 @@ fun CreateNoteScreen(
     }
 }
 
+/** Removable 96 dp tile; the caller supplies the real media content. */
 @Composable
-private fun MediaThumb(label: String, onRemove: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = BitOSColors.surfaceElevated,
-        modifier = Modifier.size(96.dp),
+private fun MediaThumb(onRemove: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier
+            .size(96.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(BitOSColors.surfaceElevated),
     ) {
-        Box {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Icon(AppIcons.Photo, contentDescription = null, tint = BitOSColors.textTertiary)
-                Text(label, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
-            }
-            Surface(
-                shape = CircleShape,
-                color = Color(0x99000000),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(22.dp)
-                    .clickable(onClickLabel = "Remove attachment") { onRemove() },
-            ) {
-                Icon(Icons.Rounded.Close, contentDescription = null, tint = Color.White, modifier = Modifier.padding(4.dp))
-            }
+        content()
+        Surface(
+            shape = CircleShape,
+            color = Color(0x99000000),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(22.dp)
+                .clickable(onClickLabel = "Remove attachment") { onRemove() },
+        ) {
+            Icon(Icons.Rounded.Close, contentDescription = null, tint = Color.White, modifier = Modifier.padding(4.dp))
         }
+    }
+}
+
+/** Remote tile: decodes on IO; broken-image fallback on failure (legacy parity). */
+private sealed interface MediaTileState {
+    data object Loading : MediaTileState
+    data object Failed : MediaTileState
+    data class Ready(val bitmap: android.graphics.Bitmap) : MediaTileState
+}
+
+@Composable
+private fun RemoteMediaTile(url: String) {
+    var state by remember(url) { mutableStateOf<MediaTileState>(MediaTileState.Loading) }
+    LaunchedEffect(url) {
+        state = space.bitos.app.ui.components.loadBitmap(url)?.let(MediaTileState::Ready) ?: MediaTileState.Failed
+    }
+    when (val tile = state) {
+        MediaTileState.Loading -> Box(Modifier.fillMaxSize())
+        MediaTileState.Failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(AppIcons.BrokenImage, contentDescription = null, tint = BitOSColors.textTertiary, modifier = Modifier.size(22.dp))
+        }
+        is MediaTileState.Ready -> Image(
+            bitmap = tile.bitmap.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -592,6 +646,7 @@ private fun ComposerToolbar(
     counter: ComposerRules.CounterState,
     onPickImage: () -> Unit,
     onAddUrl: () -> Unit,
+    onGif: () -> Unit,
     onToggleCw: () -> Unit,
     onHashtag: () -> Unit,
     onEmoji: () -> Unit,
@@ -607,13 +662,16 @@ private fun ComposerToolbar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            // Legacy toolbar order (minus Meme Studio, which awaits the
+            // studio phase): image · URL · GIF · poll · PoW · CW · hashtag · emoji.
             ToolbarButton(AppIcons.Photo, "Attach image", enabled = canAddImage, active = mediaCount > 0, badge = mediaCount.takeIf { it > 0 }?.toString(), onClick = onPickImage)
             ToolbarButton(AppIcons.Globe, "Add image URL", enabled = canAddImage, onClick = onAddUrl)
+            ToolbarButton(AppIcons.Gif, "Add GIF", enabled = canAddImage, onClick = onGif)
+            ToolbarButton(AppIcons.Poll, "Create poll", onClick = onPoll)
+            ToolbarButton(AppIcons.QrCode, "Proof-of-work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
             ToolbarButton(AppIcons.Mute, "Content warning", active = contentWarningOn, onClick = onToggleCw)
             ToolbarButton(Icons.Rounded.Tag, "Insert hashtag", onClick = onHashtag)
             ToolbarButton(AppIcons.Chat, "Insert emoji", onClick = onEmoji)
-            ToolbarButton(AppIcons.Poll, "Create poll", onClick = onPoll)
-            ToolbarButton(AppIcons.QrCode, "Proof-of-work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
             Spacer(Modifier.width(BitOSSpacing.sm))
             CharCounter(counter)
         }
@@ -668,7 +726,12 @@ private fun ToolbarButton(
 /** Web parity ring: fills with length, amber near the limit, red over. */
 @Composable
 private fun CharCounter(counter: ComposerRules.CounterState) {
-    if (counter.label.startsWith("0 /")) return
+    if (counter.label.startsWith("0 /")) {
+        // Reserve the ring's width so the toolbar doesn't shift on the
+        // first character (legacy parity).
+        Spacer(Modifier.width(20.dp))
+        return
+    }
     val color = when {
         counter.over -> BitOSColors.error
         counter.near -> Color(0xFFF5A623)

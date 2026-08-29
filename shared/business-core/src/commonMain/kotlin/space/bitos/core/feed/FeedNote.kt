@@ -92,7 +92,7 @@ data class FeedNote(
         )
         }
 
-        fun isFeedKind(kind: Int): Boolean = kind == NostrKinds.SHORT_TEXT_NOTE || kind == NostrKinds.VIDEO
+        fun isFeedKind(kind: Int): Boolean = kind in NostrKinds.feedKinds
     }
 }
 

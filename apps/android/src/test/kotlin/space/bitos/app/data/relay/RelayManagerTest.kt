@@ -52,6 +52,8 @@ class RelayManagerTest {
     fun emptyStoreBootsPlatformDefaults() {
         val manager = manager()
         assertEquals(RelayManager.defaultEntries().map { it.url }, manager.entries.value.map { it.url })
+        assertEquals("wss://nostr-01.yakihonne.com", manager.entries.value.first().url.value)
+        assertTrue(manager.entries.value.first().primary)
         // The default set seeds the pool (url-keyed transports installed).
         assertEquals(transports.keys.map { it.value }.toSet(), manager.entries.value.map { it.url.value }.toSet())
     }

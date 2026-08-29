@@ -22,10 +22,15 @@ object NostrKinds {
     const val REPOST = 6
     const val GENERIC_REACTION = 7
     const val LONG_FORM = 30_023
-    const val VIDEO = 22
+    /** NIP-71 normal video event. */
+    const val NORMAL_VIDEO = 21
+    /** NIP-71 short-form portrait video event. */
+    const val SHORT_VIDEO = 22
+    /** Compatibility name retained for existing kind-22 publishing code. */
+    const val VIDEO = SHORT_VIDEO
     const val VIDEO_COMMENT = 1_111
 
-    val feedKinds: List<Int> = listOf(SHORT_TEXT_NOTE, VIDEO)
+    val feedKinds: List<Int> = listOf(SHORT_TEXT_NOTE, NORMAL_VIDEO, SHORT_VIDEO)
 }
 
 /**

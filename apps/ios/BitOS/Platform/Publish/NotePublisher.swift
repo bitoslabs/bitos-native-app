@@ -407,7 +407,7 @@ final class NotePublisher {
     }
 
     /// Kind-0 profile metadata publish through the receipt machine.
-    func publishProfile(name: String, displayName: String, about: String, picture: String, nip05: String, lud16: String) async {
+    func publishProfile(name: String, displayName: String, about: String, picture: String, nip05: String, lud16: String, banner: String = "", website: String = "") async {
         guard result == nil, inFlightId == nil, !busy else { return }
         busy = true
         defer { busy = false }
@@ -418,13 +418,15 @@ final class NotePublisher {
         let now = Int64(Date.now.timeIntervalSince1970)
         guard let eventId = bridge.composeProfileEventId(
                   authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
-                  about: about, picture: picture, nip05: nip05, lud16: lud16, nowSeconds: now
+                  about: about, picture: picture, nip05: nip05, lud16: lud16, nowSeconds: now,
+                  banner: banner, website: website
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.profilePublishMessage(
                   authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
                   about: about, picture: picture, nip05: nip05, lud16: lud16,
-                  createdAtSeconds: now, signatureHex: signature
+                  createdAtSeconds: now, signatureHex: signature,
+                  banner: banner, website: website
               ) else {
             result = .invalid
             return

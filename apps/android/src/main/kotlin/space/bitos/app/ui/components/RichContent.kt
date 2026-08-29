@@ -5,7 +5,6 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,45 +12,50 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
-import space.bitos.core.nostr.RichToken
 import java.net.URL
+
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.sp
+import space.bitos.core.nostr.RichToken
 
 /**
  * APP-005 rich content (unified feature spec §3.5): NIP-27 rich body,
@@ -66,12 +70,23 @@ fun RichText(
     tokens: List<RichToken>,
     modifier: Modifier = Modifier,
     maxLines: Int = Int.MAX_VALUE,
+    /** Body color override (video captions render white). */
+    color: Color = BitOSColors.textPrimary,
+    /** Media link URLs already rendered as tiles — hidden from the body. */
+    hiddenMediaUrls: Set<String> = emptySet(),
+    /** Mention display-name resolver (profile entities show @name). */
+    resolveMentionName: ((String) -> String?)? = null,
+    /** Non-profile entity tap (note1/nevent1/naddr1) → open thread. */
+    onOpenNoteRef: ((String) -> Unit)? = null,
     /** APP-005 Show more/less: reports whether the body overflowed the
      * [maxLines] clamp (only meaningful with a finite limit). */
     onOverflow: ((Boolean) -> Unit)? = null,
     onOpenProfile: ((String) -> Unit)? = null,
     onOpenHashtag: ((String) -> Unit)? = null,
+    /** External-link tap interception (confirm sheet); null = open directly. */
+    onOpenExternalLink: ((String) -> Unit)? = null,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val linkStyles = TextLinkStyles(
         style = SpanStyle(color = BitOSColors.primary, fontWeight = FontWeight.W500),
     )
@@ -79,12 +94,29 @@ fun RichText(
         for (token in tokens) {
             when (token) {
                 is RichToken.Text -> append(token.value)
-                is RichToken.Link -> withLink(
-                    androidx.compose.ui.text.LinkAnnotation.Url(token.url, linkStyles) {
-                        // External links: styled only for now; in-app routing
-                        // lands with thread deep links (APP-009).
-                    },
-                ) { append(token.url) }
+                is RichToken.Link -> {
+                    // Bare media links render as tiles below — the raw URL
+                    // disappears from the body (web parity).
+                    if (token.url in hiddenMediaUrls) continue
+                    withLink(
+                        androidx.compose.ui.text.LinkAnnotation.Url(token.url, linkStyles) {
+                            val handler = onOpenExternalLink
+                            if (handler != null) {
+                                handler(token.url)
+                            } else {
+                                // External links open the system browser.
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse(token.url),
+                                        ),
+                                    )
+                                }
+                            }
+                        },
+                    ) { append(token.url) }
+                }
                 is RichToken.Hashtag -> withLink(
                     androidx.compose.ui.text.LinkAnnotation.Clickable(
                         tag = "hashtag:${token.tag}",
@@ -93,16 +125,25 @@ fun RichText(
                     ),
                 ) { append("#${token.tag}") }
                 is RichToken.Nostr -> {
-                    val display = if (token.raw.length > 14) token.raw.take(10) + "…" else token.raw
+                    // Web parity: profile mentions resolve to @display-name
+                    // once metadata lands; note refs stay shortened ids.
+                    val display = if (token.entity == RichToken.Entity.PROFILE) {
+                        token.hex?.let { hex ->
+                            resolveMentionName?.invoke(hex)?.let { "@$it" }
+                        } ?: if (token.raw.length > 14) token.raw.take(10) + "…" else token.raw
+                    } else {
+                        if (token.raw.length > 14) token.raw.take(10) + "…" else token.raw
+                    }
                     withLink(
                         androidx.compose.ui.text.LinkAnnotation.Clickable(
                             tag = "nostr:${token.raw}",
                             styles = linkStyles,
                             linkInteractionListener = {
-                                // Only profile entities open in V1 (author sheet);
-                                // note/address entities land with threads (APP-009).
                                 if (token.entity == RichToken.Entity.PROFILE) {
                                     token.hex?.let { hex -> onOpenProfile?.invoke(hex) }
+                                } else {
+                                    // note1/nevent1/naddr1 → thread (web parity).
+                                    onOpenNoteRef?.invoke(token.raw)
                                 }
                             },
                         ),
@@ -113,26 +154,23 @@ fun RichText(
     }
     Text(
         annotated,
-        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(color = BitOSColors.textPrimary),
+        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(color = color),
         modifier = modifier,
         maxLines = maxLines,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         onTextLayout = { result -> onOverflow?.invoke(result.hasVisualOverflow) },
     )
 }
 
-/** Image tiles (≤9) with the video pager owning video notes. */
+/** Media tiles (≤9): images render inline; bare video links get a
+ *  play-glyph tile that opens a fullscreen player. */
 @Composable
 fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String) -> Unit) {
-    val images = remember(urls) {
-        urls.filter {
-            val ext = it.substringAfterLast('.', "").lowercase()
-            ext in setOf("png", "jpg", "jpeg", "gif", "webp", "avif", "apng")
-        }.take(9)
-    }
-    if (images.isEmpty()) return
+    val media = remember(urls) { urls.take(9) }
+    if (media.isEmpty()) return
+    var playUrl by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        images.chunked(3).forEach { rowUrls ->
+        media.chunked(3).forEach { rowUrls ->
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -143,13 +181,71 @@ fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String)
                             .weight(1f)
                             .aspectRatio(1f)
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClickLabel = "Open media") { onOpen(url) },
+                            .clickable(onClickLabel = if (isVideoMediaUrl(url)) "Play video" else "Open media") {
+                                if (isVideoMediaUrl(url)) playUrl = url else onOpen(url)
+                            },
                     ) {
-                        RemoteBitmapImage(url = url)
+                        if (isVideoMediaUrl(url)) {
+                            // Bare video link: gradient tile + play glyph.
+                            Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    AppIcons.Play,
+                                    contentDescription = null,
+                                    tint = BitOSColors.textSecondary,
+                                    modifier = Modifier.size(32.dp),
+                                )
+                            }
+                        } else {
+                            RemoteBitmapImage(url = url)
+                        }
                     }
                 }
                 repeat(3 - rowUrls.size) { Box(Modifier.weight(1f)) }
             }
+        }
+    }
+    playUrl?.let { url ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { playUrl = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            FullscreenVideoPlayer(url = url, onDismiss = { playUrl = null })
+        }
+    }
+}
+
+// Canonical video-link test lives in AttachmentPreviewRow.kt (same
+// package); RichContent's former private copy was removed to keep one
+// helper.
+
+/** Single-file fullscreen player for bare video links (released on close). */
+@Composable
+private fun FullscreenVideoPlayer(url: String, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val player = androidx.compose.runtime.remember(url) {
+        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+            setMediaItem(androidx.media3.common.MediaItem.fromUri(url))
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+            playWhenReady = true
+            prepare()
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(url) {
+        onDispose { player.release() }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { ctx ->
+                androidx.media3.ui.PlayerView(ctx).apply {
+                    useController = true
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                }
+            },
+            update = { it.player = player },
+            modifier = Modifier.fillMaxSize(),
+        )
+        IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
+            Icon(AppIcons.Close, contentDescription = "Close video", tint = Color.White)
         }
     }
 }
@@ -181,6 +277,48 @@ fun RemoteBitmapImage(url: String, modifier: Modifier = Modifier) {
 suspend fun loadBitmap(url: String): Bitmap? = withContext(Dispatchers.IO) {
     runCatching { BitmapFactory.decodeStream(URL(url).openStream()) }.getOrNull()
 }
+
+/**
+ * Local content-Uri thumbnail (composer picks): bounds-first decode with
+ * sampling so a 48 MP photo never lands in memory at full resolution —
+ * tile-sized is all the composer grid ever shows.
+ */
+@Composable
+fun LocalUriImage(uri: android.net.Uri, resolver: android.content.ContentResolver, modifier: Modifier = Modifier) {
+    val bitmap by produceState<Bitmap?>(initialValue = null, uri) {
+        value = loadUriThumbnail(resolver, uri)
+    }
+    Box(
+        modifier.background(
+            androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(BitOSColors.surface, BitOSColors.surfaceElevated),
+            ),
+        ),
+    ) {
+        bitmap?.let { image ->
+            Image(
+                bitmap = image.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+suspend fun loadUriThumbnail(resolver: android.content.ContentResolver, uri: android.net.Uri, maxDim: Int = 512): Bitmap? =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= maxDim && bounds.outHeight / (sample * 2) >= maxDim) sample *= 2
+            resolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+            }
+        }.getOrNull()
+    }
 
 /** Fullscreen zoomable media viewer (lightbox). */
 @Composable

@@ -245,14 +245,15 @@ fun InboxScreen(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
                 onLoadComments = homeViewModel::loadComments,
-                onReply = { text, target -> homeViewModel.reply(text, target) },
+                onReply = { text, target, attachments, pow -> homeViewModel.reply(text, target, attachments, pow) },
                 onClose = { threadTarget = null },
             )
         }
     }
-    authorTarget?.let { _ ->
+    authorTarget?.let { authorPubkey ->
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
             AuthorProfileContent(
+                authorPubkey = authorPubkey,
                 state = authorState,
                 feedState = feedState,
                 onOpen = authorRepository::open,

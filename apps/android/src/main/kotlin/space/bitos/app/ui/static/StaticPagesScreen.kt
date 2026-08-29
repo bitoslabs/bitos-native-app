@@ -71,7 +71,7 @@ fun StaticPagesScreen(
                 }
             }
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onClose) { Text("Close", color = BitOSColors.textSecondary) }
+            space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
         }
 
         Column(

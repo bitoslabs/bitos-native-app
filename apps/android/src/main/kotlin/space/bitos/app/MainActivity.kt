@@ -51,6 +51,8 @@ class MainActivity : ComponentActivity() {
                 notePublisher = publisher,
                 composerDraftStore = application.composerDraftStore,
                 sentZapsStore = application.sentZapsStore,
+                dmRepository = application.dmRepository,
+                storiesRepository = application.storiesRepository,
                 mediaPublishViewModel = mediaPublish,
                 notifications = notificationRepository,
                 searchRepository = searchRepository,

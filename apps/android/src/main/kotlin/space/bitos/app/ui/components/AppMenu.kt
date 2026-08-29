@@ -2,13 +2,16 @@ package space.bitos.app.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
 import space.bitos.app.ui.theme.AppIcons
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -113,6 +116,7 @@ fun AppMenuDropdown(
                         } else {
                             null
                         },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                         onClick = {
                             onSelect(item.id)
                             onDismissRequest()
@@ -123,8 +127,11 @@ fun AppMenuDropdown(
         }
     }
 }
-
-/** Bottom-sheet menu for long lists (Bitz comments host parity). */
+/**
+ * Bottom-sheet menu (legacy Flutter `AppBottomSheetMenu` parity): drag
+ * handle + 28° top radius, centered bold title, 48 dp rows with a 12°
+ * rounded ripple, bare 18 dp leading icon, red destructive tone.
+ */
 @androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun AppBottomSheetMenu(
@@ -136,27 +143,34 @@ fun AppBottomSheetMenu(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         containerColor = BitOSColors.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
     ) {
-        if (title != null) {
-            Text(
-                title,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.W600,
-                color = BitOSColors.textSecondary,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
-        entries.forEach { entry ->
-            when (entry) {
-                AppMenuEntry.Divider -> HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    thickness = 1.dp,
-                    color = BitOSColors.divider,
+        Column(Modifier.padding(horizontal = 12.dp)) {
+            if (title != null) {
+                Text(
+                    title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.W700,
+                    color = BitOSColors.textPrimary,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
-                is AppMenuEntry.Item -> AppMenuItemRow(entry.item) { onSelect(entry.item.id) }
             }
+            entries.forEach { entry ->
+                when (entry) {
+                    AppMenuEntry.Divider -> HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        thickness = 1.dp,
+                        color = BitOSColors.divider,
+                    )
+                    is AppMenuEntry.Item -> AppMenuItemRow(entry.item) {
+                        onSelect(entry.item.id)
+                        onDismissRequest()
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -166,20 +180,23 @@ private fun AppMenuItemRow(item: AppMenuItem, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .heightIn(min = 48.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
             .clickable(onClickLabel = item.label) { onClick() }
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
             .semantics { contentDescription = item.label },
     ) {
         if (item.icon != null) {
             Icon(item.icon, contentDescription = null, tint = iconColor(item), modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
         }
         Text(
             item.label,
             fontSize = 13.sp,
             fontWeight = FontWeight.W600,
             color = labelColor(item),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
         Spacer(Modifier.weight(1f))
         if (item.checked) {

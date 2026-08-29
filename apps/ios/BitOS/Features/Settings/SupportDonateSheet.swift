@@ -69,8 +69,7 @@ struct SupportDonateSheet: View {
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.error)
             }
-            Button("Close", action: onDismiss)
-                .foregroundStyle(BitOSTheme.textSecondary)
+            SheetCloseButton(action: onDismiss)
         }
         .padding(BitOSTheme.Spacing.base)
         .background(BitOSTheme.background)

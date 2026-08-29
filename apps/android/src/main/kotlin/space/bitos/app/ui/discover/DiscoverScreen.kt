@@ -225,7 +225,7 @@ private fun PostsTab(
                 identityViewModel = identityViewModel,
                 publisherState = publisherState,
                 onLoadComments = { target -> homeViewModel.loadComments(target) },
-                onReply = { text, target -> homeViewModel.reply(text, target) },
+                onReply = { text, target, attachments, pow -> homeViewModel.reply(text, target, attachments, pow) },
                 onClose = { onThreadTarget(null) },
             )
         }
@@ -300,7 +300,12 @@ private fun PeopleTab(
                     Modifier.padding(BitOSSpacing.md).fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    space.bitos.app.ui.components.PubkeyAvatar(pubkey = person.pubkey, size = 44)
+                    space.bitos.app.ui.components.PubkeyAvatar(
+                        pubkey = person.pubkey,
+                        size = 44,
+                        pictureUrl = person.picture,
+                        label = person.displayName,
+                    )
                     Spacer(Modifier.width(BitOSSpacing.md))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -374,7 +379,7 @@ private fun HashtagsTab(hits: List<space.bitos.core.feed.SearchResults.HashtagHi
 private fun CreatorCard(pubkey: String, profile: ProfileMetadata?) {
     Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.primaryContainer) {
         Row(Modifier.padding(BitOSSpacing.base).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            PubkeyAvatar(pubkey = pubkey, size = 48)
+            PubkeyAvatar(pubkey = pubkey, size = 48, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
             Spacer(Modifier.width(BitOSSpacing.md))
             Column {
                 Text(
@@ -401,7 +406,7 @@ private fun SearchCard(note: FeedNote, profile: ProfileMetadata?, onOpen: () -> 
     ) {
         Column(Modifier.padding(BitOSSpacing.base).fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PubkeyAvatar(pubkey = note.pubkey, size = 28)
+                PubkeyAvatar(pubkey = note.pubkey, size = 28, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
                 Spacer(Modifier.width(BitOSSpacing.sm))
                 Text(
                     profile?.bestDisplayName ?: shortPubkey(note.pubkey),

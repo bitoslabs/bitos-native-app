@@ -37,7 +37,7 @@ struct MoreView: View {
                     let profile = feed.profiles[account.pubkeyHex]
                     Section {
                         HStack(spacing: 12) {
-                            PubkeyAvatarView(pubkey: account.pubkeyHex, size: 48)
+                            PubkeyAvatarView(pubkey: account.pubkeyHex, size: 48, picture: profile?.picture, label: profile?.bestDisplayName)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text((profile?.displayName ?? profile?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Your account")
                                     .font(.system(size: 16, weight: .bold))

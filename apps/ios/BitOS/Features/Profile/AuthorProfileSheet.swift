@@ -15,7 +15,7 @@ struct AuthorProfileSheet: View {
                 .navigationTitle("Profile")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Close") { onClose() } }
+                    ToolbarItem(placement: .cancellationAction) { SheetCloseButton(action: onClose) }
                 }
         }
         .preferredColorScheme(.dark)
@@ -54,7 +54,7 @@ struct AuthorProfileSheet: View {
     private var ProfileHeader: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.md) {
-                PubkeyAvatarView(pubkey: authorPubkey, size: 64)
+                PubkeyAvatarView(pubkey: authorPubkey, size: 64, picture: environment.authorStore.profile?.picture, label: environment.authorStore.profile?.bestDisplayName)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(environment.authorStore.profile?.bestDisplayName ?? FeedFormat.shortPubkey(authorPubkey))
                         .font(.title3.weight(.bold))

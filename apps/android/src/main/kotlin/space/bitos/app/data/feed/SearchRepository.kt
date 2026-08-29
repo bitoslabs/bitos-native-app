@@ -124,7 +124,7 @@ class SearchRepository(
         } else {
         // Text search over feed kinds (NIP-50; relay support varies — the
         // empty result state says "relays may not support search").
-        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.VIDEO}],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
+        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-search-$subscriptionCounter", filter))
 
         // npub: request the creator's profile + notes directly.
@@ -132,7 +132,7 @@ class SearchRepository(
             pool.broadcast(
                 NostrEventCodec.encodeRequest(
                     "bitos-search-profile-$subscriptionCounter",
-                    """{"kinds":[0,1,22],"authors":["$npub"],"limit":20}""",
+                    """{"kinds":[0,1,21,22],"authors":["$npub"],"limit":20}""",
                 ),
             )
         }

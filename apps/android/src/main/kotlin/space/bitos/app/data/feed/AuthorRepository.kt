@@ -97,7 +97,7 @@ class AuthorRepository(
         if (requested) return
         requested = true
         val target = pubkey ?: return
-        val filter = """{"kinds":[0,1,22],"authors":["$target"],"limit":20}"""
+        val filter = """{"kinds":[0,1,21,22],"authors":["$target"],"limit":20}"""
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-author", filter))
         // Settle: mark not-loading after a window even without results.
         scope.launch {

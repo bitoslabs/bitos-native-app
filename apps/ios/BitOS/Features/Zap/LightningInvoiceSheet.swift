@@ -48,8 +48,7 @@ struct LightningInvoiceSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                        .foregroundStyle(BitOSTheme.accent)
+                    SheetCloseButton { dismiss() }
                 }
             }
         }

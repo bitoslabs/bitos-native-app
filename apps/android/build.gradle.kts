@@ -60,7 +60,9 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.work.runtime)
     implementation(libs.okhttp)
+    implementation(libs.coil.compose)
     implementation(libs.zxing.core)
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -1,4 +1,5 @@
 import AVKit
+import BusinessCore
 import Network
 import SwiftUI
 import UIKit
@@ -19,6 +20,13 @@ struct HomeView: View {
     @State private var showMediaImport = false
     @State private var authorTarget: String?
     @State private var menu: AppMenuPresentation?
+    /** Legacy-parity ⋯ overflow → bottom sheet (filter stays a popover). */
+    @State private var moreSheetTarget: FeedNote?
+    /** External-link confirm sheet (never opens the browser unattended). */
+    @State private var externalLink: String?
+    /** In-place note-ref open (note1/nevent1/naddr1 → thread sheet). */
+    @State private var refOpenTarget: String?
+    @State private var shareText: String?
     /// List-surface scroll anchors (hold/reveal + re-tap-to-top).
     @State private var listAtTop = true
     @State private var listScrollToTopTick = 0
@@ -112,30 +120,59 @@ struct HomeView: View {
         menu = nil
     }
 
-    /// APP-022: screen-clamped popover at the ⋯ trigger (spec §3.4/§3.5 —
-    /// mute, report, copy/raw-JSON grow here as surfaces land).
+    /// ⋯ overflow → bottom sheet (legacy parity: web item set in the
+    /// Flutter sheet chrome; popover retained for the filter trigger).
     private func presentMoreMenu(for note: FeedNote, at anchor: CGPoint) {
-        menu = AppMenuPresentation(
-            anchor: anchor,
-            entries: [
-                .item(AppMenuItem(
-                    id: "mute",
-                    label: store.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
-                    systemImage: AppIcons.mute
-                )),
-                .divider,
-                .item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)),
-                .item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)),
-                .item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)),
-            ]
-        ) { id in
-            switch id {
-            case "mute": toggleMute(note.pubkey)
-            case "report-spam": report(note, reason: "spam")
-            case "report-illicit": report(note, reason: "illicit")
-            case "report-harassment": report(note, reason: "harassment")
-            default: break
-            }
+        moreSheetTarget = note
+    }
+
+    private func moreMenuEntries(_ note: FeedNote) -> [AppMenuEntry] {
+        [
+            .item(AppMenuItem(id: "share", label: "Share", systemImage: AppIcons.share)),
+            .item(AppMenuItem(
+                id: "save",
+                label: store.bookmarkedIds.contains(note.id) ? "Unsave note" : "Save note",
+                systemImage: AppIcons.bookmark
+            )),
+            .item(AppMenuItem(id: "copy-id", label: "Copy note ID", systemImage: AppIcons.copy)),
+            .item(AppMenuItem(id: "copy-text", label: "Copy note text", systemImage: AppIcons.pen)),
+            .item(AppMenuItem(id: "copy-npub", label: "Copy author npub", systemImage: AppIcons.user)),
+            .divider,
+            .item(AppMenuItem(
+                id: "mute",
+                label: store.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
+                systemImage: AppIcons.mute
+            )),
+            .divider,
+            .item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)),
+            .item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)),
+            .item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)),
+        ]
+    }
+
+    private func handleMoreSelect(_ note: FeedNote, _ id: String) {
+        let bridge = BusinessCoreBridge()
+        switch id {
+        case "share":
+            let npub = (bridge.npubEncode(pubkeyHex: note.pubkey) as String?) ?? note.pubkey
+            shareText = (bridge.noteShareText(content: note.content, authorNpub: npub) as String)
+        case "save":
+            toggleBookmark(note)
+        case "copy-id":
+            UIPasteboard.general.string = note.id
+        case "copy-text":
+            UIPasteboard.general.string = note.content
+        case "copy-npub":
+            UIPasteboard.general.string = (bridge.npubEncode(pubkeyHex: note.pubkey) as String?) ?? note.pubkey
+        case "mute":
+            toggleMute(note.pubkey)
+        case "report-spam":
+            report(note, reason: "spam")
+        case "report-illicit":
+            report(note, reason: "illicit")
+        case "report-harassment":
+            report(note, reason: "harassment")
+        default: break
         }
     }
 
@@ -182,7 +219,7 @@ struct HomeView: View {
     /// out the Swift type-checker (same fix class as pagerPage/pagerPosition).
     private var feedSurface: some View {
         sheetHosted(
-            toolbarDecorated
+            storyViewerHosted(toolbarDecorated)
         )
     }
 
@@ -246,6 +283,9 @@ struct HomeView: View {
         }
     }
 
+    // APP-006: story viewer.
+    @State private var storyViewerTick = false
+
     private var lifecycleDecorated: some View {
         content
             .background(BitOSTheme.background)
@@ -296,8 +336,65 @@ struct HomeView: View {
         store.revealPendingNotes()
     }
 
+    private func storyViewerHosted(_ base: some View) -> some View {
+        base.fullScreenCover(isPresented: Binding(
+            get: { environment.storiesStore.viewerTarget != nil },
+            set: { if !$0 { environment.storiesStore.openViewer(nil) } }
+        )) {
+            if let target = environment.storiesStore.viewerTarget {
+                StoryViewerView(
+                    author: target,
+                    onSeen: { environment.storiesStore.markSeen($0) },
+                    onClose: { environment.storiesStore.openViewer(nil) }
+                )
+                .preferredColorScheme(.dark)
+            }
+        }
+    }
+
     private func sheetHosted(_ base: some View) -> some View {
         base
+            .sheet(item: $moreSheetTarget) { note in
+                AppBottomSheetMenu(
+                    title: "Post actions",
+                    entries: moreMenuEntries(note)
+                ) { id in
+                    moreSheetTarget = nil
+                    handleMoreSelect(note, id)
+                }
+                .presentationDetents([.medium])
+            }
+            .sheet(isPresented: Binding(
+                get: { shareText != nil },
+                set: { if !$0 { shareText = nil } }
+            )) {
+                if let shareText {
+                    ShareSheet(items: [shareText])
+                }
+            }
+            // External-link confirm: the browser only opens on an explicit Open.
+            .sheet(isPresented: Binding(
+                get: { externalLink != nil },
+                set: { if !$0 { externalLink = nil } }
+            )) {
+                if let externalLink {
+                    ExternalLinkConfirmSheet(url: externalLink)
+                }
+            }
+            // In-place note-ref open: poll until the head arrives (3 s),
+            // then show the thread sheet.
+            .task(id: refOpenTarget) {
+                guard let raw = refOpenTarget else { return }
+                for _ in 0..<20 where !Task.isCancelled {
+                    if let fetched = store.refNote(raw: raw) {
+                        refOpenTarget = nil
+                        commentTarget = fetched
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+                refOpenTarget = nil
+            }
             .sheet(item: Binding(
                 get: { authorTarget.map { AuthorTarget(id: $0) } },
                 set: { authorTarget = $0?.id }
@@ -365,6 +462,14 @@ struct HomeView: View {
                 VStack(spacing: 0) {
                     if identity.account == nil {
                         GuestBanner(onGetStarted: onOpenProfile)
+            // APP-006: stories bar (above the timeline content).
+            if !videoOnly && !environment.storiesStore.authors.isEmpty {
+                StoriesBarView(
+                    authors: environment.storiesStore.authors,
+                    seenIds: environment.storiesStore.seenIds,
+                    onOpen: { environment.storiesStore.openViewer($0) }
+                )
+            }
                     }
                     timelineContent
                 }
@@ -486,13 +591,11 @@ struct HomeView: View {
 
     // MARK: - Vertical pager (iOS 17 scroll-target paging)
 
-    /// Home tab: scrolling compact NoteCard list (legacy UX parity).
-    private var notesList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
-                        NoteCardRow(
+
+    /// Type-checker split: one card per function (§ pagerPage fix class).
+    @ViewBuilder
+    private func noteCardRow(note: FeedNote, index: Int) -> some View {
+        NoteCardRow(
                             note: note,
                             profile: store.profiles[note.pubkey],
                             actions: store.localActions,
@@ -504,8 +607,23 @@ struct HomeView: View {
                             onRepost: { repost(note) },
                             onZap: { zapTarget = note },
                             onAuthor: { authorTarget = note.pubkey },
-                            onMore: { point in presentMoreMenu(for: note, at: point) }
+                            onMore: { point in presentMoreMenu(for: note, at: point) },
+                            onOpenNoteRef: { raw in
+                                // In-place note-ref open (web parity).
+                                refOpenTarget = raw
+                                store.openNoteReference(raw: raw)
+                            },
+                            onOpenExternalLink: { externalLink = $0 }
                         )
+                        // Legacy UI parity: hairline divider between cards.
+                        .overlay(alignment: .bottom) {
+                            if index < notes.count - 1 {
+                                Rectangle()
+                                    .fill(BitOSTheme.divider)
+                                    .frame(height: 0.5)
+                                    .padding(.leading, 60)
+                            }
+                        }
                         .onAppear {
                             // Top visibility drives hold/reveal + re-tap
                             // refresh; near the end prefetches an older page.
@@ -522,6 +640,15 @@ struct HomeView: View {
                             }
                         }
                         Divider().background(BitOSTheme.divider)
+    }
+
+    /// Home tab: scrolling compact NoteCard list (legacy UX parity).
+    private var notesList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
+                        noteCardRow(note: note, index: index)
                     }
                     // APP-004 pagination: footer spinner while an older
                     // page loads.
@@ -607,7 +734,8 @@ struct HomeView: View {
             onFollow: { toggleFollow(author: note.pubkey) },
             onZap: { zapTarget = note },
             onAuthor: { authorTarget = note.pubkey },
-            onMore: { point in presentMoreMenu(for: note, at: point) }
+            onMore: { point in presentMoreMenu(for: note, at: point) },
+            onOpenExternalLink: { externalLink = $0 }
         )
     }
 }
@@ -629,6 +757,7 @@ private struct NewNotesPill: View {
                         PubkeyAvatarView(
                             pubkey: pubkey,
                             size: 20,
+                            picture: profiles[pubkey]?.picture,
                             label: profiles[pubkey]?.bestDisplayName,
                             hasLightning: !(profiles[pubkey]?.lud16?.isEmpty ?? true)
                         )
@@ -730,6 +859,10 @@ private struct PollOptionsView: View {
 private struct ExpandableRichText: View {
     let json: String
     var onOpenProfile: ((String) -> Void)?
+    /** Mention display-name resolver (profile entities show @name). */
+    var resolveMentionName: ((String) -> String?)? = nil
+    /** note1/nevent1/naddr1 tap → in-place thread open. */
+    var onOpenNoteRef: ((String) -> Void)? = nil
 
     private static let collapseLines = 8
 
@@ -740,13 +873,19 @@ private struct ExpandableRichText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            RichTextView(json: json, onOpenProfile: onOpenProfile, onOpenHashtag: nil)
-                .lineLimit(expanded ? nil : Self.collapseLines)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(key: ClampedHeightKey.self, value: geo.size.height)
-                    }
-                )
+            RichTextView(
+                json: json,
+                onOpenProfile: onOpenProfile,
+                onOpenHashtag: nil,
+                resolveMentionName: resolveMentionName,
+                onOpenNoteRef: onOpenNoteRef
+            )
+            .lineLimit(expanded ? nil : Self.collapseLines)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: ClampedHeightKey.self, value: geo.size.height)
+                }
+            )
             // Hidden unlimited-height twin measures the natural height; the
             // probe disappears once the toggle is (or needs to be) offered.
             if !canExpand && !expanded {
@@ -828,6 +967,7 @@ private struct NoteCardRow: View {
     @Environment(SettingsStore.self) private var settings
     let note: FeedNote
     let profile: ProfileMetadata?
+    var profiles: [String: ProfileMetadata] = [:]
     let actions: LocalActions
     let isBookmarked: Bool
     var richJson: String = "[]"
@@ -838,6 +978,10 @@ private struct NoteCardRow: View {
     let onZap: () -> Void
     let onAuthor: () -> Void
     let onMore: (CGPoint) -> Void
+    /** note1/nevent1/naddr1 tap → in-place thread open. */
+    var onOpenNoteRef: ((String) -> Void)? = nil
+    /** External-link tap → confirm sheet (owned by the parent). */
+    var onOpenExternalLink: (String) -> Void = { _ in }
     @State private var revealed = false
     @State private var lightboxUrl: String?
 
@@ -847,40 +991,56 @@ private struct NoteCardRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 2 : BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: compact ? 28 : 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
-                    .onTapGesture(perform: onAuthor)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(BitOSTheme.textPrimary)
-                            .lineLimit(1)
-                        if !(profile?.nip05?.isEmpty ?? true) {
-                            AppIcons.image(for: AppIcons.checkCircle)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(BitOSTheme.accent)
-                                .accessibilityLabel("NIP-05 identity claim")
+                Button(action: onAuthor) {
+                    PubkeyAvatarView(pubkey: note.pubkey, size: compact ? 28 : 36, picture: profile?.picture, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))'s profile")
+                Button(action: onAuthor) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(BitOSTheme.textPrimary)
+                                .lineLimit(1)
+                            if !(profile?.nip05?.isEmpty ?? true) {
+                                AppIcons.image(for: AppIcons.checkCircle)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.accent)
+                                    .accessibilityLabel("NIP-05 identity claim")
+                            }
                         }
-                    }
-                    HStack(spacing: 4) {
-                        if note.repostedBy != nil {
-                            AppIcons.image(for: AppIcons.repost)
-                                .font(.system(size: 10))
-                                .foregroundStyle(BitOSTheme.repost)
+                        HStack(spacing: 4) {
+                            if note.repostedBy != nil {
+                                AppIcons.image(for: AppIcons.repost)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(BitOSTheme.repost)
+                            }
+                            Text(FeedFormat.timeAgo(createdAt: note.createdAt))
+                                .font(.system(size: 11))
+                                .foregroundStyle(BitOSTheme.textTertiary)
                         }
-                        Text(FeedFormat.timeAgo(createdAt: note.createdAt))
-                            .font(.system(size: 11))
-                            .foregroundStyle(BitOSTheme.textTertiary)
                     }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))'s profile")
                 Spacer()
                 AppMenuAnchorButton(symbol: AppIcons.more, tint: BitOSTheme.textSecondary, label: "More options", action: onMore)
             }
             if note.contentWarning && !revealed && settings.state.sensitiveMedia != .show {
                 SensitiveCover { revealed = true }
             } else {
-                // APP-005: font-scale-safe clamp — Show more/less beyond 8 lines.
-                ExpandableRichText(json: richJson, onOpenProfile: { _ in onAuthor() })
+                // APP-005: font-scale-safe clamp — Show more/less beyond 8
+                // lines; mention names resolve; note refs open in-place.
+                ExpandableRichText(
+                    json: richJson,
+                    onOpenProfile: { _ in onAuthor() },
+                    resolveMentionName: { hex in
+                        profiles[hex]?.bestDisplayName
+                    },
+                    onOpenNoteRef: { raw in onOpenNoteRef?(raw) }
+                )
                 if !note.pollOptions.isEmpty {
                     PollOptionsView(options: note.pollOptions)
                 }
@@ -895,15 +1055,16 @@ private struct NoteCardRow: View {
                 }
             }
             HStack(spacing: BitOSTheme.Spacing.base) {
-                cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
-                cardAction(AppIcons.repost, "Repost", BitOSTheme.repost, onRepost)
+                // User decision 2026-08-29: order [like · comment · repost ·
+                // zap · bookmark]; APP-005 §2.4 scale-bounce + haptic on like.
                 let liked = actions.liked.contains(note.id)
-                // APP-005 §2.4: scale-bounce + haptic on like.
                 LikeTapIcon(
                     liked: liked,
                     tint: liked ? BitOSTheme.like : BitOSTheme.textSecondary,
                     action: onLike
                 )
+                cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
+                cardAction(AppIcons.repost, "Repost", BitOSTheme.repost, onRepost)
                 cardAction(AppIcons.zap, "Zap", BitOSTheme.zap, onZap)
                 cardAction(isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark, isBookmarked ? "Remove bookmark" : "Bookmark", isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary, onBookmark)
             }
@@ -949,6 +1110,10 @@ private struct FeedPage: View {
     let onZap: () -> Void
     let onAuthor: () -> Void
     let onMore: (CGPoint) -> Void
+    /// APP-005: external links get the confirm sheet.
+    var onOpenExternalLink: (String) -> Void = { _ in }
+    /// note1/nevent1/naddr1 tap → in-place thread open.
+    var onOpenNoteRef: (String) -> Void = { _ in }
 
     var body: some View {
         if let video = note.video {
@@ -963,7 +1128,8 @@ private struct FeedPage: View {
                          isBookmarked: bookmarks.contains(note.id) || actions.bookmarked.contains(note.id),
                          richJson: richJson,
                          onLike: onLike, onBookmark: onBookmark,
-                         onComment: onComment, onRepost: onRepost, onFollow: onFollow, onZap: onZap, onAuthor: onAuthor)
+                         onComment: onComment, onRepost: onRepost, onFollow: onFollow, onZap: onZap, onAuthor: onAuthor,
+                         onOpenExternalLink: onOpenExternalLink)
         }
     }
 }
@@ -1023,7 +1189,7 @@ private struct VideoNotePage: View {
     private var caption: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
             HStack(spacing: BitOSSpacingAvatar) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 36, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
+                PubkeyAvatarView(pubkey: note.pubkey, size: 36, picture: profile?.picture, label: profile?.bestDisplayName, hasLightning: !(profile?.lud16?.isEmpty ?? true))
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
@@ -1218,6 +1384,8 @@ private struct TextNotePage: View {
     let onFollow: () -> Void
     let onZap: () -> Void
     let onAuthor: () -> Void
+    /// APP-005: external links get the confirm sheet.
+    var onOpenExternalLink: (String) -> Void = { _ in }
     @State private var revealed = false
     @State private var lightboxUrl: String?
 
@@ -1226,7 +1394,7 @@ private struct TextNotePage: View {
             BitOSTheme.background.ignoresSafeArea()
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.base) {
                 HStack(spacing: BitOSTheme.Spacing.avatarGap) {
-                    PubkeyAvatarView(pubkey: note.pubkey)
+                    PubkeyAvatarView(pubkey: note.pubkey, picture: profile?.picture, label: profile?.bestDisplayName)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
                             .font(.subheadline.weight(.semibold))
@@ -1253,8 +1421,16 @@ private struct TextNotePage: View {
                     SensitiveCover { revealed = true }
                 } else {
                     // APP-005: NIP-27 rich body (entities, links, hashtags)
-                    // + image grid with lightbox.
-                    RichTextView(json: richJson, onOpenProfile: { _ in onAuthor() }, onOpenHashtag: nil)
+                    // + image grid with lightbox. Bare media links render as
+                    // tiles and disappear from the body; external links get
+                    // the confirm sheet.
+                    RichTextView(
+                        json: richJson,
+                        onOpenProfile: { _ in onAuthor() },
+                        onOpenHashtag: nil,
+                        hiddenMediaUrls: Set(note.mediaUrls),
+                        onOpenLink: { onOpenExternalLink($0) }
+                    )
                     if !note.mediaUrls.isEmpty {
                         if settings.state.mediaPreview {
                             MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }

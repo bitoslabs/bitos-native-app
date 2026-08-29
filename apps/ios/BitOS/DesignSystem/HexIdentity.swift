@@ -107,6 +107,18 @@ struct HexAvatarView: View {
     }
 }
 
+/// Profile metadata is untrusted. Avatar fetches use only bounded HTTPS URLs
+/// and never load remote SVG documents; callers retain the hex fallback.
+func safeProfilePictureURL(_ raw: String?) -> URL? {
+    guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+          raw.count <= 512,
+          let url = URL(string: raw),
+          url.scheme?.lowercased() == "https",
+          url.host != nil else { return nil }
+    guard !url.path.lowercased().hasSuffix(".svg") else { return nil }
+    return url
+}
+
 private func avatarInitials(_ label: String) -> String {
     let words = label.split(whereSeparator: \.isWhitespace)
     switch words.count {

@@ -108,6 +108,9 @@ class RelayManager(
                 url = url,
                 read = true,
                 write = DefaultRelays.writeUrls.any { it == url },
+                // RelayPool's primary-read strategy follows configured order;
+                // keep the same first default as the NIP-65/write primary.
+                primary = url == DefaultRelays.writeUrls.firstOrNull(),
             )
         }
 

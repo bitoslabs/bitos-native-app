@@ -74,6 +74,18 @@ class BitOsApplication : Application() {
         space.bitos.app.data.publish.NotePublisher(applicationScope, relayPool)
     }
 
+    val storiesRepository: space.bitos.app.data.stories.StoriesRepository by lazy {
+        space.bitos.app.data.stories.StoriesRepository(applicationScope, relayPool)
+    }
+
+    val dmRepository: space.bitos.app.data.dm.DmRepository by lazy {
+        val keyStore = space.bitos.app.identity.SecureKeyStore(this)
+        space.bitos.app.data.dm.DmRepository(
+            applicationScope,
+            relayPool,
+        ) { keyStore.loadSecret() }
+    }
+
     val sentZapsStore: space.bitos.app.data.zap.SentZapsStore by lazy {
         space.bitos.app.data.zap.SentZapsStore(this)
     }

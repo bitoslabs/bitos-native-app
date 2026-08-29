@@ -27,10 +27,18 @@ fun PubkeyAvatar(
     pubkey: String,
     modifier: Modifier = Modifier,
     size: Int = 40,
+    pictureUrl: String? = null,
     label: String? = null,
     hasLightning: Boolean = false,
 ) {
-    HexAvatar(pubkey = pubkey, modifier = modifier, size = size, label = label, hasLightning = hasLightning)
+    HexAvatar(
+        pubkey = pubkey,
+        modifier = modifier,
+        size = size,
+        imageUrl = pictureUrl,
+        label = label,
+        hasLightning = hasLightning,
+    )
 }
 
 /** Compact social counter: 1_234 -> "1.2K". */

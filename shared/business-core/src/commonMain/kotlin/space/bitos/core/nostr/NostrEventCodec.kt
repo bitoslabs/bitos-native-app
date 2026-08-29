@@ -155,6 +155,24 @@ object NostrEventCodec {
     }
 
     /**
+     * Returns the subscription id for a structurally valid relay EVENT frame.
+     * This lets feed repositories distinguish an older-page response from a
+     * live arrival without trusting or projecting the event payload.
+     */
+    fun relayEventSubscriptionId(message: String): String? {
+        if (message.length > NostrLimits.MAX_EVENT_BYTES) return null
+        return try {
+            val array = json.parseToJsonElement(message) as? JsonArray ?: return null
+            if (array.size != 3 || array[0].jsonPrimitive.content != "EVENT") return null
+            val subscription = array[1] as? JsonPrimitive ?: return null
+            if (!subscription.isString) return null
+            subscription.content.takeIf { it.length <= NostrLimits.MAX_SUBSCRIPTION_ID_LENGTH }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Decodes the client-to-relay publish form `["EVENT", event]` — used to
      * verify a frame before sending it (our own notes pass our own gate).
      */
@@ -231,6 +249,13 @@ object NostrEventCodec {
     fun encodeRequest(subscriptionId: String, filterJson: String): String {
         if (subscriptionId.length > NostrLimits.MAX_SUBSCRIPTION_ID_LENGTH) throw Rejected("subscription id exceeds bound")
         return "[\"REQ\",\"" + escape(subscriptionId) + "\"," + filterJson + "]"
+    }
+
+    /** Build one NIP-01 REQ carrying multiple bounded filters. */
+    fun encodeRequest(subscriptionId: String, filterJsons: List<String>): String {
+        if (subscriptionId.length > NostrLimits.MAX_SUBSCRIPTION_ID_LENGTH) throw Rejected("subscription id exceeds bound")
+        if (filterJsons.isEmpty() || filterJsons.size > 8) throw Rejected("filter count is outside bound")
+        return "[\"REQ\",\"" + escape(subscriptionId) + "\"," + filterJsons.joinToString(",") + "]"
     }
 
     /**

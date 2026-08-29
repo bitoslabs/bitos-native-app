@@ -186,7 +186,7 @@ fun SupportDonateSheet(
                 }
             }
         }
-        TextButton(onClick = onDismiss) { Text("Close", color = BitOSColors.textSecondary) }
+        SheetCloseIcon(onClose = onDismiss)
     }
 }
 

@@ -95,7 +95,7 @@ fun ZapsScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Zap wallet", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onClose) { Text("Close", color = BitOSColors.textSecondary) }
+            space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
         }
         if (identity.account == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

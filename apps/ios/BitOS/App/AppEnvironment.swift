@@ -10,6 +10,8 @@ final class AppEnvironment {
     let relayPool: RelayPool
     let feedStore: FeedStore
     let sentZaps: SentZapsStore
+    let dmStore: DmStore
+    let storiesStore: StoriesStore
     let businessCore: any BusinessCoreClient
     let identityStore: IdentityStore
     let notePublisher: NotePublisher
@@ -22,10 +24,15 @@ final class AppEnvironment {
     let profileLookup: ProfileLookupStore
 
     init(
-        relayPool: RelayPool = AppEnvironment.bootRelayPool(),
-        businessCore: any BusinessCoreClient = FrameworkBusinessCoreClient(),
-        eventStore: EventStore? = AppEnvironment.defaultEventStore(client: FrameworkBusinessCoreClient())
+        relayPool: RelayPool? = nil,
+        businessCore: (any BusinessCoreClient)? = nil,
+        eventStore: EventStore? = nil
     ) {
+        // Default arguments evaluate nonisolated (Swift 6); resolve the
+        // defaults inside the MainActor body instead.
+        let relayPool = relayPool ?? Self.bootRelayPool()
+        let businessCore = businessCore ?? FrameworkBusinessCoreClient()
+        let eventStore = eventStore ?? Self.defaultEventStore(client: FrameworkBusinessCoreClient())
         self.relayPool = relayPool
         self.businessCore = businessCore
         self.feedStore = FeedStore(pool: relayPool, client: businessCore, eventStore: eventStore)
@@ -38,6 +45,10 @@ final class AppEnvironment {
         let algorithm = AlgorithmStore()
         self.algorithmStore = algorithm
         self.privacyPrefs = PrivacyPrefsStore()
+        self.storiesStore = StoriesStore(pool: relayPool)
+        self.dmStore = DmStore(pool: relayPool) {
+            IdentityKeychain.loadSecret()
+        }
         self.profileLookup = ProfileLookupStore(pool: relayPool, client: businessCore)
         // Algorithm wire drives the For-You ranking for the process lifetime.
         algorithm.sink = { [weak feedStore] json in

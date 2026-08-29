@@ -1,5 +1,5 @@
 import BusinessCore
-import BusinessCore
+import PhotosUI
 import SwiftUI
 
 /// Reply thread sheet (SOC-002): verified replies with an identity-gated
@@ -12,9 +12,35 @@ struct CommentSheet: View {
     @Environment(IdentityStore.self) private var identity
     @State private var text = ""
 
+    // APP-009 reply bar (legacy `_ThreadReplyBar` parity): sub-reply
+    // targeting, URL/GIF/gallery attachments, PoW, pill input + send.
+    @State private var replyTarget: FeedNote?
+    @State private var attachments: [String] = []
+    @State private var uploadStatus = ""
+    @State private var gifSheet = false
+    @State private var urlAlert = false
+    @State private var urlField = ""
+    @State private var powSheet = false
+    @State private var powTarget = 0
+    @State private var powOutcome: PowOutcome?
+    @State private var awaitingReply = false
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var pickerPrompt = false
+
+    private let bridge = BusinessCoreBridge()
+    private let uploader = BlossomUploader()
+    private let blossomServer = "https://blossom.primal.net"
+
     private var comments: [FeedNote] { store.comments[note.id] ?? [] }
     // APP-009 live tallies (shared NoteTally mirror).
     private var tally: NoteTallyMirror? { store.tallies[note.id] }
+
+    private var effectiveTarget: FeedNote { replyTarget ?? note }
+    private var canAddAttachment: Bool { attachments.count < 4 }
+    private var sending: Bool { publisher.busy && awaitingReply }
+    private var canSend: Bool {
+        !sending && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
 
     var body: some View {
         NavigationStack {
@@ -25,12 +51,68 @@ struct CommentSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { onClose() }
+                        SheetCloseButton(action: onClose)
                     }
                 }
         }
         .preferredColorScheme(.dark)
         .onAppear { store.loadComments(targetEventId: note.id) }
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let mime = item.supportedContentTypes.first?.preferredMIMEType {
+                    // Legacy order: upload BEFORE the URL joins the reply.
+                    do {
+                        uploadStatus = "Uploading media…"
+                        let receipt = try await uploader.upload(bytes: data, mimeType: mime, identity: identity, serverUrl: blossomServer)
+                        if canAddAttachment { attachments.append(receipt.url) }
+                        uploadStatus = ""
+                    } catch {
+                        // Stays visible until the next action clears it.
+                        uploadStatus = (error as? LocalizedError)?.errorDescription ?? "Upload failed."
+                    }
+                }
+                pickerItem = nil
+            }
+        }
+        // Clear the bar only on a successful ACK (legacy clears on success).
+        .onChange(of: publisher.result) { _, result in
+            guard awaitingReply, let result else { return }
+            if result == .published {
+                text = ""
+                attachments = []
+                powOutcome = nil
+                replyTarget = nil
+            }
+            awaitingReply = false
+        }
+        .sheet(isPresented: $gifSheet) {
+            GifPickerSheet(
+                onPick: { gif in
+                    if canAddAttachment { attachments.append(gif.url) }
+                },
+                onDismiss: { gifSheet = false }
+            )
+            .presentationDetents([.large, .medium])
+        }
+        .sheet(isPresented: $powSheet) {
+            powSheetContent
+                .presentationDetents([.medium, .large])
+        }
+        .alert("Add media URL", isPresented: $urlAlert) {
+            TextField("https://…", text: $urlField)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+            Button("Add") {
+                let trimmed = urlField.trimmingCharacters(in: .whitespacesAndNewlines)
+                if (trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://")) && canAddAttachment {
+                    attachments.append(trimmed)
+                }
+                urlField = ""
+            }
+            Button("Cancel", role: .cancel) { urlField = "" }
+        }
     }
 
     @ViewBuilder
@@ -51,7 +133,9 @@ struct CommentSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(comments) { reply in
-                        ReplyRow(reply: reply, tally: store.tallies[reply.id])
+                        ReplyRow(reply: reply, tally: store.tallies[reply.id]) {
+                            replyTarget = reply
+                        }
                     }
                 }
             }
@@ -74,24 +158,180 @@ struct CommentSheet: View {
                     .foregroundStyle(BitOSTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                HStack(spacing: BitOSTheme.Spacing.sm) {
-                    BitosField("Write a reply…", text: $text)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Reply") {
-                        let content = text
-                        text = ""
-                        Task {
-                            await publisher.publishReply(
-                                content: content, targetEventId: note.id, targetPubkey: note.pubkey
-                            )
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BitOSTheme.accent)
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty || publisher.busy)
-                }
+                replyBar
             }
         }
+    }
+
+    // MARK: - APP-009 reply bar (legacy `_ThreadReplyBar` parity)
+
+    private var replyBar: some View {
+        VStack(spacing: BitOSTheme.Spacing.xs) {
+            if replyTarget != nil {
+                HStack {
+                    Text("Reply to \(targetName(effectiveTarget))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    Spacer()
+                    Button {
+                        replyTarget = nil
+                    } label: {
+                        AppIcons.image(for: AppIcons.close)
+                            .font(.system(size: 14))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    .accessibilityLabel("Cancel reply target")
+                }
+            }
+            if !uploadStatus.isEmpty {
+                Text(uploadStatus)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(uploadStatus.hasPrefix("Uploading") ? BitOSTheme.accent : BitOSTheme.error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            AttachmentPreviewRow(urls: attachments) { index in
+                attachments.remove(at: index)
+            }
+            // Options row: gallery · GIF · media URL · PoW (legacy order).
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                optionButton(AppIcons.photo, "Attach from gallery", enabled: canAddAttachment) { pickerPrompt = true }
+                optionGlyphButton("GIF", "Add GIF", enabled: canAddAttachment) { gifSheet = true }
+                optionButton(AppIcons.globe, "Add media URL", enabled: canAddAttachment) { urlAlert = true }
+                if powOutcome != nil || powTarget > 0 {
+                    optionButton(AppIcons.qrCode, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
+                } else {
+                    optionButton(AppIcons.qrCode, "Proof of work") { powSheet = true }
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                TextField("Write a reply…", text: $text, axis: .vertical)
+                    .lineLimit(1...4)
+                    .font(.system(size: 14))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(BitOSTheme.surfaceElevated.opacity(0.5))
+                    )
+                Button(action: send) {
+                    Group {
+                        if sending {
+                            ProgressView().tint(BitOSTheme.accent)
+                        } else {
+                            AppIcons.image(for: AppIcons.send)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(canSend ? BitOSTheme.accent : BitOSTheme.textTertiary)
+                        }
+                    }
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(BitOSTheme.surfaceElevated))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .accessibilityLabel("Send reply")
+            }
+        }
+        .photosPicker(isPresented: $pickerPrompt, selection: $pickerItem, matching: .images)
+    }
+
+    private func optionButton(_ symbol: String, _ label: String, text: String? = nil, enabled: Bool = true, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                AppIcons.image(for: symbol)
+                    .font(.system(size: 18))
+                    .foregroundStyle(
+                        !enabled ? BitOSTheme.textTertiary.opacity(0.4)
+                            : active ? BitOSTheme.accent : BitOSTheme.textSecondary
+                    )
+                if let text {
+                    Text(text)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                }
+            }
+            .frame(height: 40)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
+
+    /// GIF has no SF Symbol; the legacy app renders a text glyph.
+    private func optionGlyphButton(_ glyph: String, _ label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(glyph)
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(enabled ? BitOSTheme.textSecondary : BitOSTheme.textTertiary.opacity(0.4))
+                .frame(height: 40)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
+
+    private func targetName(_ target: FeedNote) -> String {
+        store.profiles[target.pubkey]?.bestDisplayName ?? FeedFormat.shortPubkey(target.pubkey)
+    }
+
+    /// Attachments land in the content (web parity, shared rule).
+    private func composedContent() -> String {
+        guard !attachments.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: attachments),
+              let json = String(data: data, encoding: .utf8) else { return text }
+        return bridge.composerComposeContent(text: text, urlsJson: json)
+    }
+
+    /// Shared reply-tags rule through the bridge: both NIP-10 markers +
+    /// participant p-tags + content entities.
+    private func replyTagsJson() -> String? {
+        let mentions = effectiveTarget.mentions
+        guard let mentionsData = try? JSONSerialization.data(withJSONObject: Array(mentions)),
+              let mentionsJson = String(data: mentionsData, encoding: .utf8) else { return nil }
+        return bridge.replyTagsJson(
+            rootEventId: effectiveTarget.threadRootId ?? effectiveTarget.id,
+            targetEventId: effectiveTarget.id,
+            targetPubkey: effectiveTarget.pubkey,
+            targetPTagsJson: mentionsJson,
+            content: composedContent()
+        )
+    }
+
+    private func send() {
+        guard canSend, let tagsJson = replyTagsJson() else { return }
+        let content = composedContent()
+        awaitingReply = true
+        if let pow = powOutcome {
+            Task {
+                await publisher.publishPowNote(
+                    content: content, nonce: pow.nonce, targetDifficulty: Int32(pow.targetDifficulty),
+                    createdAt: pow.createdAt, tagsJson: tagsJson
+                )
+            }
+        } else {
+            Task { await publisher.publishNote(content: content, tagsJson: tagsJson) }
+        }
+    }
+
+    private var powSheetContent: some View {
+        let content = composedContent()
+        let tagsJson = replyTagsJson() ?? "[]"
+        return PowCard(
+            target: $powTarget,
+            mineChunk: { createdAt, startNonce, attempts in
+                await publisher.minePowChunkWithTags(
+                    content: content, targetDifficulty: Int32(powTarget), createdAt: createdAt,
+                    startNonce: startNonce, attempts: attempts, tagsJson: tagsJson
+                )
+            },
+            onMined: { outcome in
+                powOutcome = outcome
+                powSheet = false
+            }
+        )
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .padding(.bottom, BitOSTheme.Spacing.xl)
     }
 }
 
@@ -175,6 +415,8 @@ private struct ThreadRootCard: View {
 private struct ReplyRow: View {
     let reply: FeedNote
     var tally: NoteTallyMirror? = nil
+    /// APP-009: retarget the reply bar at this card (legacy parity).
+    var onReplyTo: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
@@ -216,6 +458,19 @@ private struct ReplyRow: View {
                             }
                         }
                     }
+                }
+                if let onReplyTo {
+                    Button(action: onReplyTo) {
+                        HStack(spacing: 4) {
+                            AppIcons.image(for: AppIcons.comment)
+                                .font(.system(size: 11))
+                            Text("Reply")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(BitOSTheme.reply)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Reply to this note")
                 }
             }
         }

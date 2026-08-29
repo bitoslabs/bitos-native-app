@@ -22,48 +22,54 @@ struct ProfileView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: BitOSTheme.Spacing.md) {
-                    if let account = store.account {
-                        accountPanel(account)
-                        // APP-014: zap wallet entry.
-                        Button {
-                            showZaps = true
-                        } label: {
-                            HStack {
-                                Text("⚡ Zap wallet")
-                                    .font(.system(size: 14, weight: .bold))
-                                Spacer()
-                                Text("Ledger")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(BitOSTheme.textTertiary)
-                            }
-                            .padding(BitOSTheme.Spacing.md)
-                            .background(
-                                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
-                                    .strokeBorder(BitOSTheme.divider)
-                            )
+                if let account = store.account {
+                    // The signed-in profile owns the full scroll width so the
+                    // cover reaches the screen edges like the legacy hero.
+                    accountPanel(account)
+                    Button {
+                        showZaps = true
+                    } label: {
+                        HStack {
+                            Text("⚡ Zap wallet")
+                                .font(.system(size: 14, weight: .bold))
+                            Spacer()
+                            Text("Ledger")
+                                .font(.system(size: 11))
+                                .foregroundStyle(BitOSTheme.textTertiary)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Open zap wallet")
-                    } else {
+                        .padding(BitOSTheme.Spacing.md)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                                .strokeBorder(BitOSTheme.divider)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open zap wallet")
+                    .padding(.horizontal, BitOSTheme.Spacing.screen)
+                    .padding(.top, BitOSTheme.Spacing.md)
+                } else {
+                    VStack(spacing: BitOSTheme.Spacing.md) {
                         browsePanel
                         importPanel
                     }
+                    .padding(BitOSTheme.Spacing.screen)
                 }
-                .padding(BitOSTheme.Spacing.screen)
             }
             .background(BitOSTheme.background)
-            .navigationTitle("You")
+            .navigationTitle(store.account == nil ? "You" : "")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        AppIcons.image(for: AppIcons.settings)
+                if store.account == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showSettings = true
+                        } label: {
+                            AppIcons.image(for: AppIcons.settings)
+                        }
+                        .accessibilityLabel("Settings")
                     }
-                    .accessibilityLabel("Settings")
                 }
             }
+            .toolbar(store.account == nil ? .visible : .hidden, for: .navigationBar)
             .fullScreenCover(isPresented: $showZaps) {
             ZapsView { showZaps = false }
                 .environment(identity)
@@ -96,6 +102,7 @@ struct ProfileView: View {
         .sheet(isPresented: $showEdit) {
             ProfileEditSheet(
                 publisher: environment.notePublisher,
+                initialProfile: environment.feedStore.profiles[store.account?.pubkeyHex ?? ""],
                 onClose: { showEdit = false }
             )
             .presentationDetents([.medium, .large])
@@ -124,80 +131,131 @@ struct ProfileView: View {
             ("Reposts", own.filter { $0.repostedBy == account.pubkeyHex }),
         ]
         return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            // Hero: gradient cover + overlapping hex avatar (web 160/104 parity).
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(
-                    colors: [BitOSTheme.accent.opacity(0.35), BitOSTheme.reply.opacity(0.25)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                .frame(height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-                PubkeyAvatarView(pubkey: account.pubkeyHex, size: 84)
-                    .offset(y: 42)
-            }
-            .padding(.bottom, 42)
-            VStack(alignment: .leading, spacing: 4) {
-                Text((profile?.displayName ?? profile?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Your account")
-                    .font(.title2.weight(.bold))
+            // ── Full-bleed cover + glass controls (legacy _ProfileHeader) ─
+            ZStack(alignment: .top) {
+                bannerCover(profile)
+                    .frame(height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 0))
                 HStack(spacing: 8) {
-                    Button {
-                        UIPasteboard.general.string = account.npub
-                    } label: {
+                    Spacer()
+                    glassPill("📷 Edit cover") { showEdit = true }
+                    glassIcon("square.and.arrow.up", "Share profile") {
+                        UIPasteboard.general.string = "nostr:\(account.npub)"
+                    }
+                    glassIcon(AppIcons.settings, "Settings") { showSettings = true }
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+            }
+            // ── Avatar hero band (lifted onto the cover edge) ───────────
+            ZStack(alignment: .top) {
+                Color.clear.frame(height: 46)
+                HexAvatarView(
+                    pubkey: account.pubkeyHex,
+                    size: 92,
+                    imageURL: safeProfilePictureURL(profile?.picture),
+                    label: profile?.bestDisplayName,
+                    hasLightning: !(profile?.lud16 ?? "").isEmpty
+                )
+                    .offset(y: -46)
+                    .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+            }
+            // ── Identity block (centered) ───────────────────────────────
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    Text((profile?.displayName ?? profile?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Your account")
+                        .font(.system(size: 24, weight: .bold))
+                    if let nip05 = profile?.nip05, !nip05.isEmpty {
+                        Image(systemName: AppIcons.check)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(BitOSTheme.success)
+                    }
+                }
+                if let username = profile?.name, !username.isEmpty {
+                    Text("@\(username)")
+                        .font(.system(size: 15))
+                        .foregroundStyle(BitOSTheme.accent)
+                }
+                Button {
+                    UIPasteboard.general.string = account.npub
+                } label: {
+                    HStack(spacing: 4) {
                         Text(settings.shortNpub(account.npub))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(BitOSTheme.accent)
+                            .font(.system(size: 11, design: .monospaced))
+                        Image(systemName: AppIcons.copy)
+                            .font(.system(size: 10))
                     }
-                    .buttonStyle(.plain)
-                    Button {
-                        showQr = true
-                    } label: {
-                        Text("QR")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(BitOSTheme.accent)
-                    }
-                    .buttonStyle(.plain)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(BitOSTheme.surfaceOverlay.opacity(0.5)))
                 }
-                if let nip05 = profile?.nip05, !nip05.isEmpty {
-                    Text("\u{2713} \(nip05)").font(.caption).foregroundStyle(BitOSTheme.success)
-                }
-                if let about = profile?.about, !about.isEmpty {
-                    Text(about).font(.footnote).foregroundStyle(BitOSTheme.textSecondary).lineLimit(4)
+                .buttonStyle(.plain)
+                if !(profile?.lud16 ?? "").isEmpty {
+                    Text("\u{26A1} Lightning")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(BitOSTheme.zap)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(BitOSTheme.zap.opacity(0.10)))
                 }
             }
-            HStack(spacing: 20) {
-                stat("Following", "\(feed.following.count)")
-                stat("Notes", "\(tabs[0].1.count)")
-                stat("Bitz", "\(tabs[2].1.count)")
-            }
+            .frame(maxWidth: .infinity)
+            // Own-profile actions are live: metadata editor + canonical QR.
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                Button { showEdit = true } label: {
+                Button {
+                    showEdit = true
+                } label: {
                     Label { Text("Edit profile") } icon: { AppIcons.image(for: AppIcons.pen) }
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(BitOSTheme.accent)
-                Button { showSettings = true } label: {
-                    Label { Text("Settings") } icon: { AppIcons.image(for: AppIcons.settings) }
+                .accessibilityLabel("Edit profile")
+
+                Button {
+                    showQr = true
+                } label: {
+                    AppIcons.image(for: AppIcons.qrCode)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Show your profile QR code")
             }
-            HStack(spacing: 8) {
+            .padding(.horizontal, BitOSTheme.Spacing.screen)
+            profileCompletionCard(profile)
+            // ── Stats row (evenly spaced) ───────────────────────────────
+            HStack {
+                Spacer()
+                stat("Posts", "\(tabs[0].1.count)")
+                Spacer()
+                stat("Following", "\(feed.following.count)")
+                Spacer()
+                stat("Bitz", "\(tabs[2].1.count)")
+                Spacer()
+            }
+            // ── About (collapsible) ─────────────────────────────────────
+            if let bio = profile?.about, !bio.isEmpty {
+                AboutBlock(bio: bio)
+            }
+            profileDetails(profile)
+            // ── Tab bar (Notes · Replies · Bitz · Reposts) ──────────────
+            HStack {
                 ForEach(Array(tabs.enumerated()), id: \.offset) { index, entry in
                     let selected = ownTab == index
                     Button {
                         ownTab = index
                     } label: {
                         Text(entry.0)
-                            .font(.system(size: 13, weight: selected ? .bold : .medium))
+                            .font(.system(size: 14, weight: selected ? .bold : .medium))
                             .foregroundStyle(selected ? BitOSTheme.accent : BitOSTheme.textSecondary)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(
-                                selected ? BitOSTheme.accent.opacity(0.15) : BitOSTheme.surfaceOverlay.opacity(0.5),
-                                in: Capsule()
-                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .background(RoundedRectangle(cornerRadius: 12).fill(BitOSTheme.surface.opacity(0.5)))
             let content = tabs[ownTab].1
             if content.isEmpty {
                 Text("Nothing here yet \u{2014} this tab shows your notes currently in the live feed window.")
@@ -211,25 +269,129 @@ struct ProfileView: View {
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.headline.monospaced())
-            Text(label).font(.caption2).foregroundStyle(BitOSTheme.textTertiary)
+    private func bannerCover(_ profile: ProfileMetadata?) -> some View {
+        ZStack {
+            if let banner = profile?.banner, !banner.isEmpty, let url = URL(string: banner) {
+                AsyncImage(url: url) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    defaultCover
+                }
+            } else {
+                defaultCover
+            }
+            LinearGradient(
+                colors: [.black.opacity(0.25), .clear, .black.opacity(0.35)],
+                startPoint: .top, endPoint: .bottom
+            )
         }
     }
 
-    private func ownNoteRow(_ note: FeedNote) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(note.video != nil ? BitOSTheme.reply : BitOSTheme.accent)
-                .frame(width: 8, height: 8)
-                .padding(.top, 5)
-            Text(note.content.isEmpty ? "(media)" : String(note.content.prefix(120)))
-                .font(.footnote)
-                .lineLimit(2)
-                .foregroundStyle(BitOSTheme.textPrimary)
+    @ViewBuilder
+    private func profileDetails(_ profile: ProfileMetadata?) -> some View {
+        let nip05 = profile?.nip05?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let website = profile?.website?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !nip05.isEmpty || !website.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if !nip05.isEmpty {
+                    Label(nip05, systemImage: "checkmark.seal")
+                }
+                if let url = URL(string: website),
+                   let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+                    Link(destination: url) {
+                        Label(website, systemImage: "link")
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(BitOSTheme.textSecondary)
+            .padding(.horizontal, BitOSTheme.Spacing.screen)
         }
-        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func profileCompletionCard(_ profile: ProfileMetadata?) -> some View {
+        let missing = profileCompletionFields(profile)
+        if !missing.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(BitOSTheme.accent)
+                        .frame(width: 26, height: 26)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(BitOSTheme.accent.opacity(0.12)))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Complete your profile")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("\(7 - missing.count) of 7 complete · \(missing.count) steps to go")
+                            .font(.system(size: 10))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                    }
+                    Spacer()
+                    Button("Finish") { showEdit = true }
+                        .font(.system(size: 12, weight: .bold))
+                        .buttonStyle(.borderedProminent)
+                        .tint(BitOSTheme.accent)
+                }
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 8) {
+                    ForEach(missing, id: \.self) { field in
+                        Label(field, systemImage: "circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+            }
+            .padding(BitOSTheme.Spacing.md)
+            .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).fill(BitOSTheme.surface))
+            .overlay(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).strokeBorder(BitOSTheme.divider))
+            .padding(.horizontal, BitOSTheme.Spacing.screen)
+        }
+    }
+
+    private func profileCompletionFields(_ profile: ProfileMetadata?) -> [String] {
+        let displayName = profile?.displayName ?? profile?.name ?? ""
+        [
+            ("Display name", !displayName.isEmpty),
+            ("Bio", !(profile?.about ?? "").isEmpty),
+            ("Profile picture", !(profile?.picture ?? "").isEmpty),
+            ("Cover photo", !(profile?.banner ?? "").isEmpty),
+            ("Verified NIP-05", !(profile?.nip05 ?? "").isEmpty),
+            ("Lightning address", !(profile?.lud16 ?? "").isEmpty),
+            ("Website", !(profile?.website ?? "").isEmpty),
+        ].compactMap { $0.1 ? nil : $0.0 }
+    }
+
+    private var defaultCover: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.96, green: 0.48, blue: 0.10), Color(red: 0.63, green: 0.18, blue: 0.04)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            DefaultCoverHexPattern()
+        }
+    }
+
+    private func glassIcon(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(.black.opacity(0.30)))
+        }
+        .accessibilityLabel(label)
+    }
+
+    private func glassPill(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.black.opacity(0.30)))
+        }
+        .buttonStyle(.plain)
     }
 
     private var browsePanel: some View {
@@ -284,6 +446,30 @@ struct ProfileView: View {
     }
 }
 
+/// The legacy fallback-banner tile: decorative geometry only, never remote SVG.
+private struct DefaultCoverHexPattern: View {
+    var body: some View {
+        Canvas { context, size in
+            let tile: CGFloat = 120
+            let hexHeight: CGFloat = 104
+            for x in stride(from: -tile / 2, through: size.width, by: tile) {
+                for y in stride(from: -hexHeight / 2, through: size.height, by: hexHeight) {
+                    var path = Path()
+                    path.move(to: CGPoint(x: x + 30, y: y))
+                    path.addLine(to: CGPoint(x: x + 90, y: y))
+                    path.addLine(to: CGPoint(x: x + 120, y: y + 52))
+                    path.addLine(to: CGPoint(x: x + 90, y: y + 104))
+                    path.addLine(to: CGPoint(x: x + 30, y: y + 104))
+                    path.addLine(to: CGPoint(x: x, y: y + 52))
+                    path.closeSubpath()
+                    context.fill(path, with: .color(.white.opacity(0.08)))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 extension IdentityPreview: Identifiable {
     var id: String { npub }
 }
@@ -332,5 +518,57 @@ private struct ConfirmIdentitySheet: View {
         }
         .padding(BitOSTheme.Spacing.base)
         .background(BitOSTheme.background)
+    }
+}
+
+/// Collapsible bio (legacy _AboutSection parity — Show more/less at 120 chars).
+private struct AboutBlock: View {
+    let bio: String
+    @State private var expanded = false
+
+    init(bio: String) {
+        self.bio = bio
+        _expanded = State(initialValue: bio.count <= 120)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(bio)
+                .font(.system(size: 13))
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .lineLimit(expanded ? nil : 2)
+            if bio.count > 120 {
+                Button(expanded ? "Show less" : "Show more") {
+                    expanded.toggle()
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(BitOSTheme.accent)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.base)
+    }
+}
+
+extension ProfileView {
+    fileprivate func stat(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 1) {
+            Text(value).font(.headline.monospaced())
+            Text(label).font(.caption2).foregroundStyle(BitOSTheme.textTertiary)
+        }
+    }
+
+    fileprivate func ownNoteRow(_ note: FeedNote) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(note.video != nil ? BitOSTheme.reply : BitOSTheme.accent)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+            Text(note.content.isEmpty ? "(media)" : String(note.content.prefix(120)))
+                .font(.footnote)
+                .lineLimit(2)
+                .foregroundStyle(BitOSTheme.textPrimary)
+        }
+        .padding(.vertical, 2)
     }
 }

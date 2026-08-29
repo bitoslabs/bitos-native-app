@@ -1,5 +1,6 @@
 package space.bitos.app.ui.feed
 
+import android.content.Intent
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -124,6 +126,8 @@ fun FeedScreen(
     /** APP-003/APP-004: bumped when the user re-taps the ACTIVE shell tab
      * (Home/Bitz) — scrolls to top, or refreshes when already at top. */
     retapTick: Int = 0,
+    /** APP-006: stories bar + viewer. */
+    storiesRepository: space.bitos.app.data.stories.StoriesRepository? = null,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
@@ -133,11 +137,25 @@ fun FeedScreen(
     val mediaState by mediaPublishViewModel.state.collectAsStateWithLifecycle()
     var showCommentsFor by androidx.compose.runtime.remember { mutableStateOf<FeedNote?>(null) }
     var zapTarget by androidx.compose.runtime.remember { mutableStateOf<FeedNote?>(null) }
+    /** External-link confirm sheet (never opens the browser unattended). */
+    var externalLink by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
+    /** In-place note-ref open (note1/nevent1/naddr1 → thread sheet). */
+    var refOpenTarget by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     var authorTarget by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
     val zapState by viewModel.zapState.collectAsStateWithLifecycle()
     val identityState by identityViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // APP-006: stories bar + viewer.
+    val storiesState by (storiesRepository?.state
+        ?: kotlinx.coroutines.flow.MutableStateFlow(space.bitos.app.data.stories.StoriesUiState())
+    ).collectAsStateWithLifecycle()
+    var storyViewerTarget by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<space.bitos.core.model.StoryAuthor?>(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(state.accountPubkey, state.following) {
+        storiesRepository?.setAccount(state.accountPubkey, state.following, context)
+    }
     // APP-018 functional settings: autoplay policy + playback rate drive the
     // pool live (closure reads the current snapshot on every reconciliation).
     val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
@@ -276,12 +294,38 @@ fun FeedScreen(
                                 viewModel.toggleLike(note)
                             },
                             onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
+                            onOpenExternalLink = { externalLink = it },
+                            onOpenNoteRef = { raw ->
+                                // In-place note-ref open (web parity): fetch
+                                // the head, then show the thread sheet.
+                                refOpenTarget = raw
+                                viewModel.openNoteReference(raw)
+                            },
                             sensitiveShowByDefault = sensitiveShowByDefault,
                             mediaPreview = settingsSnapshot.mediaPreview,
                         )
                     }
                 }
-                androidx.compose.animation.AnimatedVisibility(
+                // APP-006: stories bar (top, scrolls with content via the header).
+        if (!videoOnly && storiesState.authors.isNotEmpty()) {
+            space.bitos.app.ui.stories.StoriesBar(
+                authors = storiesState.authors,
+                seenIds = storiesState.seenIds,
+                onOpenViewer = { storyViewerTarget = it },
+                modifier = Modifier.padding(top = 48.dp),
+            )
+        }
+
+        // APP-006: story viewer full-screen overlay.
+        storyViewerTarget?.let { storyAuthor ->
+            space.bitos.app.ui.stories.StoryViewer(
+                author = storyAuthor,
+                onSeen = { slideId -> storiesRepository?.markSeen(slideId, context) },
+                onClose = { storyViewerTarget = null },
+            )
+        }
+
+        androidx.compose.animation.AnimatedVisibility(
                     visible = !videoOnly && state.pendingNotes.isNotEmpty(),
                     enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
                     exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
@@ -318,6 +362,7 @@ fun FeedScreen(
     authorTarget?.let { authorPubkey ->
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
             space.bitos.app.ui.profile.AuthorProfileContent(
+                authorPubkey = authorPubkey,
                 state = authorState,
                 feedState = state,
                 onOpen = authorRepository::open,
@@ -356,9 +401,62 @@ fun FeedScreen(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
                 onLoadComments = viewModel::loadComments,
-                onReply = { text, note -> viewModel.reply(text, note) },
+                onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
                 onClose = { showCommentsFor = null },
             )
+        }
+    }
+
+    // In-place note-ref open: poll the bounded side-store until the head
+    // arrives (3 s), then show the thread sheet.
+    LaunchedEffect(refOpenTarget) {
+        val raw = refOpenTarget ?: return@LaunchedEffect
+        repeat(20) {
+            val fetched = viewModel.refNote(raw)
+            if (fetched != null) {
+                refOpenTarget = null
+                showCommentsFor = fetched
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(150)
+        }
+        refOpenTarget = null
+    }
+
+    // External-link confirm: the browser only opens on an explicit Open.
+    externalLink?.let { url ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { externalLink = null }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = BitOSSpacing.base).padding(bottom = BitOSSpacing.lg)) {
+                Text("Open external link?", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
+                Spacer(Modifier.height(BitOSSpacing.sm))
+                Text(
+                    url,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = BitOSColors.textSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("This link leaves BitOS.", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+                Spacer(Modifier.height(BitOSSpacing.md))
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                            }
+                            externalLink = null
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = BitOSColors.primary,
+                            contentColor = Color(0xFF0A0A0F),
+                        ),
+                    ) { Text("Open", fontWeight = androidx.compose.ui.text.font.FontWeight.W600) }
+                    androidx.compose.material3.OutlinedButton(onClick = { externalLink = null }) {
+                        Text("Cancel", color = BitOSColors.primary)
+                    }
+                }
+            }
         }
     }
 
@@ -522,7 +620,7 @@ private fun CaptionOverlay(note: FeedNote, state: FeedUiState, onFollow: (String
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clickable(onClickLabel = "View author profile") { onAuthor(note.pubkey) },
         ) {
-            PubkeyAvatar(pubkey = note.pubkey, size = 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank())
+            PubkeyAvatar(pubkey = note.pubkey, size = 36, pictureUrl = profile?.picture, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank())
             Spacer(Modifier.width(BitOSSpacing.sm))
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -595,6 +693,12 @@ private fun VideoActionRail(
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // User decision 2026-08-29: [like · comment · repost · zap · bookmark].
+        RailButton(
+            icon = if (isLiked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
+            label = if (isLiked) "Unlike" else "Like",
+            tint = if (isLiked) BitOSColors.like else Color.White,
+        ) { onLike(note) }
         RailButton(
             icon = SolarFeedIcon.Comment,
             label = "Replies",
@@ -611,54 +715,81 @@ private fun VideoActionRail(
             tint = BitOSColors.zap,
         ) { onZap(note) }
         RailButton(
-            icon = if (isLiked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
-            label = if (isLiked) "Unlike" else "Like",
-            tint = if (isLiked) BitOSColors.like else Color.White,
-        ) { onLike(note) }
-        RailButton(
             icon = if (isBookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
             label = if (isBookmarked) "Remove bookmark" else "Bookmark",
             tint = if (isBookmarked) BitOSColors.bookmark else Color.White,
         ) { onBookmark(note.id) }
-        RailButton(
-            icon = AppIcons.Share,
-            label = "Share",
-            tint = Color.White,
-        ) { }
         MoreMenuButton(
+            note = note,
+            isSaved = isBookmarked,
             isMuted = isMuted,
+            onSaveToggle = { onBookmark(note.id) },
             onMuteToggle = onMuteToggle,
             onReport = onReport,
         )
     }
 }
 
-/** APP-022: note ⋯ menu anchored at the trigger (spec §3.5). */
+/**
+ * ⋯ overflow → bottom sheet (legacy parity: web item set in the Flutter
+ * sheet chrome). Icon-only trigger — no label, no dead rail Share.
+ */
 @Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 private fun MoreMenuButton(
+    note: FeedNote,
+    isSaved: Boolean,
     isMuted: Boolean,
+    onSaveToggle: () -> Unit,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
 ) {
-    var expanded by androidx.compose.runtime.remember { mutableStateOf(false) }
-    Box {
-        RailButton(
-            icon = SolarFeedIcon.More,
-            label = "More options",
-            tint = Color.White,
-        ) { expanded = true }
-        AppMenuDropdown(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
+    val context = LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val npub = remember(note.pubkey) {
+        space.bitos.core.identity.NostrKeyCodec.npub(note.pubkey) ?: note.pubkey
+    }
+    var showSheet by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { showSheet = true },
+        modifier = Modifier.size(36.dp).semantics { contentDescription = "More options" },
+    ) {
+        SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
+    }
+    if (showSheet) {
+        space.bitos.app.ui.components.AppBottomSheetMenu(
+            onDismissRequest = { showSheet = false },
+            title = "Post actions",
             entries = listOf(
-                AppMenuEntry.Item(AppMenuItem("mute", if (isMuted) "Unmute author" else "Mute author")),
+                AppMenuEntry.Item(AppMenuItem("share", "Share", icon = AppIcons.Share)),
+                AppMenuEntry.Item(
+                    AppMenuItem("save", if (isSaved) "Unsave note" else "Save note", icon = AppIcons.Bookmark),
+                ),
+                AppMenuEntry.Item(AppMenuItem("copy-id", "Copy note ID", icon = AppIcons.Copy)),
+                AppMenuEntry.Item(AppMenuItem("copy-text", "Copy note text", icon = AppIcons.Pen)),
+                AppMenuEntry.Item(AppMenuItem("copy-npub", "Copy author npub", icon = AppIcons.User)),
                 AppMenuEntry.Divider,
-                AppMenuEntry.Item(AppMenuItem("report-spam", "Report as spam", destructive = true)),
-                AppMenuEntry.Item(AppMenuItem("report-illicit", "Report as illicit", destructive = true)),
-                AppMenuEntry.Item(AppMenuItem("report-harassment", "Report as harassment", destructive = true)),
+                AppMenuEntry.Item(
+                    AppMenuItem("mute", if (isMuted) "Unmute author" else "Mute author", icon = AppIcons.Mute),
+                ),
+                AppMenuEntry.Divider,
+                AppMenuEntry.Item(AppMenuItem("report-spam", "Report as spam", icon = AppIcons.ReportSpam, destructive = true)),
+                AppMenuEntry.Item(AppMenuItem("report-illicit", "Report as illicit", icon = AppIcons.ReportIllicit, destructive = true)),
+                AppMenuEntry.Item(AppMenuItem("report-harassment", "Report as harassment", icon = AppIcons.ReportHarassment, destructive = true)),
             ),
             onSelect = { id ->
                 when (id) {
+                    "share" -> {
+                        val send = Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, space.bitos.core.feed.NoteShare.text(note.content, npub))
+                        }
+                        context.startActivity(android.content.Intent.createChooser(send, null))
+                    }
+                    "save" -> onSaveToggle()
+                    "copy-id" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.id))
+                    "copy-text" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.content))
+                    "copy-npub" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(npub))
                     "mute" -> onMuteToggle()
                     "report-spam" -> onReport("spam")
                     "report-illicit" -> onReport("illicit")
@@ -741,7 +872,7 @@ private fun TextNotePage(
     Box(Modifier.fillMaxSize().background(BitOSColors.background).padding(BitOSSpacing.screen)) {
         Column(Modifier.align(Alignment.TopStart).padding(top = BitOSSpacing.xl)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PubkeyAvatar(pubkey = note.pubkey)
+                PubkeyAvatar(pubkey = note.pubkey, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
                 Spacer(Modifier.width(BitOSSpacing.avatarGap))
                 Column {
                     Text(
@@ -864,9 +995,11 @@ private fun NotesList(
     onLike: (FeedNote) -> Unit,
     onBookmark: (String) -> Unit,
     onRepost: (FeedNote) -> Unit,
+    onOpenExternalLink: (String) -> Unit = {},
+    onOpenNoteRef: (String) -> Unit = {},
 ) {
     androidx.compose.foundation.lazy.LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-        items(notes, key = { it.id }) { note ->
+        itemsIndexed(notes, key = { _, note -> note.id }) { index, note ->
             NoteCardRow(
                 note = note,
                 state = state,
@@ -880,10 +1013,21 @@ private fun NotesList(
                 isMuted = viewModel.isMuted(note.pubkey),
                 onMuteToggle = { viewModel.toggleMute(note.pubkey) },
                 onReport = { reason -> viewModel.report(note, reason) },
+                onOpenExternalLink = onOpenExternalLink,
+                onOpenNoteRef = onOpenNoteRef,
                 sensitiveShowByDefault = sensitiveShowByDefault,
                 mediaPreview = mediaPreview,
                 compact = compact,
             )
+            // Legacy UI parity: hairline divider between cards (not after
+            // the last one).
+            if (index < notes.lastIndex) {
+                androidx.compose.material3.HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = BitOSColors.divider,
+                    modifier = Modifier.padding(start = 68.dp),
+                )
+            }
         }
         // APP-004 pagination: footer spinner while an older page loads.
         if (state.isLoadingOlder) {
@@ -910,6 +1054,10 @@ private fun NoteCardRow(
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    /** External-link tap → confirm sheet (owned by the screen). */
+    onOpenExternalLink: (String) -> Unit = {},
+    /** note1/nevent1/naddr1 tap → in-place thread open. */
+    onOpenNoteRef: (String) -> Unit = {},
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
     compact: Boolean = false,
@@ -933,11 +1081,26 @@ private fun NoteCardRow(
         verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else BitOSSpacing.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PubkeyAvatar(pubkey = note.pubkey, size = if (compact) 28 else 36, label = profile?.bestDisplayName, hasLightning = !profile?.lud16.isNullOrBlank()).let {
-                Box(Modifier.clickable(onClickLabel = "Open author") { onAuthor() }) { it }
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clickable(onClickLabel = "Open author profile") { onAuthor() },
+                contentAlignment = Alignment.Center,
+            ) {
+                PubkeyAvatar(
+                    pubkey = note.pubkey,
+                    size = if (compact) 28 else 36,
+                    pictureUrl = profile?.picture,
+                    label = profile?.bestDisplayName,
+                    hasLightning = !profile?.lud16.isNullOrBlank(),
+                )
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
-            Column {
+            Column(
+                Modifier
+                    .clickable(onClickLabel = "Open author profile") { onAuthor() }
+                    .padding(vertical = 6.dp),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(profile?.bestDisplayName ?: shortPubkey(note.pubkey), style = MaterialTheme.typography.titleSmall, color = BitOSColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (!profile?.nip05.isNullOrBlank()) Icon(Icons.Rounded.CheckCircle, contentDescription = "NIP-05 identity claim", tint = BitOSColors.primary, modifier = Modifier.padding(start = 4.dp).size(13.dp))
@@ -955,13 +1118,24 @@ private fun NoteCardRow(
                 }
             }
             Spacer(Modifier.weight(1f))
-            MoreMenuButton(isMuted = isMuted, onMuteToggle = onMuteToggle, onReport = onReport)
+            MoreMenuButton(
+                note = note,
+                isSaved = bookmarked,
+                isMuted = isMuted,
+                onSaveToggle = onBookmark,
+                onMuteToggle = onMuteToggle,
+                onReport = onReport,
+            )
         }
         if (note.contentWarning && !revealed && !sensitiveShowByDefault) {
             SensitiveCover(onReveal = { revealed = true })
         } else {
             RichText(
                 tokens = androidx.compose.runtime.remember(note.content) { space.bitos.core.nostr.Nip27.tokenize(note.content) },
+                hiddenMediaUrls = remember(note.mediaUrls) { note.mediaUrls.toSet() },
+                resolveMentionName = { hex -> state.profiles[hex]?.bestDisplayName },
+                onOpenNoteRef = onOpenNoteRef,
+                onOpenExternalLink = onOpenExternalLink,
                 maxLines = if (expanded) Int.MAX_VALUE else NOTE_COLLAPSE_LINES,
                 onOverflow = { canExpand = it },
                 onOpenProfile = { onAuthor() },
@@ -989,15 +1163,16 @@ private fun NoteCardRow(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
-            CardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
-            CardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
-            // APP-005 §2.4: scale-bounce + haptic on like.
+            // User decision 2026-08-29: order [like · comment · repost ·
+            // zap · bookmark]; APP-005 §2.4 scale-bounce + haptic on like.
             AnimatedLikeIcon(
                 liked = note.id in actions.liked,
                 tint = if (note.id in actions.liked) BitOSColors.like else BitOSColors.textSecondary,
                 iconSize = 18.dp,
                 onClick = onLike,
             )
+            CardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
+            CardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
             CardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
             CardAction(if (bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark, if (bookmarked) "Remove bookmark" else "Bookmark", if (bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary, onBookmark)
         }

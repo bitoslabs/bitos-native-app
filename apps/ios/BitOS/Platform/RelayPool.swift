@@ -226,6 +226,7 @@ extension URLSession {
 /// Default public read relays, mirroring the web client's discovery set.
 enum DefaultRelays {
     static let urls: [RelayURL] = [
+        "wss://nostr-01.yakihonne.com",
         "wss://relay.damus.io",
         "wss://nos.lol",
         "wss://relay.nostr.band",
@@ -233,6 +234,7 @@ enum DefaultRelays {
 
     /// Write-capable subset (nostr.band is read-only in the web client).
     static let writeUrls: [RelayURL] = [
+        "wss://nostr-01.yakihonne.com",
         "wss://relay.damus.io",
         "wss://nos.lol",
     ].compactMap(RelayURL.parse)

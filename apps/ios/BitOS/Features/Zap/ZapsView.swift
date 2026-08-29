@@ -107,8 +107,7 @@ struct ZapsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { onClose() }
-                        .foregroundStyle(BitOSTheme.textSecondary)
+                    SheetCloseButton(action: onClose)
                 }
             }
         }

@@ -328,19 +328,21 @@ final class FeedStore {
         } else if client.isProfileKind(event.kind) {
             absorbProfile(event)
         } else if client.isFeedKind(event.kind) {
-            absorbNote(event)
+            let fromOlderPage = bridgeFacade().relayEventSubscriptionId(message: frame.message)?
+                .hasPrefix("bitos-older-") == true
+            absorbNote(event, fromOlderPage: fromOlderPage)
             persist(event)
         }
         publishState()
     }
 
-    private func absorbNote(_ event: VerifiedEvent) {
+    private func absorbNote(_ event: VerifiedEvent, fromOlderPage: Bool = false) {
         let note = client.feedNote(from: event)
         if !knownNoteIds.contains(note.id) {
             knownNoteIds.insert(note.id)
             // APP-004: arrivals are held for the "N new notes" pill while
             // the user is scrolled into the feed; tap/at-top reveals them.
-            if holdingNewNotes, (window?.count() ?? 0) > 0 {
+            if !fromOlderPage, holdingNewNotes, (window?.count() ?? 0) > 0 {
                 pendingNotes.append(note)
                 if pendingNotes.count > Self.pendingMax { pendingNotes.removeFirst(pendingNotes.count - Self.pendingMax) }
             } else {
@@ -356,6 +358,16 @@ final class FeedStore {
             commentThreads[target] = thread
         }
         enqueueProfile(event.pubkey)
+        // Web parity: mentioned pubkeys' profiles resolve for @display.
+        if let data = (bridgeFacade().richTokens(content: note.content) as String?)?.data(using: .utf8),
+           let tokens = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            let mentioned = tokens.compactMap { token -> String? in
+                guard token["k"] as? String == "n",
+                      (token["e"] as? String) == "profile" else { return nil }
+                return token["x"] as? String
+            }
+            if !mentioned.isEmpty { requestMentionProfiles(mentioned) }
+        }
         // APP-007 Chain: by-id fetches for the remix ancestry land here too.
         remixAncestorEvents[note.id] = event
         if remixAncestorEvents.count > 48, let oldest = remixAncestorEvents.keys.first {
@@ -421,6 +433,51 @@ final class FeedStore {
     /** Ancestor note for sheet row tap-through (opens its thread). */
     func remixAncestorNote(id: String) -> FeedNote? {
         remixAncestorEvents[id].map { client.feedNote(from: $0) }
+    }
+
+    // MARK: - Mention profiles + note refs (web parity)
+
+    /** Mentioned pubkeys (NIP-27 profile entities) — @display resolution. */
+    func requestMentionProfiles(_ pubkeys: [String]) {
+        pubkeys.prefix(48).forEach { enqueueProfile($0) }
+    }
+
+    /** In-place note-ref open: fetch the head, caller polls [refNote]. */
+    func openNoteReference(raw: String) {
+        guard let ref = (bridgeFacade().eventRefParse(bech32: raw) as? [String: Any]) else { return }
+        let request: String?
+        if ref["form"] as? String == "id", let id = ref["id"] as? String {
+            request = bridgeFacade().threadRootRequestById(
+                subscriptionId: "bitos-ref-open", eventId: id)
+        } else if let kind = (ref["kind"] as? KotlinInt)?.intValue,
+                  let pubkey = ref["pubkey"] as? String,
+                  let d = ref["d"] as? String {
+            request = bridgeFacade().threadRootRequestByCoordinate(
+                subscriptionId: "bitos-ref-open", kind: Int32(truncatingIfNeeded: kind), pubkey: pubkey, d: d)
+        } else {
+            request = nil
+        }
+        if let request {
+            Task { [pool] in await pool.broadcast(request) }
+        }
+    }
+
+    /** Fetched head for the in-place ref open (null while in flight). */
+    func refNote(raw: String) -> FeedNote? {
+        guard let ref = (bridgeFacade().eventRefParse(bech32: raw) as? [String: Any]) else { return nil }
+        if ref["form"] as? String == "id", let id = ref["id"] as? String {
+            return remixAncestorEvents[id].map { client.feedNote(from: $0) }
+        }
+        if let kind = (ref["kind"] as? KotlinInt)?.intValue,
+           let pubkey = ref["pubkey"] as? String {
+            // Coordinate refs match the newest absorbed event of that shape
+            // (the REQ is limit-1, relay-newest).
+            return Array(remixAncestorEvents.values)
+                .filter { $0.kind == kind && $0.pubkey == pubkey }
+                .max { $0.createdAt < $1.createdAt }
+                .map { client.feedNote(from: $0) }
+        }
+        return nil
     }
 
     private func runRemixChainWalk(rootId: String, sourceId: String, sourcePubkey: String?) async {

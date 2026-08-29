@@ -179,7 +179,10 @@ struct AppMenu: View {
             ForEach(entries) { entry in
                 switch entry {
                 case .item(let item):
+                    // Web MenuItem parity: rows carry their own rounded
+                    // container (press + destructive tint).
                     AppMenuItemRow(item: item) { onSelect(item.id) }
+                        .padding(.horizontal, 6)
                 case .divider:
                     AppMenuDividerView()
                 }
@@ -200,16 +203,17 @@ struct AppMenuItemRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 if let symbol = item.systemImage {
                 AppIcons.image(for: symbol)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(item.isDestructive ? BitOSTheme.error : BitOSTheme.textSecondary)
-                        .frame(width: 18)
+                        .frame(width: 20)
                 }
                 Text(item.label)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(item.isDestructive ? BitOSTheme.error : BitOSTheme.textPrimary)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
                 if item.isChecked {
                     Image(systemName: AppIcons.check)
@@ -218,8 +222,13 @@ struct AppMenuItemRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: AppMenuLayout.rowHeight)
+            .padding(.vertical, 10)
+            .frame(minHeight: AppMenuLayout.rowHeight)
             .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(item.isDestructive ? BitOSTheme.error.opacity(0.08) : .clear)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(item.label)
@@ -237,9 +246,11 @@ private struct AppMenuDividerView: View {
     }
 }
 
-// MARK: - Bottom-sheet menu (long lists)
+// MARK: - Bottom-sheet menu (legacy Flutter `AppBottomSheetMenu` parity)
 
-/// Bottom-sheet menu for long lists (Bitz comments host, "More" hubs).
+/// Bottom-sheet menu (legacy chrome: drag handle + 28° top radius via the
+/// presenting sheet, centered bold title, 48 pt rows with a 12° rounded
+/// press, bare 18 pt leading icon, red destructive tone).
 /// Present inside `.sheet { AppBottomSheetMenu(...) }`.
 struct AppBottomSheetMenu: View {
     let title: String?
@@ -254,9 +265,11 @@ struct AppBottomSheetMenu: View {
                 .padding(.top, 8)
             if let title {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .frame(maxWidth: .infinity)
                     .padding(.top, 12)
+                    .padding(.bottom, 2)
             }
             VStack(spacing: 0) {
                 ForEach(entries) { entry in
@@ -269,6 +282,7 @@ struct AppBottomSheetMenu: View {
                 }
             }
             .padding(.top, 6)
+            .padding(.horizontal, 12)
             .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity)
@@ -304,5 +318,20 @@ struct AppMenuAnchorButton: View {
             }
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Icon-only dismiss affordance for sheet toolbars and headers (user
+/// decision 2026-08-29): sheets close with ✕, never a labelled Close button.
+struct SheetCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            AppIcons.image(for: AppIcons.close)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+        }
+        .accessibilityLabel("Close")
     }
 }

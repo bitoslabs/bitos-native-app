@@ -299,11 +299,20 @@ class NoteComposer(
         picture: String,
         nip05: String,
         lud16: String,
+        banner: String = "",
+        website: String = "",
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         if (name.length > 256 || displayName.length > 256) return null
         if (about.length > 1024) return null
         if (picture.length > 512 || nip05.length > 256 || lud16.length > 256) return null
+        if (banner.length > 512 || website.length > 256) return null
+        // Banner follows the picture URL policy (HTTPS-only).
+        if (banner.isNotEmpty() && !banner.startsWith("https://") &&
+            !banner.startsWith("http://127.0.0.1:") && !banner.startsWith("http://localhost:")
+        ) return null
+        // Website accepts http(s).
+        if (website.isNotEmpty() && !website.startsWith("https://") && !website.startsWith("http://")) return null
         // HTTPS-only pictures (loopback for dev).
         if (picture.isNotEmpty() && !picture.startsWith("https://") &&
             !picture.startsWith("http://127.0.0.1:") && !picture.startsWith("http://localhost:")
@@ -317,6 +326,8 @@ class NoteComposer(
             if (displayName.isNotEmpty()) append("\"display_name\":\"").append(NostrEventCodec.escape(displayName)).append("\",")
             if (about.isNotEmpty()) append("\"about\":\"").append(NostrEventCodec.escape(about)).append("\",")
             if (picture.isNotEmpty()) append("\"picture\":\"").append(NostrEventCodec.escape(picture)).append("\",")
+            if (banner.isNotEmpty()) append("\"banner\":\"").append(NostrEventCodec.escape(banner)).append("\",")
+            if (website.isNotEmpty()) append("\"website\":\"").append(NostrEventCodec.escape(website)).append("\",")
             if (nip05.isNotEmpty()) append("\"nip05\":\"").append(NostrEventCodec.escape(nip05)).append("\",")
             if (lud16.isNotEmpty()) append("\"lud16\":\"").append(NostrEventCodec.escape(lud16)).append("\",")
             // Trim trailing comma.
@@ -411,6 +422,53 @@ class NoteComposer(
     companion object {
         /** UI-side bound, deliberately far below the protocol limit. */
         const val MAX_NOTE_LENGTH: Int = 16_000
+
+        /** APP-009 participant p-tag bound (hostile targets stay bounded). */
+        const val MAX_REPLY_PARTICIPANTS: Int = 16
+
+        private val hex64 = Regex("^[0-9a-f]{64}$")
+
+        /**
+         * APP-009 reply tag derivation (legacy `publishReply` / web
+         * `feed.reply` parity): ALWAYS both NIP-10 markers — `['e', root,
+         * '', 'root']` + `['e', target, '', 'reply']` (a root reply repeats
+         * the id in both) — then participant p-tags: the replied-to author
+         * plus everyone already p-tagged in the target (64-hex only,
+         * deduped, ≤ [MAX_REPLY_PARTICIPANTS]); then the content-derived
+         * entities and hashtags via ComposerRules.deriveTags, deduped per
+         * kind against everything before them. Invalid ids → null.
+         */
+        fun replyTags(
+            rootEventId: String,
+            targetEventId: String,
+            targetPubkey: String,
+            targetPTags: List<String>,
+            content: String,
+        ): List<List<String>>? {
+            if (!rootEventId.matches(hex64)) return null
+            if (!targetEventId.matches(hex64)) return null
+            if (!targetPubkey.matches(hex64)) return null
+            val markers = listOf(
+                listOf("e", rootEventId, "", "root"),
+                listOf("e", targetEventId, "", "reply"),
+            )
+            val participants = (listOf(targetPubkey) + targetPTags)
+                .filter { it.matches(hex64) }
+                .distinct()
+                .take(MAX_REPLY_PARTICIPANTS)
+                .map { listOf("p", it) }
+            // The two markers are exempt from dedupe (a root reply repeats
+            // the id on purpose); everything after merges per kind+value.
+            val seen = mutableSetOf<Pair<String, String>>()
+            markers.forEach { seen += "e" to it[1] }
+            participants.forEach { seen += "p" to it[1] }
+            val contentTags = ComposerRules.deriveTags(content)
+                .filter { tag ->
+                    val key = tag.firstOrNull().orEmpty() to tag.getOrNull(1).orEmpty()
+                    key.second.isEmpty() || seen.add(key)
+                }
+            return markers + participants + contentTags
+        }
 
         /**
          * Parses `["OK", <eventId>, <bool>, <message>]`; null for anything

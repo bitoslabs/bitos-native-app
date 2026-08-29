@@ -184,7 +184,9 @@ slide+fade 300 easeOutCubic · page hero transitions 300. Respect
 
 - **Hex identity:** hexagonal avatars/clips everywhere (sovereign-ID motif),
   `HexMark` brand badge, gradient hex rings = unseen stories, PoW segmented
-  pills. SwiftUI: custom `Shape`; Compose: `clipShape(HexShape)`.
+  pills. Kind-0 `picture` metadata overlays the identicon only for bounded
+  HTTPS non-SVG images; the hex remains the loading/error fallback. SwiftUI:
+  custom `Shape`; Compose: `clipShape(HexShape)`.
 - **Glass surfaces:** blur-20 frosted floating controls over media (Bitz top
   bar, profile hero controls, glass pill tabs).
 - **Skeletons** for every list/grid; shimmer; matched empty states with
@@ -323,6 +325,8 @@ reactions/reposts/zap totals folded into cards, protocol-note classifier
 relays opt-in (For you only), dedup by id, newest-first capped window.
 Kind-0 author metadata is batched (≤48): query the primary connected relay
 first, then after 900 ms query only unresolved authors on fallback relays.
+The default primary is `wss://nostr-01.yakihonne.com`; it is first in the
+native default relay order and default NIP-65 write fan-out order.
 
 ### 3.5 APP-005 — NoteCard & rich content renderer (V1) — shared component
 
@@ -384,7 +388,17 @@ buttons: search · refresh.
 **Explore mode**: 3-col 9:16 video-first grid — 24 initial + 18/load-more,
 tile = cover + duration + author + zap/like counts, sensitive covers,
 skeleton tiles while loading, sensitive-cover reveal, tap → snap player
-jumped to that reel. [W] masonry ordering keeps ranked order for pictures.
+jumped to that reel. A visible footer reveals the next 18 loaded tiles,
+loads an older relay page when the local window is exhausted, and reports
+loading/exhausted state. [W] masonry ordering keeps ranked order for pictures.
+Older-page events bypass the live-arrival hold, so a viewer at the end of the
+snap pager immediately receives the next page and its player pool preloads
+the adjacent next/previous videos.
+
+The V1 relay query follows the legacy app's bounded hybrid strategy: native
+NIP-71 kinds 21 and 22 are requested together, while kind-1 media-link notes
+use a separate fallback filter. Kind 23 is not a Bitz kind; NIP-23 long-form
+content uses kind 30023 and stays outside the reels feed.
 
 **Player mode** — vertical snap `PageView` of 9:16 items:
 - [ ] Media: full-bleed, multi-rendition fallback (imeta `fallback`/
@@ -400,7 +414,12 @@ jumped to that reel. [W] masonry ordering keeps ranked order for pictures.
       [W] view toggle crop/fill)
 - [ ] Video controls: tap-to-pause/play, scrubber with seek-hint overlay,
       ±10 s fast-forward pills, compact mute button, hairline progress
-- [ ] Gestures: double-tap like; horizontal swipe = next/prev handling
+- [x] Gestures: double-tap like; horizontal swipe = next/prev handling —
+      left swipe cycles Explore → Following → For you; the final left swipe
+      on For you opens the settled reel's creator profile sheet (TikTok /
+      legacy Flutter parity); right swipe steps back; the gesture is
+      suppressed while any sheet or the search overlay is up (both
+      platforms, player + explore grid)
 - [ ] Sensitive-content reveal gate per reel
 - [ ] [W] chips: PoW badge · remix lineage ("remixed from…" → chain
       dialog) · sound chip (primary SFX cue → use-in-studio) · value-split
@@ -917,7 +936,7 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 | 3 | Shell §3.3 | ◐ both | 5 visible tabs — **Discover is filtered out of the nav bar** (Android `BitOSApp.kt:106` `filterNot`, iOS 5-case enum + Discover as sheet). See drift finding 9.4-1 |
 | 4 | Home notes feed §3.4 | ✅ both | W2 items only (banners, hashtag chips, ZapLiveStrip, rank chips) |
 | 5 | Bitz §3.7 | ◐ both | Snap player + rail live; explore grid, glass top bar/mode pills, search overlay, comments sheet, video controls (scrubber/±10 s/mute memory) missing |
-| 6 | Composer §3.8 | ✅ both | GIF picker missing; poll voting render-only (decision pending) |
+| 6 | Composer §3.8 | ✅ both | poll voting render-only (decision pending); Meme Studio button awaits studio phase |
 | 7 | Thread §3.9 | ◐ both | Sheet-based; tree assembled by shared `ThreadAssembly` but **iOS renders the flat list**; root action row, live deltas, reply-bar options missing |
 | 8 | Discover §3.10 | ◐ both | NIP-50 search + chips + npub resolve live; results tabs (Posts/People/Hashtags), trending mosaic, fullscreen image viewer missing. Reached via Home search icon + hub only |
 | 9 | Messages/DMs §3.11 | ☐ both | Honest placeholder; no NIP-17/NIP-04 code |

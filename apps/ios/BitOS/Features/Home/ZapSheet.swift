@@ -82,7 +82,7 @@ struct ZapSheet: View {
                 .navigationTitle("Zap ⚡")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Close") { onClose() } }
+                    ToolbarItem(placement: .cancellationAction) { SheetCloseButton(action: onClose) }
                 }
         }
         .preferredColorScheme(.dark)
@@ -355,9 +355,7 @@ private struct ZapHeaderView: View {
                 }
                 .accessibilityLabel("Copy Lightning address")
             }
-            Button("Close") { onClose() }
-                .font(.system(size: 13))
-                .foregroundStyle(BitOSTheme.textSecondary)
+            SheetCloseButton(action: onClose)
         }
     }
 }

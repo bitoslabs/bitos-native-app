@@ -67,6 +67,9 @@ struct ProfileMetadata: Sendable, Equatable {
     let nip05: String?
     let lud16: String?
 
+    var banner: String? = nil
+    var website: String? = nil
+
     var bestDisplayName: String {
         (displayName?.isEmpty == false ? displayName : nil)
             ?? (name?.isEmpty == false ? name : nil)
@@ -172,7 +175,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
                 about: $0.about,
                 picture: $0.picture,
                 nip05: $0.nip05,
-                lud16: $0.lud16
+                lud16: $0.lud16,
+                banner: $0.banner,
+                website: $0.website
             )
         }
     }
@@ -359,7 +364,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         FrameworkBusinessCoreClient().decodeVerifiedEvent(message: message, relay: relay)
     }
 
-    func isFeedKind(_ kind: Int) -> Bool { kind == 1 || kind == 22 }
+    func isFeedKind(_ kind: Int) -> Bool { kind == 1 || kind == 21 || kind == 22 }
     func isProfileKind(_ kind: Int) -> Bool { kind == 0 }
     func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String]) -> Bool {
         // Fixtures always pass; production goes through the shared core.

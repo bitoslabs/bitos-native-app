@@ -73,7 +73,7 @@ fun ImportMediaContent(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("New video", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onCancel) { Text("Close") }
+            space.bitos.app.ui.components.SheetCloseIcon(onClose = onCancel)
         }
 
         state.failure?.let { failure ->

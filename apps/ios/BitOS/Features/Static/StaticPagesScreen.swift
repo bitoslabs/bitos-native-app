@@ -25,9 +25,7 @@ struct StaticPagesScreen: View {
                         .foregroundStyle(page == key ? BitOSTheme.accent : BitOSTheme.textSecondary)
                 }
                 Spacer()
-                Button("Close", action: onClose)
-                    .font(.system(size: 13))
-                    .foregroundStyle(BitOSTheme.textSecondary)
+                SheetCloseButton(action: onClose)
             }
             .padding(.horizontal, BitOSTheme.Spacing.screen)
             .padding(.vertical, BitOSTheme.Spacing.sm)

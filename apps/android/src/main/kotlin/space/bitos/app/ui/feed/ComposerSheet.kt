@@ -111,7 +111,7 @@ private fun IdentityGateNotice(onClose: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = BitOSColors.textSecondary,
             )
-            OutlinedButton(onClick = onClose) { Text("Close") }
+            space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
         }
     }
 }

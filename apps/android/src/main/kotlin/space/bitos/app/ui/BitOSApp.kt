@@ -68,6 +68,8 @@ fun BitOSApp(
     notePublisher: space.bitos.app.data.publish.NotePublisher,
     composerDraftStore: space.bitos.app.data.publish.ComposerDraftStore,
     sentZapsStore: space.bitos.app.data.zap.SentZapsStore,
+    dmRepository: space.bitos.app.data.dm.DmRepository,
+    storiesRepository: space.bitos.app.data.stories.StoriesRepository,
     mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel,
     notifications: space.bitos.app.data.feed.NotificationRepository,
     searchRepository: space.bitos.app.data.feed.SearchRepository,
@@ -316,7 +318,7 @@ fun BitOSApp(
                     // More/Settings stacked-layout bug.
                     tabStateHolder.SaveableStateProvider(destination.name) {
                         when (destination) {
-                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault)
+                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
                             TopLevelDestination.BITZ -> space.bitos.app.ui.bitz.BitzScreen(
                                 viewModel = homeViewModel,
                                 identityViewModel = identityViewModel,
@@ -336,7 +338,7 @@ fun BitOSApp(
                                 identityViewModel,
                                 notePublisher,
                             )
-                            TopLevelDestination.CHATS -> space.bitos.app.ui.inbox.ChatsScreen()
+                            TopLevelDestination.CHATS -> space.bitos.app.ui.dm.DmScreen(identityViewModel, dmRepository)
                             TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
                                 identityViewModel,
                                 notifications,
@@ -354,9 +356,10 @@ fun BitOSApp(
     }
 
         // ── T16 deep-link surfaces (overlay everything) ────────────────
-        deepLinkAuthor?.let { _ ->
+        deepLinkAuthor?.let { authorPubkey ->
             androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); deepLinkAuthor = null }) {
                 space.bitos.app.ui.profile.AuthorProfileContent(
+                    authorPubkey = authorPubkey,
                     state = authorState,
                     feedState = homeViewModel.state.value,
                     onOpen = authorRepository::open,

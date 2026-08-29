@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,55 +48,63 @@ import space.bitos.core.model.ProfileMetadata
  */
 @Composable
 fun AuthorProfileContent(
+    authorPubkey: String,
     state: AuthorUiState,
     feedState: FeedUiState,
     onOpen: (String) -> Unit,
     onFollow: (String) -> Unit,
     onClose: () -> Unit,
 ) {
-    val pubkey = state.pubkey ?: return
+    // The sheet is visible before the first relay response. Drive the request
+    // from its immutable target instead of waiting for repository state, or a
+    // new sheet would render empty and never subscribe.
+    LaunchedEffect(authorPubkey) { onOpen(authorPubkey) }
 
-    LaunchedEffect(pubkey) { onOpen(pubkey) }
-    LaunchedEffect(feedState.following) { state.isFollowing != feedState.following.contains(pubkey) }
-
+    // Bounded height so the notes list can fill the sheet (ModalBottomSheet
+    // measures content against the screen; weight needs definite bounds).
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .fillMaxHeight(0.85f)
             .padding(horizontal = BitOSSpacing.screen)
-            .padding(bottom = BitOSSpacing.xl),
+            .padding(bottom = BitOSSpacing.lg),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Profile", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onClose) { Text("Close") }
+            space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
         }
         Spacer(Modifier.height(BitOSSpacing.md))
 
         ProfileHeader(
-            pubkey = pubkey,
+            pubkey = authorPubkey,
             profile = state.profile,
-            isFollowing = feedState.following.contains(pubkey),
-            onFollow = { onFollow(pubkey) },
+            isFollowing = feedState.following.contains(authorPubkey),
+            onFollow = { onFollow(authorPubkey) },
         )
 
         Spacer(Modifier.height(BitOSSpacing.md))
 
         when {
             state.isLoading && state.notes.isEmpty() -> {
-                Box(Modifier.fillMaxWidth().padding(BitOSSpacing.xl), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
                 }
             }
             state.notes.isEmpty() -> {
-                Box(Modifier.fillMaxWidth().padding(BitOSSpacing.xl), contentAlignment = Alignment.Center) {
-                    Text("No notes yet, or relays haven't returned this author's posts.", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text(
+                        "No notes yet, or relays haven't returned this author's posts.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.textSecondary,
+                    )
                 }
             }
             else -> {
                 Text("Notes (${state.notes.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
                 Spacer(Modifier.height(BitOSSpacing.sm))
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().height(360.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                 ) {
                     items(state.notes, key = { it.id }) { note ->
@@ -118,7 +126,7 @@ private fun ProfileHeader(
     Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surface) {
         Column(Modifier.padding(BitOSSpacing.base)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PubkeyAvatar(pubkey = pubkey, size = 64)
+                PubkeyAvatar(pubkey = pubkey, size = 64, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
                 Spacer(Modifier.width(BitOSSpacing.md))
                 Column(Modifier.weight(1f)) {
                     Text(

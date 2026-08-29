@@ -71,7 +71,8 @@ class BusinessCoreBridgeTest {
     fun encodesSubscriptionMessages() {
         val request = bridge.feedRequest("feed1")
         assertTrue(request.startsWith("""["REQ","feed1","""), request)
-        assertTrue(request.contains(""""kinds":[1,22,6,0]"""), request)
+        assertTrue(request.contains(""""kinds":[21,22],"limit":16"""), request)
+        assertTrue(request.contains(""""kinds":[1],"limit":48"""), request)
         assertEquals("""["CLOSE","feed1"]""", bridge.close("feed1"))
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)
@@ -110,6 +111,52 @@ class BusinessCoreBridgeTest {
         assertNull(bridge.decodeEvent(VALID_ID_WRONG_SIGNATURE_MESSAGE, "wss://relay.damus.io"))
     }
 
+    @Test
+    fun replyTagsJsonCarriesMarkersAndParticipants() {
+        val author = "aa".repeat(32)
+        val root = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val parent = "bb".repeat(32)
+        val participant = "cc".repeat(32)
+        val json = bridge.replyTagsJson(
+            rootEventId = root, targetEventId = parent, targetPubkey = author,
+            targetPTagsJson = """["$participant","not-hex"]""", content = "gm #bitcoin",
+        )!!
+        assertTrue(json.contains(""""e","$root","","root""""), json)
+        assertTrue(json.contains(""""e","$parent","","reply""""), json)
+        assertTrue(json.contains(""""p","$author""""))
+        assertTrue(json.contains(""""p","$participant""""))
+        assertTrue(json.contains(""""t","bitcoin""""))
+        assertNull(bridge.replyTagsJson("nope", parent, author, "[]", "x"))
+    }
+
+    @Test
+    fun gifPickerSurfaceMatchesStableJsonShapes() {
+        // Request building (trending when blank, encoded search otherwise).
+        assertTrue(bridge.gifPickerUrl("  ", 0).endsWith("&limit=30&offset=0&rating=pg"))
+        assertTrue(bridge.gifPickerUrl("gm nostr", 30).contains("q=gm%20nostr"))
+        // Response parse → item array JSON.
+        val items = bridge.gifPickerParse(GIPHY_TWO_ITEM_RESPONSE)
+        assertTrue(items.startsWith("[{\"id\":\"a\""), items)
+        assertTrue(items.contains("\"preview\":\"https://media.giphy.com/media/a/100.gif\""))
+        assertEquals("[]", bridge.gifPickerParse("not json"))
+        // Pagination map.
+        val page = bridge.gifPickerPagination(GIPHY_TWO_ITEM_RESPONSE, fetchedCount = 2, requestedOffset = 0)
+        assertEquals(2, page["nextOffset"])
+        assertEquals(true, page["hasMore"])
+        // Recent merge: newest first, deduped.
+        val first = """{"id":"a","url":"https://a.example/a.gif","preview":"https://a.example/as.gif","w":100,"h":100}"""
+        val merged = bridge.gifPickerMergeRecent("[$first]", first)
+        assertEquals("[$first]", merged)
+        // Cache encode/decode round-trip through the envelope JSON.
+        val wire = bridge.gifCacheEncode("[$first]", "[$first]", savedAtMs = 1_000)
+        val decoded = bridge.gifCacheDecode(wire)!!
+        assertTrue(decoded.contains("\"savedAt\":1000"), decoded)
+        assertTrue(decoded.contains("\"recent\":[{\"id\":\"a\""), decoded)
+        assertNull(bridge.gifCacheDecode("{corrupt"))
+        assertTrue(bridge.gifCacheFresh(1_000, 1_000 + 86_399_999))
+        assertFalse(bridge.gifCacheFresh(1_000, 1_000 + 86_400_001))
+    }
+
     private companion object {
         // Verbatim relay frames from contracts/nostr/fixtures/verification-vectors.json.
         const val VALID_TEXT_NOTE_MESSAGE =
@@ -120,5 +167,7 @@ class BusinessCoreBridgeTest {
             """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"tampered but re-identified","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"2cbc3c8affa0828e03b11f975337317f8e415397933fc87069265e17f719e95b","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
         const val VALID_ESCAPED_CONTENT_MESSAGE =
             """["EVENT","sub1",{"kind":1,"created_at":1710000200,"tags":[["e","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],["p","cccccccccccccccccccccccccccccccc"]],"content":"line1\nline2 \"quoted\" ₿end","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd","sig":"6678f8524132e35027dd2403993fe012a3728b100cfce94a656a9a5da39f37802185d8e6d7120518436c773e64d8e19758a6ba914fd98a0fd86339caa6adf61b"}]"""
+        const val GIPHY_TWO_ITEM_RESPONSE =
+            "{\"data\":[{\"id\":\"a\",\"images\":{\"original\":{\"url\":\"https://media.giphy.com/media/a/giphy.gif\",\"width\":\"480\",\"height\":\"480\"},\"fixed_height_small\":{\"url\":\"https://media.giphy.com/media/a/100.gif\",\"width\":\"100\",\"height\":\"100\"}}},{\"id\":\"b\",\"images\":{\"original\":{\"url\":\"https://media.giphy.com/media/b/giphy.gif\",\"width\":\"480\",\"height\":\"480\"},\"fixed_height_small\":{\"url\":\"https://media.giphy.com/media/b/100.gif\",\"width\":\"100\",\"height\":\"100\"}}}],\"pagination\":{\"offset\":0,\"count\":2,\"total_count\":95}}"
     }
 }

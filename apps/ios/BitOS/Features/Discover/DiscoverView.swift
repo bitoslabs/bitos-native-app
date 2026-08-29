@@ -182,7 +182,7 @@ private struct CreatorCard: View {
 
     var body: some View {
         HStack(spacing: BitOSTheme.Spacing.md) {
-            PubkeyAvatarView(pubkey: pubkey, size: 48)
+            PubkeyAvatarView(pubkey: pubkey, size: 48, picture: profile?.picture, label: profile?.bestDisplayName)
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
                     .font(.subheadline.weight(.bold))
@@ -206,7 +206,7 @@ private struct SearchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 28)
+                PubkeyAvatarView(pubkey: note.pubkey, size: 28, picture: profile?.picture, label: profile?.bestDisplayName)
                 Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
@@ -254,7 +254,7 @@ private struct PeopleTab: View {
             LazyVStack(spacing: BitOSTheme.Spacing.sm) {
                 ForEach(people) { person in
                     HStack(spacing: BitOSTheme.Spacing.md) {
-                        PubkeyAvatarView(pubkey: person.pubkey, size: 44)
+                        PubkeyAvatarView(pubkey: person.pubkey, size: 44, label: person.name)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(person.name.isEmpty ? FeedFormat.shortPubkey(person.pubkey) : person.name)
                                 .font(.system(size: 14, weight: .bold))

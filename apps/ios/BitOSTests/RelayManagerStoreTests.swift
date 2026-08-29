@@ -42,6 +42,8 @@ final class RelayManagerStoreTests: XCTestCase {
             store.relays.filter(\.write).map(\.url),
             DefaultRelays.writeUrls.map(\.rawValue)
         )
+        XCTAssertEqual("wss://nostr-01.yakihonne.com", store.relays.first?.url)
+        XCTAssertTrue(store.relays.first?.primary ?? false)
     }
 
     func testAddValidatesPersistsAndRoundTrips() {

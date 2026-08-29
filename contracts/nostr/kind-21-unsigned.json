@@ -1,0 +1,18 @@
+{
+  "pubkey": "1111111111111111111111111111111111111111111111111111111111111111",
+  "created_at": 0,
+  "kind": 21,
+  "content": "A BitOS normal-video interoperability fixture",
+  "tags": [
+    ["title", "Normal video fixture"],
+    ["alt", "A landscape test pattern used for NIP-71 verification"],
+    [
+      "imeta",
+      "url https://media.example/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4",
+      "m video/mp4",
+      "x bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dim 1920x1080",
+      "duration 10"
+    ]
+  ]
+}

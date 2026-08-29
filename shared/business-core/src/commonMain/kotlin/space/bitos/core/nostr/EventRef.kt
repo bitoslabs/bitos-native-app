@@ -93,7 +93,7 @@ object EventRefs {
      * or by NIP-33 coordinate (newest `#d` version — limit 1, relays sort).
      */
     fun requestFilter(ref: EventRef): String = when (ref) {
-        is EventRef.ById -> """{"kinds":[1,22],"ids":["${ref.id}"],"limit":1}"""
+        is EventRef.ById -> """{"kinds":[1,21,22],"ids":["${ref.id}"],"limit":1}"""
         is EventRef.ByCoordinate -> """{"kinds":[${ref.kind}],"authors":["${ref.pubkey}"],"#d":["${ref.d}"],"limit":1}"""
     }
 

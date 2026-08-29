@@ -125,6 +125,8 @@ enum AppIcons {
     static let video = "video.fill"
     static let play = "play.fill"
     static let pause = "pause.fill"
+    static let brokenImage = "photo.badge.exclamationmark"  // failed media tile
+    static let info = "info.circle"                          // picker footer
 
     // ── Bitz player controls (spec §3.7) ─────────────────────────────
     static let soundOn = "speaker.wave.2.fill"        // unmuted state

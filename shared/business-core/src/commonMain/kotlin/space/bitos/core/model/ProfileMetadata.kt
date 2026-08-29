@@ -14,6 +14,8 @@ data class ProfileMetadata(
     val picture: String?,
     val nip05: String?,
     val lud16: String?,
+    val banner: String? = null,
+    val website: String? = null,
 ) {
     val bestDisplayName: String
         get() = (displayName?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() })
@@ -41,6 +43,8 @@ data class ProfileMetadata(
                 picture = field("picture", MAX_FIELD),
                 nip05 = field("nip05", MAX_FIELD),
                 lud16 = field("lud16", MAX_FIELD),
+                banner = field("banner", MAX_FIELD),
+                website = field("website", MAX_FIELD),
             )
         }
     }

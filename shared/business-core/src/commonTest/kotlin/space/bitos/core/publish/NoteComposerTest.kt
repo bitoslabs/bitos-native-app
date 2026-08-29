@@ -71,4 +71,60 @@ class NoteComposerTest {
         assertNull(NoteComposer.parseOkMessage("""["OK","$id","yes",""]"""))
         assertNull(NoteComposer.parseOkMessage("not json"))
     }
+
+    // ── APP-009 reply tags (legacy `publishReply` / web feed.reply) ────
+
+    private val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+    private val rootId = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+    private val parentId = "6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd"
+
+    @Test
+    fun replyTagsAlwaysEmitBothMarkers() {
+        // Root reply (root == target): the id repeats in both markers.
+        val tags = NoteComposer.replyTags(rootId, rootId, author, emptyList(), "gm")!!
+        assertEquals(listOf("e", rootId, "", "root"), tags[0])
+        assertEquals(listOf("e", rootId, "", "reply"), tags[1])
+        assertEquals(listOf("p", author), tags[2])
+    }
+
+    @Test
+    fun replyTagsCarryParticipantsAndContentEntities() {
+        val participant = "aa".repeat(32)
+        val inlineMention = "bb".repeat(32)
+        val npub = space.bitos.core.identity.NostrKeyCodec.npub(inlineMention)!!
+        val tags = NoteComposer.replyTags(
+            rootEventId = rootId,
+            targetEventId = parentId,
+            targetPubkey = author,
+            targetPTags = listOf(participant, "not-hex", participant),
+            content = "gm #bitcoin nostr:$npub",
+        )!!
+        assertEquals(listOf("e", rootId, "", "root"), tags[0])
+        assertEquals(listOf("e", parentId, "", "reply"), tags[1])
+        // Author first, then the target's p-tags, deduped; non-hex dropped.
+        assertEquals(listOf("p", author), tags[2])
+        assertEquals(listOf("p", participant), tags[3])
+        // Hashtag + NIP-27 entity tags from the content ride after.
+        assertTrue(tags.contains(listOf("t", "bitcoin")))
+        assertTrue(tags.contains(listOf("p", inlineMention)))
+    }
+
+    @Test
+    fun replyTagsDedupeContentEntitiesAgainstMarkersAndCapParticipants() {
+        // A hostile target with many p-tags: participants cap at 16.
+        val many = (1..40).map { it.toString(16).padStart(64, '0') }
+        val tags = NoteComposer.replyTags(rootId, parentId, author, many, "#gm")!!
+        assertEquals(NoteComposer.MAX_REPLY_PARTICIPANTS, tags.count { it[0] == "p" })
+        // Content hashtag dedupes by tag; markers stay first two.
+        assertEquals("e", tags[0][0])
+        assertEquals("e", tags[1][0])
+        assertTrue(tags.contains(listOf("t", "gm")))
+    }
+
+    @Test
+    fun replyTagsRejectInvalidIds() {
+        assertNull(NoteComposer.replyTags("nope", parentId, author, emptyList(), "x"))
+        assertNull(NoteComposer.replyTags(rootId, "nope", author, emptyList(), "x"))
+        assertNull(NoteComposer.replyTags(rootId, parentId, "NOPE", emptyList(), "x"))
+    }
 }

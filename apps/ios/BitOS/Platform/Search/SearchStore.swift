@@ -73,7 +73,7 @@ final class SearchStore {
         if let request = (bridge.searchRequest(
             subscriptionId: "bitos-search-\(subscriptionCounter)",
             query: query,
-            kinds: [1, 22],
+            kinds: [1, 21, 22],
             limit: 50
         ) as String?) {
             Task { await pool.broadcast(request) }

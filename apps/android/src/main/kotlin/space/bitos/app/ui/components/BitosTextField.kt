@@ -100,6 +100,44 @@ fun BitosPlainTextField(
     )
 }
 
+/**
+ * Selection-aware variant for composer bodies: keeps the real cursor so
+ * @-mention detection, toolbar inserts and mention picks all operate at
+ * the caret, not at end-of-text.
+ */
+@Composable
+fun BitosPlainTextField(
+    value: androidx.compose.ui.text.input.TextFieldValue,
+    onValueChange: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    minLines: Int = 1,
+    maxLines: Int = Int.MAX_VALUE,
+    textStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+) {
+    androidx.compose.material3.OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        minLines = minLines,
+        maxLines = maxLines,
+        textStyle = textStyle,
+        placeholder = {
+            HintText(placeholder)
+        },
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            focusedBorderColor = Color.Transparent,
+            unfocusedBorderColor = Color.Transparent,
+            cursorColor = BitOSColors.primary,
+            focusedTextColor = BitOSColors.textPrimary,
+            unfocusedTextColor = BitOSColors.textPrimary,
+        ),
+    )
+}
+
 /** Legacy hintStyle parity: tertiary, 14 sp, w400. */
 @Composable
 private fun HintText(text: String) {

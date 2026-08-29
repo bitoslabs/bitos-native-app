@@ -41,7 +41,7 @@ struct ImportMediaSheet: View {
                 .navigationTitle("New video")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Close") { onClose() } }
+                    ToolbarItem(placement: .cancellationAction) { SheetCloseButton(action: onClose) }
                 }
                 .onAppear {
                     guard !seededCapture, let capturedData else { return }

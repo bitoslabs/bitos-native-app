@@ -87,6 +87,25 @@ class BitzTest {
     }
 
     @Test
+    fun legacyQuerySeparatesNativeVideoKindsFromTextFallback() {
+        assertEquals(
+            listOf(
+                """{"kinds":[21,22],"limit":16}""",
+                """{"kinds":[1],"limit":48}""",
+                """{"kinds":[6,0],"limit":80}""",
+            ),
+            BitzQuery.initialFilters(),
+        )
+        assertEquals(
+            listOf(
+                """{"kinds":[21,22],"limit":16,"until":123}""",
+                """{"kinds":[1],"limit":48,"until":123}""",
+            ),
+            BitzQuery.olderFilters(123),
+        )
+    }
+
+    @Test
     fun compactCountsMatchLegacyFormat() {
         // Raw below 1,000; one-decimal K/M above (legacy `_formatCount`).
         assertEquals("0", BitzFormat.count(0))

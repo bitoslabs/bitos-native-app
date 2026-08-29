@@ -99,8 +99,13 @@ class HomeViewModel(
         repository.loadOlder()
     }
 
-    fun toggleLike(note: space.bitos.core.feed.FeedNote) {
-        val turningOn = note.id !in mutableLocalActions.value.liked
+    /** In-app note-ref open (delegates the bounded fetch to the repository). */
+    fun openNoteReference(raw: String) = repository.openNoteReference(raw)
+
+    /** Fetched note for an in-app ref open (null while in flight). */
+    fun refNote(raw: String): space.bitos.core.feed.FeedNote? = repository.refNote(raw)
+
+    fun toggleLike(note: space.bitos.core.feed.FeedNote) {        val turningOn = note.id !in mutableLocalActions.value.liked
         mutableLocalActions.value = mutableLocalActions.value.copy(liked = toggle(mutableLocalActions.value.liked, note.id))
         repository.setLikedIds(mutableLocalActions.value.liked)
         // Signed accounts publish a real kind-7 reaction on like; unlikes
@@ -115,16 +120,42 @@ class HomeViewModel(
         }
     }
 
-    /** Publishes a kind-1 reply; optimistic append happens on relay ACK. */
-    fun reply(text: String, note: space.bitos.core.feed.FeedNote) {
+    /**
+     * APP-009 reply bar publish (legacy `publishReply` wire): content join
+     * for attachments + shared `replyTags` (both NIP-10 markers, participant
+     * p-tags, content entities) through the tags-aware note path, with the
+     * optional pre-mined PoW nonce. Optimistic append happens on relay ACK.
+     */
+    fun reply(
+        text: String,
+        note: space.bitos.core.feed.FeedNote,
+        attachments: List<String> = emptyList(),
+        pow: space.bitos.app.ui.components.PowOutcome? = null,
+    ) {
         if (notePublisher == null || identityViewModel == null) return
-        notePublisher.publishReplyWith(
-            content = text,
+        val content = space.bitos.core.publish.ComposerRules.composeContent(text, attachments)
+        if (content.isBlank()) return
+        // Root resolution: the target's own root marker, else the target IS
+        // the thread root (a root reply repeats the id in both markers).
+        val rootEventId = note.threadRootId ?: note.id
+        val tags = space.bitos.core.publish.NoteComposer.replyTags(
+            rootEventId = rootEventId,
             targetEventId = note.id,
             targetPubkey = note.pubkey,
-            signerProvider = { identityViewModel.createSigner() },
-            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
-        )
+            targetPTags = note.mentions,
+            content = content,
+        ) ?: return
+        if (pow != null) {
+            notePublisher.publishPowNoteWith(
+                content, tags, pow.nonce, pow.targetDifficulty, pow.createdAtSeconds,
+                { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+            )
+        } else {
+            notePublisher.publishNoteWith(
+                content, tags,
+                { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+            )
+        }
     }
 
     /** Follow/unfollow: optimistic local flip + kind-3 publish when signed in. */

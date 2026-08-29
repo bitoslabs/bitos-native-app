@@ -22,7 +22,7 @@ struct ComposerSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { onClose() }
+                        SheetCloseButton(action: onClose)
                     }
                 }
         }
@@ -105,8 +105,7 @@ private struct IdentityGateNotice: View {
             Text("Open the Profile tab to create or import a key, then come back to publish. Nothing is created silently.")
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
-            Button("Close", action: onClose)
-                .buttonStyle(.bordered)
+            SheetCloseButton(action: onClose)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(BitOSTheme.Spacing.base)

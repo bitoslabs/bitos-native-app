@@ -23,7 +23,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -78,7 +77,7 @@ fun BookmarksScreen(
             TopAppBar(
                 title = { Text("Saved", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
-                    TextButton(onClick = onClose) { Text("Close", color = BitOSColors.textSecondary) }
+                    space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
                 },
             )
         },
@@ -135,7 +134,7 @@ fun BookmarksScreen(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
                 onLoadComments = viewModel::loadComments,
-                onReply = { text, note -> viewModel.reply(text, note) },
+                onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
                 onClose = { threadTarget = null },
             )
         }

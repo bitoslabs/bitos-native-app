@@ -84,6 +84,27 @@ object BitzExplore {
 }
 
 /**
+ * Legacy-compatible Bitz relay filters. Dedicated NIP-71 kinds are queried
+ * separately from kind-1 media-link fallbacks so one noisy text-note filter
+ * cannot consume the useful video page budget.
+ */
+object BitzQuery {
+    const val MEDIA_PAGE_LIMIT = 16
+    const val TEXT_PAGE_LIMIT = 48
+
+    fun initialFilters(): List<String> = listOf(
+        """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT}""",
+        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT}""",
+        """{"kinds":[6,0],"limit":80}""",
+    )
+
+    fun olderFilters(until: Long): List<String> = listOf(
+        """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
+        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
+    )
+}
+
+/**
  * Compact rail-count labels (legacy `_formatCount` / `_compactBitSats`
  * parity): raw below 1,000, one-decimal K/M above; sats come from the
  * summed zap millisats. Locale-free by construction.

@@ -65,9 +65,10 @@ class FeedNoteTest {
     }
 
     @Test
-    fun feedKindsAreTextAndVideo() {
+    fun feedKindsIncludeTextAndBothNip71VideoKinds() {
         assertTrue(FeedNote.isFeedKind(NostrKinds.SHORT_TEXT_NOTE))
-        assertTrue(FeedNote.isFeedKind(NostrKinds.VIDEO))
+        assertTrue(FeedNote.isFeedKind(NostrKinds.NORMAL_VIDEO))
+        assertTrue(FeedNote.isFeedKind(NostrKinds.SHORT_VIDEO))
         assertFalse(FeedNote.isFeedKind(NostrKinds.REPOST))
     }
 }
@@ -82,7 +83,7 @@ class ProfileMetadataTest {
             createdAt = 1_000,
             kind = NostrKinds.PROFILE_METADATA,
             tags = emptyList(),
-            content = """{"name":"satoshi","display_name":"Satoshi N","about":"₿","picture":"https://x/p.png","nip05":"s@x.com","lud16":"s@wallet.io","unknown":"dropped"}""",
+            content = """{"name":"satoshi","display_name":"Satoshi N","about":"₿","picture":"https://x/p.png","nip05":"s@x.com","lud16":"s@wallet.io","banner":"https://x/banner.png","website":"https://bitos.space","unknown":"dropped"}""",
             signature = null,
             receivedFromRelay = null,
         )
@@ -90,6 +91,8 @@ class ProfileMetadataTest {
         assertEquals("Satoshi N", profile.bestDisplayName)
         assertEquals("s@x.com", profile.nip05)
         assertEquals("s@wallet.io", profile.lud16)
+        assertEquals("https://x/banner.png", profile.banner)
+        assertEquals("https://bitos.space", profile.website)
     }
 
     @Test

@@ -759,6 +759,7 @@ private struct AccountSection: View {
         .sheet(isPresented: $showEdit) {
             ProfileEditSheet(
                 publisher: environment.notePublisher,
+                initialProfile: environment.feedStore.profiles[identity.account?.pubkeyHex ?? ""],
                 onClose: { showEdit = false }
             )
             .presentationDetents([.medium, .large])
@@ -1046,7 +1047,7 @@ private struct RelaysSection: View {
                 Text("Roles follow NIP-65: read relays serve your feeds; write relays receive your events. A relay needs at least one role.")
             }
             Section {
-                let suggestions = ["wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"]
+                let suggestions = ["wss://nostr-01.yakihonne.com", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"]
                     .filter { url in !relays.relays.contains { $0.url == url } }
                 if !suggestions.isEmpty {
                     HStack(spacing: 6) {

@@ -367,7 +367,7 @@ private struct RawEventSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") { dismiss() }
+                    SheetCloseButton { dismiss() }
                 }
             }
         }

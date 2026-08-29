@@ -268,7 +268,7 @@ private fun ZapHeader(
                 )
             }
         }
-        TextButton(onClick = onClose) { Text("Close", color = BitOSColors.textSecondary) }
+        space.bitos.app.ui.components.SheetCloseIcon(onClose = onClose)
     }
 }
 

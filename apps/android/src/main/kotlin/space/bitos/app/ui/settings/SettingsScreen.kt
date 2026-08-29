@@ -725,8 +725,8 @@ private fun AccountDetail(
                 initialLud16 = "",
                 error = profileEditState.error,
                 busy = profileEditState.busy,
-                onPublish = { name, displayName, about, nip05, lud16 ->
-                    identityViewModel.publishProfile(name, displayName, about, nip05, lud16)
+                onPublish = { name, displayName, about, nip05, lud16, picture, banner, website ->
+                    identityViewModel.publishProfile(name, displayName, about, nip05, lud16, picture, banner, website)
                 },
                 onClose = { showEdit = false; identityViewModel.clearProfileEditError() },
             )
@@ -1162,7 +1162,7 @@ private fun RelaysDetail(
             if (addError != null) {
                 Text(addError!!, fontSize = 12.sp, color = BitOSColors.error)
             }
-            val suggestions = listOf("wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol")
+            val suggestions = listOf("wss://nostr-01.yakihonne.com", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol")
                 .filterNot { url -> entries.any { it.url.value == url } }
             if (suggestions.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {

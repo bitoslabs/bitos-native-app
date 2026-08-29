@@ -367,6 +367,8 @@ class NotePublisher(
         picture: String,
         nip05: String,
         lud16: String,
+        banner: String = "",
+        website: String = "",
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
     ) {
@@ -377,7 +379,10 @@ class NotePublisher(
                 return@launch
             }
             val profile = composer.composeProfileMetadata(
-                signer.publicKeyHex(), name, displayName, about, picture, nip05, lud16,
+                authorPubkey = signer.publicKeyHex(),
+                name = name, displayName = displayName, about = about,
+                picture = picture, nip05 = nip05, lud16 = lud16,
+                banner = banner, website = website,
             ) ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch

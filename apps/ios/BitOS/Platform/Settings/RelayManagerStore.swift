@@ -138,7 +138,9 @@ final class RelayManagerStore {
             ManagedRelay(
                 url: url.rawValue,
                 read: true,
-                write: DefaultRelays.writeUrls.contains(url)
+                write: DefaultRelays.writeUrls.contains(url),
+                // Match RelayPool's first-configured primary-read strategy.
+                primary: url == DefaultRelays.writeUrls.first
             )
         }
     }

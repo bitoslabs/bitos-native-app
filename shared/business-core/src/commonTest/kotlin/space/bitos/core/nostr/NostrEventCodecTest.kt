@@ -145,8 +145,27 @@ class NostrEventCodecTest {
             """["REQ","feed1",{"kinds":[1],"limit":50}]""",
             NostrEventCodec.encodeRequest("feed1", """{"kinds":[1],"limit":50}"""),
         )
+        assertEquals(
+            """["REQ","bitz",{"kinds":[21,22],"limit":16},{"kinds":[1],"limit":48}]""",
+            NostrEventCodec.encodeRequest(
+                "bitz",
+                listOf("""{"kinds":[21,22],"limit":16}""", """{"kinds":[1],"limit":48}"""),
+            ),
+        )
         assertEquals("""["CLOSE","feed1"]""", NostrEventCodec.encodeClose("feed1"))
         assertFailsWith<NostrEventCodec.Rejected> { NostrEventCodec.encodeRequest("x".repeat(200), "{}") }
+        assertFailsWith<NostrEventCodec.Rejected> { NostrEventCodec.encodeRequest("bitz", emptyList()) }
+    }
+
+    @Test
+    fun extractsOnlyBoundedRelayEventSubscriptionIds() {
+        assertEquals(
+            "bitos-older-7",
+            NostrEventCodec.relayEventSubscriptionId("""["EVENT","bitos-older-7",{}]"""),
+        )
+        assertNull(NostrEventCodec.relayEventSubscriptionId("""["NOTICE","bitos-older-7"]"""))
+        assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT",7,{}]"""))
+        assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT","${"x".repeat(129)}",{}]"""))
     }
 }
 

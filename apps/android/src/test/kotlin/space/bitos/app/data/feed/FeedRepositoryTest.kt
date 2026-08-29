@@ -146,6 +146,9 @@ class FeedRepositoryTest {
                 kotlinx.coroutines.delay(10)
             }
         }
+        val request = transport.sent.last { it.contains("bitos-older-1") }
+        assertTrue(request.contains("\"kinds\":[21,22],\"limit\":16,\"until\":1710000000"), request)
+        assertTrue(request.contains("\"kinds\":[1],\"limit\":48,\"until\":1710000000"), request)
         assertTrue(repository.state.value.isLoadingOlder)
 
         // In-flight guard: a second call must not issue another REQ.
@@ -153,6 +156,19 @@ class FeedRepositoryTest {
         repository.loadOlder()
         kotlinx.coroutines.delay(200)
         assertEquals(olderReqs, transport.sent.count { it.contains("bitos-older") })
+    }
+
+    @Test
+    fun olderPageBypassesTheLiveArrivalHold(): Unit = runBlocking {
+        repository.start()
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+        repository.holdNewNotes(true)
+
+        transport.emit(VALID_SECOND_KEY_MESSAGE.replace("\"sub1\"", "\"bitos-older-1\""))
+
+        val state = withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
+        assertTrue(state.pendingNotes.isEmpty())
     }
 
     @Test

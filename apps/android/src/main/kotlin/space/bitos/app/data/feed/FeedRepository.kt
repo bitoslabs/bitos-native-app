@@ -167,7 +167,11 @@ class FeedRepository(
                         // APP-009: kind-7 reactions tally per thread note.
                         tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
                     }
-                    FeedNote.isFeedKind(event.kind) -> absorbNote(event)
+                    FeedNote.isFeedKind(event.kind) -> absorbNote(
+                        event,
+                        fromOlderPage = NostrEventCodec.relayEventSubscriptionId(frame.message)
+                            ?.startsWith(OLDER_SUBSCRIPTION_PREFIX) == true,
+                    )
                 }
             }
         }
@@ -263,7 +267,7 @@ class FeedRepository(
         pool.broadcast(
             NostrEventCodec.encodeRequest(
                 "bitos-older-$olderCounter",
-                OLDER_FEED_PREFIX + oldest + OLDER_FEED_SUFFIX,
+                space.bitos.core.feed.BitzQuery.olderFilters(oldest),
             ),
         )
         scope.launch {
@@ -449,20 +453,24 @@ class FeedRepository(
 
     private fun subscribe() {
         subscriptionCounter += 1
-        val filter = FEED_FILTER
-        pool.broadcast(NostrEventCodec.encodeRequest(subscriptionId(), filter))
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                subscriptionId(),
+                space.bitos.core.feed.BitzQuery.initialFilters(),
+            ),
+        )
         mutableState.value = mutableState.value.copy(isLoading = !mutableState.value.hasLoadedAnyEvent)
     }
 
     private fun subscriptionId() = "bitos-feed-$subscriptionCounter"
 
-    private fun absorbNote(event: NostrEvent) {
+    private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
         val note = FeedNote.from(event)
         if (note.id !in knownNoteIds) {
             knownNoteIds.add(note.id)
             // APP-004: arrivals are held for the "N new notes" pill while
             // the user is scrolled into the feed; tap/at-top reveals them.
-            if (holdingNewNotes && mutableState.value.notes.isNotEmpty()) {
+            if (!fromOlderPage && holdingNewNotes && mutableState.value.notes.isNotEmpty()) {
                 pendingNotes.addLast(note)
                 if (pendingNotes.size > PENDING_MAX) pendingNotes.removeFirst()
             } else {
@@ -642,6 +650,52 @@ class FeedRepository(
 
     private val profileTimestamps = mutableMapOf<String, Long>()
 
+    /** Mentioned pubkeys (NIP-27 profile entities) — names resolve for @display. */
+    fun requestMentionProfiles(pubkeys: List<String>) {
+        pubkeys.take(PROFILE_BATCH).forEach(::enqueueProfile)
+    }
+
+    /**
+     * In-app note-reference open (web parity): note1/nevent1/naddr1 tapped
+     * in a body → fetch the head by id/coordinate; the caller polls
+     * [refNote] until it lands (bounded), then opens the thread sheet.
+     */
+    fun openNoteReference(raw: String) {
+        val ref = space.bitos.core.nostr.EventRefs.parse(raw) ?: return
+        when (ref) {
+            is space.bitos.core.nostr.EventRef.ById ->
+                pool.broadcast(
+                    NostrEventCodec.encodeRequest(
+                        "bitos-ref-open".take(64),
+                        """{"ids":["${ref.id}"],"limit":1}""",
+                    ),
+                )
+            is space.bitos.core.nostr.EventRef.ByCoordinate ->
+                pool.broadcast(
+                    NostrEventCodec.encodeRequest(
+                        "bitos-ref-open".take(64),
+                        """{"kinds":[${ref.kind}],"authors":["${ref.pubkey}"],"#d":["${ref.d}"],"limit":1}""",
+                    ),
+                )
+        }
+    }
+
+    /** Fetched note for an in-app ref open (null while in flight). */
+    fun refNote(raw: String): FeedNote? {
+        return when (val ref = space.bitos.core.nostr.EventRefs.parse(raw)) {
+            is space.bitos.core.nostr.EventRef.ById -> synchronized(remixChainEvents) { remixChainEvents[ref.id] }
+                // Coordinate refs match on kind+author: the newest absorbed
+                // event with that shape (the REQ above is limit-1, relay-newest).
+            is space.bitos.core.nostr.EventRef.ByCoordinate ->
+                synchronized(remixChainEvents) {
+                    remixChainEvents.values.lastOrNull { event ->
+                        event.kind == ref.kind && event.pubkey.value == ref.pubkey
+                    }
+                }
+            null -> null
+        }?.let(FeedNote::from)
+    }
+
     private fun enqueueProfile(pubkey: String) {
         if (profiles.containsKey(pubkey)) return
         if (pubkey !in profileQueue && pubkey !in requestedProfiles) {
@@ -757,13 +811,10 @@ class FeedRepository(
         const val PROFILE_FALLBACK_DELAY_MS = 900L
         const val OLDER_WINDOW_MAX = 200
         const val OLDER_WATCHDOG_MS = 8_000L
-        const val FEED_FILTER =
-            """{"kinds":[1,22,0],"limit":80}"""
-        const val OLDER_FEED_PREFIX = """{"kinds":[1,22],"limit":40,"until":"""
-        const val OLDER_FEED_SUFFIX = """}"""
+        const val OLDER_SUBSCRIPTION_PREFIX = "bitos-older-"
         const val CONTACT_FILTER_PREFIX = """{"kinds":[3],"authors":["""
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
-        const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,22],"authors":["""
+        const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":["""
         const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
         const val COMMENT_FILTER_PREFIX = """{"kinds":[1,7,6,9735],"#e":["""
         const val BOOKMARK_FILTER_PREFIX = """{"kinds":[30003],"authors":["""
@@ -788,6 +839,7 @@ class FeedRepository(
 /** Default public relays, mirroring the web client's discovery set. */
 object DefaultRelays {
     val urls: List<RelayUrl> = listOf(
+        "wss://nostr-01.yakihonne.com",
         "wss://relay.damus.io",
         "wss://nos.lol",
         "wss://relay.nostr.band",
@@ -795,6 +847,7 @@ object DefaultRelays {
 
     /** Write-capable subset (nostr.band is read-only in the web client). */
     val writeUrls: List<RelayUrl> = listOf(
+        "wss://nostr-01.yakihonne.com",
         "wss://relay.damus.io",
         "wss://nos.lol",
     ).mapNotNull(RelayUrl::parse)

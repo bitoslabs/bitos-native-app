@@ -69,7 +69,7 @@ struct RootView: View {
                 .tag(AppDestination.bitz)
                 .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
 
-            ChatsView()
+            DmScreen()
                 .tag(AppDestination.chats)
                 .tabItem { Label { Text("Chats") } icon: { AppIcons.image(for: AppIcons.chat) } }
 

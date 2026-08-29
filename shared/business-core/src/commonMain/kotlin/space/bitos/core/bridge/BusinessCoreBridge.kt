@@ -51,6 +51,8 @@ class BusinessCoreBridge {
         val picture: String?,
         val nip05: String?,
         val lud16: String?,
+        val banner: String?,
+        val website: String?,
     )
 
     /** Normalized, display-oriented feed note. */
@@ -113,6 +115,10 @@ class BusinessCoreBridge {
         }
     }
 
+    /** EVENT subscription id, used to keep explicitly requested older pages out of the live-arrival hold. */
+    fun relayEventSubscriptionId(message: String): String? =
+        NostrEventCodec.relayEventSubscriptionId(message)
+
     fun isFeedKind(kind: Int): Boolean = FeedNote.isFeedKind(kind)
 
     /**
@@ -162,7 +168,7 @@ class BusinessCoreBridge {
 
     /** APP-004 pagination: one older page — feed kinds before `until`. */
     fun olderFeedRequest(subscriptionId: String, until: Long, limit: Int): String =
-        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[1,22],"limit":$limit,"until":$until}""")
+        NostrEventCodec.encodeRequest(subscriptionId, space.bitos.core.feed.BitzQuery.olderFilters(until))
 
     // ── Bitz surface (APP-007) ──────────────────────────────────────────
 
@@ -270,6 +276,10 @@ class BusinessCoreBridge {
         }.toString()
     }
 
+    /** APP-007 Explore window: 24 initially, then 18 per explicit load-more. */
+    fun bitzExploreVisibleCount(loadMoreCount: Int): Int =
+        space.bitos.core.feed.BitzExplore.visibleCount(loadMoreCount)
+
     private fun parseBitzEntries(json: String): List<space.bitos.core.feed.BitzSearch.Entry>? = try {
         val arr = Json.parseToJsonElement(json).jsonArray
         arr.map { el ->
@@ -298,6 +308,8 @@ class BusinessCoreBridge {
             picture = metadata.picture,
             nip05 = metadata.nip05,
             lud16 = metadata.lud16,
+            banner = metadata.banner,
+            website = metadata.website,
         )
     }
 
@@ -335,7 +347,7 @@ class BusinessCoreBridge {
     fun feedRequest(subscriptionId: String): String = try {
         NostrEventCodec.encodeRequest(
             subscriptionId,
-            """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.VIDEO},${NostrKinds.REPOST},${NostrKinds.PROFILE_METADATA}],"limit":80}""",
+            space.bitos.core.feed.BitzQuery.initialFilters(),
         )
     } catch (_: NostrEventCodec.Rejected) {
         // Subscription ids are app-generated and bounded; reaching here is a
@@ -680,6 +692,72 @@ class BusinessCoreBridge {
     /** Quick-emoji palette (32, legacy parity). */
     fun composerEmojis(): List<String> = space.bitos.core.publish.ComposerRules.COMPOSER_EMOJIS
 
+    // ------------------------------------------------------------------
+    // APP-008 GIF picker (shared `GifPickerContract`; legacy Flutter sheet /
+    // web GifPicker.svelte parity). Item JSON shape everywhere:
+    // `{"id":…,"url":…,"preview":…,"w":…,"h":…}`.
+    // ------------------------------------------------------------------
+
+    /** Giphy request URL (trending when the query is blank); offset pages. */
+    fun gifPickerUrl(query: String, offset: Int): String =
+        space.bitos.core.publish.GifPickerContract.buildUrl(
+            space.bitos.core.publish.GifPickerContract.DEFAULT_API_KEY,
+            query,
+            offset,
+        )
+
+    /** Giphy response parse → item array JSON (empty array when unparseable). */
+    fun gifPickerParse(responseJson: String): String =
+        space.bitos.core.publish.GifPickerContract.choicesToJson(
+            space.bitos.core.publish.GifPickerContract.parseChoices(responseJson),
+        )
+
+    /** Pagination math: {nextOffset, hasMore}. */
+    fun gifPickerPagination(responseJson: String, fetchedCount: Int, requestedOffset: Int): Map<String, Any> {
+        val page = space.bitos.core.publish.GifPickerContract.pagination(responseJson, fetchedCount, requestedOffset)
+        return mapOf("nextOffset" to page.nextOffset, "hasMore" to page.hasMore)
+    }
+
+    /** Recent merge (newest first, dedup by id, cap 12). `pickJson` = one item. */
+    fun gifPickerMergeRecent(recentJson: String, pickJson: String): String {
+        val pick = space.bitos.core.publish.GifPickerContract.choicesFromJson("[$pickJson]").firstOrNull()
+            ?: return recentJson
+        return space.bitos.core.publish.GifPickerContract.choicesToJson(
+            space.bitos.core.publish.GifPickerContract.mergeRecent(
+                space.bitos.core.publish.GifPickerContract.choicesFromJson(recentJson),
+                pick,
+            ),
+        )
+    }
+
+    /** Versioned v1 cache wire from item arrays. */
+    fun gifCacheEncode(recentJson: String, trendingJson: String, savedAtMs: Long): String =
+        space.bitos.core.publish.GifPickerContract.cacheEncode(
+            recent = space.bitos.core.publish.GifPickerContract.choicesFromJson(recentJson),
+            trending = space.bitos.core.publish.GifPickerContract.choicesFromJson(trendingJson),
+            savedAtMs = savedAtMs,
+        )
+
+    /** Cache decode → `{"recent":[…],"trending":[…],"savedAt":ms}` or null. */
+    fun gifCacheDecode(json: String): String? {
+        val cache = space.bitos.core.publish.GifPickerContract.cacheDecode(json) ?: return null
+        return buildJsonObject {
+            put("recent", Json.parseToJsonElement(choicesJson(cache.recent)))
+            put("trending", Json.parseToJsonElement(choicesJson(cache.trending)))
+            put("savedAt", cache.savedAtMs)
+        }.toString()
+    }
+
+    private fun choicesJson(choices: List<space.bitos.core.publish.GifChoice>): String =
+        space.bitos.core.publish.GifPickerContract.choicesToJson(choices)
+
+    /** 24 h trending-cache freshness window. */
+    fun gifCacheFresh(savedAtMs: Long, nowMs: Long): Boolean =
+        space.bitos.core.publish.GifPickerContract.isCacheFresh(savedAtMs, nowMs)
+
+    /** Search-as-you-type debounce (350 ms, legacy parity). */
+    fun gifPickerDebounceMs(): Long = space.bitos.core.publish.GifPickerContract.SEARCH_DEBOUNCE_MS
+
     /** APP-014 zap-sheet presentation rules (shared `ZapFormat`). */
     fun zapEmoji(sats: Long): String = space.bitos.core.model.ZapFormat.emoji(sats)
 
@@ -795,6 +873,108 @@ class BusinessCoreBridge {
     fun staticTermsSummaryBody(): String = space.bitos.core.settings.StaticPagesContent.TERMS_SUMMARY_BODY
     fun staticTermsSections(): List<Map<String, Any>> =
         space.bitos.core.settings.StaticPagesContent.termsSections.map { mapOf("title" to it.title, "body" to it.body) }
+
+    /** APP-006 Stories: subscribe REQ for account + followed authors. */
+    fun storiesRequest(subscriptionId: String, authorPubkeys: List<String>): String {
+        val authors = authorPubkeys.take(50).joinToString("\"", prefix = "[\"", postfix = "\"")
+        return NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${space.bitos.core.model.Stories.STORY_KIND},${space.bitos.core.model.Stories.DELETE_KIND}],"authors":$authors,"limit":100}""",
+        )
+    }
+
+    /** APP-006: parse a verified kind-30315 frame → slide map (null = not a valid story). */
+    fun storyFromFrame(message: String, relayUrl: String, nowSeconds: Long): Map<String, Any>? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        }
+        if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
+        val slide = space.bitos.core.model.Stories.parseSlide(event, nowSeconds) ?: return null
+        return mapOf(
+            "id" to slide.id,
+            "pubkey" to slide.pubkey,
+            "content" to slide.content,
+            "createdAt" to slide.createdAt,
+            "expiresAt" to slide.expiresAt,
+            "d" to (slide.d ?: ""),
+            "imageUrl" to (slide.imageUrl ?: ""),
+            "gradient" to (slide.gradient ?: ""),
+            "pow" to (slide.pow ?: 0),
+        )
+    }
+
+    /** APP-011 DMs: kind-1059 subscription REQ. */
+    fun secureDmRequest(subscriptionId: String, accountPubkey: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${space.bitos.core.publish.SecureDmComposer.KIND_GIFT_WRAP}],"#p":["$accountPubkey"],"limit":50}""",
+        )
+
+    /** APP-011: unwrap a gift wrap → rumor map {id, author, peer, content, createdAt}. */
+    fun secureDmUnwrap(message: String, relayUrl: String, myPrivateKeyHex: String): Map<String, Any>? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        }
+        val rumor = space.bitos.core.publish.SecureDmComposer.unwrap(event, myPrivateKeyHex) ?: return null
+        val peer = rumor.tags.firstOrNull { it.firstOrNull() == "p" }?.getOrNull(1) ?: return null
+        return mapOf(
+            "id" to rumor.id.value,
+            "author" to rumor.pubkey.value,
+            "peer" to peer,
+            "content" to rumor.content,
+            "createdAt" to rumor.createdAt,
+        )
+    }
+
+    /** APP-011: wrap a message → {rumor, seal, wrap} Events. */
+    fun secureDmWrap(senderPrivateKeyHex: String, recipientPubkey: String, content: String, nowSeconds: Long): space.bitos.core.publish.SecureDmComposer.WrappedMessage? {
+        space.bitos.core.publish.SecureDmClock.now = { nowSeconds }
+        return space.bitos.core.publish.SecureDmComposer.wrapMessage(senderPrivateKeyHex, recipientPubkey, content)
+    }
+
+    /** APP-011: wrap result as a flat map (iOS-friendly — no nested events). */
+    fun secureDmWrapResult(
+        senderPrivateKeyHex: String,
+        recipientPubkey: String,
+        content: String,
+        nowSeconds: Long,
+    ): Map<String, Any>? {
+        space.bitos.core.publish.SecureDmClock.now = { nowSeconds }
+        val wrapped = space.bitos.core.publish.SecureDmComposer.wrapMessage(senderPrivateKeyHex, recipientPubkey, content) ?: return null
+        return mapOf(
+            "rumorId" to wrapped.rumor.id.value,
+            "rumorPubkey" to wrapped.rumor.pubkey.value,
+            "rumorContent" to wrapped.rumor.content,
+            "rumorCreatedAt" to wrapped.rumor.createdAt,
+            "wrapId" to wrapped.wrap.id.value,
+            "wrapPubkey" to wrapped.wrap.pubkey.value,
+            "wrapCreatedAt" to wrapped.wrap.createdAt,
+            "wrapKind" to wrapped.wrap.kind,
+            "wrapTags" to wrapped.wrap.tags,
+            "wrapContent" to wrapped.wrap.content,
+            "wrapSig" to (wrapped.wrap.signature ?: return null),
+        )
+    }
+
+    /** APP-011: the ["EVENT",…] publish frame for a wrapped DM event. */
+    fun secureDmPublishMessage(wrap: Event): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { wrap.createdAt })
+        val unsigned = space.bitos.core.publish.UnsignedNote(
+            idHex = wrap.id,
+            pubkeyHex = wrap.pubkey,
+            createdAtSeconds = wrap.createdAt,
+            kind = wrap.kind,
+            tags = wrap.tags,
+            content = wrap.content,
+        )
+        return composer.publishMessage(unsigned, wrap.signature ?: return null)
+    }
 
     /** APP-009: bolt11 HRP msat for zap tallies; 0 when unparseable. */
     fun bolt11AmountMillisats(invoice: String): Long =
@@ -1186,7 +1366,7 @@ class BusinessCoreBridge {
     fun followingRequest(subscriptionId: String, authors: List<String>): String {
         val joined = authors.take(space.bitos.core.model.ContactList.MAX_FOLLOWS)
             .joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.VIDEO}],"authors":$joined,"limit":40}"""
+        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"authors":$joined,"limit":40}"""
         return NostrEventCodec.encodeRequest(subscriptionId, filter)
     }
 
@@ -1216,6 +1396,29 @@ class BusinessCoreBridge {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeReply(content, targetEventId, targetPubkey, authorPubkey, relayHint) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
+     * APP-009 reply bar tags (legacy `publishReply` parity): both NIP-10
+     * markers + participant p-tags + content entities, as the TagsCodec
+     * wire JSON for `publishNote(tags:)`/`publishPowNote(tags:)`.
+     * `targetPTagsJson`: `["<64-hex>", …]` (the target's p-tags).
+     */
+    fun replyTagsJson(
+        rootEventId: String,
+        targetEventId: String,
+        targetPubkey: String,
+        targetPTagsJson: String,
+        content: String,
+    ): String? {
+        val participants = try {
+            Json.parseToJsonElement(targetPTagsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.NoteComposer
+            .replyTags(rootEventId, targetEventId, targetPubkey, participants, content)
+            ?.let(space.bitos.core.store.TagsCodec::encode)
     }
 
     /** REQ for replies to one event (NIP-01 tagged #e filter). */
@@ -2073,7 +2276,7 @@ class BusinessCoreBridge {
     fun authorRequest(subscriptionId: String, authorPubkey: String): String =
         NostrEventCodec.encodeRequest(
             subscriptionId,
-            """{"kinds":[0,1,22],"authors":["$authorPubkey"],"limit":20}""",
+            """{"kinds":[0,1,21,22],"authors":["$authorPubkey"],"limit":20}""",
         )
 
     /** Composes the unsigned kind-0 profile event and returns its id. */
@@ -2086,9 +2289,11 @@ class BusinessCoreBridge {
         nip05: String,
         lud16: String,
         nowSeconds: Long,
+        banner: String = "",
+        website: String = "",
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
-        return composer.composeProfileMetadata(authorPubkey, name, displayName, about, picture, nip05, lud16)?.idHex
+        return composer.composeProfileMetadata(authorPubkey, name, displayName, about, picture, nip05, lud16, banner, website)?.idHex
     }
 
     /** The ["EVENT", {...}] frame for the signed kind-0 profile, or null. */
@@ -2102,9 +2307,11 @@ class BusinessCoreBridge {
         lud16: String,
         createdAtSeconds: Long,
         signatureHex: String,
+        banner: String = "",
+        website: String = "",
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
-        val unsigned = composer.composeProfileMetadata(authorPubkey, name, displayName, about, picture, nip05, lud16) ?: return null
+        val unsigned = composer.composeProfileMetadata(authorPubkey, name, displayName, about, picture, nip05, lud16, banner, website) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
 

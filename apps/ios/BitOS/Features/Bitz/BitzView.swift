@@ -41,6 +41,10 @@ struct BitzBridgeRules {
         (bridge.bitzFormatSats(zapMillisats: zapMillisats) as String?)
     }
 
+    func exploreVisibleCount(loadMoreCount: Int) -> Int {
+        Int(bridge.bitzExploreVisibleCount(loadMoreCount: Int32(clamping: loadMoreCount)))
+    }
+
     /// Wire seed tags (remix marker + p attribution + human credit) as JSON.
     func remixSeedTagsJson(note: FeedNote, label: String) -> String {
         let relaysData = (try? JSONSerialization.data(withJSONObject: [String]())) ?? Data()
@@ -111,6 +115,10 @@ struct BitzView: View {
     @State private var zapTarget: FeedNote?
     @State private var authorTarget: String?
     @State private var menu: AppMenuPresentation?
+    /** Legacy-parity ⋯ overflow → bottom sheet. */
+    @State private var moreSheetTarget: FeedNote?
+    /** External-link confirm sheet (never opens the browser unattended). */
+    @State private var externalLink: String?
     @State private var pendingJumpId: String?
     @State private var pathMonitor: NWPathMonitor?
     /** APP-007 remix: seeded composer tags + the advisory-ask target. */
@@ -194,6 +202,25 @@ struct BitzView: View {
                 .presentationDetents([.medium, .large])
         }
         .appMenuHost($menu)
+        .sheet(item: $moreSheetTarget) { note in
+            AppBottomSheetMenu(
+                title: "Bitz actions",
+                entries: moreMenuEntries(note)
+            ) { id in
+                moreSheetTarget = nil
+                handleMoreSelect(note, id)
+            }
+            .presentationDetents([.medium])
+        }
+        // External-link confirm: the browser only opens on an explicit Open.
+        .sheet(isPresented: Binding(
+            get: { externalLink != nil },
+            set: { if !$0 { externalLink = nil } }
+        )) {
+            if let externalLink {
+                ExternalLinkConfirmSheet(url: externalLink)
+            }
+        }
         .sheet(item: $chainTarget) { target in
             BitzChainSheet(
                 store: environment.feedStore,
@@ -370,20 +397,8 @@ struct BitzView: View {
                 onRecord: { showCreateHub = true }
             )
         }
-        .overlay(alignment: .bottomTrailing) {
-            Button {
-                showComposer = true
-            } label: {
-                Label("New note", image: "SolarPenLinear")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(BitOSTheme.accent, in: Capsule())
-                    .foregroundStyle(Color(red: 0.04, green: 0.04, blue: 0.06))
-            }
-            .padding(16)
-            .accessibilityLabel("New note")
-        }
+        // No "New note" FAB (user decision 2026-08-29): creation entries are
+        // the header record button and the feed FAB.
     }
 
     private var playerSurface: some View {
@@ -505,6 +520,9 @@ struct BitzView: View {
                         },
                         onAuthor: { authorTarget = note.pubkey },
                         onMore: { point in presentMoreMenu(for: note, at: point) },
+                        onOpenExternalLink: { externalLink = $0 },
+                        onSwipe: { left in handleSwipe(left: left) },
+                        richJson: environment.feedStore.richTokens(for: note.content),
                         railCounts: railCounts(for: note)
                     )
                     .containerRelativeFrame(.vertical)
@@ -526,7 +544,8 @@ struct BitzView: View {
     }
 
     private var exploreGrid: some View {
-        let tiles = videos.prefix(BitzExploreVisible.tiles(loadMoreCount))
+        let visibleCount = rules.exploreVisibleCount(loadMoreCount: loadMoreCount)
+        let tiles = videos.prefix(visibleCount)
         let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
         return ScrollView {
             if environment.feedStore.isLoading && videos.isEmpty {
@@ -534,36 +553,46 @@ struct BitzView: View {
                     ForEach(0..<12, id: \.self) { _ in SkeletonTile() }
                 }
             } else {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(Array(tiles), id: \.id) { note in
-                        BitzTile(
-                            note: note,
-                            profile: environment.feedStore.profiles[note.pubkey],
-                            zapCount: environment.feedStore.zapCounts[note.id] ?? 0,
-                            likeCount: environment.feedStore.tallies[note.id]?.reactions ?? 0,
-                            durationLabel: note.video?.durationSeconds.map { rules.formatDuration($0) },
-                            sensitiveShown: settings.state.sensitiveMedia == .show,
-                            revealed: revealedIds.contains(note.id),
-                            onReveal: { revealedIds.insert(note.id) },
-                            onOpen: { openInPlayer(note) }
-                        )
-                        .onAppear {
-                            // Shared bounds: 24 initial + 18/load-more, then
-                            // older relay pages when the window runs out.
-                            if note.id == tiles.last?.id {
-                                if videos.count > BitzExploreVisible.tiles(loadMoreCount) {
-                                    loadMoreCount += 1
-                                } else {
+                VStack(spacing: 0) {
+                    LazyVGrid(columns: columns, spacing: 2) {
+                        ForEach(Array(tiles), id: \.id) { note in
+                            BitzTile(
+                                note: note,
+                                profile: environment.feedStore.profiles[note.pubkey],
+                                zapCount: environment.feedStore.zapCounts[note.id] ?? 0,
+                                likeCount: environment.feedStore.tallies[note.id]?.reactions ?? 0,
+                                durationLabel: note.video?.durationSeconds.map { rules.formatDuration($0) },
+                                sensitiveShown: settings.state.sensitiveMedia == .show,
+                                revealed: revealedIds.contains(note.id),
+                                onReveal: { revealedIds.insert(note.id) },
+                                onOpen: { openInPlayer(note) }
+                            )
+                            .onAppear {
+                                // Prefetch an older relay page at the edge,
+                                // while the footer owns the explicit reveal.
+                                if note.id == tiles.last?.id, videos.count <= visibleCount {
                                     environment.feedStore.loadOlder()
                                 }
                             }
                         }
                     }
+                    BitzExploreFooter(
+                        hasHiddenTiles: videos.count > visibleCount,
+                        isLoadingOlder: environment.feedStore.isLoadingOlder,
+                        noMoreOlder: environment.feedStore.noMoreOlder,
+                        onRevealMore: { loadMoreCount += 1 },
+                        onLoadOlder: environment.feedStore.loadOlder
+                    )
                 }
                 .padding(.top, 48)
                 .padding(.bottom, 88)
             }
         }
+        .simultaneousGesture(
+            // Grid parity with the player: horizontal swipes cycle modes.
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in horizontalSwipeEnded(value) }
+        )
     }
 
     // MARK: Actions
@@ -607,6 +636,40 @@ struct BitzView: View {
         }
         mode = next
         settings.set(next)
+    }
+
+    /**
+     * TikTok-style horizontal swipe (legacy bitz parity): a left swipe
+     * advances Explore → Following → For you; the final left swipe on
+     * For you opens the settled page's creator profile; a right swipe
+     * steps back one mode. Presented sheets/overlays swallow the gesture.
+     */
+    private func handleSwipe(left: Bool) {
+        guard !showSearch,
+              commentTarget == nil, chainTarget == nil, zapTarget == nil,
+              authorTarget == nil, remixAskTarget == nil else { return }
+        let order: [SettingsBitzMode] = [.explore, .following, .forYou]
+        guard let current = mode, let index = order.firstIndex(of: current) else { return }
+        if left {
+            if current == .forYou {
+                let settled = playerNotes.first { $0.id == topId } ?? playerNotes.first
+                if let settled {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    authorTarget = settled.pubkey
+                }
+            } else {
+                selectMode(order[index + 1])
+            }
+        } else if index > 0 {
+            selectMode(order[index - 1])
+        }
+    }
+
+    /// Horizontal-dominant drag filter shared by the player and the grid.
+    private func horizontalSwipeEnded(_ value: DragGesture.Value) {
+        let h = value.translation.width
+        guard abs(h) > 60, abs(h) > abs(value.translation.height) * 1.5 else { return }
+        handleSwipe(left: h < 0)
     }
 
     /// Explore tile / search pick → splice ahead of the window and jump.
@@ -666,41 +729,63 @@ struct BitzView: View {
         )
     }
 
+    /// ⋯ overflow → bottom sheet (legacy parity: web item set in the
+    /// Flutter sheet chrome).
     private func presentMoreMenu(for note: FeedNote, at anchor: CGPoint) {
-        menu = AppMenuPresentation(
-            anchor: anchor,
-            entries: [
-                .item(AppMenuItem(
-                    id: "mute",
-                    label: environment.feedStore.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
-                    systemImage: AppIcons.mute
-                )),
-                .item(AppMenuItem(id: "share", label: "Share", systemImage: AppIcons.share)),
-                .item(AppMenuItem(id: "copy-id", label: "Copy note ID", systemImage: AppIcons.copy)),
-                .divider,
-                .item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)),
-                .item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)),
-                .item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)),
-            ]
-        ) { id in
-            switch id {
-            case "mute": environment.feedStore.toggleMute(note.pubkey)
-            case "share":
-                // Web parity: Share lives in the overflow, not the rail.
-                shareText = rules.shareText(content: note.content, authorNpub: rules.npub(note.pubkey))
-            case "copy-id": UIPasteboard.general.string = note.id
-            case "report-spam": report(note, reason: "spam")
-            case "report-illicit": report(note, reason: "illicit")
-            case "report-harassment": report(note, reason: "harassment")
-            default: break
-            }
+        moreSheetTarget = note
+    }
+
+    private func moreMenuEntries(_ note: FeedNote) -> [AppMenuEntry] {
+        [
+            .item(AppMenuItem(id: "share", label: "Share", systemImage: AppIcons.share)),
+            .item(AppMenuItem(
+                id: "save",
+                label: environment.feedStore.bookmarkedIds.contains(note.id) ? "Unsave bitz" : "Save bitz",
+                systemImage: AppIcons.bookmark
+            )),
+            .item(AppMenuItem(id: "copy-id", label: "Copy note ID", systemImage: AppIcons.copy)),
+            .item(AppMenuItem(id: "copy-text", label: "Copy note text", systemImage: AppIcons.pen)),
+            .item(AppMenuItem(id: "copy-npub", label: "Copy author npub", systemImage: AppIcons.user)),
+            .divider,
+            .item(AppMenuItem(
+                id: "mute",
+                label: environment.feedStore.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
+                systemImage: AppIcons.mute
+            )),
+            .divider,
+            .item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)),
+            .item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)),
+            .item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)),
+        ]
+    }
+
+    private func handleMoreSelect(_ note: FeedNote, _ id: String) {
+        switch id {
+        case "share":
+            shareText = rules.shareText(content: note.content, authorNpub: rules.npub(note.pubkey))
+        case "save":
+            toggleBookmark(note)
+        case "copy-id":
+            UIPasteboard.general.string = note.id
+        case "copy-text":
+            UIPasteboard.general.string = note.content
+        case "copy-npub":
+            UIPasteboard.general.string = rules.npub(note.pubkey)
+        case "mute":
+            environment.feedStore.toggleMute(note.pubkey)
+        case "report-spam":
+            report(note, reason: "spam")
+        case "report-illicit":
+            report(note, reason: "illicit")
+        case "report-harassment":
+            report(note, reason: "harassment")
+        default: break
         }
     }
 
     private func report(_ note: FeedNote, reason: String) {
         guard environment.identityStore.account != nil else { return }
         Task { await environment.notePublisher.publishReport(targetEventId: note.id, targetPubkey: note.pubkey, reason: reason) }
-        menu = nil
     }
 
     // MARK: Path monitor (autoplay Wi-Fi policy)
@@ -723,9 +808,42 @@ struct BitzView: View {
     }
 }
 
-// 24 + 18 explore paging mirrored from the shared `BitzExplore` object.
-enum BitzExploreVisible {
-    static func tiles(_ loadMoreCount: Int) -> Int { 24 + 18 * min(max(loadMoreCount, 0), 100) }
+private struct BitzExploreFooter: View {
+    let hasHiddenTiles: Bool
+    let isLoadingOlder: Bool
+    let noMoreOlder: Bool
+    let onRevealMore: () -> Void
+    let onLoadOlder: () -> Void
+
+    var body: some View {
+        Group {
+            if hasHiddenTiles {
+                Button(action: onRevealMore) {
+                    Label("Load more Bitz", systemImage: AppIcons.add)
+                }
+                .accessibilityHint("Shows the next 18 loaded Bitz")
+            } else if isLoadingOlder {
+                Button(action: {}) {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading older Bitz")
+                    }
+                }
+                .disabled(true)
+            } else if !noMoreOlder {
+                Button("Load older Bitz", action: onLoadOlder)
+            } else {
+                Text("That's all the Bitz for now")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .font(.subheadline.weight(.bold))
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+    }
 }
 
 // MARK: - Top bar
@@ -738,17 +856,15 @@ private struct BitzTopBar: View {
     let onRecord: () -> Void
 
     var body: some View {
+        // Clean chrome (user decision 2026-08-29): no bar background, bare
+        // text tabs (legacy Flutter TikTok parity), no borders.
         HStack(spacing: 8) {
-            // No wordmark, no refresh button (user decision 2026-08-28):
-            // refresh = re-tap the active Bitz tab in the bottom bar.
             Spacer(minLength: 8)
             HStack(spacing: 2) {
                 pill("Explore", .explore)
                 pill("Following", .following)
                 pill("For you", .forYou)
             }
-            .padding(2)
-            .background(Color.black.opacity(0.4), in: Capsule())
             Spacer(minLength: 8)
             Button(action: onRecord) {
                 AppIcons.image(for: AppIcons.camera)
@@ -763,20 +879,20 @@ private struct BitzTopBar: View {
         }
         .padding(.horizontal, BitOSTheme.Spacing.base)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
+    /// Bare-text tab (legacy parity): active bold opaque, inactive 70%.
     private func pill(_ label: String, _ value: SettingsBitzMode) -> some View {
         let selected = mode == value
         return Button {
             onSelectMode(value)
         } label: {
             Text(label)
-                .font(.caption.weight(selected ? .bold : .semibold))
-                .foregroundStyle(selected ? Color(red: 0.04, green: 0.04, blue: 0.06) : .white.opacity(0.9))
+                .font(.subheadline.weight(selected ? .heavy : .semibold))
+                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.7))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(selected ? BitOSTheme.accent : Color.clear, in: Capsule())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Show \(label) videos")
@@ -927,6 +1043,12 @@ private struct BitzVideoPage: View {
     var onChain: () -> Void = {}
     let onAuthor: () -> Void
     let onMore: (CGPoint) -> Void
+    /** External-link tap → confirm sheet (owned by the parent). */
+    var onOpenExternalLink: (String) -> Void = { _ in }
+    /** Horizontal swipe on the media: `true` = leftward (advance). */
+    var onSwipe: (Bool) -> Void = { _ in }
+    /** NIP-27 token JSON for the rich caption (shared tokenizer). */
+    var richJson: String = "[]"
     /** Legacy parity: count labels replace the static ones when > 0. */
     let railCounts: BitzRailCounts
 
@@ -967,6 +1089,17 @@ private struct BitzVideoPage: View {
                                 pool.setRateBoost(noteId: nil, multiplier: nil)
                             }
                         }, perform: {})
+                        // TikTok-style horizontal swipe (mode cycling; final
+                        // left swipe opens the creator). Simultaneous so the
+                        // vertical pager and tap/hold gestures keep working.
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 24)
+                                .onEnded { value in
+                                    let h = value.translation.width
+                                    guard abs(h) > 60, abs(h) > abs(value.translation.height) * 1.5 else { return }
+                                    onSwipe(h < 0)
+                                }
+                        )
                         .accessibilityLabel("Pause or resume playback")
                         .accessibilityAddTraits(.isButton)
                 }
@@ -1052,6 +1185,7 @@ private struct BitzVideoPage: View {
                         PubkeyAvatarView(
                             pubkey: note.pubkey,
                             size: 36,
+                            picture: profile?.picture,
                             label: profile?.bestDisplayName,
                             hasLightning: !(profile?.lud16?.isEmpty ?? true)
                         )
@@ -1095,34 +1229,38 @@ private struct BitzVideoPage: View {
                     .font(.caption2)
                     .foregroundStyle(BitOSTheme.repost)
             }
-            Text(note.content)
-                .font(.subheadline)
-                .foregroundStyle(.white)
-                .lineLimit(3)
+            // Rich body: NIP-27 entities + external links tappable (white);
+            // bare media links render as tiles and disappear from the body.
+            RichTextView(
+                json: BusinessCoreBridge().richTokens(content: note.content),
+                onOpenProfile: { _ in onAuthor() },
+                color: .white,
+                lineLimit: 3,
+                hiddenMediaUrls: Set(note.mediaUrls),
+                onOpenLink: { onOpenExternalLink($0) }
+            )
             if !note.hashtags.isEmpty {
                 Text(note.hashtags.prefix(4).map { "#\($0)" }.joined(separator: " "))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(BitOSTheme.accent)
             }
         }
+        // Clean chrome (user decision 2026-08-29): no black scrim behind
+        // the caption — the text stands on the media directly.
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, BitOSTheme.Spacing.base)
         .padding(.vertical, BitOSTheme.Spacing.lg)
-        .background(
-            LinearGradient(colors: [.clear, .clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-        )
     }
 
     private var rail: some View {
         VStack(spacing: BitOSTheme.Spacing.lg) {
-            // Web-parity order (legacy bitz rail): Remix first (violet), then
-            // Zap · Like · Comments · Repost · Save; Share lives in the ⋯ menu.
+            // User decision 2026-08-29: [like · comment · repost · zap ·
+            // bookmark] after Remix/Chain; Share lives in the ⋯ sheet.
             railButton(AppIcons.sparkles, "Remix", tint: Color(red: 0.545, green: 0.361, blue: 0.965), action: onRemix)
             // Chain: only when this note declares a remix source (web parity).
             if note.remixOfEventId != nil {
                 railButton(AppIcons.appsGrid, "Chain", tint: .white, action: onChain)
             }
-            railButton(AppIcons.zap, railCounts.zap, tint: BitOSTheme.zap, action: onZap)
             railButton(
                 actions.liked.contains(note.id) ? AppIcons.heartFill : AppIcons.heart,
                 railCounts.like,
@@ -1131,6 +1269,7 @@ private struct BitzVideoPage: View {
             )
             railButton(AppIcons.comment, railCounts.comment, tint: .white, action: onComment)
             railButton(AppIcons.repost, railCounts.repost, tint: .white, action: onRepost)
+            railButton(AppIcons.zap, railCounts.zap, tint: BitOSTheme.zap, action: onZap)
             railButton(
                 isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark,
                 isBookmarked ? "Saved" : "Save",
@@ -1215,7 +1354,8 @@ private struct BitzVideoPage: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
-        .background(Color.black.opacity(0.26))
+        // Clean chrome (user decision 2026-08-29): no black strip behind
+        // the compact controls.
     }
 }
 
@@ -1328,7 +1468,7 @@ private struct BitzLoadingView: View {
 
 /// Poster loader (media pipeline lands later; HomeView parity).
 /// System share sheet for the ⋯ overflow Share action (web parity).
-private struct ShareSheet: UIViewControllerRepresentable {
+struct ShareSheet: UIViewControllerRepresentable {
     let items: [String]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
@@ -1355,8 +1495,7 @@ private struct BitzChainSheet: View {
                     .font(.headline)
                     .foregroundStyle(BitOSTheme.textPrimary)
                 Spacer()
-                Button("Close", action: onClose)
-                    .foregroundStyle(BitOSTheme.accent)
+                SheetCloseButton(action: onClose)
             }
             content
         }
@@ -1431,6 +1570,7 @@ private struct BitzChainSheet: View {
                 PubkeyAvatarView(
                     pubkey: step.pubkey ?? "",
                     size: 32,
+                    picture: step.pubkey.flatMap { store.profiles[$0]?.picture },
                     label: step.pubkey.flatMap { store.profiles[$0]?.bestDisplayName },
                     hasLightning: !(step.pubkey.flatMap { store.profiles[$0]?.lud16 } ?? "").isEmpty
                 )

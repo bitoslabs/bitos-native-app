@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 
 /**
  * Hex identity system (unified feature spec §2.5/§4, APP-022): the BitOS
@@ -99,14 +101,14 @@ class HexShape : Shape {
     }
 }
 
-/** Hexagonal identicon avatar: deterministic gradient + initials. Remote
- * profile pictures load through the media pipeline later; the identicon is
- * the stable fallback so feed rows never shift layout. */
+/** Hexagonal identicon avatar with an HTTPS profile-picture overlay. The
+ * deterministic identicon stays visible while a remote image loads or fails. */
 @Composable
 fun HexAvatar(
     pubkey: String,
     modifier: Modifier = Modifier,
     size: Int = 40,
+    imageUrl: String? = null,
     label: String? = null,
     hasLightning: Boolean = false,
 ) {
@@ -126,6 +128,14 @@ fun HexAvatar(
             contentAlignment = Alignment.Center,
         ) {
             Text(initials, color = Color.White, fontSize = (size / 3).sp, fontWeight = FontWeight.W700)
+            safeProfilePictureUrl(imageUrl)?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(size.dp),
+                )
+            }
         }
         if (hasLightning) {
             Icon(
@@ -142,6 +152,15 @@ fun HexAvatar(
             )
         }
     }
+}
+
+/** Profile metadata is untrusted. Avatars accept bounded HTTPS raster URLs only. */
+private fun safeProfilePictureUrl(raw: String?): String? {
+    val url = raw?.trim()?.takeIf { it.length in 1..512 } ?: return null
+    if (!url.startsWith("https://", ignoreCase = true)) return null
+    val path = url.substringBefore('?').substringBefore('#')
+    if (path.endsWith(".svg", ignoreCase = true)) return null
+    return url
 }
 
 private fun avatarInitials(label: String): String {

@@ -120,7 +120,8 @@ final class BusinessCoreFacadeTests: XCTestCase {
     func testEncodesSubscriptionMessages() {
         let request = client.feedRequest(subscriptionId: "feed1")
         XCTAssertTrue(request.hasPrefix(#"["REQ","feed1","#))
-        XCTAssertTrue(request.contains(#""kinds":[1,22,6,0]"#))
+        XCTAssertTrue(request.contains(#""kinds":[21,22],"limit":16"#))
+        XCTAssertTrue(request.contains(#""kinds":[1],"limit":48"#))
         XCTAssertEqual(client.close(subscriptionId: "feed1"), #"["CLOSE","feed1"]"#)
     }
 

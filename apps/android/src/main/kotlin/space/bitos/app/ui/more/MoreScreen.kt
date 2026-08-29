@@ -138,7 +138,12 @@ fun MoreScreen(
                     Modifier.fillMaxWidth().padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PubkeyAvatar(pubkey = account.pubkeyHex, size = 48)
+                    PubkeyAvatar(
+                        pubkey = account.pubkeyHex,
+                        size = 48,
+                        pictureUrl = profile?.picture,
+                        label = profile?.bestDisplayName,
+                    )
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -274,7 +279,12 @@ fun MoreScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Box {
-                                PubkeyAvatar(pubkey = acct.pubkeyHex, size = 40)
+                                PubkeyAvatar(
+                                    pubkey = acct.pubkeyHex,
+                                    size = 40,
+                                    pictureUrl = profile?.picture,
+                                    label = name,
+                                )
                                 if (hasLightning) {
                                     Box(
                                         Modifier
