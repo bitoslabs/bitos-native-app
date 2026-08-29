@@ -22,15 +22,41 @@ object NostrKinds {
     const val REPOST = 6
     const val GENERIC_REACTION = 7
     const val LONG_FORM = 30_023
+    /** NIP-68 picture event (image reels). */
+    const val PICTURE = 20
     /** NIP-71 normal video event. */
     const val NORMAL_VIDEO = 21
     /** NIP-71 short-form portrait video event. */
     const val SHORT_VIDEO = 22
     /** Compatibility name retained for existing kind-22 publishing code. */
     const val VIDEO = SHORT_VIDEO
+    /** NIP-71 addressable (replaceable) normal video event. */
+    const val ADDRESSABLE_VIDEO = 34_235
+    /** NIP-71 addressable (replaceable) short-form video event. */
+    const val ADDRESSABLE_SHORT_VIDEO = 34_236
     const val VIDEO_COMMENT = 1_111
 
-    val feedKinds: List<Int> = listOf(SHORT_TEXT_NOTE, NORMAL_VIDEO, SHORT_VIDEO)
+    /** Kinds whose events project into the feed window (reads + projection). */
+    val feedKinds: List<Int> = listOf(
+        SHORT_TEXT_NOTE,
+        PICTURE,
+        NORMAL_VIDEO,
+        SHORT_VIDEO,
+        ADDRESSABLE_VIDEO,
+        ADDRESSABLE_SHORT_VIDEO,
+    )
+
+    /**
+     * Dedicated reel-media kinds (FED-004 pagination): queried deep because
+     * they are ~100% renderable bitz, unlike kind-1 text notes.
+     */
+    val reelMediaKinds: List<Int> = listOf(
+        PICTURE,
+        NORMAL_VIDEO,
+        SHORT_VIDEO,
+        ADDRESSABLE_VIDEO,
+        ADDRESSABLE_SHORT_VIDEO,
+    )
 }
 
 /**

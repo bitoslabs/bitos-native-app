@@ -143,4 +143,96 @@ class BitzTest {
         // Empty content still attributes honestly.
         assertEquals("— npub1abc · BitOS", NoteShare.text("   \n ", "npub1abc"))
     }
+
+    // MARK: - Pagination walk policy (FED-004, study §2.2)
+
+    @Test
+    fun walkQueriesReelMediaKindsDeepAndTextShallow() {
+        // Dedicated media kinds (20/21/22/34235/34236) queried deep; kind-1
+        // shallow; both filters ride one request (per-relay-per-filter limit).
+        assertEquals(
+            listOf(20, 21, 22, 34_235, 34_236),
+            BitzTimelinePolicy.MEDIA_KINDS,
+        )
+        assertEquals(
+            listOf(
+                """{"kinds":[20,21,22,34235,34236],"limit":80}""",
+                """{"kinds":[1],"limit":120}""",
+            ),
+            BitzTimelinePolicy.initialFilters(),
+        )
+        assertEquals(
+            listOf(
+                """{"kinds":[20,21,22,34235,34236],"limit":60,"until":99}""",
+                """{"kinds":[1],"limit":150,"until":99}""",
+            ),
+            BitzTimelinePolicy.batchFilters(99),
+        )
+        // `until` is exclusive: cursor = oldest - 1.
+        assertEquals(99, BitzTimelinePolicy.cursor(100))
+    }
+
+    @Test
+    fun walkStopsAtFreshBudgetOrBatchBound() {
+        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 0))
+        assertTrue(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 17, batchesIssued = 5))
+        // 18 fresh media = one full reveal page → stop.
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 18, batchesIssued = 0))
+        // Batch cap reached → stop even under budget.
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 0, batchesIssued = 6))
+        assertFalse(BitzTimelinePolicy.shouldContinue(foundFreshMedia = 17, batchesIssued = 6))
+    }
+
+    @Test
+    fun cursorMovesMonotonicallyBackwardOnly() {
+        // A relay re-sending newer events must never pull the cursor forward.
+        assertEquals(90, BitzTimelinePolicy.advanceCursor(oldestInBatch = 90, current = 100))
+        assertEquals(90, BitzTimelinePolicy.advanceCursor(oldestInBatch = 120, current = 90))
+        // Null batch (nothing arrived) holds the cursor.
+        assertEquals(100, BitzTimelinePolicy.advanceCursor(oldestInBatch = null, current = 100))
+    }
+
+    @Test
+    fun relayStallDetectorTerminatesUntilIgnoringRelays() {
+        // Nothing fresh AND no cursor advance = relay ignoring `until`.
+        assertTrue(BitzTimelinePolicy.relayStalled(oldestInBatch = 120, previousCursor = 100, freshCount = 0))
+        assertTrue(BitzTimelinePolicy.relayStalled(oldestInBatch = null, previousCursor = 100, freshCount = 0))
+        // Fresh ids or a real backwards move keep the walk alive.
+        assertFalse(BitzTimelinePolicy.relayStalled(oldestInBatch = 90, previousCursor = 100, freshCount = 0))
+        assertFalse(BitzTimelinePolicy.relayStalled(oldestInBatch = 120, previousCursor = 100, freshCount = 3))
+    }
+
+    // MARK: - Tab sorts (APP-007 W2, web parity)
+
+    private fun sortEntry(
+        id: String,
+        createdAt: Long,
+        reactions: Long = 0,
+        reposts: Long = 0,
+        zapCount: Long = 0,
+        zapSats: Long = 0,
+    ) = BitzSort.Entry(id, createdAt, reactions, reposts, zapCount, zapSats)
+
+    @Test
+    fun trendingDecaysEngagementCountsWithThreeDayHalfLife() {
+        val now = 1_000_000L
+        // Same engagement: 12 h old beats 12 days old (0.5^(0.5) vs 0.5^4).
+        val fresh = sortEntry("fresh", createdAt = now - 43_200, reactions = 10)
+        val old = sortEntry("old", createdAt = now - 1_036_800, reactions = 10)
+        assertEquals(listOf("fresh", "old"), BitzSort.trending(listOf(old, fresh), now))
+        // Counts (not sats) drive trending: 3 zap-count events beat 1.
+        val many = sortEntry("many", createdAt = now - 43_200, zapCount = 3)
+        val few = sortEntry("few", createdAt = now - 43_200, zapCount = 1)
+        assertEquals(listOf("many", "few"), BitzSort.trending(listOf(few, many), now))
+    }
+
+    @Test
+    fun zappedRanksBySatsDescendingWithNewestTiebreak() {
+        val now = 1_000_000L
+        val top = sortEntry("top", createdAt = now - 100, zapSats = 2_100)
+        val second = sortEntry("second", createdAt = now - 50, zapSats = 2_100)
+        val third = sortEntry("third", createdAt = now, zapSats = 9)
+        // Equal sats → newer first; raw sats dominate engagement counts.
+        assertEquals(listOf("second", "top", "third"), BitzSort.zapped(listOf(top, second, third)))
+    }
 }

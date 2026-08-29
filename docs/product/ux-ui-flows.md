@@ -58,6 +58,40 @@ First signed action
 - Remote/external signer rejection returns to the pending action without data loss.
 - Multi-account switch shows the active identity before signing or paying.
 
+### 4.1 Profile view & edit flow (APP-013, legacy-Flutter parity)
+
+User stories:
+
+1. **Recognize my identity** — as a signed-in user, my profile page shows the
+   brand hero (cover + hex avatar straddling the banner edge), my name,
+   verified badge, npub chip and ⚡ chip — same visual language as the old app.
+2. **Edit everything in one place** — "Edit profile" opens the editor with a
+   live header preview (banner + "Change banner" pill, avatar + camera chip)
+   that shows exactly what my profile will look like once saved.
+3. **Change my photo in familiar steps** — tapping the camera chip (avatar)
+   or "Change banner" (cover) opens a source sheet ("Take photo" on device
+   camera / "Choose from library"), then the shot is center-cropped to the
+   published size (512×512 avatar / 1500×500 banner), uploaded to Blossom and
+   the preview updates immediately. No URL knowledge required; raw URL fields
+   remain for power users. The editor is a full page with a back button (not a
+   bottom sheet) — legacy `Routes.PROFILE_EDIT` parity.
+4. **Never lose work** — fields keep my draft if the sheet stays open; upload
+   or publish failures surface a human message and keep every entered value.
+
+Acceptance criteria:
+
+| # | Given / When / Then |
+|---|---|
+| AC-1 | Given a signed-in account, when the profile tab opens, then the cover renders edge-to-edge with the brand gradient + hex pattern fallback, keeps a full 160pt of visible height under the status bar (legacy banner:avatar ratio), and the hex avatar overlaps the banner bottom by half, with drop shadow — no tint over the photo. |
+| AC-2 | When the Notes·Replies·Bitz·Reposts rail is scrolled to the top, it pins under the status bar with the page background (no contrasting surface block) and keeps content masked behind it. |
+| AC-3 | When the camera chip is tapped, a source sheet offers "Take photo" (hidden when no camera) and "Choose from library"; after a photo is chosen, the chip shows a spinner ("Uploading") until the Blossom upload resolves, then the avatar preview shows the uploaded image. |
+| AC-3b | The editor opens as a full page with a back chevron in the header and a full-width Save pill (spinner while publishing); back cancels without publishing. |
+| AC-4 | If an upload fails, an error message appears, the previous image stays, and Save remains available for the remaining fields. |
+| AC-5 | Save is disabled while any image upload is in flight (nothing is signed before media is uploaded and hash-verified) and while publishing; on success a "Profile published ✓" confirmation shows and the profile hero reflects the new kind-0 once the relay echo lands. |
+| AC-6 | Portrait photos taken with the device camera crop to the same framing the user saw in the picker (EXIF-orientation normalized before crop) on both platforms. |
+| AC-7 | Bio is capped at 300 characters with a live counter; all eight kind-0 fields (username, display name, bio, avatar, banner, website, NIP-05, lightning) are editable. |
+| AC-8 | Every control has an accessibility label (camera chip, change-banner pill, tab rail, glass controls), and the npub chip announces copy state. |
+
 ## 5. Home feed flow
 
 ```text

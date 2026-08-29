@@ -18,6 +18,7 @@ enum class SolarFeedIcon(@DrawableRes val drawableRes: Int) {
     Repost(R.drawable.solar_repeat_linear),
     Zap(R.drawable.solar_bolt_linear),
     More(R.drawable.solar_menu_dots_linear),
+    Send(R.drawable.solar_plain_linear),
 }
 
 @Composable

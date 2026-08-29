@@ -708,11 +708,16 @@ private fun AccountDetail(
     val profileEditState by identityViewModel.profileEditState.collectAsStateWithLifecycle()
     val registered by identityViewModel.registeredAccounts.collectAsStateWithLifecycle()
     val activePubkey by identityViewModel.activeRegistryPubkey.collectAsStateWithLifecycle()
+    val snapshot by store.snapshot.collectAsStateWithLifecycle()
     val account = identity.account
     val clipboard = LocalClipboardManager.current
     var npubCopied by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf<String?>(null) }
+    // APP-018a row 1: switches ride the branded overlay (MoreScreen parity).
+    var switchTarget by remember {
+        mutableStateOf<space.bitos.core.identity.RegisteredAccount?>(null)
+    }
 
     if (account == null) {
         Footnote("No account — create or import a key on the You tab.")
@@ -767,7 +772,7 @@ private fun AccountDetail(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !isActive) { identityViewModel.switchTo(acct.pubkeyHex) }
+                        .clickable(enabled = !isActive) { switchTarget = acct }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -818,6 +823,17 @@ private fun AccountDetail(
         }) {
             Text("Clear cache (keeps theme & language)", color = BitOSColors.error, fontWeight = FontWeight.W600)
         }
+    }
+
+    switchTarget?.let { target ->
+        space.bitos.app.ui.components.AccountSwitchOverlay(
+            fromPubkey = (activePubkey ?: account?.pubkeyHex),
+            toPubkey = target.pubkeyHex,
+            toName = target.displayName ?: target.npub.take(10) + "…",
+            hapticsEnabled = { snapshot.hapticEnabled },
+            switchAction = { identityViewModel.switchTo(target.pubkeyHex) },
+            onFinished = { switchTarget = null },
+        )
     }
 }
 

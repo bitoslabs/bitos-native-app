@@ -1,6 +1,15 @@
 # Bitz Short-Video Performance Study — Why the Web Feed Is Fast, and the Native Implementation Plan
 
 Status: reference + implementation plan (feeds APP-007 / FED epic)
+Progress: **§4.1 delivered** — shared `BitzTimelinePolicy` (+ walk bounds consts), `BitzSort`
+(trending/zapped), `MediaMetadata` fallback-mirror + rendition-ladder parsing with
+`selectRendition` (§4.5), settings schema **v5** (`trending`/`zapped` wires), bridge
+`bitzTabSortIds`/`mediaPickRenditionUrl`/walk getters; **§4.3 player triggers delivered**;
+**§4.5 delivered both platforms** — player pick → mirror → lower-rendition failover chains
+(Android `VideoPlayerPool`+`MediaSources`, iOS `PlayerPool`); **5-tab pills live both
+platforms** (§2.9); signed protocol fixture `valid-kind22-rendition-ladder` (§4.1 fixture
+rule). Remaining from §4: relay-layer progressive queries (§4.2 repository seam), cold-start
+cache snapshot + tab session (§4.4), §4.7 acceptance runs.
 Date: 2026-08-29
 Web app audited at: `../../bitos-nostr-web` (SvelteKit, `src/routes/bitz/+page.svelte` ~2,300 lines)
 Native destination: `apps/ios/BitOS/Features/Bitz/`, `apps/android/.../ui/bitz/`, shared rules in `shared/business-core/.../feed/Bitz.kt`
@@ -182,6 +191,35 @@ On a long grid this skips hundreds of off-screen header requests.
 - **Explore paging math** already shared: `BitzExplore.INITIAL_PAGE = 24`,
   `MORE_PAGE = 18` — web parity confirmed.
 
+### 2.9 Tab system — five surfaces, one window
+
+The web mounts five tabs: **Explore · Following · For you · Trending ·
+Most zapped**. Only the first two change *what is fetched*; the last three
+are orderings of the same loaded window:
+
+| Tab | Data source | Ordering |
+|---|---|---|
+| Explore | same window, 3-col grid | grid paging (`BitzExplore` 24+18) |
+| Following | `follows` filter on relays | chronological |
+| For you | global media window | chronological (arrival; native adds ranking) |
+| Trending | **same window, zero fetch** | `counts × 0.5^(ageHours / 72)` desc — engagement = reactions + reposts + zaps |
+| Most zapped | **same window, zero fetch** | zap sats desc, newest as tiebreak |
+
+Rules the native port must keep:
+
+- **View-only sorts.** Trending/Most-zapped never issue a relay request;
+  they re-rank the verified window client-side as tallies patch in. Rankings
+  therefore track live engagement (a zap landing mid-session re-orders).
+- **One scroll memory per tab**, not per surface — the pager index is
+  restored on tab return from the in-memory session (§2.5); persistence
+  beyond the run is explicitly not required.
+- **Half-life 72 h** on trending decay: fresh-but-small beats old-but-big
+  after ~3 half-lives, matching the web constant exactly.
+- Native realization (delivered): shared `BitzSort.trending/zapped` +
+  settings v5 modes; pills and 5-step swipe order on both platforms;
+  engagement rows cross the iOS bridge as JSON
+  (`bitzTabSortIds`, mirroring `algorithmRankIds`).
+
 ---
 
 ## 3. Native gap analysis (what exists vs what the web proves)
@@ -204,15 +242,19 @@ Native gaps this plan closes (tracked →):
 
 | Gap | Web behavior to port | Tracker |
 |---|---|---|
-| G1 Query depth & kind coverage | Media kinds deep (web 400 across `[20,21,22,34235,34236]`) vs native 16 across `[21,22]`; no kind-20 pictures | FED-00x + APP-007 |
-| G2 Multi-batch backward walk with fresh-count budget & stall detection | 6×(60 media/150 text), stop at 18 fresh media, monotonic `until` | FED/REL |
-| G3 Per-batch `maxWait` 4 s | Dead relay cannot stall pagination | REL |
-| G4 Progressive paint (primary-first, secondary merge) | First relay paints; slow ones merge in | REL |
-| G5 Three-layer distance triggers on the pager | Render window +5, fetch when ≤6 buffered, at 2–3 viewport heights | APP-007 |
-| G6 Cold-start snapshot + tab-session with position restore | 10 reels / 15 min TTL; session index + scroll top; 60 s refresh gate | FED |
-| G7 Rendition selection + mirror failover on the read path | Screen-height ×1.25 static pick; fallback chain on error only | FED-004 (open per blueprint) |
-| G8 `imeta` poster/thumbnail use | Web skips posters; native player pool already makes posters less critical, but grid thumbs should use `thumb` when present | APP-007 polish |
-| G9 Engagement second-pass patch-in | Zap/like counts arrive after, patch without re-layout | FED |
+| G1 ✅ Query depth & kind coverage | kinds `[20,21,22,34235,34236]` now in `feedKinds`/`reelMediaKinds` + `BitzTimelinePolicy.initialFilters()` | Delivered (shared, tested) |
+| G2 ✅ Multi-batch backward walk policy | `BitzTimelinePolicy` (fresh budget 18, 6 batches, monotonic `until`, stall detect) — repository seam adoption pending | Policy shared+tested; repo walk pending (REL) |
+| G3 ◐ Per-batch `maxWait` 4 s | `PAGE_MAX_WAIT_MS` shared const; relay-layer enforcement pending | REL |
+| G4 ◐ Progressive paint (primary-first, secondary merge) | First relay paints; slow ones merge in | REL |
+| G5 ✅ Three-layer distance triggers on the pager | Android pager + iOS `onChange(topId)` now fire load-older at the shared `PREFETCH_BUFFER_THRESHOLD` distance; store-side render batching rides the pools | APP-007 delivered |
+| G6 ○ Cold-start snapshot + tab-session with position restore | 10 reels / 15 min TTL; session index + scroll top; 60 s refresh gate | FED pending |
+| G7 ✅ Rendition selection + mirror failover on the read path | `selectRendition` (screen ×1.25 static pick) + pick→mirrors→renditions chain on item error, BOTH players; imeta parsing bounded | FED-004 delivered |
+| G8 ○ `imeta` poster/thumbnail use | Grid thumbs should use `thumb` when present | APP-007 polish pending |
+| G9 ◐ Engagement second-pass patch-in | Tallies already patch in place on both platforms; the kinds `[7,6,16,9735,1111,1018]` `#e`-batched second pass is not yet issued per page | FED partial |
+
+**Tab-system gap (closed):** the web's 5-tab cycle (Explore · Following ·
+For you · Trending · Most zapped) vs the native 3-tab bar → delivered as
+view-only sorts (§2.9) through shared `BitzSort` + settings v5, both platforms.
 
 Deliberate **non-goals** (web behaviors not to port): localStorage JSON blobs
 (native has the versioned event cache — DAT-001..003), DOM-style render

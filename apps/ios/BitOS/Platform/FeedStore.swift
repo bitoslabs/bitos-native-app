@@ -442,6 +442,30 @@ final class FeedStore {
         pubkeys.prefix(48).forEach { enqueueProfile($0) }
     }
 
+    /**
+     * APP-018a row 5 (legacy parity): wipes the session's DERIVED feed
+     * state — profiles, thread/comment views, tallies, bookmark/block
+     * projections and buffers. Live subscriptions re-fetch all of it; user
+     * preferences (mutes) and the feed windows stay. The persisted event
+     * cache equivalent (Android `EventCache.clearAllCache`) arrives with
+     * DAT-003 on iOS.
+     */
+    func clearDerivedState() {
+        profiles = [:]
+        comments = [:]
+        threads = [:]
+        commentThreads = [:]
+        tallies = [:]
+        talliesBuffer = [:]
+        tallyTargets = []
+        zapCountsBuffer = [:]
+        zapRequestIdsBuffer = [:]
+        remixAncestorEvents = [:]
+        bookmarked = []
+        blocked = []
+        blockHeadAt = nil
+    }
+
     /** In-place note-ref open: fetch the head, caller polls [refNote]. */
     func openNoteReference(raw: String) {
         guard let ref = (bridgeFacade().eventRefParse(bech32: raw) as? [String: Any]) else { return }

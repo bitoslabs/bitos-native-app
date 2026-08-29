@@ -67,6 +67,24 @@ struct BitzBridgeRules {
         return array.compactMap { $0["id"] as? String }
     }
 
+    /// Performance study §2.9 tab sorts: trending (engagement × 72 h
+    /// half-life decay) and most-zapped (sats desc), both through the
+    /// shared `BitzSort`. Engagement rows in, ordered ids out.
+    func tabSortIds(mode: SettingsBitzMode, entries: [[String: Any]], nowSeconds: Int64) -> [String] {
+        let modeWire: String
+        switch mode {
+        case .trending: modeWire = "trending"
+        case .zapped: modeWire = "zapped"
+        default: return []
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: entries) else { return [] }
+        let entriesJson = String(data: data, encoding: .utf8) ?? "[]"
+        guard let raw = bridge.bitzTabSortIds(mode: modeWire, entriesJson: entriesJson, nowSeconds: nowSeconds),
+              let idsData = raw.data(using: .utf8),
+              let ids = try? JSONSerialization.jsonObject(with: idsData) as? [String] else { return [] }
+        return ids
+    }
+
     private func entriesJson(_ notes: [FeedNote], profiles: [String: ProfileMetadata]) -> String {
         let entries: [[String: String]] = notes.map { note in
             [
@@ -133,7 +151,32 @@ struct BitzView: View {
 
     private var playerNotes: [FeedNote] {
         let windowIds = Set(videos.map(\.id))
-        return spliced.filter { !windowIds.contains($0.id) } + videos
+        let window = spliced.filter { !windowIds.contains($0.id) } + videos
+        // §2.9: TRENDING/ZAPPED are view-only sorts over the same verified
+        // window — engagement rows through the shared BitzSort via the
+        // bridge, timeline lifecycle stays For-You's.
+        guard let mode, mode == .trending || mode == .zapped, !window.isEmpty else { return window }
+        let store = environment.feedStore
+        let rows: [[String: Any]] = window.map { note in
+            let tally = store.tallies[note.id]
+            return [
+                "id": note.id,
+                "createdAt": note.createdAt,
+                "reactions": tally?.reactions ?? 0,
+                "reposts": tally?.reposts ?? 0,
+                "zapCount": store.zapCounts[note.id] ?? 0,
+                "zapSats": (tally?.zapMillisats ?? 0) / 1_000,
+            ]
+        }
+        let ids = rules.tabSortIds(
+            mode: mode,
+            entries: rows,
+            nowSeconds: Int64(Date.now.timeIntervalSince1970)
+        )
+        guard !ids.isEmpty else { return window }
+        var rank: [String: Int] = [:]
+        for (index, id) in ids.enumerated() { rank[id] = index }
+        return window.sorted { (rank[$0.id] ?? ids.count) < (rank[$1.id] ?? ids.count) }
     }
 
     private var rootContent: some View {
@@ -345,10 +388,12 @@ struct BitzView: View {
             pool.releaseAll()
         }
         .task(id: mode) {
-            // The pills drive the same shared window Home uses.
+            // The pills drive the same shared window Home uses; TRENDING
+            // and ZAPPED rank that window client-side (§2.9) and therefore
+            // ride the For-You timeline too.
             guard let mode else { return }
             switch mode {
-            case .forYou: environment.feedStore.selectTimeline(.forYou)
+            case .forYou, .trending, .zapped: environment.feedStore.selectTimeline(.forYou)
             case .following: environment.feedStore.selectTimeline(.following)
             case .explore: break
             }
@@ -387,6 +432,7 @@ struct BitzView: View {
             Group {
                 switch mode {
                 case .explore: exploreGrid
+                case .trending, .zapped: rankedPlayerSurface
                 default: playerSurface
                 }
             }
@@ -405,6 +451,38 @@ struct BitzView: View {
         Group {
             if playerNotes.isEmpty && !environment.feedStore.isLoading {
                 playerEmptyState
+            } else {
+                pager
+            }
+        }
+    }
+
+    /// §2.9 ranked tabs (Trending / Most zapped): the same player surface
+    /// over the BitzSort-ordered window; a tailored empty state until the
+    /// first engagement tallies land.
+    private var rankedPlayerSurface: some View {
+        Group {
+            if playerNotes.isEmpty && !environment.feedStore.isLoading {
+                VStack(spacing: BitOSTheme.Spacing.sm) {
+                    AppIcons.image(for: AppIcons.bitz)
+                        .font(.system(size: 44))
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                    Text(mode == .trending ? "Nothing trending yet" : "No zapped Bitz yet")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("Rankings build from live engagement on the For-you window.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                    Button {
+                        refreshWindow()
+                    } label: {
+                        Text("Refresh Bitz")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(BitOSTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
             } else {
                 pager
             }
@@ -639,19 +717,20 @@ struct BitzView: View {
     }
 
     /**
-     * TikTok-style horizontal swipe (legacy bitz parity): a left swipe
-     * advances Explore → Following → For you; the final left swipe on
-     * For you opens the settled page's creator profile; a right swipe
-     * steps back one mode. Presented sheets/overlays swallow the gesture.
+     * TikTok-style horizontal swipe (5-tab cycle, §2.9): a left swipe
+     * advances Explore → Following → For you → Trending → Most zapped;
+     * the final left swipe on the deepest tab opens the settled page's
+     * creator profile; a right swipe steps back one mode. Presented
+     * sheets/overlays swallow the gesture.
      */
     private func handleSwipe(left: Bool) {
         guard !showSearch,
               commentTarget == nil, chainTarget == nil, zapTarget == nil,
               authorTarget == nil, remixAskTarget == nil else { return }
-        let order: [SettingsBitzMode] = [.explore, .following, .forYou]
+        let order: [SettingsBitzMode] = [.explore, .following, .forYou, .trending, .zapped]
         guard let current = mode, let index = order.firstIndex(of: current) else { return }
         if left {
-            if current == .forYou {
+            if current == .zapped {
                 let settled = playerNotes.first { $0.id == topId } ?? playerNotes.first
                 if let settled {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -864,6 +943,8 @@ private struct BitzTopBar: View {
                 pill("Explore", .explore)
                 pill("Following", .following)
                 pill("For you", .forYou)
+                pill("Trending", .trending)
+                pill("Most zapped", .zapped)
             }
             Spacer(minLength: 8)
             Button(action: onRecord) {

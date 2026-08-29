@@ -41,7 +41,7 @@ import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
-import space.bitos.app.ui.feed.CommentContent
+import space.bitos.app.ui.feed.CommentThreadSheet
 import space.bitos.app.ui.feed.HomeViewModel
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
@@ -128,14 +128,12 @@ fun BookmarksScreen(
 
     threadTarget?.let { target ->
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
-            CommentContent(
+            CommentThreadSheet(
                 note = target,
-                feedState = state,
+                viewModel = viewModel,
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
-                onLoadComments = viewModel::loadComments,
-                onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
-                onClose = { threadTarget = null },
+                onDismiss = { threadTarget = null },
             )
         }
     }

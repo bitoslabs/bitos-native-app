@@ -17,10 +17,52 @@ data class MediaMetadata(
     val height: Int?,
     /** NIP-92 imeta `duration` (whole seconds, 1..[MAX_DURATION_SECONDS]); null = unknown. */
     val durationSeconds: Long? = null,
+    /**
+     * Mirror URLs for the primary [url] (NIP-92 `fallback` imeta fields,
+     * order preserved, deduped, bounded by [MAX_FALLBACK_URLS]). Walked by
+     * the player only when the primary fails — a failover chain, not an
+     * alternative rendition.
+     */
+    val fallbackUrls: List<String> = emptyList(),
+    /**
+     * Alternative encodings of the same clip (NIP-92 `fallbackrendition`
+     * `variant` entries), sorted tall→short by height, then bitrate. Pure
+     * data — selection happens in [selectRendition], bounded to
+     * [MAX_RENDITIONS].
+     */
+    val renditions: List<MediaRendition> = emptyList(),
 ) {
+    /**
+     * Picks the rendition whose height best fits [targetHeight] (the
+     * display's long edge, see the Bitz performance study §2.6): tallest
+     * fitting under `targetHeight × 1.25` (DPR headroom); when everything
+     * overshoots, the smallest available (the client downscales). Pure —
+     * no platform or network dependency. Falls back to the primary [url]
+     * when no rendition carries usable dimensions.
+     */
+    fun selectRendition(targetHeight: Int): String {
+        if (renditions.isEmpty()) return url
+        val cap = targetHeight.toLong() * 1_250L / 1_000L
+        var best: MediaRendition? = null
+        var smallest: MediaRendition? = null
+        for (rendition in renditions) {
+            val h = rendition.height.toLong()
+            if (h in 1..cap) {
+                if (best == null || h > best!!.height.toLong()) best = rendition
+            }
+            if (smallest == null || h < smallest!!.height.toLong()) smallest = rendition
+        }
+        return (best ?: smallest ?: renditions.first()).url
+    }
     companion object {
         private const val MAX_URL_LENGTH = 2048
         private const val MAX_DIMENSION = 100_000
+
+        /** Hostile-input bound: mirrors beyond 8 are dropped. */
+        const val MAX_FALLBACK_URLS = 8
+
+        /** Hostile-input bound: rendition ladder entries beyond 8 are dropped. */
+        const val MAX_RENDITIONS = 8
 
         /** 4 h — longer imeta durations are hostile data, not real clips. */
         const val MAX_DURATION_SECONDS = 14_400L
@@ -54,11 +96,21 @@ data class MediaMetadata(
             var width: Int? = null
             var height: Int? = null
             var durationSeconds: Long? = null
+            val fallbacks = LinkedHashSet<String>()
+            val renditions = ArrayList<MediaRendition>(MAX_RENDITIONS)
 
             for (tag in event.tags) {
                 when (tag.firstOrNull()) {
                     "imeta" -> {
                         val fields = parseImetaFields(tag)
+                        // A fallbackrendition block carries `variant <url>
+                        // <dim> <bitrate>` entries describing renditions of
+                        // the clip, without carrying its own url/m fields.
+                        if (fields["fallbackrendition"] != null) {
+                            collectRendition(fields, renditions)
+                        }
+                        // Mirrors ride along any imeta block, order preserved.
+                        fields["fallback"]?.takeIf(::isHttpUrl)?.let { fallbacks.add(it) }
                         val url = fields["url"]?.takeIf(::isHttpUrl) ?: continue
                         val mime = fields["m"]?.takeIf { it.length <= 128 }
                         when {
@@ -84,6 +136,10 @@ data class MediaMetadata(
                             posterUrl = url
                         }
                     }
+                    "fallback" -> {
+                        // Legacy/positional mirror tag form.
+                        tag.getOrNull(1)?.takeIf(::isHttpUrl)?.let { fallbacks.add(it) }
+                    }
                 }
             }
 
@@ -93,7 +149,41 @@ data class MediaMetadata(
                 videoMime = null
             }
             if (videoUrl == null) return null
-            return MediaMetadata(videoUrl, videoMime, posterUrl, width, height, durationSeconds)
+            // Same-URL variants are mirrors, not renditions (codec parity).
+            val ladder = renditions
+                .filter { it.url != videoUrl }
+                .sortedWith(compareByDescending<MediaRendition> { it.height }.thenByDescending { it.bitrate })
+                .take(MAX_RENDITIONS)
+                .distinctBy { it.url }
+            return MediaMetadata(
+                videoUrl,
+                videoMime,
+                posterUrl,
+                width,
+                height,
+                durationSeconds,
+                fallbackUrls = fallbacks.toList().take(MAX_FALLBACK_URLS),
+                renditions = ladder,
+            )
+        }
+
+        /** `variant <url> <dim> <bitrate>` (bitrate optional) → a ladder entry. */
+        private fun collectRendition(fields: Map<String, String>, out: MutableList<MediaRendition>) {
+            // The payload rides the `fallbackrendition` field value as
+            // `variant <url> <dim> <bitrate>`; a hostile bitrate drops the
+            // rung entirely rather than poisoning the ladder with 0.
+            val payload = fields["fallbackrendition"] ?: return
+            val parts = payload.trim().split(' ')
+            if (parts.firstOrNull() != "variant") return
+            val url = parts.getOrNull(1)?.takeIf(::isHttpUrl) ?: return
+            val dim = parts.getOrNull(2)?.let(::parseDim) ?: return
+            val bitrateToken = parts.getOrNull(3)
+            val bitrate = if (bitrateToken == null) {
+                0L
+            } else {
+                bitrateToken.toLongOrNull()?.takeIf { it in 1..2_000_000_000L } ?: return
+            }
+            out.add(MediaRendition(url, minOf(dim.first, dim.second), bitrate))
         }
 
         private fun parseDuration(raw: String): Long? =
@@ -143,3 +233,16 @@ data class MediaMetadata(
         }
     }
 }
+
+/**
+ * One alternative encoding of the same clip (NIP-92 `fallbackrendition`
+ * `variant` entry). Renditions are lower/alternate-height encodings, not
+ * host mirrors — selection policy lives in `MediaMetadata.selectRendition`.
+ */
+data class MediaRendition(
+    val url: String,
+    /** Short-edge height in pixels; 0 = unknown. */
+    val height: Int,
+    /** Bits per second when published; 0 = unknown. */
+    val bitrate: Long,
+)

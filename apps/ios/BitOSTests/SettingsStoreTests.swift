@@ -130,4 +130,62 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(rules.formatDuration(59), "0:59")
         XCTAssertEqual(rules.formatDuration(3_723), "1:02:03")
     }
+
+    // MARK: - Bitz tab sorts + rendition pick (settings v5 / FED-004)
+
+    func testBitzModeEnumCarriesTrendingAndZappedWires() {
+        // iOS enum rawValues must equal the shared BitzModeSetting wires.
+        XCTAssertEqual(SettingsBitzMode.trending.rawValue, "trending")
+        XCTAssertEqual(SettingsBitzMode.zapped.rawValue, "zapped")
+        // Round-trip through the settings store (schema v5 normalize).
+        store.set(SettingsBitzMode.trending)
+        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "trending")
+        store.set(SettingsBitzMode.zapped)
+        XCTAssertEqual(defaults.string(forKey: "bitos_bitz_mode"), "zapped")
+        store.reload()
+        XCTAssertEqual(store.state.bitzMode, .zapped)
+    }
+
+    func testBitzTabSortsRankTrendingAndZapped() {
+        let rules = BitzBridgeRules()
+        // Trending: engagement decays by 72 h half-life — a 1 h-old note
+        // with 100 reactions (≈99) outranks a 216 h-old note with 600 (75).
+        let entries: [[String: Any]] = [
+            ["id": "stale", "createdAt": 1_000_000 - 216 * 3_600, "reactions": 600, "reposts": 0, "zapCount": 0, "zapSats": 0],
+            ["id": "fresh", "createdAt": 1_000_000 - 3_600, "reactions": 100, "reposts": 0, "zapCount": 0, "zapSats": 0],
+        ]
+        XCTAssertEqual(rules.tabSortIds(mode: .trending, entries: entries, nowSeconds: 1_000_000), ["fresh", "stale"])
+        // Zapped: sats desc, then newest.
+        let zapEntries: [[String: Any]] = [
+            ["id": "small", "createdAt": 5, "reactions": 0, "reposts": 0, "zapCount": 1, "zapSats": 100],
+            ["id": "big", "createdAt": 2, "reactions": 0, "reposts": 0, "zapCount": 9, "zapSats": 9_000],
+        ]
+        XCTAssertEqual(rules.tabSortIds(mode: .zapped, entries: zapEntries, nowSeconds: 1_000_000), ["big", "small"])
+        // Non-ranked modes ask for no ordering.
+        XCTAssertEqual(rules.tabSortIds(mode: .forYou, entries: entries, nowSeconds: 1_000_000), [])
+    }
+
+    func testMediaRenditionPickPrefersTallestFittingFromBridgeSpecs() {
+        let bridge = BusinessCoreBridge()
+        let specs = [
+            "https://x/2160.mp4|2160|8_000_000",
+            "https://x/1080.mp4|1080|4_000_000",
+            "https://x/720.mp4|720|2_500_000",
+        ]
+        // 1080 target → ×1.25 cap 1350 → tallest fitting = 1080.
+        XCTAssertEqual(
+            bridge.mediaPickRenditionUrl(renditionSpecs: specs, primaryUrl: "https://x/primary.mp4", targetHeight: 1080),
+            "https://x/1080.mp4"
+        )
+        // 480 target → everything overshoots → smallest (client downscales).
+        XCTAssertEqual(
+            bridge.mediaPickRenditionUrl(renditionSpecs: specs, primaryUrl: "https://x/primary.mp4", targetHeight: 480),
+            "https://x/720.mp4"
+        )
+        // No ladder → primary untouched.
+        XCTAssertEqual(
+            bridge.mediaPickRenditionUrl(renditionSpecs: [], primaryUrl: "https://x/primary.mp4", targetHeight: 1080),
+            "https://x/primary.mp4"
+        )
+    }
 }

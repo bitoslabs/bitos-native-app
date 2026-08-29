@@ -53,7 +53,7 @@ import space.bitos.app.data.feed.NotificationUiState
 import space.bitos.app.data.feed.OriginNoteState
 import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.identity.IdentityViewModel
-import space.bitos.app.ui.feed.CommentContent
+import space.bitos.app.ui.feed.CommentThreadSheet
 import space.bitos.app.ui.feed.HomeViewModel
 import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.AppMenuDropdown
@@ -239,14 +239,12 @@ fun InboxScreen(
     // Deep links: target note → thread sheet; otherwise → author sheet.
     threadTarget?.let { note ->
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
-            CommentContent(
+            CommentThreadSheet(
                 note = note,
-                feedState = feedState,
+                viewModel = homeViewModel,
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
-                onLoadComments = homeViewModel::loadComments,
-                onReply = { text, target, attachments, pow -> homeViewModel.reply(text, target, attachments, pow) },
-                onClose = { threadTarget = null },
+                onDismiss = { threadTarget = null },
             )
         }
     }

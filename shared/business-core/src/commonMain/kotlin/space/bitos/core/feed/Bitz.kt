@@ -1,5 +1,10 @@
 package space.bitos.core.feed
 
+import kotlin.math.exp
+
+/** ln(2), spelled out for Kotlin/Native common code portability. */
+private const val LN_TWO = 0.6931471805599453
+
 /**
  * Bitz short-video surface rules (APP-007, spec §3.7). The deterministic
  * product behavior of the reels surface lives here once and both platforms
@@ -102,6 +107,126 @@ object BitzQuery {
         """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
         """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
     )
+}
+
+/**
+ * Bitz pagination walk policy (FED-004, Bitz performance study §2.2/§4.1).
+ * One "load more" is a bounded backwards `until`-walk whose page budget
+ * counts only FRESH media events — relays happily re-send known ids, and
+ * counting those would silently shrink every page. Pure decision rules;
+ * the repositories execute them (timing stays native per the split).
+ *
+ * Ported from the web's `loadMoreReels()` invariants:
+ *  - the cursor moves monotonically backwards only,
+ *  - only fresh ids count toward the page budget,
+ *  - a relay that ignores `until` (no cursor advance + nothing fresh)
+ *    terminates the walk instead of looping,
+ *  - an empty batch means the relays are exhausted for now.
+ */
+object BitzTimelinePolicy {
+    /** Media kinds queried deep (FED-004 widening: 20/21/22/34235/34236). */
+    val MEDIA_KINDS: List<Int> = space.bitos.core.model.NostrKinds.reelMediaKinds
+
+    /** Dedicated media kinds are ~100% renderable — query them deep. */
+    const val MEDIA_INITIAL_LIMIT = 80
+
+    /** Kind-1 is mostly text; only a shallow window carries video links. */
+    const val TEXT_INITIAL_LIMIT = 120
+
+    /** Per-batch limits of the backwards walk (web parity: 60 / 150). */
+    const val MEDIA_PAGE_LIMIT = 60
+    const val TEXT_PAGE_LIMIT = 150
+
+    /** One load-more targets one full Explore reveal page of NEW media. */
+    const val PAGE_FRESH_MEDIA_TARGET = 18
+
+    /** Walk bound: 6 batches × [PAGE_MAX_WAIT_MS] is the worst-case latency. */
+    const val MAX_QUERY_BATCHES = 6
+
+    /** Hard per-batch deadline so a dead relay cannot stall the walk. */
+    const val PAGE_MAX_WAIT_MS = 4_000L
+
+    /** Prefetch when this few loaded-but-unrendered reels remain buffered. */
+    const val PREFETCH_BUFFER_THRESHOLD = 6
+
+    /** Player render-window growth per near-edge trigger. */
+    const val RENDER_BATCH = 5
+
+    /** Cursor is `oldestEventCreatedAt - 1` (`until` is exclusive). */
+    fun cursor(oldestCreatedAt: Long): Long = oldestCreatedAt - 1
+
+    fun initialFilters(): List<String> = listOf(
+        """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_INITIAL_LIMIT}""",
+        """{"kinds":[1],"limit":$TEXT_INITIAL_LIMIT}""",
+    )
+
+    fun batchFilters(until: Long): List<String> = listOf(
+        """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
+        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
+    )
+
+    /** The walk continues while the budget is unfilled and batches remain. */
+    fun shouldContinue(foundFreshMedia: Int, batchesIssued: Int): Boolean =
+        foundFreshMedia < PAGE_FRESH_MEDIA_TARGET && batchesIssued < MAX_QUERY_BATCHES
+
+    /**
+     * New cursor after a batch: monotonically backwards only — a relay
+     * re-sending newer events must never move the walk forward.
+     */
+    fun advanceCursor(oldestInBatch: Long?, current: Long): Long =
+        if (oldestInBatch == null) current else minOf(oldestInBatch, current)
+
+    /**
+     * A relay that returns events but neither advances the cursor nor
+     * produces anything fresh is ignoring `until` — stop instead of loop.
+     */
+    fun relayStalled(oldestInBatch: Long?, previousCursor: Long, freshCount: Int): Boolean =
+        freshCount == 0 && (oldestInBatch == null || oldestInBatch >= previousCursor)
+}
+
+/**
+ * Bitz tab sorts (APP-007 W2, web `/bitz` parity): Trending and Most-zapped
+ * are VIEW-ONLY sorts of the same loaded window — switching tabs never
+ * fetches. Deterministic formulas live here once; both platforms render.
+ *
+ * Web parity (`trendingReels` / `zappedReels` in `src/routes/bitz/+page.svelte`):
+ *  - Trending: `(reactions + reposts + zapCount) × 0.5^(ageHours / 72)` —
+ *    engagement COUNTS (not sats), 3-day half-life decay.
+ *  - Most zapped: `zapSats` descending, newest `createdAt` tiebreak.
+ */
+object BitzSort {
+    /** Trending decay half-life in hours (web parity: 3 days). */
+    const val TRENDING_HALF_LIFE_HOURS = 72.0
+
+    data class Entry(
+        val id: String,
+        val createdAt: Long,
+        val reactions: Long = 0,
+        val reposts: Long = 0,
+        val zapCount: Long = 0,
+        val zapSats: Long = 0,
+    )
+
+    /** Raw trending score; exposed for tests and rank debugging. */
+    fun trendingScore(entry: Entry, nowSeconds: Long): Double {
+        val ageHours = ((nowSeconds - entry.createdAt).coerceAtLeast(0)) / 3_600.0
+        // 0.5^x == e^(-x·ln2): half-life decay without Math.pow (not in
+        // Kotlin/Native common code).
+        val decay = exp(-ageHours / TRENDING_HALF_LIFE_HOURS * LN_TWO)
+        return (entry.reactions + entry.reposts + entry.zapCount) * decay
+    }
+
+    /** Engagement-count × 72 h decay, descending; stable id tiebreak. */
+    fun trending(entries: List<Entry>, nowSeconds: Long): List<String> =
+        entries.sortedWith(
+            compareByDescending<Entry> { trendingScore(it, nowSeconds) }.thenBy { it.id },
+        ).map { it.id }
+
+    /** Raw sats descending, newest first, stable id tiebreak. */
+    fun zapped(entries: List<Entry>): List<String> =
+        entries.sortedWith(
+            compareByDescending<Entry> { it.zapSats }.thenByDescending { it.createdAt }.thenBy { it.id },
+        ).map { it.id }
 }
 
 /**

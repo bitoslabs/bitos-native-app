@@ -216,17 +216,14 @@ private fun PostsTab(
 ) {
     val thread = threadTarget
     if (thread != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
-        val homeState by homeViewModel.state.collectAsStateWithLifecycle()
         val publisherState by notePublisher.state.collectAsStateWithLifecycle()
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { onThreadTarget(null) }) {
-            space.bitos.app.ui.feed.CommentContent(
+            space.bitos.app.ui.feed.CommentThreadSheet(
                 note = thread,
-                feedState = homeState,
+                viewModel = homeViewModel,
                 identityViewModel = identityViewModel,
                 publisherState = publisherState,
-                onLoadComments = { target -> homeViewModel.loadComments(target) },
-                onReply = { text, target, attachments, pow -> homeViewModel.reply(text, target, attachments, pow) },
-                onClose = { onThreadTarget(null) },
+                onDismiss = { onThreadTarget(null) },
             )
         }
     }

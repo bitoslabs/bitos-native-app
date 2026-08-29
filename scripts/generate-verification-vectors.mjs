@@ -165,6 +165,24 @@ const notOnCurve = { ...v1, pubkey: badPubkey };
 notOnCurve.id = createHash('sha256').update(serializeEvent(notOnCurve)).digest('hex');
 record('pubkey-not-on-curve', notOnCurve, false);
 
+// FED-004: kind-22 short video with a NIP-92 imeta block carrying the
+// rendition ladder (`fallbackrendition variant`) + mirrors (`fallback`).
+// Locks the wire format both platform parsers and the bridge spec rows
+// (`url|height|bitrate`) are fixture-tested against.
+const v22 = deterministicallySigned({
+  kind: 22,
+  created_at: 1710000500,
+  tags: [
+    ['imeta', 'url https://cdn.example/v.mp4', 'm video/mp4', 'dim 1080x1920', 'duration 59'],
+    ['imeta', 'url https://cdn.example/poster.jpg', 'm image/jpeg', 'dim 1080x1920'],
+    ['imeta', 'fallback https://mirror.example/v.mp4'],
+    ['imeta', 'fallbackrendition variant https://cdn.example/v-720.mp4 720x1280 2500000'],
+    ['imeta', 'fallbackrendition variant https://cdn.example/v-480.mp4 480x854 1200000'],
+  ],
+  content: 'first bitz #bitcoin',
+});
+record('valid-kind22-rendition-ladder', v22, true);
+
 const out = path.resolve(here, '../contracts/nostr/fixtures/verification-vectors.json');
 await mkdir(path.dirname(out), { recursive: true });
 await writeFile(out, JSON.stringify({ generator: 'nostr-tools 2.24.1 (@noble/curves)', pubkey, vectors }, null, 2) + '\n');

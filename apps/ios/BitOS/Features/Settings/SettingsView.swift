@@ -663,6 +663,8 @@ private struct AccountSection: View {
     @Environment(SettingsStore.self) private var settings
     @Binding var npubCopied: Bool
     @State private var showEdit = false
+    // APP-018a row 1: switches ride the branded overlay (MoreView parity).
+    @State private var switchTarget: RegisteredAccountRow?
 
     var body: some View {
         List {
@@ -726,7 +728,7 @@ private struct AccountSection: View {
                                 .font(.system(size: 13))
                             }
                             .contentShape(Rectangle())
-                            .onTapGesture { if !isActive { identity.switchTo(pubkeyHex: acct.pubkeyHex) } }
+                            .onTapGesture { if !isActive { switchTarget = acct } }
                         }
                     }
                 } header: {
@@ -744,6 +746,10 @@ private struct AccountSection: View {
                     }
                     Button(role: .destructive) {
                         settings.clearCache()
+                        // APP-018a row 5 (legacy parity): also wipe the
+                        // session's derived feed state — the persisted
+                        // event cache arrives with DAT-003 on iOS.
+                        environment.feedStore.clearDerivedState()
                     } label: {
                         Text("Clear cache (keeps theme & language)")
                     }
@@ -763,6 +769,15 @@ private struct AccountSection: View {
                 onClose: { showEdit = false }
             )
             .presentationDetents([.medium, .large])
+        }
+        .fullScreenCover(item: $switchTarget) { target in
+            AccountSwitchOverlayView(
+                fromPubkey: identity.activeRegistryPubkey ?? identity.account?.pubkeyHex,
+                toPubkey: target.pubkeyHex,
+                toName: target.displayName ?? (String(target.npub.prefix(10)) + "\u{2026}"),
+                switchAction: { identity.switchTo(pubkeyHex: target.pubkeyHex) },
+                onFinished: { switchTarget = nil }
+            )
         }
     }
 }

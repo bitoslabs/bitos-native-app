@@ -11,6 +11,7 @@ import kotlinx.serialization.json.put
 import space.bitos.core.feed.FeedAggregator
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.MediaMetadata
+import space.bitos.core.model.MediaRendition
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.model.RelayUrl
@@ -81,11 +82,15 @@ class BusinessCoreBridge {
         val threadParentId: String? = null,
         /** APP-008 poll labels (index order; empty = not a poll). */
         val pollOptions: List<String> = emptyList(),
-        /** APP-007 remix source (id + author pubkey); nulls = original work. */
+        /** APP-007 remix source (id + author pubkey); null = original work. */
         val remixOfEventId: String? = null,
         val remixOfPubkey: String? = null,
         /** APP-007 `license` tag (remix advisory gate); null = permissive. */
         val license: String? = null,
+        /** FED-004 mirror chain (NIP-92 `fallback`), order preserved. */
+        val fallbackUrls: List<String> = emptyList(),
+        /** FED-004 rendition ladder as `url|height|bitrate` spec rows. */
+        val renditionSpecs: List<String> = emptyList(),
     )
 
     /**
@@ -144,7 +149,16 @@ class BusinessCoreBridge {
             mediaUrls = note.mediaUrls,
             isProtocolPayload = note.protocolPayload,
             video = note.videoUrl?.let {
-                MediaMetadata(url = it, mimeType = note.videoMime, posterUrl = note.posterUrl, width = note.videoWidth, height = note.videoHeight, durationSeconds = note.durationSeconds)
+                MediaMetadata(
+                    url = it,
+                    mimeType = note.videoMime,
+                    posterUrl = note.posterUrl,
+                    width = note.videoWidth,
+                    height = note.videoHeight,
+                    durationSeconds = note.durationSeconds,
+                    fallbackUrls = note.fallbackUrls,
+                    renditions = note.renditionSpecs.mapNotNull(::parseRenditionSpec),
+                )
             },
             repostedBy = note.repostedBy,
             contentWarning = note.contentWarning,
@@ -280,6 +294,72 @@ class BusinessCoreBridge {
     fun bitzExploreVisibleCount(loadMoreCount: Int): Int =
         space.bitos.core.feed.BitzExplore.visibleCount(loadMoreCount)
 
+    /**
+     * Bitz tab sort seam (APP-007 W2, web parity): orders the loaded window
+     * for the Trending / Most-zapped tabs — view-only sorts, zero fetches.
+     * Entries arrive as `[{id,createdAt,reactions,reposts,zapCount,zapSats},…]`
+     * JSON; the ordered ids come back as a JSON array. Malformed JSON → null.
+     */
+    fun bitzTabSortIds(mode: String, entriesJson: String, nowSeconds: Long): String? {
+        val entries = parseBitzSortEntries(entriesJson) ?: return null
+        val ids = when (mode) {
+            "trending" -> space.bitos.core.feed.BitzSort.trending(entries, nowSeconds)
+            "zapped" -> space.bitos.core.feed.BitzSort.zapped(entries)
+            else -> return null
+        }
+        return buildJsonArray { ids.forEach { add(it) } }.toString()
+    }
+
+    private fun parseBitzSortEntries(json: String): List<space.bitos.core.feed.BitzSort.Entry>? = try {
+        val arr = Json.parseToJsonElement(json).jsonArray
+        arr.map { el ->
+            val o = el.jsonObject
+            space.bitos.core.feed.BitzSort.Entry(
+                id = o["id"]?.jsonPrimitive?.content ?: "",
+                createdAt = o["createdAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                reactions = o["reactions"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                reposts = o["reposts"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                zapCount = o["zapCount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                zapSats = o["zapSats"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+            )
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Bitz pagination walk bounds (FED-004): fresh-media budget, max batches. */
+    fun bitzWalkMaxBatches(): Int = space.bitos.core.feed.BitzTimelinePolicy.MAX_QUERY_BATCHES
+
+    /** Bitz pagination walk bound: per-batch hard deadline in ms. */
+    fun bitzWalkMaxWaitMs(): Long = space.bitos.core.feed.BitzTimelinePolicy.PAGE_MAX_WAIT_MS
+
+    /** Bitz player render-window growth per near-edge trigger. */
+    fun bitzWalkRenderBatch(): Int = space.bitos.core.feed.BitzTimelinePolicy.RENDER_BATCH
+
+    /** Bitz prefetch threshold: fetch older when ≤ N loaded-unrendered remain. */
+    fun bitzWalkPrefetchThreshold(): Int =
+        space.bitos.core.feed.BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
+
+    /**
+     * FED-004 rendition pick (shared rule, both players): the ladder rides
+     * the note as `url|height|bitrate` rows; the pick is tallest fitting
+     * `targetHeight × 1.25`, smallest-on-overshoot, primary when no ladder.
+     */
+    fun mediaPickRenditionUrl(renditionSpecs: List<String>, primaryUrl: String, targetHeight: Int): String {
+        val renditions = renditionSpecs.mapNotNull(::parseRenditionSpec)
+        if (renditions.isEmpty()) return primaryUrl
+        return MediaMetadata(
+            url = primaryUrl,
+            mimeType = null,
+            posterUrl = null,
+            width = null,
+            height = null,
+            durationSeconds = null,
+            fallbackUrls = emptyList(),
+            renditions = renditions,
+        ).selectRendition(targetHeight)
+    }
+
     private fun parseBitzEntries(json: String): List<space.bitos.core.feed.BitzSearch.Entry>? = try {
         val arr = Json.parseToJsonElement(json).jsonArray
         arr.map { el ->
@@ -340,6 +420,8 @@ class BusinessCoreBridge {
             remixOfEventId = note.remixOfEventId,
             remixOfPubkey = note.remixOfPubkey,
             license = note.license,
+            fallbackUrls = note.video?.fallbackUrls ?: emptyList(),
+            renditionSpecs = note.video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
         )
     }
 
@@ -2443,8 +2525,23 @@ class FeedWindow(maxItems: Int) {
         posterUrl = video?.posterUrl,
         videoWidth = video?.width,
         videoHeight = video?.height,
+        fallbackUrls = video?.fallbackUrls ?: emptyList(),
+        renditionSpecs = video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
     )
 }
 
 /** Local 4-tuple for the ledger bridge parsing. */
 private data class Quadruple(val first: Long, val second: String, val third: Long, val fourth: String?)
+
+/** FED-004 spec row codec: `url|height|bitrate`. */
+private fun renditionSpec(rendition: MediaRendition): String =
+    "${rendition.url}|${rendition.height}|${rendition.bitrate}"
+
+private fun parseRenditionSpec(spec: String): MediaRendition? {
+    val parts = spec.split('|')
+    if (parts.size != 3) return null
+    val url = parts[0].takeIf { it.startsWith("http") } ?: return null
+    val height = parts[1].toIntOrNull()?.takeIf { it in 1..100_000 } ?: return null
+    val bitrate = parts[2].toLongOrNull()?.takeIf { it in 0..2_000_000_000L } ?: return null
+    return MediaRendition(url, height, bitrate)
+}

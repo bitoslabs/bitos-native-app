@@ -9,8 +9,12 @@ struct CommentSheet: View {
     let store: FeedStore
     let publisher: NotePublisher
     let onClose: () -> Void
+    @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
+    @Environment(SettingsStore.self) private var settings
     @State private var text = ""
+    /** Per-comment zap: opens the ZapSheet stacked above this thread. */
+    @State private var zapTarget: FeedNote?
 
     // APP-009 reply bar (legacy `_ThreadReplyBar` parity): sub-reply
     // targeting, URL/GIF/gallery attachments, PoW, pill input + send.
@@ -113,6 +117,29 @@ struct CommentSheet: View {
             }
             Button("Cancel", role: .cancel) { urlField = "" }
         }
+        // Per-comment zap: opens the zap sheet stacked above this thread.
+        .sheet(item: $zapTarget) { target in
+            ZapSheet(
+                note: target,
+                profiles: store.profiles,
+                initialAmountSats: settings.state.defaultZapAmount,
+                zapCount: store.zapCounts[target.id] ?? 0,
+                paidRequestIds: store.zapRequestIds[target.id] ?? [],
+                onPaid: { sats, memo in
+                    environment.sentZaps.record(.init(
+                        id: "zap-\(target.id)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                        amountSats: Int64(sats),
+                        recipientPubkey: target.pubkey,
+                        createdAt: Int64(Date.now.timeIntervalSince1970),
+                        targetNoteId: target.id,
+                        memo: memo.isEmpty ? nil : memo
+                    ))
+                },
+                onClose: { zapTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium])
+        }
     }
 
     @ViewBuilder
@@ -124,7 +151,14 @@ struct CommentSheet: View {
                         note: note,
                         profile: store.profiles[note.pubkey],
                         replyCount: comments.count,
-                        tally: tally
+                        tally: tally,
+                        isLiked: store.localActions.liked.contains(note.id),
+                        isBookmarked: store.bookmarkedIds.contains(note.id)
+                            || store.localActions.bookmarked.contains(note.id),
+                        onLike: { like(note) },
+                        onRepost: { repost(note) },
+                        onBookmark: { toggleBookmark(note) },
+                        onZap: { openZap(note) }
                     )
                     if comments.isEmpty {
                         Text(store.hasLoadedAnyEvent ? "No replies yet." : "Loading replies…")
@@ -133,7 +167,14 @@ struct CommentSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(comments) { reply in
-                        ReplyRow(reply: reply, tally: store.tallies[reply.id]) {
+                        ReplyRow(
+                            reply: reply,
+                            profile: store.profiles[reply.pubkey],
+                            tally: store.tallies[reply.id],
+                            isLiked: store.localActions.liked.contains(reply.id),
+                            onLike: { like(reply) },
+                            onZap: { openZap(reply) }
+                        ) {
                             replyTarget = reply
                         }
                     }
@@ -161,6 +202,34 @@ struct CommentSheet: View {
                 replyBar
             }
         }
+    }
+
+    // MARK: - Interactive thread actions (HomeView parity)
+
+    private func like(_ note: FeedNote) {
+        let turningOn = !store.localActions.liked.contains(note.id)
+        store.localActions.toggleLike(note.id)
+        guard turningOn, environment.identityStore.account != nil else { return }
+        Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+    }
+
+    private func repost(_ note: FeedNote) {
+        guard environment.identityStore.account != nil else { return }
+        Task { await environment.notePublisher.publishRepost(targetEventId: note.id, targetPubkey: note.pubkey) }
+    }
+
+    private func toggleBookmark(_ note: FeedNote) {
+        if let updated = store.applyBookmarkChange(eventId: note.id, add: !store.bookmarkedIds.contains(note.id)) {
+            guard environment.identityStore.account != nil else { return }
+            Task { await environment.notePublisher.publishBookmarkList(eventIds: updated) }
+        } else {
+            store.localActions.toggleBookmark(note.id)
+        }
+    }
+
+    private func openZap(_ note: FeedNote) {
+        store.loadZaps(targetEventId: note.id)
+        zapTarget = note
     }
 
     // MARK: - APP-009 reply bar (legacy `_ThreadReplyBar` parity)
@@ -336,14 +405,21 @@ struct CommentSheet: View {
 }
 
 /**
- * APP-009 root card: author + body + the full live action row
- * (reply count · like+count · repost+count · zap+sats · ⋯ raw) §3.9.
+ * APP-009 root card: author + body + the legacy interactive action row
+ * (like · replies · zap · repost · bookmark — Solar icons, live tallies,
+ * legacy `_ThreadActionRow` parity) + ⋯ raw §3.9.
  */
 private struct ThreadRootCard: View {
     let note: FeedNote
     let profile: ProfileMetadata?
     let replyCount: Int
     let tally: NoteTallyMirror?
+    let isLiked: Bool
+    let isBookmarked: Bool
+    let onLike: () -> Void
+    let onRepost: () -> Void
+    let onBookmark: () -> Void
+    let onZap: () -> Void
     @State private var showRaw = false
 
     var body: some View {
@@ -362,10 +438,21 @@ private struct ThreadRootCard: View {
                 .font(.system(size: 14))
                 .foregroundStyle(BitOSTheme.textPrimary)
             HStack(spacing: BitOSTheme.Spacing.base) {
-                tallyAction(AppIcons.comment, "\(replyCount)", BitOSTheme.reply)
-                tallyAction(AppIcons.heart, "\(tally?.reactions ?? 0)", BitOSTheme.like)
-                tallyAction(AppIcons.repost, "\(tally?.reposts ?? 0)", BitOSTheme.repost)
-                tallyAction(AppIcons.zap, zapLabel, BitOSTheme.zap)
+                threadAction(
+                    isLiked ? AppIcons.heartFill : AppIcons.heart,
+                    "\(tally?.reactions ?? 0)",
+                    isLiked ? BitOSTheme.like : BitOSTheme.textSecondary,
+                    action: onLike
+                )
+                threadAction(AppIcons.comment, "\(replyCount)", BitOSTheme.reply, action: nil)
+                threadAction(AppIcons.zap, zapLabel, BitOSTheme.zap, action: onZap)
+                threadAction(AppIcons.repost, "\(tally?.reposts ?? 0)", BitOSTheme.repost, action: onRepost)
+                threadAction(
+                    isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark,
+                    nil,
+                    isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary,
+                    action: onBookmark
+                )
                 Spacer()
                 Button {
                     showRaw = true
@@ -399,83 +486,130 @@ private struct ThreadRootCard: View {
         return "\(zaps)"
     }
 
-    private func tallyAction(_ symbol: String, _ label: String, _ tint: Color) -> some View {
+    /// Legacy `_ThreadAction` parity: 14 pt icon + 11 pt semibold count,
+    /// tappable when an action exists.
+    private func threadAction(_ symbol: String, _ label: String?, _ tint: Color, action: (() -> Void)?) -> some View {
+        Group {
+            if let action {
+                Button(action: action) { threadActionLabel(symbol, label, tint: tint) }
+                    .buttonStyle(.plain)
+            } else {
+                threadActionLabel(symbol, label, tint: tint)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+    }
+
+    private func threadActionLabel(_ symbol: String, _ label: String?, tint: Color) -> some View {
         HStack(spacing: 4) {
             AppIcons.image(for: symbol)
                 .font(.system(size: 14))
                 .foregroundStyle(tint)
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(tint)
+            if let label {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
         }
-        .accessibilityElement(children: .ignore)
     }
 }
 
+/**
+ * One comment row (legacy `_CommentRow` parity): bold author + time, body,
+ * ghost action row — Like (+count) · Zap (+sats) · Reply — with Solar
+ * icons and " · count" trailings.
+ */
 private struct ReplyRow: View {
     let reply: FeedNote
+    var profile: ProfileMetadata? = nil
     var tally: NoteTallyMirror? = nil
+    var isLiked: Bool = false
+    var onLike: (() -> Void)? = nil
+    var onZap: (() -> Void)? = nil
     /// APP-009: retarget the reply bar at this card (legacy parity).
     var onReplyTo: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
-            PubkeyAvatarView(pubkey: reply.pubkey, size: 32)
+            PubkeyAvatarView(pubkey: reply.pubkey, size: 28, label: profile?.bestDisplayName)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: BitOSTheme.Spacing.sm) {
-                    Text(FeedFormat.shortPubkey(reply.pubkey))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(BitOSTheme.accent)
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(reply.pubkey))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                        .lineLimit(1)
                     Text(FeedFormat.timeAgo(createdAt: reply.createdAt))
-                        .font(.caption2)
+                        .font(.system(size: 11))
                         .foregroundStyle(BitOSTheme.textTertiary)
                 }
                 Text(reply.content)
                     .font(.subheadline)
                     .foregroundStyle(BitOSTheme.textPrimary)
-                // APP-009: live per-reply deltas (reactions · zaps+sats).
-                if let tally, tally.reactions > 0 || tally.zaps > 0 {
-                    HStack(spacing: BitOSTheme.Spacing.base) {
-                        if tally.reactions > 0 {
-                            HStack(spacing: 3) {
-                                AppIcons.image(for: AppIcons.heart)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(BitOSTheme.like)
-                                Text("\(tally.reactions)")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(BitOSTheme.like)
-                            }
-                        }
-                        if tally.zaps > 0 {
-                            HStack(spacing: 3) {
-                                AppIcons.image(for: AppIcons.zap)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(BitOSTheme.zap)
-                                let sats = tally.zapMillisats / 1000
-                                Text(sats > 0 ? "\(tally.zaps) · \(BusinessCoreBridge().zapFormatSats(sats: sats))" : "\(tally.zaps)")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(BitOSTheme.zap)
-                            }
-                        }
+                // Legacy parity: web comment action row — Like · Zap · Reply.
+                HStack(spacing: BitOSTheme.Spacing.base) {
+                    if let onLike {
+                        commentAction(
+                            isLiked ? AppIcons.heartFill : AppIcons.heart,
+                            isLiked ? "Unlike" : "Like",
+                            tint: isLiked ? BitOSTheme.like : BitOSTheme.textSecondary,
+                            trailing: (tally?.reactions ?? 0) > 0 ? "\(tally?.reactions ?? 0)" : nil,
+                            action: onLike
+                        )
                     }
-                }
-                if let onReplyTo {
-                    Button(action: onReplyTo) {
-                        HStack(spacing: 4) {
-                            AppIcons.image(for: AppIcons.comment)
-                                .font(.system(size: 11))
-                            Text("Reply")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .foregroundStyle(BitOSTheme.reply)
+                    if let onZap {
+                        commentAction(
+                            AppIcons.zap,
+                            "Zap",
+                            tint: BitOSTheme.zap,
+                            trailing: zapTrailing,
+                            action: onZap
+                        )
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Reply to this note")
+                    if let onReplyTo {
+                        commentAction(
+                            AppIcons.comment,
+                            "Reply",
+                            tint: BitOSTheme.textSecondary,
+                            trailing: nil,
+                            action: onReplyTo
+                        )
+                    }
                 }
             }
         }
         .padding(BitOSTheme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).fill(BitOSTheme.surface))
+    }
+
+    private var zapTrailing: String? {
+        guard let tally else { return nil }
+        let sats = tally.zapMillisats / 1000
+        if tally.zaps <= 0 { return nil }
+        return sats > 0
+            ? "\(tally.zaps) · \(BusinessCoreBridge().zapFormatSats(sats: sats))"
+            : "\(tally.zaps)"
+    }
+
+    /// Legacy `_CommentActionButton` parity: 11 pt icon + 11 pt bold label,
+    /// count rides as a " · N" trailing.
+    private func commentAction(_ symbol: String, _ label: String, tint: Color, trailing: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                AppIcons.image(for: symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(tint)
+                Text(label)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tint)
+                if let trailing {
+                    Text("· \(trailing)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) this reply")
     }
 }

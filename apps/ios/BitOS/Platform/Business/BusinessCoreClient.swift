@@ -55,6 +55,17 @@ struct MediaMetadata: Sendable, Equatable {
     let height: Int?
     /// NIP-92 imeta duration in whole seconds; nil = unknown.
     var durationSeconds: Int64? = nil
+    /// FED-004 mirror chain (NIP-92 `fallback`), order preserved.
+    var fallbackUrls: [String] = []
+    /// FED-004 rendition ladder `url|height|bitrate` spec rows (tall→short).
+    var renditionSpecs: [String] = []
+
+    /// URLs of the ladder rows, tall→short (failover tail of the chain).
+    var renditionUrls: [String] {
+        renditionSpecs.compactMap { row in
+            row.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).first.map(String.init)
+        }
+    }
 }
 
 /// Bounded kind-0 profile projection (mirror of `BusinessCoreBridge.Profile`).
@@ -203,7 +214,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
                     posterUrl: note.posterUrl,
                     width: note.videoWidth?.intValue,
                     height: note.videoHeight?.intValue,
-                    durationSeconds: note.durationSeconds?.int64Value
+                    durationSeconds: note.durationSeconds?.int64Value,
+                    fallbackUrls: note.fallbackUrls.map { $0 as String },
+                    renditionSpecs: note.renditionSpecs.map { $0 as String }
                 )
             },
             contentWarning: note.contentWarning,
@@ -297,7 +310,9 @@ private final class SharedFeedWindow: FeedWindowing {
                         posterUrl: note.posterUrl,
                         width: note.videoWidth?.intValue,
                         height: note.videoHeight?.intValue,
-                        durationSeconds: note.durationSeconds?.int64Value
+                        durationSeconds: note.durationSeconds?.int64Value,
+                        fallbackUrls: note.fallbackUrls.map { $0 as String },
+                        renditionSpecs: note.renditionSpecs.map { $0 as String }
                     )
                 },
                 contentWarning: note.contentWarning
@@ -336,7 +351,9 @@ private extension FeedNote {
             pollOptions: pollOptions,
             remixOfEventId: remixOfEventId,
             remixOfPubkey: remixOfPubkey,
-            license: license
+            license: license,
+            fallbackUrls: video?.fallbackUrls ?? [],
+            renditionSpecs: video?.renditionSpecs ?? []
         )
     }
 }

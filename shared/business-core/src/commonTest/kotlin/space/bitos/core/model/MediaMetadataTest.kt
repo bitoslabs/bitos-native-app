@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * Kind-22 / NIP-92 `imeta` / legacy kind-1 media parsing with hostile-input
@@ -153,6 +154,83 @@ class MediaMetadataTest {
                 event(NostrKinds.VIDEO, listOf(listOf("imeta", "url https://x/pic.jpg", "m image/jpeg"))),
             ),
         )
+    }
+
+    // MARK: - Rendition ladder + mirrors (FED-004)
+
+    @Test
+    fun parsesFallbackMirrorsAndRenditionLadder() {
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://cdn.example/v.mp4", "m video/mp4", "dim 1080x1920"),
+                    listOf("imeta", "fallback https://mirror.example/v.mp4"),
+                    listOf("imeta", "fallback https://cdn.example/v.mp4"), // dup of primary → kept as mirror, dropped from ladder
+                    listOf("imeta", "fallbackrendition variant https://cdn.example/v-720.mp4 720x1280 2500000"),
+                    // Same-URL lower rung — a mirror of the same rendition,
+                    // not a separate ladder entry.
+                    listOf("imeta", "fallbackrendition variant https://cdn.example/v-720.mp4 480x854 1200000"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://cdn.example/v.mp4", media.url)
+        // Mirrors: order preserved, bounded, primary URL may appear once.
+        assertEquals(
+            listOf("https://mirror.example/v.mp4", "https://cdn.example/v.mp4"),
+            media.fallbackUrls,
+        )
+        // Ladder tall→short, same-URL variants excluded (mirror, not rendition):
+        // the second block reuses the v-720 URL at a lower rung and must
+        // collapse into the taller one instead of adding a ladder entry.
+        assertEquals(1, media.renditions.size)
+        assertEquals("https://cdn.example/v-720.mp4", media.renditions.first().url)
+        assertEquals(720, media.renditions.first().height)
+        assertEquals(2_500_000L, media.renditions.first().bitrate)
+    }
+
+    @Test
+    fun selectRenditionPicksTallestFittingWithHeadroom() {
+        fun media(vararg heights: Int): MediaMetadata = MediaMetadata(
+            url = "https://x/primary.mp4",
+            mimeType = "video/mp4",
+            posterUrl = null,
+            width = null,
+            height = null,
+            durationSeconds = null,
+            fallbackUrls = emptyList(),
+            renditions = heights.map { MediaRendition("https://x/$it.mp4", it, 0L) },
+        )
+
+        // 1080 × 1.25 = 1350 cap → 1080 (tallest fitting).
+        assertEquals("https://x/1080.mp4", media(2160, 1080, 720).selectRendition(1080))
+        // Everything overshoots → smallest available (client downscales).
+        assertEquals("https://x/1440.mp4", media(2160, 1440).selectRendition(1080))
+        // DPR headroom: 1350 fits under a 1080 × 1.25 cap.
+        assertEquals("https://x/1350.mp4", media(1350, 1080).selectRendition(1080))
+        // No ladder → primary URL, untouched.
+        assertEquals("https://x/primary.mp4", media().selectRendition(1080))
+    }
+
+    @Test
+    fun hostileRenditionFieldsAreDropped() {
+        // Bad scheme, missing dim, absurd bitrate → nothing enters the ladder.
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4"),
+                    listOf("imeta", "fallbackrendition variant javascript:alert(1) 720x1280"),
+                    listOf("imeta", "fallbackrendition variant https://x/nodim.mp4"),
+                    listOf("imeta", "fallbackrendition variant https://x/ok.mp4 480x854 9999999999"),
+                    listOf("fallback", "ftp://not-a-mirror.mp4"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertTrue(media.renditions.isEmpty())
+        assertTrue(media.fallbackUrls.isEmpty())
     }
 
     @Test

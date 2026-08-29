@@ -17,7 +17,7 @@ package space.bitos.core.settings
  * fall back to defaults.
  */
 object SettingsContract {
-    const val SCHEMA_VERSION = 4
+    const val SCHEMA_VERSION = 5
 
     // ── Storage keys (legacy bitos_* names) ────────────────────────────
     const val KEY_THEME_MODE = "bitos_theme_mode"
@@ -198,9 +198,12 @@ enum class SensitiveMediaSetting(val wire: String) {
 /**
  * Bitz surface mode (APP-007): the view the reels tab boots into. The
  * choice persists; `for_you` keeps the player as the first-run default.
+ * TRENDING/ZAPPED (W2, web parity) are view-only sorts of the same loaded
+ * window — switching to them never fetches.
  */
 enum class BitzModeSetting(val wire: String) {
-    EXPLORE("explore"), FOLLOWING("following"), FOR_YOU("for_you");
+    EXPLORE("explore"), FOLLOWING("following"), FOR_YOU("for_you"),
+    TRENDING("trending"), ZAPPED("zapped");
 
     companion object {
         val DEFAULT = FOR_YOU

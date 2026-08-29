@@ -400,8 +400,18 @@ fun FeedScreen(
                 feedState = state,
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
+                actions = actions,
                 onLoadComments = viewModel::loadComments,
                 onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
+                onLike = viewModel::toggleLike,
+                onRepost = viewModel::repost,
+                onBookmark = viewModel::toggleBookmark,
+                // Per-comment zap: opens the zap sheet above this one.
+                onZap = { reply ->
+                    viewModel.loadZaps(reply.id)
+                    viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                    zapTarget = reply
+                },
                 onClose = { showCommentsFor = null },
             )
         }

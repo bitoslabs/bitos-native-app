@@ -107,12 +107,16 @@ enum SettingsDateFormat: String, CaseIterable, Identifiable {
 enum SettingsBitzMode: String, CaseIterable, Identifiable {
     case explore, following
     case forYou = "for_you"
+    // Wire values must equal the shared BitzModeSetting (settings v5).
+    case trending, zapped
     var id: String { rawValue }
     var label: String {
         switch self {
         case .explore: "Explore"
         case .following: "Following"
         case .forYou: "For you"
+        case .trending: "Trending"
+        case .zapped: "Most zapped"
         }
     }
 }

@@ -226,7 +226,7 @@ class SettingsTest {
 
     @Test
     fun schemaIsVersioned() {
-        assertEquals(4, SettingsContract.SCHEMA_VERSION)
+        assertEquals(5, SettingsContract.SCHEMA_VERSION)
     }
 
     // MARK: - Sensitive-media default (v3, APP-018 privacy)
@@ -266,6 +266,15 @@ class SettingsTest {
             BitzModeSetting.FOLLOWING,
             SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "following")).bitzMode,
         )
+        // W2 tab sorts (v5): view-only modes of the same loaded window.
+        assertEquals(
+            BitzModeSetting.TRENDING,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "trending")).bitzMode,
+        )
+        assertEquals(
+            BitzModeSetting.ZAPPED,
+            SettingsCodec.decode(mapOf(SettingsContract.KEY_BITZ_MODE to "zapped")).bitzMode,
+        )
         assertFalse(
             SettingsCodec.decode(mapOf(SettingsContract.KEY_VIDEO_MUTED to "0")).videoMuted,
         )
@@ -277,6 +286,8 @@ class SettingsTest {
         assertTrue(SettingsCodec.decode(mapOf(SettingsContract.KEY_VIDEO_MUTED to "loud")).videoMuted)
         // Normalize: enums canonicalize (invalid → default), mute is boolean.
         assertEquals("explore", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "explore"))
+        assertEquals("trending", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "trending"))
+        assertEquals("zapped", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "zapped"))
         assertEquals("for_you", SettingsRules.normalize(SettingsContract.KEY_BITZ_MODE, "garbage"))
         assertEquals("1", SettingsRules.normalize(SettingsContract.KEY_VIDEO_MUTED, "true"))
         assertEquals("0", SettingsRules.normalize(SettingsContract.KEY_VIDEO_MUTED, "0"))

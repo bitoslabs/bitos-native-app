@@ -126,6 +126,8 @@ import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.core.feed.BitzExplore
 import space.bitos.core.feed.BitzSearch
+import space.bitos.core.feed.BitzSort
+import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.feed.NoteShare
 import space.bitos.core.identity.NostrKeyCodec
@@ -183,10 +185,12 @@ fun BitzScreen(
     // ── Mode (persisted through the shared settings contract) ─────────
     var mode by remember { mutableStateOf(settingsSnapshot.bitzMode) }
     LaunchedEffect(mode) {
-        // The pills drive the same shared window Home uses.
+        // The pills drive the same shared window Home uses; TRENDING and
+        // ZAPPED are view-only sorts (web parity: same verified window,
+        // client-side ranking — performance study §2.9).
         val current = viewModel.state.value.timeline
         when (mode) {
-            BitzModeSetting.FOR_YOU ->
+            BitzModeSetting.FOR_YOU, BitzModeSetting.TRENDING, BitzModeSetting.ZAPPED ->
                 if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
             BitzModeSetting.FOLLOWING ->
                 if (current != FeedTimeline.FOLLOWING) viewModel.selectTimeline(FeedTimeline.FOLLOWING)
@@ -197,9 +201,45 @@ fun BitzScreen(
     // ── Window + splice (search picks land ahead of the window) ────────
     val videos = remember(state.notes) { state.notes.filter { it.video != null } }
     val spliced = remember { mutableStateListOf<FeedNote>() }
-    val playerNotes = remember(videos, spliced.toList()) {
-        spliced.filter { s -> videos.none { it.id == s.id } } + videos
+
+    /** Engagement entry for the shared BitzSort (tallies + zap counts). */
+    fun sortEntry(note: FeedNote, feed: FeedUiState): BitzSort.Entry = BitzSort.Entry(
+        id = note.id,
+        createdAt = note.createdAt,
+        reactions = (feed.tallies[note.id]?.reactions ?: 0).toLong(),
+        reposts = (feed.tallies[note.id]?.reposts ?: 0).toLong(),
+        zapCount = (feed.zapCounts[note.id] ?: 0).toLong(),
+        zapSats = (feed.tallies[note.id]?.zapMillisats ?: 0L) / 1_000L,
+    )
+
+    /** Applies a shared BitzSort id order; unranked notes keep window order at the tail. */
+    fun sortByIds(window: List<FeedNote>, ids: List<String>): List<FeedNote> {
+        val rank = HashMap<String, Int>(ids.size)
+        ids.forEachIndexed { index, id -> rank[id] = index }
+        return window.sortedBy { note -> rank[note.id] ?: ids.size }
     }
+
+    fun nowSeconds(): Long = System.currentTimeMillis() / 1_000L
+
+    // TRENDING/ZAPPED are view-only sorts over the same verified window
+    // (performance study §2.9): engagement tallies feed the shared
+    // BitzSort; the underlying timeline/paging lifecycle stays FOR_YOU's.
+    // Recomputed when tallies patch in, so rankings track live counts.
+    val rankedPlayerNotes = remember(mode, videos, spliced.toList(), state.tallies, state.zapCounts) {
+        val window = spliced.filter { s -> videos.none { it.id == s.id } } + videos
+        when (mode) {
+            BitzModeSetting.TRENDING -> sortByIds(
+                window,
+                BitzSort.trending(window.map { note -> sortEntry(note, state) }, nowSeconds()),
+            )
+            BitzModeSetting.ZAPPED -> sortByIds(
+                window,
+                BitzSort.zapped(window.map { note -> sortEntry(note, state) }),
+            )
+            else -> window
+        }
+    }
+    val playerNotes = rankedPlayerNotes
 
     // ── Player pool (bounded three-slot reconciliation) ────────────────
     val pool = remember {
@@ -271,9 +311,13 @@ fun BitzScreen(
     LaunchedEffect(pagerState.settledPage) {
         viewModel.holdNewNotes(pagerState.settledPage != 0)
     }
-    // Player pagination: near the end, fetch one older page.
+    // Player pagination: near the end, fetch one older page. The trigger
+    // distance comes from the shared policy (pages-to-end ~ half the
+    // prefetch buffer, web §2.5 parity).
     LaunchedEffect(pagerState.settledPage, playerNotes.size) {
-        if (playerNotes.isNotEmpty() && pagerState.settledPage >= playerNotes.size - 3) {
+        if (playerNotes.isNotEmpty() &&
+            pagerState.settledPage >= playerNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD / 2
+        ) {
             viewModel.loadOlder()
         }
     }
@@ -365,7 +409,16 @@ fun BitzScreen(
         ) {
             return
         }
-        val order = BitzModeSetting.entries
+        // Web 5-tab swipe cycle (performance study §2.9): Explore →
+        // Following → For you → Trending → Most zapped; the final left
+        // swipe keeps the creator-profile shortcut on the deepest tab.
+        val order = listOf(
+            BitzModeSetting.EXPLORE,
+            BitzModeSetting.FOLLOWING,
+            BitzModeSetting.FOR_YOU,
+            BitzModeSetting.TRENDING,
+            BitzModeSetting.ZAPPED,
+        )
         val index = order.indexOf(mode)
         if (left) {
             if (mode == BitzModeSetting.FOR_YOU) {
@@ -396,6 +449,56 @@ fun BitzScreen(
                 onLoadOlder = viewModel::loadOlder,
                 onHorizontalSwipe = ::handleHorizontalSwipe,
             )
+            BitzModeSetting.TRENDING, BitzModeSetting.ZAPPED -> {
+                when {
+                    state.isLoading && playerNotes.isEmpty() -> BitzLoading()
+                    playerNotes.isEmpty() -> BitzMessage(
+                        title = if (mode == BitzModeSetting.TRENDING) "Nothing trending yet" else "No zapped Bitz yet",
+                        body = "Rankings build from live engagement on the For-you window; tap refresh after watching.",
+                        actionLabel = "Refresh Bitz",
+                        onAction = { refreshWindow() },
+                    )
+                    else -> VerticalPager(state = pagerState) { page ->
+                        val note = playerNotes[page]
+                        BitzVideoPage(
+                            note = note,
+                            state = state,
+                            actions = actions,
+                            pool = pool,
+                            isSettled = pagerState.settledPage == page,
+                            muted = settingsSnapshot.videoMuted,
+                            sensitiveShowByDefault = sensitiveShowByDefault,
+                            revealed = revealed,
+                            onHorizontalSwipe = ::handleHorizontalSwipe,
+                            onToggleMute = {
+                                settingsStore.setRaw(
+                                    SettingsContract.KEY_VIDEO_MUTED,
+                                    if (settingsSnapshot.videoMuted) "0" else "1",
+                                )
+                            },
+                            onLike = viewModel::toggleLike,
+                            onBookmark = viewModel::toggleBookmark,
+                            onComment = { commentsTarget = it },
+                            onRepost = viewModel::repost,
+                            onFollow = viewModel::toggleFollow,
+                            onZap = {
+                                viewModel.loadZaps(it.id)
+                                viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                                zapTarget = it
+                            },
+                            onRemix = ::handleRemix,
+                            onChain = {
+                                chainTarget = it
+                                viewModel.loadRemixChain(it)
+                            },
+                            onAuthor = { authorTarget = it },
+                            isMuted = viewModel.isMuted(note.pubkey),
+                            onMuteToggle = { viewModel.toggleMute(note.pubkey) },
+                            onReport = { reason -> viewModel.report(note, reason) },
+                        )
+                    }
+                }
+            }
             else -> {
                 when {
                     state.isLoading && playerNotes.isEmpty() -> BitzLoading()
@@ -519,8 +622,18 @@ fun BitzScreen(
                 feedState = state,
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
+                actions = actions,
                 onLoadComments = viewModel::loadComments,
                 onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
+                onLike = viewModel::toggleLike,
+                onRepost = viewModel::repost,
+                onBookmark = viewModel::toggleBookmark,
+                // Per-comment zap: opens the zap sheet above this one.
+                onZap = { reply ->
+                    viewModel.loadZaps(reply.id)
+                    viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                    zapTarget = reply
+                },
                 onClose = { commentsTarget = null },
             )
         }
@@ -600,6 +713,8 @@ private fun BitzTopBar(
             ModePill("Explore", mode == BitzModeSetting.EXPLORE) { onSelectMode(BitzModeSetting.EXPLORE) }
             ModePill("Following", mode == BitzModeSetting.FOLLOWING) { onSelectMode(BitzModeSetting.FOLLOWING) }
             ModePill("For you", mode == BitzModeSetting.FOR_YOU) { onSelectMode(BitzModeSetting.FOR_YOU) }
+            ModePill("Trending", mode == BitzModeSetting.TRENDING) { onSelectMode(BitzModeSetting.TRENDING) }
+            ModePill("Most zapped", mode == BitzModeSetting.ZAPPED) { onSelectMode(BitzModeSetting.ZAPPED) }
         }
         Spacer(Modifier.weight(1f))
         // Spec §3.7 record entry: camera capture → trim → publish.

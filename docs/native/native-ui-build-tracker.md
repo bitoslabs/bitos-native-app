@@ -55,13 +55,13 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-004 | Home feed surface §3.4 | W1 | ✅ | ✅ | ✅ | V1 complete: wordmark/apps-grid header, underline tabs + live counts, X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain |
 | APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
 | APP-006 | Stories §3.6 | W3 | ☐ | ☐ | ☐ | NIP-38/40 models + composer |
-| APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), rendition fallbacks, W2/W3 chips |
+| APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share) + W2 delivered: 5-tab Trending/Most-zapped sorts (shared BitzSort), rendition+mirror failover chain, settings v5, signed kind-22 fixture; remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), PoW/remix/sound/split chips, dwell ranking |
 | APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, legacy toolbar order, tinted error banner and selection-aware Android field; PoW gated while picks pending |
 | APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ◐ | comments exist; X-style threading, naddr resolution, live deltas, reply-bar options remain |
 | APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
 | APP-011 | Messages/DMs §3.11 | W2 | ☐ | ☐ | ☐ | NIP-17/44 chat first; calls/groups W3 |
 | APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
-| APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page upgraded (hero cover+avatar, name/npub/NIP-05/about, stats, Edit+Settings, Notes/Replies/Bitz/Reposts window tabs) + view+edit live; hero glass, stats sheets, tabs, completion card remain |
+| APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page at legacy-Flutter parity (2026-08-29): edge-to-edge hero (gradient + hex pattern + scrims, avatar glow band), glass controls, identity block (cyan verified, npub copy chip, chips), Edit pill + ⋯ menu, completion card w/ progress bar, stats (K/M), about chips, pinned tabs w/ real content (cards/strips/3-col grid/empty states); view+edit live; follower sheets, banner lightbox, other-user action row remain |
 | APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; LUD-21 verify poll remains; NWC W4 |
 | APP-015 | Bookmarks §3.15 | W1 | ✅ | ✅ | ✅ | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test |
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
@@ -154,8 +154,10 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [ ] Comments sheet: two-level threading, like/zap/reply rows, composer (GIF/URL/gallery/PoW + previews) — existing CommentSheet still opens (Android renders the shared tree; iOS flat → audit T10)
 - [x] ⋯ menu: mute/copy note ID/report (raw JSON + delete-own remain W2); Share is REAL now — deterministic `NoteShare.text` through the system sheet (fixed the audit 9.4-3 no-op)
 - [x] Mode-aware empty states (skeleton grid, relay-empty retry, Following-needs-identity); record entry → camera remains (audit T4 re-wires the capture pipeline)
-- [ ] W2/W3: PoW + remix + sound + split chips; author mode; Trending/Most-zapped tabs; dwell ranking feed
-- [ ] TEST: rendition fallback order (imeta `fallback` parsing not yet on the read path); search cancel; comment tree guard — shared BitzTest covers merge/bounds/duration/share (8) + SettingsTest v4 keys; iOS SettingsStoreTests gained the adapter + bridge-rule tests
+- [x] W2 tabs: Trending / Most-zapped pills (5-tab cycle, web §2.9 parity) — view-only sorts over the same verified For-You window via shared `BitzSort` (trending = engagement × 72 h half-life decay; zapped = sats desc, newest tiebreak; settings schema v5 `trending`/`zapped` wires; Android `BitzTabsContractTest`, iOS `SettingsStoreTests` adapter tests); swipe order Explore → Following → For you → Trending → Most zapped, final left swipe keeps the creator-profile shortcut; pagination trigger re-based on shared `BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD`
+- [x] Rendition + mirror failover (FED-004): imeta `fallback` mirrors + `fallbackrendition variant` ladder parsed on the shared read path (bounded ≤8 each, hostile fields dropped), static pick = tallest fitting `screen × 1.25` (smallest on overshoot, primary when no ladder), player chains walk pick → mirrors → lower renditions ONLY on item error (Android ExoPlayer `onPlayerError`; iOS `AVPlayerItemFailedToPlayToEndTime` observer); bridge carries `Note.fallbackUrls`/`renditionSpecs` (`url|height|bitrate` rows) + `mediaPickRenditionUrl`; protocol fixture `valid-kind22-rendition-ladder` (signed, nostr-tools)
+- [ ] W2/W3: PoW + remix + sound + split chips; author mode; dwell ranking feed
+- [ ] TEST: search cancel; comment tree guard — shared BitzTest covers merge/bounds/duration/share + walk-policy/sort/entry tests; MediaMetadataTest covers mirrors/ladder/hostile-drops; SettingsTest v5 keys
 
 ### APP-008 — Composer (spec §3.8)
 
@@ -226,15 +228,17 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-013 — Profile (spec §3.13)
 
 - [x] Own profile view + kind-0 edit publish (W0); author sheet for others
-- [ ] Edge-to-edge hero: banner 160/200, gradient default + hex pattern, scrim, overlapping hex avatar + ⚡ chip, banner lightbox
-- [ ] Glass floating controls: back/share/edit-cover/settings
-- [ ] Info block: name, NIP-05, npub copy chip, website/lud16 chips, QR
-- [ ] Action row: own Edit+⋯ / other Follow·Message·Zap+⋯ (mute/block/report/copy/share)
-- [ ] Stats row + follower/following sheets (lists + tabs)
-- [ ] About expandable; completion card (score bar → editor)
-- [ ] Sticky tabs: Notes/Replies/Bitz/Reposts (+loading/empty per tab)
-- [ ] Guest state; npub/hex param resolution
-- [ ] W2: Media gallery + heatmap, Liked/Pinned/Zaps tabs, mini identity
+- [x] Edge-to-edge hero (2026-08-29, legacy `profile_view` parity both platforms): banner 160 + `115° primary-400→700` gradient default + hex-tile overlay (also over banner images), from/via/to-black scrims, zero-gap identity band w/ overlapping hex avatar (drop shadow + primary glow), ⚡ chip; banner lightbox remains
+- [x] Glass floating controls (2026-08-29): share (copies `njump.me/<npub>`), edit-cover pill (camera icon), settings; 36pt circle black/30 + blur (iOS material), pill black/30; back button n/a on the tab
+- [x] Info block (2026-08-29): display name 24 w800 ("Anonymous" fallback), cyan verified badge, @username, npub mono chip (copy → green check 1.8 s), ⚡ Lightning chip, NIP-05/website/lud16 info chips (radius 8, tint@10%) + hairline divider; QR via ⋯ menu
+- [x] Action row — own (2026-08-29): Edit-profile pill (primary, pen) + 44-pt outlined ⋯ menu (Settings · Zap wallet · Copy profile link · Copy npub · Show profile QR · Copy lightning); other-user Follow·Message·Zap+⋯ remains on the author sheet
+- [x] Stats row (2026-08-29): Posts/Following/Bitz space-evenly, 1.2K/1.2M counts; follower/following sheets remain
+- [x] About expandable (2026-08-29): 5-line clamp, Show more at 240 chars
+- [x] Completion card (2026-08-29): sparkles tile, "{score}% · N steps to go", primary→cyan 8-pt progress bar, missing-field pill chips, Finish pill
+- [x] Sticky tabs (2026-08-29): pinned 48-pt rail (page-background — no surface block, underline indicator, outline/15 divider) — Notes/Replies (replying-to strip)/Bitz (3-col grid, video scrim+play)/Reposts (reposted-by header) with per-tab empty states; profile note cards (author row, 6-line clamp + show more, media row/video tile, hairline dividers)
+- [x] Guest state (browse-first panels); npub/hex param resolution for the author sheet
+- [x] Editor as a legacy page + step flow (2026-08-29): full-screen page with back header + full-width Save pill (not a bottom sheet); source sheet step ("Take photo" via UIImagePickerController / TakePicturePreview, or library picker) → center-crop (EXIF-normalized on iOS) → Blossom upload → live preview header (`_ProfileHeaderPreview` parity: banner 120 + change pill, hex avatar 88 + 28-pt camera chip); Save gated while an upload is in flight (sign only after upload+hash); full 8-field kind-0 form retained
+- [ ] W2: Media gallery + heatmap, Liked/Pinned/Zaps tabs, mini identity; banner lightbox; follower/following sheets; other-user action row parity (Follow·Message·Zap + mute/block/report)
 - [ ] TEST: param resolution; stats reconcile
 
 ### APP-014 — Zaps wallet (spec §3.14)
@@ -297,11 +301,11 @@ push toggles), relays live status dots, zap sats display.**
 
 | # | Old-app feature (source) | Native now | Gap → plan |
 |:--|:--|:--|:--|
-| 1 | ✅ **Account switcher** (2026-08-28) — SHIPPED: shared `AccountRegistry` (bounded ≤8, secret-free wire) + Android `AccountRegistryStore`/`SecureKeyStore` pubkey-keyed slots + `IdentityViewModel.switchTo/signOut(deactivate)/removeRegisteredAccount` + iOS `IdentityStore` registry + `IdentityKeychain` slots; switcher card in Settings-account (hex avatar, name/npub, active check, Remove w/ confirm); sign-out now deactivates (slots survive) both platforms. Branded switch OVERLAY still pending (V1 swaps state directly) | done | registry + slots + switcher shipped; overlay + auth-screen one-tap rows remain |
+| 1 | ✅ **Account switcher** (2026-08-28) — SHIPPED: shared `AccountRegistry` (bounded ≤8, secret-free wire) + Android `AccountRegistryStore`/`SecureKeyStore` pubkey-keyed slots + `IdentityViewModel.switchTo/signOut(deactivate)/removeRegisteredAccount` + iOS `IdentityStore` registry + `IdentityKeychain` slots; switcher card in Settings-account (hex avatar, name/npub, active check, Remove w/ confirm); sign-out now deactivates (slots survive) both platforms. Branded switch OVERLAY still pending (V1 swaps state directly) | done | registry + slots + switcher + branded switch OVERLAY shipped (MoreScreen/MoreView AND the Settings account switcher both platforms — every switch rides the brand beat); auth-screen one-tap rows remain |
 | 2 | ✅ **Privacy store** (2026-08-28) — SHIPPED: shared `PrivacyPrefsContract` (8 gate fields, per-field tolerant, enums validated; sensitive media stays the settings-contract key, push toggles stay the kind mutes — no duplication) + native stores + Account-privacy card (6 toggles) + Interactions card (message/comment permission pickers) both platforms; enforcement footnotes honest (W2 DMs) | done | — |
 | 3 | **Profile editor fields** — picture + banner (image_picker → crop → upload w/ progress + local preview), website URL field; optimistic metadata cache + kind-0 publish | name/display/about/nip05/lud16 only | extend ProfileEditSheet both platforms: website field (trivial), picture/banner pickers (needs CAP media path reuse: pick → Blossom upload → URL into kind-0) |
 | 4 | ✅ (2026-08-28) — SHIPPED: `RelayListContract` schema 2 `primary` flag (≤1, write-only, first in fan-out) + ⭐ toggle + add-dialog suggestion chips (primal/damus/nos) both platforms | done | — |
-| 5 | ✅ (2026-08-28, Android) `EventCache.clearAllCache` + `FeedRepository.clearEventCache`; clear-cache row wipes both. iOS EventStore wipe pending | mostly done | iOS row 5 remainder |
+| 5 | ✅ (2026-08-28, Android) `EventCache.clearAllCache` + `FeedRepository.clearEventCache`; clear-cache row wipes both. iOS (2026-08-29): `FeedStore.clearDerivedState()` — profiles/thread views/tallies/bookmark+block projections wiped on clear-cache (live subs re-fetch); persisted cache arrives with DAT-003 | done | persisted iOS cache = DAT-003 |
 | 6 | ✅ (2026-08-28, Android) presets 1/5/21/100/500/1000. iOS uses a stepper (equivalent). Ledger link → APP-014 | done | — |
 | 7 | ✅ (2026-08-28) — SHIPPED: `diversityEnabled` per surface (AlgorithmContract schema 2) + `FeedRanking.applyDiversity` (author-clustering requeue, ≤2 consecutive, guarded drain, never drops — origin diversity.ts parity, deterministic, tested) + Diverse-authors toggle + Reset-to-preset both platforms; stat tiles + preset icons remain cosmetic | done | cosmetic extras only |
 | 8 | **Appearance live preview** — sample widget rendering with the picked accent/theme | honest pending rows | ship with APP-023 theming (preview needs real token application to be meaningful) |
@@ -358,6 +362,34 @@ push toggles), relays live status dots, zap sats display.**
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-08-29 — Comment sheet legacy-UI completion (user request, both
+  platforms; layered on the reply-bar work that landed in f0fba90).
+  (1) INTERACTIVE THREAD ACTIONS: every comment row now carries the
+  legacy `_CommentActionButton` ghost row — Like (toggles, filled heart,
+  " · N" trailing) · Zap (opens the ZapSheet stacked above the thread,
+  " · sats" trailing) · Reply (retargets the reply bar) — and the root
+  card's action row became the interactive `_ThreadActionRow` (like ·
+  replies · zap · repost · bookmark with live tallies; ⋯ raw stays).
+  Android wires them through CommentContent's new actions/onLike/
+  onRepost/onBookmark/onZap seams; a shared CommentThreadSheet host
+  renders comment + stacked zap sheets for Discover/Inbox/Bookmarks
+  (Feed/Bitz reuse their existing zap chrome). iOS adds the same rows
+  plus an in-sheet ZapSheet via AppEnvironment (like/repost/bookmark
+  publish paths mirror HomeView). (2) SOLAR ICONS: new
+  `solar_plain_linear` drawable (paper plane, converted from the iOS
+  SolarPlainLinear SVG source) + `SolarFeedIcon.Send` — the Android
+  reply-bar send now uses the Solar glyph (iOS already had it); all
+  comment/thread actions render Solar heart/comment/zap/repost/
+  bookmark. (3) LEGACY ROW CHROME: Android reply rows flattened to the
+  `thread_view.dart` look — avatar 28 (22 sub-replies), bold display
+  name + time, conversation rail for descendants, no per-row cards;
+  iOS rows show the bold display name (was bare shortPubkey).
+  (4) FOUND+FIXED mid-flight: shared BitzModeSetting grew TRENDING/
+  ZAPPED while BitzScreen's mode `when` wasn't updated — branches added
+  (no-op until those pills land); the Bitz swipe cycle stays pinned to
+  the legacy Explore→Following→For-you order. Verified: Android
+  compile + unit tests green, iOS Swift 6 typecheck 0 errors.
 
 - 2026-08-29 — Feed card dividers + mention/note-ref functional (user
   request; APP-005). (1) DIVIDERS: hairline separators between feed cards
@@ -1060,6 +1092,23 @@ fixed, what's next.
   - APP-009 threading remainder: naddr/nevent root resolution, X-style
     flattened descendants, live deltas on replies.
   - APP-010 results tabs (Posts/People/Hashtags) + trending mosaic.
+
+- 2026-08-29 — APP-018a audit rows 1 + 5 closed out. Row 1 remainder: the
+  branded switch overlay (shipped earlier in MoreScreen/MoreView) now
+  covers the SETTINGS account switcher too — Android `AccountDetail` hoists
+  `switchTarget` and rides `AccountSwitchOverlay` (haptics-gated), iOS
+  `AccountSection` mirrors it via `.fullScreenCover(item:)` +
+  `AccountSwitchOverlayView`; every switch surface now gets the brand beat
+  (only the auth-screen one-tap rows remain for row 1). Row 5 iOS
+  remainder: `FeedStore.clearDerivedState()` wipes the session's derived
+  state (profiles, comment/thread views, tallies + buffers, zap buffers,
+  remix ancestry, bookmark/block projections — live subscriptions
+  re-fetch; mutes and feed windows stay) and the Settings clear-cache row
+  calls it alongside `settings.clearCache()`; the persisted-event-cache
+  equivalent arrives with DAT-003. Verified: iOS Swift 6 strict-concurrency
+  typecheck exit 0; Android compile green for all touched files (the
+  module's one remaining error is concurrent WIP: BitzScreen TRENDING/
+  ZAPPED mode branches, in flight by the user at write time).
 
 - 2026-08-29 — APP-009 reply bar, legacy `_ThreadReplyBar` parity (the
   composer stream's direct follow-on; reuses the APP-008 GIF picker).

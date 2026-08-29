@@ -71,6 +71,13 @@
       "id": "70a6598eca9574dd35c0be77852bbafed36a3910742e6a466e73c113b42d0cca",
       "sig": "1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8",
       "message": "[\"EVENT\",\"sub1\",{\"kind\":1,\"created_at\":1710000000,\"tags\":[[\"t\",\"bitcoin\"]],\"content\":\"gm from BitOS\",\"pubkey\":\"0000000000000000000000000000000000000000000000000000000000000005\",\"id\":\"70a6598eca9574dd35c0be77852bbafed36a3910742e6a466e73c113b42d0cca\",\"sig\":\"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8\"}]"
+    },
+    {
+      "name": "valid-kind22-rendition-ladder",
+      "valid": true,
+      "id": "24696b31b3c6df805c488269614d2a4711df362294eb9ce5edb1ba03dd1abd1a",
+      "sig": "800a209544596ddc79d5f7bd482d2536afc1f34e3ddf1e41de4995117cd4e6bcd2a5dc8eed5fee5dbabe6fb42e2cc99619386ba281cbcb271732338efb830af0",
+      "message": "[\"EVENT\",\"sub1\",{\"kind\":22,\"created_at\":1710000500,\"tags\":[[\"imeta\",\"url https://cdn.example/v.mp4\",\"m video/mp4\",\"dim 1080x1920\",\"duration 59\"],[\"imeta\",\"url https://cdn.example/poster.jpg\",\"m image/jpeg\",\"dim 1080x1920\"],[\"imeta\",\"fallback https://mirror.example/v.mp4\"],[\"imeta\",\"fallbackrendition variant https://cdn.example/v-720.mp4 720x1280 2500000\"],[\"imeta\",\"fallbackrendition variant https://cdn.example/v-480.mp4 480x854 1200000\"]],\"content\":\"first bitz #bitcoin\",\"pubkey\":\"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001\",\"id\":\"24696b31b3c6df805c488269614d2a4711df362294eb9ce5edb1ba03dd1abd1a\",\"sig\":\"800a209544596ddc79d5f7bd482d2536afc1f34e3ddf1e41de4995117cd4e6bcd2a5dc8eed5fee5dbabe6fb42e2cc99619386ba281cbcb271732338efb830af0\"}]"
     }
   ]
 }

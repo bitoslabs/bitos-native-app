@@ -1,5 +1,7 @@
 import AVFoundation
+import BusinessCore
 import Foundation
+import UIKit
 
 /**
  * Three-slot playback coordinator (FED-001).
@@ -29,6 +31,12 @@ final class PlayerPool {
     /// Keyed by verified event id; bounded to three entries by update().
     private var slots: [String: Slot] = [:]
 
+    /// FED-004 failover chain per slot: rendition pick first, then imeta
+    /// mirrors, then remaining renditions. Walked only on item failure.
+    private var mediaChains: [String: [String]] = [:]
+    private var chainIndexes: [String: Int] = [:]
+    private var failureObservers: [String: Any] = [:]
+
     /// Last persisted playback rate from settings (restore target for boosts).
     private var currentRate: Float = 1
 
@@ -49,16 +57,29 @@ final class PlayerPool {
         // Release slots outside the window.
         for id in slots.keys where !keepIds.contains(id) {
             slots.removeValue(forKey: id)?.player.pause()
+            mediaChains.removeValue(forKey: id)
+            chainIndexes.removeValue(forKey: id)
+            if let observer = failureObservers.removeValue(forKey: id) {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
         // Create missing slots (bounded to keepIds.count <= 3).
         for id in keepIds where slots[id] == nil {
-            guard let url = notes.first(where: { $0.id == id })?.video?.url,
-                  let videoURL = URL(string: url) else { continue }
+            guard let note = notes.first(where: { $0.id == id }),
+                  let video = note.video else { continue }
+            // FED-004: static rendition pick (tallest fitting the display
+            // long edge with ±25% headroom, shared rule) — no ABR in V1.
+            let screenHeight = awaitScreenHeight()
+            let chain = mediaChain(for: video, targetHeight: screenHeight)
+            guard let first = chain.first, let videoURL = URL(string: first) else { continue }
+            mediaChains[id] = chain
+            chainIndexes[id] = 0
             let player = AVQueuePlayer()
             player.isMuted = muted
             let item = AVPlayerItem(url: videoURL)
             let looper = AVPlayerLooper(player: player, templateItem: item)
             slots[id] = Slot(player: player, looper: looper)
+            installFailureObserver(noteId: id, player: player)
         }
         // Exactly the visible video plays — gated by the autoplay policy,
         // with the persisted playback rate as the default (looping keeps it).
@@ -81,6 +102,73 @@ final class PlayerPool {
 
     func player(for noteId: String) -> AVQueuePlayer? {
         slots[noteId]?.player
+    }
+
+    // MARK: FED-004 rendition pick + mirror failover
+
+    private let bridge = BusinessCoreBridge()
+
+    /// Display long edge for the rendition pick (memoized; main thread).
+    private var cachedScreenHeight: Int?
+    private func awaitScreenHeight() -> Int {
+        if let cached = cachedScreenHeight { return cached }
+        let height = Int(UIScreen.main.bounds.height)
+        cachedScreenHeight = height
+        return height
+    }
+
+    /// Candidate chain: shared rendition pick, then mirrors, then the
+    /// remaining renditions (tall→short). Pure ordering over shared data.
+    private func mediaChain(for video: MediaMetadata, targetHeight: Int) -> [String] {
+        let pick = bridge.mediaPickRenditionUrl(
+            renditionSpecs: video.renditionSpecs,
+            primaryUrl: video.url,
+            targetHeight: Int32(targetHeight)
+        )
+        var chain = [pick]
+        chain.append(contentsOf: video.fallbackUrls)
+        chain.append(contentsOf: video.renditionUrls)
+        var seen = Set<String>()
+        return chain.filter { seen.insert($0).inserted }
+    }
+
+    /// On item failure → advance to the next candidate and re-prepare.
+    private func installFailureObserver(noteId: String, player: AVQueuePlayer) {
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            // AVPlayerLooper replaces items; observe the live one.
+            guard let self, let item = player.currentItem,
+                  item.status == .failed || Self.failedError(item) else { return }
+            MainActor.assumeIsolated {
+                self.swapToNextCandidate(noteId: noteId, animateResume: false)
+            }
+        }
+        failureObservers[noteId] = observer
+    }
+
+    nonisolated private static func failedError(_ item: AVPlayerItem) -> Bool {
+        // Playback stalls with an unrecoverable error also count for failover.
+        guard let error = item.error else { return false }
+        let ns = error as NSError
+        return ns.domain == AVFoundationErrorDomain || ns.domain == NSURLErrorDomain
+    }
+
+    private func swapToNextCandidate(noteId: String, animateResume: Bool) {
+        guard var index = chainIndexes[noteId],
+              let chain = mediaChains[noteId] else { return }
+        guard index + 1 < chain.count else { return }
+        index += 1
+        chainIndexes[noteId] = index
+        guard let slot = slots[noteId], let next = URL(string: chain[index]) else { return }
+        let wasPlaying = slot.player.timeControlStatus == .playing
+        slot.looper.disableLooping()
+        let item = AVPlayerItem(url: next)
+        slot.player.replaceCurrentItem(with: item)
+        installFailureObserver(noteId: noteId, player: slot.player)
+        if wasPlaying || animateResume { slot.player.play() }
     }
 
     func togglePlay(noteId: String) {
