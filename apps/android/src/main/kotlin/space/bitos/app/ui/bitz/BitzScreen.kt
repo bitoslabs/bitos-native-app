@@ -436,8 +436,18 @@ fun BitzScreen(
             } else if (index in 0 until order.lastIndex) {
                 selectMode(order[index + 1])
             }
-        } else if (index > 0) {
-            selectMode(order[index - 1])
+        } else {
+            // Right swipe on For You: open settled creator's profile (TikTok
+            // pattern). Other modes step back one tab.
+            if (mode == BitzModeSetting.FOR_YOU) {
+                val settled = playerNotes.getOrNull(pagerState.settledPage) ?: playerNotes.firstOrNull()
+                if (settled != null) {
+                    bitzHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    authorTarget = settled.pubkey
+                }
+            } else if (index > 0) {
+                selectMode(order[index - 1])
+            }
         }
     }
 

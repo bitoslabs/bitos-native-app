@@ -130,6 +130,8 @@ struct BitzView: View {
     @State private var composerSeedTagsJson = "[]"
     @State private var remixAskTarget: FeedNote?
     @State private var shareText: String?
+    /** Swipe-right on settled Bitz video → full-screen profile for that creator. */
+    @State private var fullProfileTarget: String?
     private let rules = BitzBridgeRules()
 
     private var videos: [FeedNote] {
@@ -205,9 +207,24 @@ struct BitzView: View {
             get: { authorTarget.map { BitzAuthorTarget(id: $0) } },
             set: { authorTarget = $0?.id }
         )) { target in
-            AuthorProfileSheet(authorPubkey: target.id, onClose: { authorTarget = nil })
+            AuthorProfileSheet(
+                authorPubkey: target.id,
+                onClose: { authorTarget = nil },
+                onOpenFullProfile: {
+                    authorTarget = nil
+                    fullProfileTarget = target.id
+                }
+            )
+            .environment(identity)
+            .presentationDetents([.medium, .large])
+        }
+        .fullScreenCover(item: Binding(
+            get: { fullProfileTarget.map { BitzAuthorTarget(id: $0) } },
+            set: { fullProfileTarget = $0?.id }
+        )) { target in
+            AuthorProfileFullView(authorPubkey: target.id, onClose: { fullProfileTarget = nil })
+                .environment(environment)
                 .environment(identity)
-                .presentationDetents([.medium, .large])
         }
         .appMenuHost($menu)
         .sheet(item: $moreSheetTarget) { note in
@@ -539,7 +556,15 @@ struct BitzView: View {
                         onAuthor: { authorTarget = note.pubkey },
                         onMore: { point in presentMoreMenu(for: note, at: point) },
                         onOpenExternalLink: { externalLink = $0 },
-                        onSwipe: { left in handleSwipe(left: left) },
+                        onSwipe: { left in
+                            // Swipe right on For-you settled page → creator full profile
+                            // (TikTok pattern). Other modes use the standard mode cycle.
+                            if !left, mode == .forYou, topId == note.id {
+                                fullProfileTarget = note.pubkey
+                            } else {
+                                handleSwipe(left: left)
+                            }
+                        },
                         richJson: environment.feedStore.richTokens(for: note.content),
                         railCounts: railCounts(for: note)
                     )

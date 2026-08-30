@@ -36,6 +36,11 @@ struct CommentSheet: View {
     private let blossomServer = "https://blossom.primal.net"
 
     private var comments: [FeedNote] { store.comments[note.id] ?? [] }
+    /// NIP-10 assembled display list (depth + orphan flag).
+    private var threadItems: [ThreadDisplayItem] { store.threads[note.id] ?? [] }
+    private var noteById: [String: FeedNote] {
+        Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
+    }
     // APP-009 live tallies (shared NoteTally mirror).
     private var tally: NoteTallyMirror? { store.tallies[note.id] }
 
@@ -166,16 +171,21 @@ struct CommentSheet: View {
                             .foregroundStyle(BitOSTheme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ForEach(comments) { reply in
-                        ReplyRow(
-                            reply: reply,
-                            profile: store.profiles[reply.pubkey],
-                            tally: store.tallies[reply.id],
-                            isLiked: store.localActions.liked.contains(reply.id),
-                            onLike: { like(reply) },
-                            onZap: { openZap(reply) }
-                        ) {
-                            replyTarget = reply
+                    let lookup = noteById
+                    ForEach(threadItems.isEmpty ? comments.map { ThreadDisplayItem(id: $0.id, depth: 0, parentId: nil, orphan: false) } : threadItems) { item in
+                        if let reply = lookup[item.id] ?? comments.first(where: { $0.id == item.id }) {
+                            ReplyRow(
+                                reply: reply,
+                                profile: store.profiles[reply.pubkey],
+                                depth: item.depth,
+                                orphan: item.orphan,
+                                tally: store.tallies[reply.id],
+                                isLiked: store.localActions.liked.contains(reply.id),
+                                onLike: { like(reply) },
+                                onZap: { openZap(reply) }
+                            ) {
+                                replyTarget = reply
+                            }
                         }
                     }
                 }
@@ -522,62 +532,93 @@ private struct ThreadRootCard: View {
 private struct ReplyRow: View {
     let reply: FeedNote
     var profile: ProfileMetadata? = nil
+    var depth: Int = 0
+    var orphan: Bool = false
     var tally: NoteTallyMirror? = nil
     var isLiked: Bool = false
     var onLike: (() -> Void)? = nil
     var onZap: (() -> Void)? = nil
-    /// APP-009: retarget the reply bar at this card (legacy parity).
     var onReplyTo: (() -> Void)? = nil
 
+    // Depth-keyed tint for the vertical thread line (TikTok/X pattern).
+    private static let depthColors: [Color] = [
+        Color(red: 0.40, green: 0.28, blue: 0.96),
+        Color(red: 0.12, green: 0.69, blue: 0.95),
+        Color(red: 0.95, green: 0.70, blue: 0.12),
+        Color(red: 0.22, green: 0.85, blue: 0.60),
+    ]
+    private var lineColor: Color {
+        depth > 0 ? Self.depthColors[(depth - 1) % Self.depthColors.count] : .clear
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
-            PubkeyAvatarView(pubkey: reply.pubkey, size: 28, label: profile?.bestDisplayName)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(reply.pubkey))
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(BitOSTheme.textPrimary)
-                        .lineLimit(1)
-                    Text(FeedFormat.timeAgo(createdAt: reply.createdAt))
-                        .font(.system(size: 11))
-                        .foregroundStyle(BitOSTheme.textTertiary)
+        HStack(alignment: .top, spacing: 0) {
+            // Vertical depth lines at each nesting level.
+            if depth > 0 {
+                HStack(spacing: 6) {
+                    ForEach(0..<depth, id: \.self) { level in
+                        Capsule()
+                            .fill(Self.depthColors[level % Self.depthColors.count].opacity(0.50))
+                            .frame(width: 2)
+                    }
                 }
-                Text(reply.content)
-                    .font(.subheadline)
-                    .foregroundStyle(BitOSTheme.textPrimary)
-                // Legacy parity: web comment action row — Like · Zap · Reply.
-                HStack(spacing: BitOSTheme.Spacing.base) {
-                    if let onLike {
-                        commentAction(
-                            isLiked ? AppIcons.heartFill : AppIcons.heart,
-                            isLiked ? "Unlike" : "Like",
-                            tint: isLiked ? BitOSTheme.like : BitOSTheme.textSecondary,
-                            trailing: (tally?.reactions ?? 0) > 0 ? "\(tally?.reactions ?? 0)" : nil,
-                            action: onLike
-                        )
+                .frame(width: CGFloat(depth) * 8)
+                .padding(.trailing, 6)
+            }
+            HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
+                PubkeyAvatarView(pubkey: reply.pubkey, size: depth == 0 ? 28 : 22, label: profile?.bestDisplayName)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: BitOSTheme.Spacing.xs) {
+                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(reply.pubkey))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(BitOSTheme.textPrimary)
+                            .lineLimit(1)
+                        if orphan {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 9))
+                                .foregroundStyle(BitOSTheme.textTertiary)
+                        }
+                        Text(FeedFormat.timeAgo(createdAt: reply.createdAt))
+                            .font(.system(size: 11))
+                            .foregroundStyle(BitOSTheme.textTertiary)
                     }
-                    if let onZap {
-                        commentAction(
-                            AppIcons.zap,
-                            "Zap",
-                            tint: BitOSTheme.zap,
-                            trailing: zapTrailing,
-                            action: onZap
-                        )
-                    }
-                    if let onReplyTo {
-                        commentAction(
-                            AppIcons.comment,
-                            "Reply",
-                            tint: BitOSTheme.textSecondary,
-                            trailing: nil,
-                            action: onReplyTo
-                        )
+                    Text(reply.content)
+                        .font(depth == 0 ? .subheadline : .footnote)
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    HStack(spacing: BitOSTheme.Spacing.base) {
+                        if let onLike {
+                            commentAction(
+                                isLiked ? AppIcons.heartFill : AppIcons.heart,
+                                isLiked ? "Unlike" : "Like",
+                                tint: isLiked ? BitOSTheme.like : BitOSTheme.textSecondary,
+                                trailing: (tally?.reactions ?? 0) > 0 ? "\(tally?.reactions ?? 0)" : nil,
+                                action: onLike
+                            )
+                        }
+                        if let onZap {
+                            commentAction(
+                                AppIcons.zap,
+                                "Zap",
+                                tint: BitOSTheme.zap,
+                                trailing: zapTrailing,
+                                action: onZap
+                            )
+                        }
+                        if let onReplyTo {
+                            commentAction(
+                                AppIcons.comment,
+                                "Reply",
+                                tint: BitOSTheme.textSecondary,
+                                trailing: nil,
+                                action: onReplyTo
+                            )
+                        }
                     }
                 }
             }
         }
-        .padding(BitOSTheme.Spacing.md)
+        .padding(.vertical, BitOSTheme.Spacing.sm)
+        .padding(.horizontal, BitOSTheme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).fill(BitOSTheme.surface))
     }
