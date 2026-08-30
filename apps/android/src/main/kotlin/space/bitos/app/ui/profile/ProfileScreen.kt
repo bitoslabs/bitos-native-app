@@ -659,7 +659,7 @@ private fun ImportPanel(
 // ── Own-profile helpers (legacy parity) ────────────────────────────────
 
 @Composable
-private fun StatPill(label: String, value: String) {
+internal fun StatPill(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.W700, color = BitOSColors.textPrimary)
         Spacer(Modifier.height(2.dp))
@@ -704,12 +704,19 @@ private fun RepostHeader(note: space.bitos.core.feed.FeedNote, profiles: Map<Str
 }
 
 /// Compact profile note card: author row, clamped content, media preview.
+/// Shared with the author profile page. X-style: the whole card opens the
+/// note's thread when [onOpen] is provided.
 @Composable
-private fun ProfileNoteCard(note: space.bitos.core.feed.FeedNote, profile: space.bitos.core.model.ProfileMetadata?) {
+internal fun ProfileNoteCard(
+    note: space.bitos.core.feed.FeedNote,
+    profile: space.bitos.core.model.ProfileMetadata?,
+    onOpen: () -> Unit = {},
+) {
     var expanded by remember(note.id) { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
+            .clickable(onClickLabel = "Open note thread") { onOpen() }
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -797,8 +804,9 @@ private fun TabEmptyState(tab: Int) {
 
 /// One Bitz grid tile — poster/image cover-cropped square; video tiles get
 /// the black/30 scrim + white play affordance (legacy _MediaTile).
+/// Shared with the author profile page.
 @Composable
-private fun BitzGridTile(note: space.bitos.core.feed.FeedNote, modifier: Modifier = Modifier) {
+internal fun BitzGridTile(note: space.bitos.core.feed.FeedNote, modifier: Modifier = Modifier) {
     val images = note.mediaUrls.filterNot { it.hasVideoExtension() }
     val model = images.firstOrNull() ?: note.video?.posterUrl ?: note.video?.url
     Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(0.dp))) {
@@ -828,8 +836,9 @@ private fun BitzGridTile(note: space.bitos.core.feed.FeedNote, modifier: Modifie
 }
 
 /// 16:9 video preview with play affordance, used inside note cards.
+/// Shared with the author profile sheet.
 @Composable
-private fun VideoTile(posterUrl: String?, modifier: Modifier = Modifier) {
+internal fun VideoTile(posterUrl: String?, modifier: Modifier = Modifier) {
     Box(
         modifier
             .height(180.dp)
@@ -905,9 +914,10 @@ private fun ProfileChip(icon: androidx.compose.ui.graphics.vector.ImageVector, t
     }
 }
 
-/** Decorative native hex tile, matching the old app fallback cover. */
+/** Decorative native hex tile, matching the old app fallback cover. Shared
+ * with the author profile page. */
 @Composable
-private fun DefaultCoverHexPattern() {
+internal fun DefaultCoverHexPattern() {
     Canvas(Modifier.fillMaxSize()) {
         val tile = 120.dp.toPx()
         val hexHeight = 104.dp.toPx()
@@ -1034,9 +1044,10 @@ private fun ProfileCompletionCard(missing: List<String>, onFinish: () -> Unit) {
 
 /// Bio (5-line clamp, Show more past 240 chars) + info chips (NIP-05,
 /// website, lightning) + hairline divider (legacy _AboutSection).
+/// Shared with the author profile page.
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun AboutSection(profile: space.bitos.core.model.ProfileMetadata?) {
+internal fun AboutSection(profile: space.bitos.core.model.ProfileMetadata?) {
     val bio = profile?.about?.trim().orEmpty()
     val nip05 = profile?.nip05?.trim().orEmpty()
     val website = profile?.website?.trim().orEmpty()

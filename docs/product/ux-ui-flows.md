@@ -117,7 +117,63 @@ Acceptance criteria:
 | AC-7 | Bio is capped at 300 characters with a live counter; all eight kind-0 fields (username, display name, bio, avatar, banner, website, NIP-05, lightning) are editable. |
 | AC-8 | Every control has an accessibility label (camera chip, change-banner pill, tab rail, glass controls), and the npub chip announces copy state. |
 
+### 4.3 Author profile surfaces & internal routing (UX-010)
+
+User stories:
+
+1. **Peek, then commit** — tapping any author (feed card, Bitz caption, comment
+   row, Discover creator/people row, notification actor, mention) opens the
+   profile-overview bottom sheet, mock-parity top-to-bottom: banner with the
+   close circle on it, hex avatar with a white **View Profile** pill beside
+   it, name + NIP-05 check + npub-copy chip, about, info chips, truthful
+   stats row, the **Zap + Follow** two-button quick-action row, and a
+   two-line **Latest Note** preview card above the notes list.
+2. **Full page, same language as "You"** — "View full profile" routes to the
+   in-app full-page profile (never an external web link): back header + ⋯
+   menu, full-bleed cover with hex-pattern fallback, hex avatar hero
+   floating on a background hex plate (the mock's border), identity block,
+   Zap + Follow pills, stats row, collapsible about, and a pinned
+   Notes · Replies · Bitz tab rail over a dedicated author REQ.
+3. **Zap the person, not just a note** — Zap on profile surfaces is a NIP-57
+   profile zap: the kind-9734 request carries only the recipient `p` tag (no
+   `e` tag); paid detection rides the LUD-21 verify settle and the record
+   lands in the sent ledger without a target note.
+4. **Comments lead to profiles** — inside the comment sheet, every root/comment
+   avatar and name opens the author sheet, so a conversation can be explored
+   without leaving the thread.
+5. **Notes page five at a time** — the author REQ loads the first five notes
+   with the profile; older pages page backward (`until` = oldest loaded
+   note, notes-only filter, limit coerced 1..100) when the reader reaches
+   the loaded edge. A short page marks the history exhausted; dedupe stays
+   by verified event id.
+6. **Note cards are X-style detail entries** — every note card (sheet notes
+   list, page Notes/Replies tabs) renders inline media (up to three square
+   images or one 16:9 video tile) and opens the note's thread sheet on tap;
+   Bitz grid tiles open the same thread.
+
+Acceptance criteria:
+
+| # | Given / When / Then |
+|---|---|
+| PR-1 | Tapping "View Profile" (any surface, either platform) opens the in-app full profile page; no `njump.me`/browser intent is ever triggered by a profile action. Copy-link remains available explicitly in the page's ⋯ menu. |
+| PR-2 | The full page renders the author's live kind-0 (banner, avatar, name, NIP-05, about, website, lud16) from a dedicated author REQ (`kinds:[0,1,21,22]`); stats only show counts the REQ can truthfully produce (Posts/Replies/Bitz, Notes/Bitz on the sheet) — follower counts are never invented. Notes load five per page and page backward from the oldest loaded note; a page returning fewer than five new notes disables load-more. |
+| PR-3 | Zap is shown only when the author publishes a lud16; disabled/hidden otherwise with an explanatory label. Follow mirrors the shared contact-list state (optimistic flip + kind-3 publish when signed in). |
+| PR-4 | Back from the full page returns to the originating surface (the sheet stays dismissed on Android; iOS fullScreenCover dismisses to the caller); the system back gesture is honored on Android via BackHandler. |
+| PR-5 | Deep links (`nostr:`/`njump` author targets) land on the profile sheet first (peek), preserving the sheet → page hierarchy. |
+| PR-6 | Every avatar/name tap target carries an "Open … profile" accessibility label; Zap/Follow announce their state. |
+
+Comment bottom-sheet anatomy (both platforms):
+
+- header "Comments N" + close;
+- root card (author row tappable → profile sheet; like · replies · zap+sats ·
+  repost · bookmark · raw ⋯);
+- threaded replies behind depth rails, per-reply Like (+count) · Zap (+sats) ·
+  Reply, reply avatars/names tappable → profile sheet;
+- identity-gated composer (sub-reply targeting chip, gallery · GIF · URL ·
+  PoW options, pill input + circular send), keyboard never covers the bar.
+
 ## 5. Home feed flow
+
 
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
@@ -136,6 +192,8 @@ Home -> poster/first frame -> autoplay visible Bitz
 UI anatomy:
 
 - full-bleed media respecting safe areas;
+- full-screen playback uses aspect-fit/contain: landscape, square and portrait
+  originals retain their complete frame, with black letterbox space instead of crop;
 - top mode switch with clear selected state;
 - right action rail with labels available to assistive technology;
 - bottom author, caption, tags, sound and progress;
@@ -145,6 +203,8 @@ UI anatomy:
   minute boundaries; the feed store is never republished for a clock tick;
 - For You and Following paginate independently; exhausting one mode never
   disables loading in the other;
+- Explore always reads and paginates the global For You lane, even after the
+  user has visited Following; each mode therefore keeps the correct cursor;
 - Explore reveals ten more tiles per local page and begins relay pagination ten
   tiles before the loaded edge; Nostr uses the oldest event time as `until`
   because relay offsets are not portable;

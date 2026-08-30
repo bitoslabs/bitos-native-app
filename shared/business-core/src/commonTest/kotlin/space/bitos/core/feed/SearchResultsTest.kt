@@ -54,4 +54,16 @@ class SearchResultsTest {
         val hits = SearchResults.hashtags(notes)
         assertEquals(listOf("bitcoin" to 2, "lightning" to 2, "nostr" to 1), hits.map { it.tag to it.count })
     }
+
+    @Test
+    fun hashtagsDropMachineCoordinationTags() {
+        // Web humanTags parity: `udal-*` swarm tags never reach the Hashtags
+        // tab — they would crowd out human topics.
+        val notes = listOf(
+            note("1", "aa".repeat(32), "nostr", "udal-friend-aede0a98e7fd3ffef77db169c0ccaaa1"),
+            note("2", "bb".repeat(32), "udal-peer-2348e984dab2c63dfbdab100aa1a3974"),
+        )
+        val hits = SearchResults.hashtags(notes)
+        assertEquals(listOf("nostr" to 1), hits.map { it.tag to it.count })
+    }
 }

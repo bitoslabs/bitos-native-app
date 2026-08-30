@@ -94,6 +94,8 @@ fun InboxScreen(
     authorRepository: AuthorRepository,
     /** APP-018 privacy: `show` renders NIP-36 media directly (no cover). */
     sensitiveShowByDefault: Boolean = false,
+    /** UX-010: opens the in-app full profile page for a pubkey. */
+    onOpenAuthorProfile: (String) -> Unit = {},
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val state by notifications.state.collectAsStateWithLifecycle()
@@ -245,20 +247,25 @@ fun InboxScreen(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
                 onDismiss = { threadTarget = null },
+                // UX-010: author taps inside the thread open the profile sheet.
+                onOpenAuthor = { authorTarget = it },
             )
         }
     }
     authorTarget?.let { authorPubkey ->
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
-            AuthorProfileContent(
-                authorPubkey = authorPubkey,
-                state = authorState,
-                feedState = feedState,
-                onOpen = authorRepository::open,
-                onFollow = homeViewModel::toggleFollow,
-                onClose = { authorRepository.close(); authorTarget = null },
-            )
-        }
+        space.bitos.app.ui.profile.AuthorProfileSheetHost(
+            authorPubkey = authorPubkey,
+            state = authorState,
+            feedState = feedState,
+            homeViewModel = homeViewModel,
+            identityViewModel = identityViewModel,
+            notePublisher = notePublisher,
+            onOpen = authorRepository::open,
+            onClose = { authorRepository.close(); authorTarget = null },
+            // UX-010: the full profile is an in-app page, never a browser link.
+            onOpenFullProfile = { authorRepository.close(); authorTarget = null; onOpenAuthorProfile(it) },
+            onLoadMore = authorRepository::loadMoreNotes,
+        )
     }
 }
 

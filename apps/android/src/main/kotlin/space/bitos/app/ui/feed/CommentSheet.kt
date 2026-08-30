@@ -68,6 +68,8 @@ fun CommentContent(
     onRepost: (FeedNote) -> Unit,
     onBookmark: (String) -> Unit,
     onZap: (FeedNote) -> Unit,
+    /** UX-010: author avatar/name taps open the profile sheet. */
+    onOpenAuthor: (String) -> Unit = {},
     onClose: () -> Unit,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
@@ -153,7 +155,7 @@ fun CommentContent(
             .padding(bottom = BitOSSpacing.lg),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Replies", style = MaterialTheme.typography.headlineMedium)
+            Text("Comments", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.width(BitOSSpacing.sm))
             Text(
                 "${thread.size}",
@@ -184,6 +186,7 @@ fun CommentContent(
                     onRepost = { onRepost(note) },
                     onBookmark = { onBookmark(note.id) },
                     onZap = { onZap(note) },
+                    onOpenAuthor = { onOpenAuthor(note.pubkey) },
                 )
             }
             items(thread, key = { it.id }) { item ->
@@ -197,6 +200,7 @@ fun CommentContent(
                         isLiked = reply.id in actions.liked,
                         onLike = { onLike(reply) },
                         onZap = { onZap(reply) },
+                        onOpenAuthor = { onOpenAuthor(reply.pubkey) },
                         onReplyTo = { replyTarget = reply },
                     )
                 }
@@ -491,6 +495,7 @@ private fun RootCard(
     onRepost: () -> Unit,
     onBookmark: () -> Unit,
     onZap: () -> Unit,
+    onOpenAuthor: () -> Unit = {},
 ) {
     var showRaw by remember { mutableStateOf(false) }
     if (showRaw) {
@@ -511,7 +516,12 @@ private fun RootCard(
     }
     Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.surface) {
         Column(Modifier.padding(BitOSSpacing.md)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClickLabel = "Open author profile") { onOpenAuthor() },
+            ) {
                 PubkeyAvatar(pubkey = note.pubkey, size = 40, label = profile?.bestDisplayName)
                 Spacer(Modifier.width(BitOSSpacing.sm))
                 Column {
@@ -627,6 +637,7 @@ private fun ReplyRow(
     isLiked: Boolean = false,
     onLike: () -> Unit = {},
     onZap: () -> Unit = {},
+    onOpenAuthor: () -> Unit = {},
     onReplyTo: () -> Unit = {},
 ) {
     Row(
@@ -644,7 +655,11 @@ private fun ReplyRow(
             )
             Spacer(Modifier.width(BitOSSpacing.sm))
         }
-        PubkeyAvatar(pubkey = reply.pubkey, size = if (depth > 0) 22 else 28)
+        PubkeyAvatar(
+            pubkey = reply.pubkey,
+            size = if (depth > 0) 22 else 28,
+            modifier = Modifier.clickable(onClickLabel = "Open author profile") { onOpenAuthor() },
+        )
         Spacer(Modifier.width(BitOSSpacing.sm))
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -655,7 +670,10 @@ private fun ReplyRow(
                     color = BitOSColors.textPrimary,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable(onClickLabel = "Open author profile") { onOpenAuthor() }
+                        .weight(1f, fill = false),
                 )
                 Spacer(Modifier.width(BitOSSpacing.xs))
                 Text(
@@ -719,6 +737,8 @@ fun CommentThreadSheet(
     identityViewModel: IdentityViewModel,
     publisherState: PublishUiState,
     onDismiss: () -> Unit,
+    /** UX-010: author taps open the profile sheet (host-owned). */
+    onOpenAuthor: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
@@ -741,6 +761,7 @@ fun CommentThreadSheet(
             viewModel.loadZaps(reply.id)
             zapTarget = reply
         },
+        onOpenAuthor = onOpenAuthor,
         onClose = onDismiss,
     )
 

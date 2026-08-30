@@ -203,6 +203,23 @@ class HomeViewModel(
         currentZapRequestId = null
     }
 
+    /** Records a paid profile zap (no target note) into the sent ledger. */
+    fun onAuthorZapPaid(recipientPubkey: String, amountSats: Long, memo: String = "") {
+        val store = sentZaps ?: return
+        store.record(
+            space.bitos.core.model.SentZapRecord(
+                id = mutableZap.value.requestId
+                    ?: recipientPubkey + ":" + amountSats + ":" + (System.currentTimeMillis() / 1000),
+                amountSats = amountSats,
+                recipientPubkey = recipientPubkey,
+                createdAt = System.currentTimeMillis() / 1000,
+                targetNoteId = null,
+                memo = memo.takeIf { it.isNotBlank() },
+            ),
+        )
+        currentZapRequestId = null
+    }
+
     fun dismissZap() {
         mutableZap.value = space.bitos.app.ui.feed.ZapUiState()
     }
@@ -210,7 +227,25 @@ class HomeViewModel(
     /** LNURL flow: params → signed 9734 → invoice. Failures surface; never crashes UI. */
     fun zap(note: space.bitos.core.feed.FeedNote, comment: String = "", anonymous: Boolean = false) {
         val profile = repository.state.value.profiles[note.pubkey]
-        val lud16 = profile?.lud16 ?: run {
+        zapRecipient(note.pubkey, profile?.lud16, note.id, comment, anonymous)
+    }
+
+    /**
+     * Profile zap (NIP-57 p-tag only): the same LNURL flow without a target
+     * note — the 9734 request carries only the recipient `p` tag.
+     */
+    fun zapAuthor(recipientPubkey: String, lud16: String?, comment: String = "", anonymous: Boolean = false) {
+        zapRecipient(recipientPubkey, lud16, null, comment, anonymous)
+    }
+
+    private fun zapRecipient(
+        recipientPubkey: String,
+        lud16: String?,
+        targetEventId: String?,
+        comment: String,
+        anonymous: Boolean,
+    ) {
+        if (lud16 == null) {
             mutableZap.value = mutableZap.value.copy(
                 phase = space.bitos.app.ui.feed.ZapPhase.FAILED,
                 failure = "This author has no Lightning address in their profile, so zaps cannot be sent.",
@@ -222,7 +257,7 @@ class HomeViewModel(
         viewModelScope.launch {
             try {
                 val payRequest = lnurlClient.fetchPayRequest(lud16)
-                val nostrJson = if (anonymous) null else signedZapRequest(payRequest, amountSats, lud16, note, comment)
+                val nostrJson = if (anonymous) null else signedZapRequest(payRequest, amountSats, lud16, recipientPubkey, targetEventId, comment)
                 // APP-014: remember the 9734 id — the paid watcher matches
                 // the receipt whose embedded request id equals it exactly.
                 mutableZap.value = mutableZap.value.copy(requestId = currentZapRequestId)
@@ -266,19 +301,20 @@ class HomeViewModel(
         payRequest: space.bitos.core.model.LnurlPay.PayRequest,
         amountSats: Long,
         lud16: String,
-        note: space.bitos.core.feed.FeedNote,
+        recipientPubkey: String,
+        targetEventId: String?,
         comment: String = "",
     ): String? {
         val signer = identityViewModel?.createSigner() ?: return null
         val composer = space.bitos.core.publish.NoteComposer(clock = { System.currentTimeMillis() / 1000 })
         val unsigned = composer.composeZapRequest(
-            recipientPubkey = note.pubkey,
+            recipientPubkey = recipientPubkey,
             amountMillisats = amountSats * 1000,
             relays = space.bitos.app.data.feed.DefaultRelays.urls.map { it.value },
             lnurlHint = lud16,
             comment = comment,
             authorPubkey = signer.publicKeyHex(),
-            targetEventId = note.id,
+            targetEventId = targetEventId,
         ) ?: return null
         currentZapRequestId = unsigned.idHex
         val signature = signer.sign(unsigned.messageBytes()) ?: return null

@@ -1,3 +1,4 @@
+import BusinessCore
 import SwiftUI
 
 /// Author profile bottom sheet (TikTok-style): banner hero + all profile
@@ -14,13 +15,19 @@ struct AuthorProfileSheet: View {
 
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
+    @Environment(SettingsStore.self) private var settings
     @State private var aboutExpanded = false
     @State private var npubCopied = false
     @State private var showInlineFull = false
+    @State private var showZap = false
+    /** X-style: tapping a note card opens its thread (CommentSheet). */
+    @State private var threadTarget: FeedNote?
 
     private var profile: ProfileMetadata? { environment.authorStore.profile }
     private var notes: [FeedNote] { environment.authorStore.notes }
     private var isFollowing: Bool { environment.feedStore.following.contains(authorPubkey) }
+    private var hasLightning: Bool { !(profile?.lud16 ?? "").isEmpty }
+    private var bitzCount: Int { notes.filter { $0.video != nil || !$0.mediaUrls.isEmpty }.count }
 
     var body: some View {
         NavigationStack {
@@ -35,7 +42,9 @@ struct AuthorProfileSheet: View {
                             aboutBlock(about)
                         }
                         infoChipsRow
-                        viewFullProfileRow
+                        statsRow
+                        quickActionsRow
+                        latestNoteCard
                         Divider().background(BitOSTheme.divider).padding(.vertical, 2)
                         notesSection
                     }
@@ -46,11 +55,7 @@ struct AuthorProfileSheet: View {
             .background(BitOSTheme.background)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    SheetCloseButton(action: onClose)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
         .onAppear { environment.authorStore.open(authorPubkey: authorPubkey) }
@@ -63,88 +68,161 @@ struct AuthorProfileSheet: View {
             .environment(environment)
             .environment(identity)
         }
+        // Profile zap (NIP-57 p-tag only, no target note).
+        .sheet(isPresented: $showZap) {
+            ZapSheet(
+                authorPubkey: authorPubkey,
+                profile: profile,
+                initialAmountSats: settings.state.defaultZapAmount,
+                onPaid: { sats, memo in
+                    environment.sentZaps.record(.init(
+                        id: "zap-\(authorPubkey)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                        amountSats: Int64(sats),
+                        recipientPubkey: authorPubkey,
+                        createdAt: Int64(Date.now.timeIntervalSince1970),
+                        targetNoteId: nil,
+                        memo: memo.isEmpty ? nil : memo
+                    ))
+                },
+                onClose: { showZap = false }
+            )
+            .environment(identity)
+            .presentationDetents([.medium])
+        }
+        // X-style note detail: the tapped note's thread opens above the sheet.
+        .sheet(item: $threadTarget) { target in
+            CommentSheet(
+                note: target,
+                store: environment.feedStore,
+                publisher: environment.notePublisher,
+                onClose: { threadTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium, .large])
+        }
     }
 
     // MARK: - Banner
 
     private var bannerSection: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let banner = profile?.banner, !banner.isEmpty, let url = URL(string: banner) {
-                AsyncImage(url: url) { phase in
-                    if let img = phase.image {
-                        img.resizable().scaledToFill()
-                    } else {
-                        defaultBanner
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let banner = profile?.banner, !banner.isEmpty, let url = URL(string: banner) {
+                    AsyncImage(url: url) { phase in
+                        if let img = phase.image {
+                            img.resizable().scaledToFill()
+                        } else {
+                            defaultBanner
+                        }
                     }
+                    .frame(height: 130)
+                    .clipped()
+                } else {
+                    defaultBanner
                 }
-                .frame(height: 130)
-                .clipped()
-            } else {
-                defaultBanner
             }
-            // Bottom scrim so the avatar reads on any cover.
-            LinearGradient(
-                colors: [.clear, BitOSTheme.background.opacity(0.55)],
-                startPoint: .top, endPoint: .bottom
-            )
+            .frame(height: 130)
+
+            // Close circle on the banner (mock parity): dark glass dot.
+            Button(action: onClose) {
+                AppIcons.image(for: AppIcons.close)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(.black.opacity(0.40)).background(.ultraThinMaterial))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close profile")
+            .padding(BitOSTheme.Spacing.md)
         }
-        .frame(height: 130)
     }
 
+    /// Mock parity: vivid orange → amber gradient with the hexagon pattern
+    /// overlay (same palette as the "You" page default cover).
     private var defaultBanner: some View {
-        LinearGradient(
-            colors: [BitOSTheme.accent.opacity(0.55), Color(red: 0.08, green: 0.06, blue: 0.22)],
-            startPoint: .topLeading, endPoint: .bottomTrailing
-        )
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.976, green: 0.659, blue: 0.294), Color(red: 0.831, green: 0.475, blue: 0.059)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            DefaultCoverHexPattern()
+        }
     }
 
     // MARK: - Avatar + action row
 
     private var avatarActionsRow: some View {
         HStack(alignment: .bottom, spacing: BitOSTheme.Spacing.sm) {
-            // Avatar overlaps the banner by pulling up with a negative top offset.
-            PubkeyAvatarView(
-                pubkey: authorPubkey,
-                size: 76,
-                picture: profile?.picture,
-                label: profile?.bestDisplayName,
-                hasLightning: !(profile?.lud16 ?? "").isEmpty
-            )
-            .overlay(
-                Circle()
-                    .strokeBorder(BitOSTheme.background, lineWidth: 3)
-            )
+            // Hex avatar floating over the banner edge (mock parity): a
+            // background-colored hex plate forms the border, so the avatar
+            // reads as a pure floating hexagon — no circular plate.
+            ZStack {
+                HexShape()
+                    .fill(BitOSTheme.background)
+                    .frame(width: 84, height: 84)
+                    .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                PubkeyAvatarView(
+                    pubkey: authorPubkey,
+                    size: 76,
+                    picture: profile?.picture,
+                    label: profile?.bestDisplayName,
+                    hasLightning: !(profile?.lud16 ?? "").isEmpty
+                )
+            }
             .offset(y: -38)
             .padding(.bottom, -38)
 
             Spacer()
 
-            // Copy npub
+            // "View Profile" pill beside the avatar (mock parity) — routes
+            // to the in-app full profile page, never an external link.
             Button {
-                if let npub = BusinessCoreBridge().npubEncode(pubkeyHex: authorPubkey) as String? {
-                    UIPasteboard.general.string = npub
-                    npubCopied = true
-                    Task {
-                        try? await Task.sleep(nanoseconds: 1_500_000_000)
-                        npubCopied = false
-                    }
+                if let external = onOpenFullProfile {
+                    onClose()
+                    external()
+                } else {
+                    showInlineFull = true
                 }
             } label: {
-                HStack(spacing: 4) {
-                    AppIcons.image(for: npubCopied ? AppIcons.checkCircle : AppIcons.copy)
-                        .font(.system(size: 14))
-                    Text(npubCopied ? "Copied" : "npub")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(BitOSTheme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(BitOSTheme.surface))
+                Text("View Profile")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(BitOSTheme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(BitOSTheme.textPrimary))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Copy npub")
+            .accessibilityLabel("View this author's full profile")
+        }
+        .padding(.top, BitOSTheme.Spacing.sm)
+    }
 
-            // Follow / Unfollow
+    // MARK: - Quick actions (Zap + Follow, mock parity)
+
+    private var quickActionsRow: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            // Zap — primary accent, only when the author has a lud16.
+            Button {
+                guard hasLightning else { return }
+                showZap = true
+            } label: {
+                HStack(spacing: 6) {
+                    AppIcons.image(for: AppIcons.zap)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Zap")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundStyle(hasLightning ? .white : BitOSTheme.textTertiary)
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .background(
+                    Capsule(style: .continuous).fill(hasLightning ? BitOSTheme.accent : BitOSTheme.surfaceOverlay)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasLightning)
+            .accessibilityLabel(hasLightning ? "Zap this profile" : "No lightning address")
+
+            // Follow / Unfollow — dark outline capsule.
             Button {
                 if let updated = environment.feedStore.applyFollowChange(
                     author: authorPubkey,
@@ -155,18 +233,42 @@ struct AuthorProfileSheet: View {
                 }
             } label: {
                 Text(isFollowing ? "Following ✓" : "Follow")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(isFollowing ? BitOSTheme.textPrimary : BitOSTheme.background)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 42)
                     .background(
-                        Capsule().fill(isFollowing ? BitOSTheme.surface : BitOSTheme.accent)
+                        Capsule(style: .continuous).fill(BitOSTheme.surfaceElevated)
+                    )
+                    .overlay(
+                        Capsule(style: .continuous).strokeBorder(BitOSTheme.border, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isFollowing ? "Unfollow" : "Follow")
         }
-        .padding(.top, BitOSTheme.Spacing.sm)
+    }
+
+    // MARK: - Latest note preview (mock parity)
+
+    @ViewBuilder
+    private var latestNoteCard: some View {
+        if let latest = notes.first, !latest.content.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Latest Note")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                Text(latest.content)
+                    .font(.system(size: 12))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(BitOSTheme.Spacing.md)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BitOSTheme.surface))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(BitOSTheme.border.opacity(0.6)))
+        }
     }
 
     // MARK: - Name block
@@ -191,9 +293,27 @@ struct AuthorProfileSheet: View {
                     .foregroundStyle(BitOSTheme.accent)
                     .lineLimit(1)
             }
-            Text(FeedFormat.shortPubkey(authorPubkey))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(BitOSTheme.textTertiary)
+            // Copy npub chip (moved from the header row).
+            Button {
+                if let npub = BusinessCoreBridge().npubEncode(pubkeyHex: authorPubkey) as String? {
+                    UIPasteboard.general.string = npub
+                    npubCopied = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        npubCopied = false
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    AppIcons.image(for: npubCopied ? AppIcons.checkCircle : AppIcons.copy)
+                        .font(.system(size: 12))
+                    Text(npubCopied ? "npub copied" : FeedFormat.shortPubkey(authorPubkey))
+                        .font(.system(size: 11, design: .monospaced))
+                }
+                .foregroundStyle(npubCopied ? BitOSTheme.success : BitOSTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy npub")
         }
     }
 
@@ -260,35 +380,37 @@ struct AuthorProfileSheet: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(0.12)))
     }
 
-    // MARK: - View full profile row
+    // MARK: - Stats row (truthful counts from the author REQ window)
 
-    private var viewFullProfileRow: some View {
-        Button {
-            if let external = onOpenFullProfile {
-                onClose()
-                external()
-            } else {
-                showInlineFull = true
+    private var statsRow: some View {
+        HStack(spacing: BitOSTheme.Spacing.xl) {
+            stat("Notes", FeedFormat.count(notes.count))
+            stat("Bitz", FeedFormat.count(bitzCount))
+            if isFollowing {
+                stat("Follows", "✓ You")
             }
-        } label: {
-            HStack {
-                AppIcons.image(for: AppIcons.user)
-                    .font(.system(size: 14))
-                    .foregroundStyle(BitOSTheme.accent)
-                Text("View full profile")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(BitOSTheme.accent)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(BitOSTheme.textTertiary)
-            }
-            .padding(.vertical, 10)
-            .padding(.horizontal, BitOSTheme.Spacing.md)
-            .background(RoundedRectangle(cornerRadius: 12).fill(BitOSTheme.surface))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("View this author's full profile")
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, BitOSTheme.Spacing.sm)
+        .overlay(
+            Rectangle().fill(BitOSTheme.border.opacity(0.6)).frame(height: 1),
+            alignment: .top
+        )
+        .overlay(
+            Rectangle().fill(BitOSTheme.border.opacity(0.6)).frame(height: 1),
+            alignment: .bottom
+        )
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(BitOSTheme.textPrimary)
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(BitOSTheme.textSecondary)
+        }
     }
 
     // MARK: - Notes
@@ -314,8 +436,28 @@ struct AuthorProfileSheet: View {
                     .foregroundStyle(BitOSTheme.textSecondary)
                     .textCase(.uppercase)
                     .tracking(0.5)
-                ForEach(notes.prefix(20)) { note in
-                    AuthorNoteCard(note: note, profile: profile)
+                // Pages of five arrive on demand — reaching the last loaded
+                // note asks for the next older page.
+                ForEach(notes) { note in
+                    AuthorNoteCard(note: note, profile: profile) {
+                        threadTarget = note
+                    }
+                    .onAppear {
+                        if note.id == notes.last?.id {
+                            environment.authorStore.loadMoreNotes()
+                        }
+                    }
+                }
+                if environment.authorStore.isLoadingMore {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .tint(BitOSTheme.accent)
+                        Text("Loading more…")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, BitOSTheme.Spacing.sm)
                 }
             }
         }
@@ -324,35 +466,43 @@ struct AuthorProfileSheet: View {
 
 // MARK: - Full-screen profile view (presented from "View full profile")
 
-/// Expanded profile presentation that fills the whole screen — same data as
-/// the sheet, more room for the banner hero and notes list.
+/// In-app full-page profile for any author (UX-010): same page as the "You"
+/// tab, backed by a private AuthorStore REQ. Never opens an external link.
 struct AuthorProfileFullView: View {
     let authorPubkey: String
     let onClose: () -> Void
-    @Environment(AppEnvironment.self) private var environment
-    @Environment(IdentityStore.self) private var identity
 
     var body: some View {
-        // Re-use the sheet as a full-screen NavigationStack by changing detents
-        // to fill-all; the AuthorStore state is already loaded.
-        AuthorProfileSheet(
-            authorPubkey: authorPubkey,
-            onClose: onClose
-        )
-        .environment(environment)
-        .environment(identity)
-        .ignoresSafeArea(edges: .top)
+        AuthorProfilePage(authorPubkey: authorPubkey, onClose: onClose)
     }
 }
 
 // MARK: - Author note card
 
+/// X-style card: time + media badge, clamped content, inline media preview
+/// (image row / 16:9 video tile), whole card opens the note's thread when
+/// `onOpen` is provided.
 private struct AuthorNoteCard: View {
     let note: FeedNote
     let profile: ProfileMetadata?
+    var onOpen: (() -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
+        Group {
+            if let onOpen {
+                card
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Open note thread")
+            } else {
+                card
+            }
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 Text(FeedFormat.timeAgo(createdAt: note.createdAt))
@@ -393,10 +543,39 @@ private struct AuthorNoteCard: View {
                         .buttonStyle(.plain)
                 }
             }
+            mediaPreview
         }
         .padding(BitOSTheme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BitOSTheme.surface))
+    }
+
+    /// X-style inline media: up to three square images or one video tile.
+    @ViewBuilder
+    private var mediaPreview: some View {
+        let images = note.mediaUrls.filter { !$0.hasVideoExtension }
+        if let video = note.video {
+            BitzVideoTile(url: URL(string: video.posterUrl ?? video.url))
+        } else if !images.isEmpty {
+            HStack(spacing: 2) {
+                ForEach(images.prefix(3), id: \.self) { urlString in
+                    AsyncImage(url: URL(string: urlString)) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        BitOSTheme.surfaceOverlay
+                    }
+                    .frame(width: 92, height: 92)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+}
+
+private extension String {
+    var hasVideoExtension: Bool {
+        let lower = lowercased()
+        return [".mp4", ".webm", ".mov", ".m4v"].contains { lower.hasSuffix($0) }
     }
 }
 

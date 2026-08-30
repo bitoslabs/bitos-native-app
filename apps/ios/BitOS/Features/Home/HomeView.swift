@@ -1267,14 +1267,16 @@ private struct VideoNotePage: View {
     private var BitOSSpacingAvatar: CGFloat { BitOSTheme.Spacing.sm }
 }
 
-/// Aspect-fill, no built-in controls: playback control is the tap layer.
+/// Aspect-fit, no built-in controls: playback control is the tap layer.
+/// Black page space is intentional so the creator's original frame is never
+/// cropped by the feed.
 struct PlayerSurface: UIViewControllerRepresentable {
     let player: AVQueuePlayer?
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.showsPlaybackControls = false
-        controller.videoGravity = .resizeAspectFill
+        controller.videoGravity = .resizeAspect
         controller.view.backgroundColor = .clear
         return controller
     }
@@ -1527,14 +1529,10 @@ private struct PosterImage: View {
                 if let image {
                     Image(uiImage: image)
                         .resizable()
-                        .scaledToFill()
+                        .scaledToFit()
                         .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
                 } else {
-                    LinearGradient(
-                        colors: [BitOSTheme.surface, BitOSTheme.surfaceElevated],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
+                    Color.black
                 }
             }
         }

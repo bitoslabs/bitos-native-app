@@ -139,6 +139,7 @@ class BusinessCoreBridge {
         filterOrdinal: Int,
         ownPubkeyHex: String?,
         likedIds: List<String>,
+        showProtocolNotes: Boolean = false,
     ): Boolean {
         val filter = space.bitos.core.feed.FeedFilter.entries.getOrNull(filterOrdinal) ?: space.bitos.core.feed.FeedFilter.ALL
         val coreNote = FeedNote(
@@ -169,8 +170,24 @@ class BusinessCoreBridge {
             threadRootId = note.threadRootId,
             threadParentId = note.threadParentId,
         )
-        return space.bitos.core.feed.FeedFilters.passes(coreNote, filter, ownPubkeyHex, likedIds.toSet())
+        return space.bitos.core.feed.FeedFilters.passes(coreNote, filter, ownPubkeyHex, likedIds.toSet(), showProtocolNotes)
     }
+
+    /**
+     * Content classification (web `content-classification.ts` parity):
+     * serialized channel rosters are machine traffic, not reader content.
+     */
+    fun isProtocolPayload(content: String): Boolean =
+        space.bitos.core.nostr.ContentClassification.isProtocolPayload(content)
+
+    /** Bot coordination tags (`udal-*`) never carry a human topic. */
+    fun isMachineTag(tag: String): Boolean =
+        space.bitos.core.nostr.ContentClassification.isMachineTag(tag)
+
+    /** Filter a tag list down to the human-meaningful entries. */
+    fun humanTags(tags: List<String>): List<String> =
+        space.bitos.core.nostr.ContentClassification.humanTags(tags)
+
 
     /**
      * APP-005 NIP-27 rich-content tokens as stable JSON for the Swift
@@ -2390,12 +2407,24 @@ class BusinessCoreBridge {
         return if (trimmed.startsWith("npub1")) space.bitos.core.identity.NostrKeyCodec.parseNpub(trimmed) else null
     }
 
-    /** REQ for one author's profile + notes. */
-    fun authorRequest(subscriptionId: String, authorPubkey: String): String =
-        NostrEventCodec.encodeRequest(
-            subscriptionId,
-            """{"kinds":[0,1,21,22],"authors":["$authorPubkey"],"limit":20}""",
-        )
+    /** REQ for one author's profile + notes. First page includes kind-0 and
+     *  is bounded by [limit]; follow-up pages drop kind-0 and page backward
+     *  from [untilSeconds] (the caller dedupes by event id). Limit coerces
+     *  into the 1..100 window so the REQ stays size-bounded. */
+    fun authorRequest(
+        subscriptionId: String,
+        authorPubkey: String,
+        limit: Int = 20,
+        untilSeconds: Long? = null,
+    ): String {
+        val bounded = limit.coerceIn(1, 100)
+        val filter = if (untilSeconds == null) {
+            """{"kinds":[0,1,21,22],"authors":["$authorPubkey"],"limit":$bounded}"""
+        } else {
+            """{"kinds":[1,21,22],"authors":["$authorPubkey"],"until":$untilSeconds,"limit":$bounded}"""
+        }
+        return NostrEventCodec.encodeRequest(subscriptionId, filter)
+    }
 
     /** Composes the unsigned kind-0 profile event and returns its id. */
     fun composeProfileEventId(

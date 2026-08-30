@@ -110,7 +110,12 @@ protocol BusinessCoreClient: Sendable {
     func isProfileKind(_ kind: Int) -> Bool
 
     /// APP-004 content-filter rule (shared core; Swift-note seam).
-    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String]) -> Bool
+    /// `showProtocolNotes` re-admits protocol-payload notes (web parity).
+    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String], showProtocolNotes: Bool) -> Bool
+    /// Content classification (web `content-classification.ts` parity).
+    func isProtocolPayload(_ content: String) -> Bool
+    func isMachineTag(_ tag: String) -> Bool
+    func humanTags(_ tags: [String]) -> [String]
     /// APP-004 empty-feed retry delay in ms (shared `EmptyFeedRetry` policy:
     /// 2 s exponential backoff capped at 30 s).
     func emptyFeedRetryDelayMs(attempt: Int) -> Int
@@ -170,13 +175,26 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.isProfileKind(kind: Int32(kind))
     }
 
-    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String]) -> Bool {
+    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String], showProtocolNotes: Bool) -> Bool {
         bridge.feedFilterMatches(
             note: note.bridgeNote,
             filterOrdinal: Int32(filterOrdinal),
             ownPubkeyHex: ownPubkeyHex,
-            likedIds: likedIds
+            likedIds: likedIds,
+            showProtocolNotes: showProtocolNotes
         )
+    }
+
+    func isProtocolPayload(_ content: String) -> Bool {
+        bridge.isProtocolPayload(content: content)
+    }
+
+    func isMachineTag(_ tag: String) -> Bool {
+        bridge.isMachineTag(tag: tag)
+    }
+
+    func humanTags(_ tags: [String]) -> [String] {
+        bridge.humanTags(tags: tags).map { $0 as String }
     }
 
     func emptyFeedRetryDelayMs(attempt: Int) -> Int {
@@ -408,9 +426,21 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
 
     func isFeedKind(_ kind: Int) -> Bool { kind == 1 || kind == 21 || kind == 22 }
     func isProfileKind(_ kind: Int) -> Bool { kind == 0 }
-    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String]) -> Bool {
-        // Fixtures always pass; production goes through the shared core.
-        true
+    func feedFilterMatches(note: FeedNote, filterOrdinal: Int, ownPubkeyHex: String?, likedIds: [String], showProtocolNotes: Bool) -> Bool {
+        // Same seam as decode: the shared rule runs once in the framework.
+        FrameworkBusinessCoreClient().feedFilterMatches(
+            note: note, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkeyHex,
+            likedIds: likedIds, showProtocolNotes: showProtocolNotes
+        )
+    }
+    func isProtocolPayload(_ content: String) -> Bool {
+        FrameworkBusinessCoreClient().isProtocolPayload(content)
+    }
+    func isMachineTag(_ tag: String) -> Bool {
+        FrameworkBusinessCoreClient().isMachineTag(tag)
+    }
+    func humanTags(_ tags: [String]) -> [String] {
+        FrameworkBusinessCoreClient().humanTags(tags)
     }
     func emptyFeedRetryDelayMs(attempt: Int) -> Int { 2_000 }
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }

@@ -68,6 +68,9 @@ class BitOsApplication : Application() {
             scope = applicationScope,
             pool = relayPool,
             cache = SqliteEventCache(this),
+            // Web feedPreferences parity: read live so a settings change
+            // reconciles on the next publish without rebuilding the repo.
+            showProtocolNotes = { settingsStore.snapshot.value.showProtocolNotes },
         )
     }
 

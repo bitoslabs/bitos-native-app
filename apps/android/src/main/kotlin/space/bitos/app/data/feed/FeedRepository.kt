@@ -97,6 +97,9 @@ class FeedRepository(
     /** Injectable so contract tests drive the APP-004 empty-feed backoff
      * without real-time waits; production uses the shared-core policy. */
     private val retryDelayMs: (Int) -> Long = EmptyFeedRetry::delayMs,
+    /** Web feedPreferences parity: persisted reader opt-in that re-admits
+     * protocol-payload notes into the feed windows. */
+    private val showProtocolNotes: () -> Boolean = { false },
 ) {
     private val aggregator = FeedAggregator(maxItems = 200)
     private val followingWindow = FeedAggregator(maxItems = 200)
@@ -433,6 +436,8 @@ class FeedRepository(
         val freshPlayable = batch.freshPlayableIds.size
         val nextCursor = BitzTimelinePolicy.advanceCursor(batch.oldestInBatch, batch.cursor)
         olderLanes.getValue(batch.timeline).cursorSeconds = nextCursor
+        val confirmedEmpty = batch.expectedRelays.isNotEmpty() &&
+            batch.eoseRelays.containsAll(batch.expectedRelays)
         val stalled = batch.returnedIds.isNotEmpty() &&
             BitzTimelinePolicy.relayStalled(batch.oldestInBatch, batch.cursor, freshIds)
         if (stalled) {
@@ -441,6 +446,13 @@ class FeedRepository(
             return
         }
 
+        // A deadline is a slow/unavailable relay, not proof that history
+        // ended. Leave this lane retryable so the near-edge trigger can ask
+        // again; only all-relay EOSE empties contribute to exhaustion.
+        if (batch.returnedIds.isEmpty() && !confirmedEmpty) {
+            finishOlderWalk(batch.timeline)
+            return
+        }
         val nextEmptyAttempts = if (batch.returnedIds.isEmpty()) batch.emptyAttempts + 1 else 0
         if (nextEmptyAttempts >= OLDER_EMPTY_EXHAUST) {
             olderLanes.getValue(batch.timeline).exhausted = true
@@ -471,7 +483,7 @@ class FeedRepository(
 
     /** ALL-window size of the For You timeline (mutes + protocol payload hidden). */
     private fun allWindowSize(): Int =
-        aggregator.snapshot().count { it.pubkey !in mutedPubkeys && !it.isProtocolPayload }
+        aggregator.snapshot().count { it.pubkey !in mutedPubkeys && (showProtocolNotes() || !it.isProtocolPayload) }
 
     private fun space.bitos.core.model.NostrEvent.eTaggedIds(): List<String> =
         tags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }
@@ -969,6 +981,7 @@ class FeedRepository(
         val filter = mutableState.value.filter
         val ownPubkey = accountPubkey
         val liked = likedIds
+        val protocolNotesVisible = showProtocolNotes()
         val forYouWindow = aggregator.snapshot()
         val rankedForYou = algorithm?.let { snapshot ->
             FeedRanking.rank(
@@ -985,14 +998,14 @@ class FeedRepository(
         } ?: forYouWindow
         val followingSnapshot = followingWindow.snapshot()
         val allWindow: (List<FeedNote>) -> Int = { window ->
-            window.count { it.pubkey !in hiddenSet && !it.isProtocolPayload }
+            window.count { it.pubkey !in hiddenSet && (protocolNotesVisible || !it.isProtocolPayload) }
         }
         mutableState.value = mutableState.value.copy(
             notes = (if (mutableState.value.timeline == FeedTimeline.FOLLOWING) {
                 followingSnapshot
             } else {
                 rankedForYou
-            }).filter { it.pubkey !in hiddenSet && FeedFilters.passes(it, filter, ownPubkey, liked) },
+            }).filter { it.pubkey !in hiddenSet && FeedFilters.passes(it, filter, ownPubkey, liked, protocolNotesVisible) },
             pendingNotes = pendingFor(mutableState.value.timeline).toList(),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),

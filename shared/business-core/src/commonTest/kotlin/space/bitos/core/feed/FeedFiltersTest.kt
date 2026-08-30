@@ -43,6 +43,16 @@ class FeedFiltersTest {
     }
 
     @Test
+    fun protocolOptInReAdmitsProtocolPayloads() {
+        // Web feedPreferences parity: showProtocolNotes re-admits machine
+        // traffic into the reader-facing windows.
+        assertTrue(FeedFilters.passes(note(protocol = true), FeedFilter.ALL, null, showProtocolNotes = true))
+        assertTrue(FeedFilters.passes(note(protocol = true, replyTo = "e".repeat(64)), FeedFilter.REPLIES, null, showProtocolNotes = true))
+        // Explicit user selections never depend on traffic class.
+        assertTrue(FeedFilters.passes(note(protocol = true, id = "11".repeat(8)), FeedFilter.LIKED, null, liked))
+    }
+
+    @Test
     fun originalsExcludesReplies() {
         assertTrue(FeedFilters.passes(note(), FeedFilter.ORIGINALS, null))
         assertFalse(FeedFilters.passes(note(replyTo = "e".repeat(64)), FeedFilter.ORIGINALS, null))

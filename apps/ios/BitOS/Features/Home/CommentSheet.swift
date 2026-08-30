@@ -15,6 +15,8 @@ struct CommentSheet: View {
     @State private var text = ""
     /** Per-comment zap: opens the ZapSheet stacked above this thread. */
     @State private var zapTarget: FeedNote?
+    /** Author avatar/name taps open the profile sheet (UX-010). */
+    @State private var profileTarget: String?
 
     // APP-009 reply bar (legacy `_ThreadReplyBar` parity): sub-reply
     // targeting, URL/GIF/gallery attachments, PoW, pill input + send.
@@ -56,13 +58,9 @@ struct CommentSheet: View {
             content
                 .padding(BitOSTheme.Spacing.screen)
                 .background(BitOSTheme.background)
-                .navigationTitle("Replies")
+                .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        SheetCloseButton(action: onClose)
-                    }
-                }
+                .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
         .onAppear { store.loadComments(targetEventId: note.id) }
@@ -145,11 +143,46 @@ struct CommentSheet: View {
             .environment(identity)
             .presentationDetents([.medium])
         }
+        // Author taps inside the thread open the profile sheet (UX-010).
+        .sheet(item: Binding(
+            get: { profileTarget.map { ProfileTarget(id: $0) } },
+            set: { profileTarget = $0?.id }
+        )) { target in
+            AuthorProfileSheet(
+                authorPubkey: target.id,
+                onClose: { profileTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private struct ProfileTarget: Identifiable {
+        let id: String
     }
 
     @ViewBuilder
     private var content: some View {
         VStack(spacing: BitOSTheme.Spacing.md) {
+            // Header (mock parity): "Comments N" + close.
+            HStack(alignment: .firstTextBaseline) {
+                Text("Comments")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                Text("\(max(comments.count, threadItems.count))")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                Spacer()
+                Button(action: onClose) {
+                    AppIcons.image(for: AppIcons.close)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close comments")
+            }
             ScrollView {
                 VStack(spacing: BitOSTheme.Spacing.sm) {
                     ThreadRootCard(
@@ -163,7 +196,8 @@ struct CommentSheet: View {
                         onLike: { like(note) },
                         onRepost: { repost(note) },
                         onBookmark: { toggleBookmark(note) },
-                        onZap: { openZap(note) }
+                        onZap: { openZap(note) },
+                        onOpenProfile: { profileTarget = note.pubkey }
                     )
                     if comments.isEmpty {
                         Text(store.hasLoadedAnyEvent ? "No replies yet." : "Loading replies…")
@@ -182,7 +216,8 @@ struct CommentSheet: View {
                                 tally: store.tallies[reply.id],
                                 isLiked: store.localActions.liked.contains(reply.id),
                                 onLike: { like(reply) },
-                                onZap: { openZap(reply) }
+                                onZap: { openZap(reply) },
+                                onOpenProfile: { profileTarget = reply.pubkey }
                             ) {
                                 replyTarget = reply
                             }
@@ -430,19 +465,26 @@ private struct ThreadRootCard: View {
     let onRepost: () -> Void
     let onBookmark: () -> Void
     let onZap: () -> Void
+    var onOpenProfile: (() -> Void)? = nil
     @State private var showRaw = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 40, label: profile?.bestDisplayName)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                        .font(.system(size: 14, weight: .bold))
-                    Text(FeedFormat.timeAgo(createdAt: note.createdAt))
-                        .font(.system(size: 11))
-                        .foregroundStyle(BitOSTheme.textTertiary)
+                Button(action: { onOpenProfile?() }) {
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        PubkeyAvatarView(pubkey: note.pubkey, size: 40, label: profile?.bestDisplayName)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
+                                .font(.system(size: 14, weight: .bold))
+                            Text(FeedFormat.timeAgo(createdAt: note.createdAt))
+                                .font(.system(size: 11))
+                                .foregroundStyle(BitOSTheme.textTertiary)
+                        }
+                    }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open author profile")
             }
             Text(note.content)
                 .font(.system(size: 14))
@@ -538,6 +580,7 @@ private struct ReplyRow: View {
     var isLiked: Bool = false
     var onLike: (() -> Void)? = nil
     var onZap: (() -> Void)? = nil
+    var onOpenProfile: (() -> Void)? = nil
     var onReplyTo: (() -> Void)? = nil
 
     // Depth-keyed tint for the vertical thread line (TikTok/X pattern).
@@ -566,22 +609,32 @@ private struct ReplyRow: View {
                 .padding(.trailing, 6)
             }
             HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: reply.pubkey, size: depth == 0 ? 28 : 22, label: profile?.bestDisplayName)
+                Button(action: { onOpenProfile?() }) {
+                    PubkeyAvatarView(pubkey: reply.pubkey, size: depth == 0 ? 28 : 22, label: profile?.bestDisplayName)
+                }
+                .buttonStyle(.plain)
+                .disabled(onOpenProfile == nil)
+                .accessibilityLabel("Open author profile")
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: BitOSTheme.Spacing.xs) {
-                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(reply.pubkey))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(BitOSTheme.textPrimary)
-                            .lineLimit(1)
-                        if orphan {
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: 9))
+                    Button(action: { onOpenProfile?() }) {
+                        HStack(spacing: BitOSTheme.Spacing.xs) {
+                            Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(reply.pubkey))
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(BitOSTheme.textPrimary)
+                                .lineLimit(1)
+                            if orphan {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(BitOSTheme.textTertiary)
+                            }
+                            Text(FeedFormat.timeAgo(createdAt: reply.createdAt))
+                                .font(.system(size: 11))
                                 .foregroundStyle(BitOSTheme.textTertiary)
                         }
-                        Text(FeedFormat.timeAgo(createdAt: reply.createdAt))
-                            .font(.system(size: 11))
-                            .foregroundStyle(BitOSTheme.textTertiary)
                     }
+                    .buttonStyle(.plain)
+                    .disabled(onOpenProfile == nil)
+                    .accessibilityLabel("Open author profile")
                     Text(reply.content)
                         .font(depth == 0 ? .subheadline : .footnote)
                         .foregroundStyle(BitOSTheme.textPrimary)

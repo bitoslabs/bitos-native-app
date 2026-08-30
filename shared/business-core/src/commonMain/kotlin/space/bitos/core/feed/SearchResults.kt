@@ -48,7 +48,10 @@ object SearchResults {
     fun hashtags(notes: List<FeedNote>): List<HashtagHit> {
         val counts = HashMap<String, Int>()
         for (note in notes) {
-            for (tag in note.hashtags) {
+            // Machine coordination tags (`udal-*` bot swarms) are not topics:
+            // they would crowd out human tags from the Hashtags tab (web
+            // `humanTags` parity).
+            for (tag in space.bitos.core.nostr.ContentClassification.humanTags(note.hashtags)) {
                 val key = tag.lowercase()
                 counts[key] = (counts[key] ?: 0) + 1
             }

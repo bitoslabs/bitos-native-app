@@ -21,7 +21,10 @@ struct ZapUiState: Sendable, Equatable {
  * (NWC is a separate safety-gated slice).
  */
 struct ZapSheet: View {
-    let note: FeedNote
+    /** Target note for a note zap; nil for a profile zap (NIP-57 p-tag only). */
+    let note: FeedNote?
+    /** Recipient in both modes: the note author or the zapped profile. */
+    let recipientPubkey: String
     let profiles: [String: ProfileMetadata]
     let initialAmountSats: Int
     var zapCount: Int = 0
@@ -54,6 +57,7 @@ struct ZapSheet: View {
          onPaid: @escaping (Int, String) -> Void = { _, _ in },
          onClose: @escaping () -> Void) {
         self.note = note
+        self.recipientPubkey = note.pubkey
         self.profiles = profiles
         self.initialAmountSats = initialAmountSats
         self.zapCount = zapCount
@@ -63,8 +67,25 @@ struct ZapSheet: View {
         _state = State(initialValue: ZapUiState(amountSats: initialAmountSats))
     }
 
-    private var lud16: String? { profiles[note.pubkey]?.lud16 }
-    private var displayName: String? { profiles[note.pubkey]?.bestDisplayName }
+    /// Profile zap (no target note): the kind-9734 request carries only the
+    /// `p` tag; paid detection rides the LUD-21 verify settle alone.
+    init(authorPubkey: String, profile: ProfileMetadata?,
+         initialAmountSats: Int = 21,
+         onPaid: @escaping (Int, String) -> Void = { _, _ in },
+         onClose: @escaping () -> Void) {
+        self.note = nil
+        self.recipientPubkey = authorPubkey
+        self.profiles = [authorPubkey: profile].compactMapValues { $0 }
+        self.initialAmountSats = initialAmountSats
+        self.zapCount = 0
+        self.paidRequestIds = []
+        self.onPaid = onPaid
+        self.onClose = onClose
+        _state = State(initialValue: ZapUiState(amountSats: initialAmountSats))
+    }
+
+    private var lud16: String? { profiles[recipientPubkey]?.lud16 }
+    private var displayName: String? { profiles[recipientPubkey]?.bestDisplayName }
     private var amount: Int {
         Int(customAmount).flatMap { $0 > 0 ? $0 : nil } ?? state.amountSats
     }
@@ -86,7 +107,10 @@ struct ZapSheet: View {
                 }
         }
         .preferredColorScheme(.dark)
-        .onAppear { environment.feedStore.loadZaps(targetEventId: note.id) }
+        .onAppear {
+            // Profile zaps have no note receipt stream to watch (LUD-21 only).
+            if let note { environment.feedStore.loadZaps(targetEventId: note.id) }
+        }
         .onChange(of: zapCount) { _, count in
             // Paid: EXACT request-id match when we signed a 9734;
             // unsigned/anonymous keeps the count signal.
@@ -129,8 +153,8 @@ struct ZapSheet: View {
             ZapHeaderView(
                 paid: paid,
                 recipientName: displayName,
-                recipientPubkey: note.pubkey,
-                recipientPicture: profiles[note.pubkey]?.picture,
+                recipientPubkey: recipientPubkey,
+                recipientPicture: profiles[recipientPubkey]?.picture,
                 lud16: lud16,
                 copiedKind: copiedKind,
                 onCopyAddress: {
@@ -209,17 +233,17 @@ struct ZapSheet: View {
             if payRequest.allowsNostr, let account = identity.account, !anonymous {
                 let now = Int64(Date.now.timeIntervalSince1970)
                 if let eventId = bridge.composeZapRequestEventId(
-                    recipientPubkey: note.pubkey, amountMillisats: Int64(amount) * 1000,
+                    recipientPubkey: recipientPubkey, amountMillisats: Int64(amount) * 1000,
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
-                    authorPubkey: account.pubkeyHex, targetEventId: note.id, nowSeconds: now
+                    authorPubkey: account.pubkeyHex, targetEventId: note?.id, nowSeconds: now
                 ), let signature = await identity.signLocally(eventId),
                    // LUD-06: the `nostr` param is the BARE signed event
                    // object `{...}` — never a relay `["EVENT",…]` frame
                    // (APP-014 fix: servers reject frames outright).
                    let frame = bridge.zapRequestEventJson(
-                    recipientPubkey: note.pubkey, amountMillisats: Int64(amount) * 1000,
+                    recipientPubkey: recipientPubkey, amountMillisats: Int64(amount) * 1000,
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
-                    authorPubkey: account.pubkeyHex, targetEventId: note.id,
+                    authorPubkey: account.pubkeyHex, targetEventId: note?.id,
                     createdAtSeconds: now, signatureHex: signature
                    ) {
                     nostrJson = frame

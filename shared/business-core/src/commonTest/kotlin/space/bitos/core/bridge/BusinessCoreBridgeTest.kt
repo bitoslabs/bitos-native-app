@@ -40,6 +40,24 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun authorRequestPagesBackwardAndStaysBounded() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        // First page: profile + notes kinds, default 20-item window.
+        val first = bridge.authorRequest("bitos-author", author)
+        assertTrue(first.contains("\"kinds\":[0,1,21,22]"), first)
+        assertTrue(first.contains("\"limit\":20"), first)
+        assertFalse(first.contains("\"until\""), first)
+        // Follow-up page: notes only, `until` cursor, small bounded window.
+        val page = bridge.authorRequest("bitos-author-2", author, limit = 5, untilSeconds = 1_710_000_000)
+        assertTrue(page.contains("\"kinds\":[1,21,22]"), page)
+        assertTrue(page.contains("\"until\":1710000000"), page)
+        assertTrue(page.contains("\"limit\":5"), page)
+        // The limit is coerced into the 1..100 window either way.
+        assertTrue(bridge.authorRequest("s3", author, limit = 9_999).contains("\"limit\":100"))
+        assertTrue(bridge.authorRequest("s4", author, limit = 0).contains("\"limit\":1"))
+    }
+
+    @Test
     fun rejectsInvalidRelayUrl() {
         assertNull(bridge.decodeEvent(VALID_TEXT_NOTE_MESSAGE, "https://not-websocket.example"))
         assertNull(bridge.decodeEvent(VALID_TEXT_NOTE_MESSAGE, null))

@@ -19,15 +19,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material3.Button
@@ -48,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -58,10 +55,12 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.data.feed.AuthorUiState
 import space.bitos.app.data.feed.FeedUiState
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.SheetCloseIcon
+import space.bitos.app.ui.components.formatCount
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.AppIcons
@@ -74,8 +73,9 @@ import space.bitos.core.model.ProfileMetadata
 
 /**
  * Author profile bottom sheet: banner hero, all profile fields (about,
- * website, lightning), follow/unfollow, copy-npub, and a "View full
- * profile" link that opens njump.me in the browser.
+ * website, lightning), Zap + follow/unfollow, copy-npub, stats, and a
+ * "View full profile" action that routes to the in-app full profile page
+ * (never an external link).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -86,6 +86,14 @@ fun AuthorProfileContent(
     onOpen: (String) -> Unit,
     onFollow: (String) -> Unit,
     onClose: () -> Unit,
+    /** Opens the profile zap sheet (only rendered with a lud16). */
+    onZap: () -> Unit = {},
+    /** Routes to the in-app full profile page (UX-010). */
+    onOpenFullProfile: (String) -> Unit = {},
+    /** X-style: tapping a note card opens its thread. */
+    onOpenNote: (FeedNote) -> Unit = {},
+    /** Next older notes page (five at a time). */
+    onLoadMore: () -> Unit = {},
 ) {
     LaunchedEffect(authorPubkey) { onOpen(authorPubkey) }
 
@@ -115,29 +123,21 @@ fun AuthorProfileContent(
                     modifier = Modifier.matchParentSize(),
                 )
             } else {
+                // Mock parity: vivid orange → amber gradient with the
+                // hexagon pattern overlay (same palette as the "You" page
+                // default cover).
                 Box(
                     modifier = Modifier
                         .matchParentSize()
                         .background(
                             Brush.linearGradient(
-                                listOf(
-                                    BitOSColors.primary.copy(alpha = 0.55f),
-                                    Color(0xFF14103A),
-                                )
+                                listOf(Color(0xFFF9A84B), Color(0xFFD4790F)),
                             )
                         ),
-                )
+                ) {
+                    DefaultCoverHexPattern()
+                }
             }
-            // Bottom scrim
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, BitOSColors.background.copy(alpha = 0.5f)),
-                        )
-                    ),
-            )
             // Close button in top-right corner of the banner
             Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                 SheetCloseIcon(onClose = onClose)
@@ -158,71 +158,45 @@ fun AuthorProfileContent(
                 ),
                 verticalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
             ) {
-                // ── Avatar + action row ──────────────────────────────
+                // ── Avatar + "View Profile" pill (mock parity) ─────────
                 item(key = "header") {
                     Row(
                         verticalAlignment = Alignment.Bottom,
                         modifier = Modifier.overlapAbove(32.dp),
                     ) {
-                        // Avatar overlapping the banner
+                        // Hex avatar floating over the banner edge: a
+                        // background-colored hex plate forms the border
+                        // (mock border-4) — no circular plate.
                         Box(
                             modifier = Modifier
-                                .size(80.dp)
-                                .clip(CircleShape)
-                                .background(BitOSColors.background)
-                                .padding(3.dp),
+                                .size(84.dp)
+                                .shadow(6.dp, space.bitos.app.ui.components.HexShape())
+                                .clip(space.bitos.app.ui.components.HexShape())
+                                .background(BitOSColors.background),
+                            contentAlignment = Alignment.Center,
                         ) {
                             PubkeyAvatar(
                                 pubkey = authorPubkey,
-                                size = 74,
+                                size = 76,
                                 pictureUrl = profile?.picture,
                                 label = profile?.bestDisplayName,
                                 hasLightning = !profile?.lud16.isNullOrBlank(),
                             )
                         }
                         Spacer(Modifier.weight(1f))
-                        // Copy npub
-                        OutlinedButton(
-                            onClick = {
-                                val npub = space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
-                                if (npub != null) {
-                                    clipboard.setText(AnnotatedString(npub))
-                                    npubCopied = true
-                                }
-                            },
+                        // In-app full profile route (UX-010) — white pill
+                        // beside the avatar, never an external link.
+                        Button(
+                            onClick = { onOpenFullProfile(authorPubkey) },
                             shape = RoundedCornerShape(50),
-                            modifier = Modifier.height(36.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BitOSColors.textPrimary,
+                                contentColor = BitOSColors.background,
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp),
+                            modifier = Modifier.height(34.dp),
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ContentCopy,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (npubCopied) "Copied" else "npub",
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                        Spacer(Modifier.width(BitOSSpacing.sm))
-                        // Follow / Unfollow
-                        val isFollowing = feedState.following.contains(authorPubkey)
-                        if (isFollowing) {
-                            OutlinedButton(
-                                onClick = { onFollow(authorPubkey) },
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier.height(36.dp),
-                            ) {
-                                Text("Following ✓", style = MaterialTheme.typography.labelMedium)
-                            }
-                        } else {
-                            Button(
-                                onClick = { onFollow(authorPubkey) },
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier.height(36.dp),
-                            ) {
-                                Text("Follow", style = MaterialTheme.typography.labelMedium)
-                            }
+                            Text("View Profile", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700)
                         }
                     }
                 }
@@ -252,12 +226,31 @@ fun AuthorProfileContent(
                         profile?.nip05?.takeIf { it.isNotBlank() }?.let { nip05 ->
                             Text(nip05, style = MaterialTheme.typography.bodySmall, color = BitOSColors.accent)
                         }
-                        Text(
-                            shortPubkey(authorPubkey),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = BitOSColors.textTertiary,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        )
+                        // Copy npub chip (moved from the header row).
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                val npub = space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
+                                if (npub != null) {
+                                    clipboard.setText(AnnotatedString(npub))
+                                    npubCopied = true
+                                }
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                tint = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (npubCopied) "npub copied" else shortPubkey(authorPubkey),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            )
+                        }
                     }
                 }
 
@@ -327,47 +320,99 @@ fun AuthorProfileContent(
                     }
                 }
 
-                // ── View full profile ────────────────────────────────
-                item(key = "full-profile") {
-                    val npub = remember(authorPubkey) {
-                        space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = BitOSColors.surface,
-                        modifier = Modifier
+                // ── Stats row (truthful counts from the author REQ) ───
+                item(key = "stats") {
+                    val bitzCount = state.notes.count { it.video != null || it.mediaUrls.isNotEmpty() }
+                    Row(
+                        Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                val link = "https://njump.me/${npub ?: authorPubkey}"
-                                runCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
-                                }
-                            },
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xl),
                     ) {
-                        Row(
-                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Rounded.OpenInNew,
-                                contentDescription = null,
-                                tint = BitOSColors.primary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
+                        Column {
                             Text(
-                                "View full profile",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.W600,
-                                color = BitOSColors.primary,
-                                modifier = Modifier.weight(1f),
+                                formatCount(state.notes.size.toLong()),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.W700,
                             )
-                            Icon(
-                                Icons.Rounded.ChevronRight,
-                                contentDescription = null,
-                                tint = BitOSColors.textTertiary,
-                                modifier = Modifier.size(16.dp),
+                            Text("Notes", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                        }
+                        Column {
+                            Text(
+                                formatCount(bitzCount.toLong()),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.W700,
                             )
+                            Text("Bitz", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                        }
+                        if (feedState.following.contains(authorPubkey)) {
+                            Column {
+                                Text("✓", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700, color = BitOSColors.primary)
+                                Text("Follows", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                            }
+                        }
+                    }
+                }
+
+                // ── Quick actions: Zap + Follow (mock parity) ──────────
+                item(key = "quick-actions") {
+                    val hasLightning = !profile?.lud16.isNullOrBlank()
+                    val isFollowing = feedState.following.contains(authorPubkey)
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                        Button(
+                            onClick = onZap,
+                            enabled = hasLightning,
+                            shape = RoundedCornerShape(99.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (hasLightning) BitOSColors.primary else BitOSColors.surfaceOverlay,
+                                contentColor = if (hasLightning) Color(0xFF0A0A0F) else BitOSColors.textTertiary,
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(AppIcons.Zap, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (hasLightning) "Zap" else "No lightning address", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700)
+                        }
+                        OutlinedButton(
+                            onClick = { onFollow(authorPubkey) },
+                            shape = RoundedCornerShape(99.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                if (isFollowing) "Following ✓" else "Follow",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.W700,
+                            )
+                        }
+                    }
+                }
+
+                // ── Latest note preview (mock parity) ─────────────────
+                val latestNote = state.notes.firstOrNull { it.content.isNotBlank() }
+                if (latestNote != null) {
+                    item(key = "latest-note") {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = BitOSColors.surface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border.copy(alpha = 0.6f)),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.padding(BitOSSpacing.md)) {
+                                Text(
+                                    "Latest Note",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                    letterSpacing = androidx.compose.ui.unit.TextUnit(0.8f, androidx.compose.ui.unit.TextUnitType.Sp),
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    latestNote.content,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -407,9 +452,114 @@ fun AuthorProfileContent(
                 }
 
                 items(state.notes, key = { it.id }) { note ->
-                    AuthorNoteCard(note, profile)
+                    AuthorNoteCard(note, profile, onClick = { onOpenNote(note) })
+                }
+
+                // Pages of five arrive on demand — this sentinel asks for
+                // the next older page when it composes.
+                if (state.canLoadMore && state.notes.isNotEmpty()) {
+                    item(key = "load-more") {
+                        androidx.compose.runtime.LaunchedEffect(state.notes.size) { onLoadMore() }
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (state.isLoadingMore) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    color = BitOSColors.primary,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Loading more…", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary)
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Shared host for the author profile sheet: wraps the ModalBottomSheet,
+ * stacks the profile-zap sheet above it, and routes "View full profile" to
+ * the caller's in-app page. Every author entry point (Feed, Bitz, Inbox,
+ * Discover, deep links) presents profiles through this host so routing and
+ * zap chrome stay identical everywhere.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun AuthorProfileSheetHost(
+    authorPubkey: String,
+    state: AuthorUiState,
+    feedState: FeedUiState,
+    homeViewModel: space.bitos.app.ui.feed.HomeViewModel,
+    identityViewModel: space.bitos.app.identity.IdentityViewModel,
+    notePublisher: space.bitos.app.data.publish.NotePublisher,
+    onOpen: (String) -> Unit,
+    onClose: () -> Unit,
+    /** In-app full profile route (UX-010) — never an external link. */
+    onOpenFullProfile: (String) -> Unit,
+    /** Next older notes page (five at a time). */
+    onLoadMore: () -> Unit = {},
+) {
+    var showZap by remember { mutableStateOf(false) }
+    // X-style: the tapped note's thread opens above the profile sheet.
+    var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
+    val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
+    val identityState by identityViewModel.state.collectAsStateWithLifecycle()
+    val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onClose) {
+        AuthorProfileContent(
+            authorPubkey = authorPubkey,
+            state = state,
+            feedState = feedState,
+            onOpen = onOpen,
+            onFollow = homeViewModel::toggleFollow,
+            onZap = { showZap = true },
+            onOpenFullProfile = onOpenFullProfile,
+            onOpenNote = { threadTarget = it },
+            onLoadMore = onLoadMore,
+            onClose = onClose,
+        )
+    }
+
+    val thread = threadTarget
+    if (thread != null) {
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
+            space.bitos.app.ui.feed.CommentThreadSheet(
+                note = thread,
+                viewModel = homeViewModel,
+                identityViewModel = identityViewModel,
+                publisherState = publisherState,
+                onDismiss = { threadTarget = null },
+            )
+        }
+    }
+
+    // Profile zap (NIP-57 p-tag only): stacked above the profile sheet.
+    if (showZap) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { homeViewModel.dismissZap(); showZap = false },
+        ) {
+            space.bitos.app.ui.feed.ZapContent(
+                recipientPubkey = authorPubkey,
+                lud16 = state.profile?.lud16,
+                state = zapState,
+                profileName = state.profile?.bestDisplayName,
+                hasIdentity = identityState.account != null,
+                onPaid = { sats, memo -> homeViewModel.onAuthorZapPaid(authorPubkey, sats, memo) },
+                onAmountSelected = homeViewModel::selectZapAmount,
+                onZap = { sats, comment, anonymous ->
+                    homeViewModel.selectZapAmount(sats)
+                    homeViewModel.zapAuthor(authorPubkey, state.profile?.lud16, comment, anonymous)
+                },
+                onClose = { homeViewModel.dismissZap(); showZap = false },
+                profilePictureUrl = state.profile?.picture,
+            )
         }
     }
 }
@@ -450,10 +600,18 @@ private fun InfoChip(
     }
 }
 
+/// X-style card: time + media badge, clamped content, inline media preview
+/// (image row / 16:9 video tile); the whole card opens the note's thread.
 @Composable
-private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?) {
+private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?, onClick: () -> Unit = {}) {
     var expanded by remember(note.id) { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(12.dp), color = BitOSColors.surface) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = BitOSColors.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Open note thread") { onClick() },
+    ) {
         Column(Modifier.padding(BitOSSpacing.md).fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -469,7 +627,7 @@ private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?) {
                     }
                 } else if (note.mediaUrls.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(imageVector = Icons.Rounded.Photo, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Rounded.Photo, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(12.dp))
                         Text("${note.mediaUrls.size}", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
                     }
                 }
@@ -491,6 +649,30 @@ private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?) {
                     }
                 }
             }
+            // Inline media: up to three square images or one 16:9 video tile.
+            val images = note.mediaUrls.filterNot { it.hasVideoExtension() }
+            if (note.video != null) {
+                VideoTile(
+                    posterUrl = note.video?.posterUrl ?: note.video?.url,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            } else if (images.isNotEmpty()) {
+                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    images.take(3).forEach { url ->
+                        coil.compose.AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(92.dp).clip(RoundedCornerShape(8.dp)),
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+private fun String.hasVideoExtension(): Boolean {
+    val lower = lowercase()
+    return listOf(".mp4", ".webm", ".mov", ".m4v").any { lower.endsWith(it) }
 }

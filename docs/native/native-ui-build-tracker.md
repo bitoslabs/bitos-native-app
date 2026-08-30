@@ -109,7 +109,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 ### APP-004 — Home feed surface (spec §3.4)
 
 - [x] Vertical video pager + notes list + pull-to-refresh + pagination (W0)
-- [x] Filter menu popover: All/Original/Replies/Media/Liked/Mine (checks) — AppMenu both platforms; rules in shared core `FeedFilters` (7 common tests) + bridge `feedFilterMatches` for iOS
+- [x] Filter menu popover: All/Original/Replies/Media/Liked/Mine (checks) — AppMenu both platforms; rules in shared core `FeedFilters` (7 common tests) + bridge `feedFilterMatches` for iOS; web content-classification parity (2026-08): `ContentClassification` narrows protocol payloads to serialized `channel:__roster` hex blobs (the broad JSON-prefix heuristic is retired), `isMachineTag` filters `udal-*` bot coordination tags out of `SearchResults.hashtags`, and the persisted `showProtocolNotes` opt-in now actually drives the feed windows on both platforms (was a dead setting).
 - [x] Mode tabs For you / Following — sticky row under the app bar: icon + label, Following live ALL-window count, accent underline indicator, hairline divider (both platforms); Following displays real notes now (identity → contacts-resolving → notes)
 - [x] App bar: wordmark leading (iOS asset w/ light+dark variants; Android `bitos_branding` density PNGs) + search action → Discover + apps-grid action → You hub (APP-017 More hub re-routes later)
 - [x] GuestBanner signed-out (StoriesBar mount point lands W3)

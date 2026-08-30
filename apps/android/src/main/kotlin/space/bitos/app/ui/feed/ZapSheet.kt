@@ -90,12 +90,13 @@ private const val AUTO_CLOSE_MS = 2_400L
  */
 @Composable
 fun ZapContent(
-    note: FeedNote,
+    /** Target note for a note zap; null for a profile zap. */
+    note: FeedNote? = null,
     lud16: String?,
     state: ZapUiState,
     profileName: String?,
     hasIdentity: Boolean,
-    zapCount: Int,
+    zapCount: Int = 0,
     paidRequestIds: Set<String> = emptySet(),
     onPaid: (Long, String) -> Unit = { _, _ -> },
     onAmountSelected: (Long) -> Unit,
@@ -103,10 +104,13 @@ fun ZapContent(
     onClose: () -> Unit,
     /** Recipient's kind-0 picture URL — HTTPS raster only, hex identicon fallback. */
     profilePictureUrl: String? = null,
+    /** Profile zap (no target note): the zapped author's pubkey. */
+    recipientPubkey: String? = null,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val presets = remember { space.bitos.core.model.ZapFormat.PRESETS.map { it.toLong() } }
+    val recipient = note?.pubkey ?: recipientPubkey ?: ""
 
     var customAmount by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
@@ -166,7 +170,7 @@ fun ZapContent(
         ZapHeader(
             title = if (paid) "Zap sent" else "Zap ⚡",
             recipientName = profileName,
-            recipientPubkey = note.pubkey,
+            recipientPubkey = recipient,
             profilePictureUrl = profilePictureUrl,
             lud16 = lud16,
             copiedKind = copied,

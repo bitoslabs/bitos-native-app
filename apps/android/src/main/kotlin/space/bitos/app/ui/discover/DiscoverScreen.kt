@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,12 +64,17 @@ fun DiscoverScreen(
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel? = null,
     identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
     notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
+    /** UX-010: enables author taps (profile sheet + full profile page). */
+    authorRepository: space.bitos.app.data.feed.AuthorRepository? = null,
+    onOpenAuthorProfile: (String) -> Unit = {},
 ) {
     val state by search.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
     // APP-009 root resolution: a note1/nevent1/naddr1 query fetches the
     // thread head; the result opens the X-style thread sheet.
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
+    // UX-010: creator/result author taps open the profile sheet.
+    var authorTarget by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(input) { search.search(input) }
 
@@ -92,8 +98,28 @@ fun DiscoverScreen(
                 homeViewModel = homeViewModel,
                 identityViewModel = identityViewModel,
                 notePublisher = notePublisher,
+                onOpenAuthor = { authorTarget = it },
             )
         }
+    }
+
+    // UX-010: author profile sheet (sheet → "View full profile" → in-app page).
+    val authorPubkey = authorTarget
+    if (authorPubkey != null && authorRepository != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
+        val authorState by authorRepository.state.collectAsStateWithLifecycle()
+        val feedState by homeViewModel.state.collectAsStateWithLifecycle()
+        space.bitos.app.ui.profile.AuthorProfileSheetHost(
+            authorPubkey = authorPubkey,
+            state = authorState,
+            feedState = feedState,
+            homeViewModel = homeViewModel,
+            identityViewModel = identityViewModel,
+            notePublisher = notePublisher,
+            onOpen = authorRepository::open,
+            onClose = { authorRepository.close(); authorTarget = null },
+            onOpenFullProfile = { authorRepository.close(); authorTarget = null; onOpenAuthorProfile(it) },
+            onLoadMore = authorRepository::loadMoreNotes,
+        )
     }
 }
 
@@ -150,6 +176,7 @@ private fun SearchResults(
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel? = null,
     identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
     notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
+    onOpenAuthor: (String) -> Unit = {},
 ) {
     var threadTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<FeedNote?>(null) }
     // APP-010 results tabs: Posts · People · Hashtags (shared fan-in rule).
@@ -191,7 +218,7 @@ private fun SearchResults(
             }
         }
         when (tab) {
-            1 -> PeopleTab(people = people, homeViewModel = homeViewModel)
+            1 -> PeopleTab(people = people, homeViewModel = homeViewModel, onOpenAuthor = onOpenAuthor)
             2 -> HashtagsTab(hits = hashtags, onPick = { tag -> /* router hop next */ })
             else -> PostsTab(
                 state = state,
@@ -200,6 +227,7 @@ private fun SearchResults(
                 notePublisher = notePublisher,
                 threadTarget = threadTarget,
                 onThreadTarget = { threadTarget = it },
+                onOpenAuthor = onOpenAuthor,
             )
         }
     }
@@ -213,6 +241,7 @@ private fun PostsTab(
     notePublisher: space.bitos.app.data.publish.NotePublisher?,
     threadTarget: FeedNote?,
     onThreadTarget: (FeedNote?) -> Unit,
+    onOpenAuthor: (String) -> Unit = {},
 ) {
     val thread = threadTarget
     if (thread != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
@@ -224,6 +253,7 @@ private fun PostsTab(
                 identityViewModel = identityViewModel,
                 publisherState = publisherState,
                 onDismiss = { onThreadTarget(null) },
+                onOpenAuthor = onOpenAuthor,
             )
         }
     }
@@ -242,6 +272,7 @@ private fun PostsTab(
                 CreatorCard(
                     pubkey = state.resolvedNpub!!,
                     profile = creatorProfile,
+                    onOpen = { onOpenAuthor(state.resolvedNpub!!) },
                 )
             }
         }
@@ -267,6 +298,7 @@ private fun PostsTab(
                         onThreadTarget(note)
                     }
                 },
+                onOpenAuthor = { onOpenAuthor(note.pubkey) },
             )
         }
     }
@@ -278,6 +310,7 @@ private fun PostsTab(
 private fun PeopleTab(
     people: List<space.bitos.core.feed.SearchResults.PeopleRow>,
     homeViewModel: space.bitos.app.ui.feed.HomeViewModel?,
+    onOpenAuthor: (String) -> Unit = {},
 ) {
     val homeState = if (homeViewModel != null) {
         homeViewModel.state.collectAsStateWithLifecycle().value
@@ -292,7 +325,11 @@ private fun PeopleTab(
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
         items(people, key = { it.pubkey }) { person ->
-            Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.surface) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = BitOSColors.surface,
+                modifier = Modifier.clickable(onClickLabel = "Open profile") { onOpenAuthor(person.pubkey) },
+            ) {
                 Row(
                     Modifier.padding(BitOSSpacing.md).fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -373,8 +410,12 @@ private fun HashtagsTab(hits: List<space.bitos.core.feed.SearchResults.HashtagHi
 }
 
 @Composable
-private fun CreatorCard(pubkey: String, profile: ProfileMetadata?) {
-    Surface(shape = RoundedCornerShape(14.dp), color = BitOSColors.primaryContainer) {
+private fun CreatorCard(pubkey: String, profile: ProfileMetadata?, onOpen: () -> Unit = {}) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = BitOSColors.primaryContainer,
+        modifier = Modifier.clickable(onClickLabel = "Open creator profile") { onOpen() },
+    ) {
         Row(Modifier.padding(BitOSSpacing.base).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             PubkeyAvatar(pubkey = pubkey, size = 48, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
             Spacer(Modifier.width(BitOSSpacing.md))
@@ -395,14 +436,19 @@ private fun CreatorCard(pubkey: String, profile: ProfileMetadata?) {
 }
 
 @Composable
-private fun SearchCard(note: FeedNote, profile: ProfileMetadata?, onOpen: () -> Unit = {}) {
+private fun SearchCard(note: FeedNote, profile: ProfileMetadata?, onOpen: () -> Unit = {}, onOpenAuthor: () -> Unit = {}) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = BitOSColors.surface,
         modifier = Modifier.clickable(onClickLabel = "Open thread") { onOpen() },
     ) {
         Column(Modifier.padding(BitOSSpacing.base).fillMaxWidth()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClickLabel = "Open author profile") { onOpenAuthor() },
+            ) {
                 PubkeyAvatar(pubkey = note.pubkey, size = 28, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
                 Spacer(Modifier.width(BitOSSpacing.sm))
                 Text(

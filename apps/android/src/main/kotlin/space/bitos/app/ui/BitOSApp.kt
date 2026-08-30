@@ -136,6 +136,9 @@ fun BitOSApp(
         // T16 deep links: author sheet target + lightning invoice viewer.
         var deepLinkAuthor by remember { mutableStateOf<String?>(null) }
         var deepLinkInvoice by remember { mutableStateOf<String?>(null) }
+        // UX-010: in-app full profile page target. Every "View full
+        // profile" affordance routes here — never an external link.
+        var authorPageTarget by remember { mutableStateOf<String?>(null) }
         val authorState by authorRepository.state.collectAsStateWithLifecycle()
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         LaunchedEffect(pendingDeepLink) {
@@ -311,6 +314,16 @@ fun BitOSApp(
                         initialSection = hubSettingsSection,
                         onBack = { hubSettingsSection = null; showMore = true },
                     )
+                } else if (authorPageTarget != null) {
+                    // UX-010: full-page author profile ("You"-page parity).
+                    space.bitos.app.ui.profile.AuthorProfileScreen(
+                        authorPubkey = authorPageTarget!!,
+                        authorRepository = authorRepository,
+                        homeViewModel = homeViewModel,
+                        identityViewModel = identityViewModel,
+                        notePublisher = notePublisher,
+                        onClose = { authorRepository.close(); authorPageTarget = null },
+                    )
                 }
                 else {
                     // Overlay destinations are mutually exclusive with the
@@ -318,7 +331,7 @@ fun BitOSApp(
                     // More/Settings stacked-layout bug.
                     tabStateHolder.SaveableStateProvider(destination.name) {
                         when (destination) {
-                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
+                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, onOpenAuthorProfile = { authorPageTarget = it }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
                             TopLevelDestination.BITZ -> space.bitos.app.ui.bitz.BitzScreen(
                                 viewModel = homeViewModel,
                                 identityViewModel = identityViewModel,
@@ -331,12 +344,15 @@ fun BitOSApp(
                                 onOpenComposer = { showCreateNote = true },
                                 onOpenCreate = { showCreateHub = true },
                                 onOpenRemixComposer = { openSeededComposer(it) },
+                                onOpenAuthorProfile = { authorPageTarget = it },
                             )
                             TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(
                                 searchRepository,
                                 homeViewModel,
                                 identityViewModel,
                                 notePublisher,
+                                authorRepository = authorRepository,
+                                onOpenAuthorProfile = { authorPageTarget = it },
                             )
                             TopLevelDestination.CHATS -> space.bitos.app.ui.dm.DmScreen(identityViewModel, dmRepository)
                             TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
@@ -346,6 +362,7 @@ fun BitOSApp(
                                 notePublisher,
                                 authorRepository,
                                 sensitiveShowByDefault = sensitiveShowByDefault,
+                                onOpenAuthorProfile = { authorPageTarget = it },
                             )
                             TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true })
                         }
@@ -357,16 +374,18 @@ fun BitOSApp(
 
         // ── T16 deep-link surfaces (overlay everything) ────────────────
         deepLinkAuthor?.let { authorPubkey ->
-            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); deepLinkAuthor = null }) {
-                space.bitos.app.ui.profile.AuthorProfileContent(
-                    authorPubkey = authorPubkey,
-                    state = authorState,
-                    feedState = homeViewModel.state.value,
-                    onOpen = authorRepository::open,
-                    onFollow = homeViewModel::toggleFollow,
-                    onClose = { authorRepository.close(); deepLinkAuthor = null },
-                )
-            }
+            space.bitos.app.ui.profile.AuthorProfileSheetHost(
+                authorPubkey = authorPubkey,
+                state = authorState,
+                feedState = homeViewModel.state.value,
+                homeViewModel = homeViewModel,
+                identityViewModel = identityViewModel,
+                notePublisher = notePublisher,
+                onOpen = authorRepository::open,
+                onClose = { authorRepository.close(); deepLinkAuthor = null },
+                onOpenFullProfile = { authorRepository.close(); deepLinkAuthor = null; authorPageTarget = it },
+                onLoadMore = authorRepository::loadMoreNotes,
+            )
         }
 
         deepLinkInvoice?.let { invoice ->

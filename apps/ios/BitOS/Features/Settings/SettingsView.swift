@@ -348,7 +348,7 @@ private struct AlgorithmSection: View {
             } header: {
                 Text("Feed")
             } footer: {
-                Text("Protocol notes show raw kind events (reposts, reactions) in the timeline — web feedPreferences parity.")
+                Text("Serialized channel records, such as channel:__roster, are hidden by default.")
             }
 
             Section {

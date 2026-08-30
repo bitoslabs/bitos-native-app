@@ -468,7 +468,7 @@ private fun AlgorithmDetail(
         PrefRow("Show reactions", snapshot.showReactions) { store.setRaw(C.KEY_FEED_SHOW_REACTIONS, if (it) "1" else "0") }
         PrefRow("Protocol notes", snapshot.showProtocolNotes) { store.setRaw(C.KEY_FEED_SHOW_PROTOCOL_NOTES, if (it) "1" else "0") }
     }
-    Footnote("Protocol notes show raw kind events (reposts, reactions) in the timeline — web feedPreferences parity.")
+    Footnote("Serialized channel records, such as channel:__roster, are hidden by default.")
 
     // ── Ranking (origin AlgorithmSettings parity) ─────────────────────
     DetailCard("Freshness") {

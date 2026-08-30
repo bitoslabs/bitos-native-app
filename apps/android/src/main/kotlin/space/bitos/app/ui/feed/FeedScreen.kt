@@ -145,6 +145,8 @@ fun FeedScreen(
     retapTick: Int = 0,
     /** APP-006: stories bar + viewer. */
     storiesRepository: space.bitos.app.data.stories.StoriesRepository? = null,
+    /** UX-010: opens the in-app full profile page for a pubkey. */
+    onOpenAuthorProfile: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
@@ -389,16 +391,19 @@ fun FeedScreen(
     }
 
     authorTarget?.let { authorPubkey ->
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
-            space.bitos.app.ui.profile.AuthorProfileContent(
-                authorPubkey = authorPubkey,
-                state = authorState,
-                feedState = state,
-                onOpen = authorRepository::open,
-                onFollow = viewModel::toggleFollow,
-                onClose = { authorRepository.close(); authorTarget = null },
-            )
-        }
+        space.bitos.app.ui.profile.AuthorProfileSheetHost(
+            authorPubkey = authorPubkey,
+            state = authorState,
+            feedState = state,
+            homeViewModel = viewModel,
+            identityViewModel = identityViewModel,
+            notePublisher = notePublisher,
+            onOpen = authorRepository::open,
+            onClose = { authorRepository.close(); authorTarget = null },
+            // UX-010: the full profile is an in-app page, never a browser link.
+            onOpenFullProfile = { authorRepository.close(); authorTarget = null; onOpenAuthorProfile(it) },
+            onLoadMore = authorRepository::loadMoreNotes,
+        )
     }
 
     zapTarget?.let { target ->
@@ -442,6 +447,8 @@ fun FeedScreen(
                     viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
                     zapTarget = reply
                 },
+                // UX-010: author taps inside the thread open the profile sheet.
+                onOpenAuthor = { authorTarget = it },
                 onClose = { showCommentsFor = null },
             )
         }
@@ -605,13 +612,19 @@ private fun VideoNotePage(
     onReport: (String) -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PosterImage(url = note.video!!.posterUrl, modifier = Modifier.fillMaxSize())
-        // Surface: aspect-fill video, no built-in controls.
+        PosterImage(
+            url = note.video!!.posterUrl,
+            contentScale = ContentScale.Fit,
+            backgroundColor = Color.Black,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Preserve the creator's frame. The black page background becomes
+        // letterbox/pillarbox space instead of cropping the original video.
         androidx.compose.ui.viewinterop.AndroidView(
             factory = { context ->
                 PlayerView(context).apply {
                     useController = false
-                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },
@@ -994,13 +1007,22 @@ private fun TextNotePage(
 // ---------------------------------------------------------------------
 
 @Composable
-fun PosterImage(url: String?, modifier: Modifier = Modifier) {
-    Box(modifier.background(Brush.linearGradient(listOf(BitOSColors.surface, BitOSColors.surfaceElevated)))) {
+fun PosterImage(
+    url: String?,
+    contentScale: ContentScale = ContentScale.Crop,
+    backgroundColor: Color = BitOSColors.surface,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.background(if (backgroundColor == BitOSColors.surface) {
+        Brush.linearGradient(listOf(BitOSColors.surface, BitOSColors.surfaceElevated))
+    } else {
+        Brush.linearGradient(listOf(backgroundColor, backgroundColor))
+    })) {
         if (url != null) {
             coil.compose.AsyncImage(
                 model = url,
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
+                contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
             )
         }

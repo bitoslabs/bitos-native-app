@@ -82,6 +82,9 @@ final class FeedStore {
     /** APP-009 live per-note tallies (reactions/reposts/zaps+msat). */
     private(set) var tallies: [String: NoteTallyMirror] = [:]
     private(set) var muted: Set<String> = []
+    /** Web feedPreferences parity: protocol-payload notes stay hidden until
+     *  the reader opts in (Settings → Feed → Protocol notes). */
+    private(set) var showProtocolNotes = false
 
     /// Blocked authors (NIP-51 kind-10004 head) — filtered like mutes.
     private(set) var blocked: Set<String> = []
@@ -405,12 +408,21 @@ final class FeedStore {
         guard loadingOlderTimeline == batch.timeline else { return }
 
         let freshCount = batch.freshIds.count
+        let confirmedEmpty = !batch.expectedRelays.isEmpty &&
+            batch.eoseRelays.isSuperset(of: batch.expectedRelays)
         let stalled = !batch.returnedIds.isEmpty && freshCount == 0 &&
             (batch.oldestInBatch == nil || batch.oldestInBatch! >= batch.cursor)
         if stalled {
             var lane = olderLanes[batch.timeline] ?? OlderLane()
             lane.exhausted = true
             olderLanes[batch.timeline] = lane
+            finishOlderWalk(batch.timeline)
+            return
+        }
+        // A timeout means the relay is slow or unavailable, not that its
+        // history ended. Keep the lane retryable for the next edge trigger;
+        // only a completed all-relay EOSE empty counts toward exhaustion.
+        if batch.returnedIds.isEmpty && !confirmedEmpty {
             finishOlderWalk(batch.timeline)
             return
         }
@@ -839,6 +851,14 @@ final class FeedStore {
         publishState()
     }
 
+    /// Web feedPreferences parity: reader opt-in that re-admits
+    /// protocol-payload (channel roster) notes into every feed window.
+    func setShowProtocolNotes(_ enabled: Bool) {
+        guard showProtocolNotes != enabled else { return }
+        showProtocolNotes = enabled
+        publishState()
+    }
+
     func toggleMute(_ pubkey: String) {
         if muted.contains(pubkey) {
             muted.remove(pubkey)
@@ -957,9 +977,16 @@ final class FeedStore {
         }
     }
 
-    private func bridgeFacade() -> BusinessCoreBridge { cachedBridge }
-    private lazy var cachedBridge: BusinessCoreBridge =
-        (client as? FrameworkBusinessCoreClient)?.bridgeForFollowing() ?? BusinessCoreBridge()
+    /// First call resolves the framework bridge (following-capable when the
+    /// framework client is present); later calls reuse it. Manual memo —
+    /// `lazy` is not representable under the @Observable macro.
+    private var cachedBridge: BusinessCoreBridge?
+    private func bridgeFacade() -> BusinessCoreBridge {
+        if let cachedBridge { return cachedBridge }
+        let bridge = (client as? FrameworkBusinessCoreClient)?.bridgeForFollowing() ?? BusinessCoreBridge()
+        cachedBridge = bridge
+        return bridge
+    }
 
     private func absorbProfile(_ event: VerifiedEvent) {
         guard let metadata = client.profile(from: event) else { return }
@@ -1106,12 +1133,13 @@ final class FeedStore {
         let filterOrdinal = filterOrdinal
         let ownPubkey = accountPubkey
         let liked = Array(localActions.liked)
-        let forYouBase = (window?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && !$0.isProtocolPayload }
-        let followingBase = (followingWindow?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && !$0.isProtocolPayload }
+        let protocolNotesVisible = showProtocolNotes
+        let forYouBase = (window?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && (protocolNotesVisible || !$0.isProtocolPayload) }
+        let followingBase = (followingWindow?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && (protocolNotesVisible || !$0.isProtocolPayload) }
         forYouCount = forYouBase.count
         followingCount = followingBase.count
         notes = (timeline == .following ? followingBase : rankedForYou(forYouBase)).filter {
-            client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked)
+            client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked, showProtocolNotes: protocolNotesVisible)
         }
         pendingNotes = timeline == .following ? pendingFollowing : pendingForYou
         comments = commentThreads

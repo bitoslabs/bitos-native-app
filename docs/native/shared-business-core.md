@@ -46,7 +46,7 @@ shared/
     └── src/
         ├── commonMain/kotlin/space/bitos/core/
         │   ├── crypto/           # Fp256, Scalar256, Secp256k1, BIP-340 Schnorr sign/verify, NIP-44 v2
-        │   ├── nostr/            # NostrEventCodec, EventHasher, NIP-27, NIP-36, PoW, DeepLink, EventRef, QrCode
+        │   ├── nostr/            # NostrEventCodec, EventHasher, NIP-27, NIP-36, ContentClassification, PoW, DeepLink, EventRef, QrCode
         │   ├── model/            # NostrEvent, ProfileMetadata, contact/block/bookmark/relay lists,
         │   │                     #   MediaMetadata, Blossom, Poll, Stories, Zap/ZapFormat/SentZapLedger,
         │   │                     #   Notification(+filters/grouping), DmGrouping, OriginNote, Identifiers

@@ -166,6 +166,8 @@ fun BitzScreen(
     onOpenCreate: () -> Unit = {},
     /** APP-007 remix: opens the composer seeded with remix attribution tags. */
     onOpenRemixComposer: (List<List<String>>) -> Unit = {},
+    /** UX-010: opens the in-app full profile page for a pubkey. */
+    onOpenAuthorProfile: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
@@ -194,7 +196,11 @@ fun BitzScreen(
                 if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
             BitzModeSetting.FOLLOWING ->
                 if (current != FeedTimeline.FOLLOWING) viewModel.selectTimeline(FeedTimeline.FOLLOWING)
-            BitzModeSetting.EXPLORE -> Unit
+            // Explore is the global/video window. It must reset to For You
+            // before asking for an older page; otherwise a previous
+            // Following selection makes Explore paginate the wrong lane.
+            BitzModeSetting.EXPLORE ->
+                if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
         }
     }
 
@@ -551,16 +557,19 @@ fun BitzScreen(
     }
 
     authorTarget?.let { authorPubkey ->
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { authorRepository.close(); authorTarget = null }) {
-            AuthorProfileContent(
-                authorPubkey = authorPubkey,
-                state = authorState,
-                feedState = state,
-                onOpen = authorRepository::open,
-                onFollow = viewModel::toggleFollow,
-                onClose = { authorRepository.close(); authorTarget = null },
-            )
-        }
+        space.bitos.app.ui.profile.AuthorProfileSheetHost(
+            authorPubkey = authorPubkey,
+            state = authorState,
+            feedState = state,
+            homeViewModel = viewModel,
+            identityViewModel = identityViewModel,
+            notePublisher = notePublisher,
+            onOpen = authorRepository::open,
+            onClose = { authorRepository.close(); authorTarget = null },
+            // UX-010: the full profile is an in-app page, never a browser link.
+            onOpenFullProfile = { authorRepository.close(); authorTarget = null; onOpenAuthorProfile(it) },
+            onLoadMore = authorRepository::loadMoreNotes,
+        )
     }
 
     zapTarget?.let { target ->
@@ -604,6 +613,8 @@ fun BitzScreen(
                     viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
                     zapTarget = reply
                 },
+                // UX-010: author taps inside the thread open the profile sheet.
+                onOpenAuthor = { authorTarget = it },
                 onClose = { commentsTarget = null },
             )
         }
@@ -1089,13 +1100,17 @@ private fun BitzVideoPage(
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PosterImage(url = note.video!!.posterUrl, modifier = Modifier.fillMaxSize())
-        // Surface: aspect-fill video, no built-in controls.
+        PosterImage(
+            url = note.video!!.posterUrl,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Preserve the original video frame; unused page space stays black.
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             },

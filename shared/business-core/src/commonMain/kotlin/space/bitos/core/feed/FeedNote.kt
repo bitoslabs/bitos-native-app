@@ -44,7 +44,6 @@ data class FeedNote(
         private val mentionPattern = Regex("@([\\w.]{1,100})")
         private val mediaUrlPattern = Regex("https?://\\S+\\.(?:apng|avif|gif|jpe?g|png|webp)(?:[?#]\\S*)?", RegexOption.IGNORE_CASE)
         private val videoUrlPattern = Regex("https?://\\S+\\.(?:mp4|webm|mov|m4v)(?:[?#]\\S*)?", RegexOption.IGNORE_CASE)
-        private val protocolPayloadPattern = Regex("^\\s*[\\[{]")
 
         fun from(event: NostrEvent): FeedNote {
             // Kind-6 reposts resolve to the embedded original with attribution.
@@ -83,7 +82,7 @@ data class FeedNote(
             mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
             mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
                 .map { it.value }.distinct().take(8).toList(),
-            isProtocolPayload = protocolPayloadPattern.containsMatchIn(event.content),
+            isProtocolPayload = space.bitos.core.nostr.ContentClassification.isProtocolPayload(event.content),
             video = MediaMetadata.fromEvent(event),
             contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
             remixOfEventId = remixSource?.eventId,

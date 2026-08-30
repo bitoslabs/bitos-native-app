@@ -60,8 +60,19 @@ class FeedNoteTest {
 
     @Test
     fun classifiesProtocolPayloads() {
-        assertTrue(note("""{"kind":"token","amount":1}""").isProtocolPayload)
+        // Web content-classification parity: serialized channel rosters are
+        // machine traffic; prose (even JSON-ish) stays readable.
+        assertTrue(note("channel:__roster\n${"ab".repeat(64)}").isProtocolPayload)
+        assertFalse(note("""{"kind":"token","amount":1}""").isProtocolPayload)
         assertFalse(note("just talking about json { is fine").isProtocolPayload)
+    }
+
+    @Test
+    fun filtersMachineTagsFromHashtags() {
+        val feedNote = note("hi #nostr #udal-friend-aede0a98e7fd3ffef77db169c0ccaaa1")
+        // Inline extraction keeps both; tag consumers filter (humanTags).
+        assertEquals(listOf("nostr", "udal-friend-aede0a98e7fd3ffef77db169c0ccaaa1"), feedNote.hashtags)
+        assertEquals(listOf("nostr"), space.bitos.core.nostr.ContentClassification.humanTags(feedNote.hashtags))
     }
 
     @Test

@@ -385,6 +385,10 @@ struct BitzView: View {
                 topId = visibleId
                 reconcilePool(visibleId: visibleId)
             case .explore:
+                // Explore pages the global/For You lane. Without this reset,
+                // switching from Following can make its older-page request
+                // use the Following cursor and appear to stop loading.
+                environment.feedStore.selectTimeline(.forYou)
                 pool.releaseAll()
             }
         }
@@ -1746,11 +1750,21 @@ private struct BitzPosterImage: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [BitOSTheme.surface, BitOSTheme.surfaceElevated], startPoint: .topLeading, endPoint: .bottomTrailing)
+            if purpose == .grid {
+                LinearGradient(colors: [BitOSTheme.surface, BitOSTheme.surfaceElevated], startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                Color.black
+            }
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
+                if purpose == .grid {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                }
             }
         }
         .clipped()

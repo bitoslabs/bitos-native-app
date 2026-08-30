@@ -85,6 +85,11 @@ struct RootView: View {
         .tint(BitOSTheme.accent)
         // APP-018 functional setting: font size applies app-wide.
         .environment(\.dynamicTypeSize, fontTypeSize)
+        // Web feedPreferences parity: the persisted protocol-notes opt-in
+        // drives the feed gate live (Settings → Feed → Protocol notes).
+        .onChange(of: settings.state.showProtocolNotes, initial: true) { _, enabled in
+            environment.feedStore.setShowProtocolNotes(enabled)
+        }
         // Tokens are dark-only until APP-023; the persisted theme preference
         // (SettingsStore) will drive this once light surfaces exist.
         .preferredColorScheme(.dark)

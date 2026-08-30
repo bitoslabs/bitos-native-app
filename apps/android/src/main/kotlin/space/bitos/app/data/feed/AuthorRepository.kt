@@ -20,11 +20,17 @@ data class AuthorUiState(
     val notes: List<FeedNote> = emptyList(),
     val isFollowing: Boolean = false,
     val isLoading: Boolean = true,
+    /** False once a page returned fewer than a full page of new notes. */
+    val canLoadMore: Boolean = true,
+    val isLoadingMore: Boolean = false,
 )
 
 /**
  * Author profile repository: targeted profile + notes REQ for one pubkey,
- * verified fan-in, bounded window. One instance at a time (the open sheet).
+ * verified fan-in, bounded window. Notes load five at a time — the first
+ * page arrives with the profile, older pages page backward
+ * (`until` = oldest loaded note) on demand. One instance at a time (the
+ * open sheet/page).
  */
 class AuthorRepository(
     private val scope: CoroutineScope,
@@ -36,7 +42,7 @@ class AuthorRepository(
     private var profileAt = Long.MIN_VALUE
     private var pubkey: String? = null
     private var collectJob: Job? = null
-    private var requested = false
+    private var page = 0
 
     private val mutableState = MutableStateFlow(AuthorUiState())
     val state: StateFlow<AuthorUiState> = mutableState.asStateFlow()
@@ -78,7 +84,7 @@ class AuthorRepository(
         notes.clear()
         profile = null
         profileAt = Long.MIN_VALUE
-        requested = false
+        page = 0
         mutableState.value = AuthorUiState(pubkey = authorPubkey, isLoading = true)
         subscribe()
     }
@@ -93,14 +99,44 @@ class AuthorRepository(
         mutableState.value = mutableState.value.copy(isFollowing = following)
     }
 
-    private fun subscribe() {
-        if (requested) return
-        requested = true
+    /** Next older page (first PAGE_SIZE load with the profile, the rest on demand). */
+    fun loadMoreNotes() {
         val target = pubkey ?: return
-        val filter = """{"kinds":[0,1,21,22],"authors":["$target"],"limit":20}"""
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-author", filter))
-        // Settle: mark not-loading after a window even without results.
+        val state = mutableState.value
+        if (!state.canLoadMore || state.isLoadingMore || notes.isEmpty()) return
+        mutableState.value = state.copy(isLoadingMore = true)
+        page += 1
+        val until = notes.values.minOf { it.createdAt }
+        val before = notes.size
+        val request = space.bitos.core.bridge.BusinessCoreBridge().authorRequest(
+            subscriptionId = "bitos-author-$page",
+            authorPubkey = target,
+            limit = PAGE_SIZE,
+            untilSeconds = until,
+        )
         scope.launch {
+            pool.broadcast(request)
+            // Settle: a short page means the author's history ended.
+            kotlinx.coroutines.delay(3_000)
+            if (pubkey == target) {
+                mutableState.value = mutableState.value.copy(
+                    isLoadingMore = false,
+                    canLoadMore = (notes.size - before) >= PAGE_SIZE,
+                )
+            }
+        }
+    }
+
+    private fun subscribe() {
+        val target = pubkey ?: return
+        val request = space.bitos.core.bridge.BusinessCoreBridge().authorRequest(
+            subscriptionId = "bitos-author",
+            authorPubkey = target,
+            limit = PAGE_SIZE,
+        )
+        scope.launch {
+            pool.broadcast(request)
+            // Settle: mark not-loading after a window even without results.
             kotlinx.coroutines.delay(3_000)
             if (mutableState.value.isLoading) {
                 mutableState.value = mutableState.value.copy(isLoading = false)
@@ -115,6 +151,12 @@ class AuthorRepository(
             notes = notes.values.sortedByDescending { it.createdAt },
             isFollowing = mutableState.value.isFollowing,
             isLoading = false,
+            canLoadMore = mutableState.value.canLoadMore,
+            isLoadingMore = mutableState.value.isLoadingMore,
         )
+    }
+
+    private companion object {
+        const val PAGE_SIZE = 5
     }
 }

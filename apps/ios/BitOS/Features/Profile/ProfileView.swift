@@ -650,8 +650,9 @@ struct ProfileView: View {
 // MARK: - About section (legacy _AboutSection parity)
 
 /// Bio (5-line clamp, Show more past 240 chars) + info chips (NIP-05,
-/// website, lightning) + hairline divider.
-private struct ProfileAboutSection: View {
+/// website, lightning) + hairline divider. Shared with the author profile
+/// surfaces (sheet + full page).
+struct ProfileAboutSection: View {
     let profile: ProfileMetadata?
     @State private var expanded = false
 
@@ -720,12 +721,29 @@ private struct ProfileAboutSection: View {
 // MARK: - Note card (profile tabs)
 
 /// Compact profile note card: author row, expandable content, media preview.
-private struct ProfileNoteCard: View {
+/// Shared with the author profile page. X-style: the whole card opens the
+/// note's thread when `onOpen` is provided.
+struct ProfileNoteCard: View {
     let note: FeedNote
     let profile: ProfileMetadata?
+    var onOpen: (() -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
+        Group {
+            if let onOpen {
+                card
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Open note thread")
+            } else {
+                card
+            }
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 PubkeyAvatarView(
@@ -801,7 +819,8 @@ private struct ProfileNoteCard: View {
 
 // MARK: - Bitz grid tiles (legacy _PostGrid/_MediaTile parity)
 
-private struct BitzGridTile: View {
+/// Shared with the author profile page (Bitz tab).
+struct BitzGridTile: View {
     let note: FeedNote
 
     private var imageURL: URL? {
@@ -834,8 +853,8 @@ private struct BitzGridTile: View {
     }
 }
 
-/// 16:9 video preview used inside note cards.
-private struct BitzVideoTile: View {
+/// 16:9 video preview used inside note cards. Shared with the author sheet.
+struct BitzVideoTile: View {
     let url: URL?
     var wide = false
 
@@ -885,7 +904,8 @@ private extension String {
 // MARK: - Flow layout (wrapping chip rows)
 
 /// Simple wrapping layout for chip rows (legacy Flutter `Wrap` parity).
-private struct FlowLayout: Layout {
+/// Shared with the author profile surfaces.
+struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -925,7 +945,8 @@ extension IdentityPreview: Identifiable {
 }
 
 /// The legacy fallback-banner tile: decorative geometry only, never remote SVG.
-private struct DefaultCoverHexPattern: View {
+/// Shared with the author profile surfaces.
+struct DefaultCoverHexPattern: View {
     var body: some View {
         Canvas { context, size in
             let tile: CGFloat = 120
