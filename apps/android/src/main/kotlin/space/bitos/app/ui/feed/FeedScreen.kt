@@ -48,6 +48,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedTimeline
 import space.bitos.app.data.feed.FeedUiState
@@ -93,6 +95,27 @@ import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarFeedIcon
 import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
+
+/**
+ * A visible row owns its relative-time clock. It ticks each second only for
+ * the first minute, then wakes on minute boundaries; relay state is never
+ * republished just to advance a label.
+ */
+@Composable
+private fun rememberRelativeTimeNow(createdAtSeconds: Long): Long {
+    var nowSeconds by remember(createdAtSeconds) {
+        mutableLongStateOf(System.currentTimeMillis() / 1_000)
+    }
+    LaunchedEffect(createdAtSeconds) {
+        while (true) {
+            val age = (nowSeconds - createdAtSeconds).coerceAtLeast(0)
+            val delaySeconds = if (age < 60) 1L else (60 - (age % 60)).coerceAtLeast(1L)
+            delay(delaySeconds * 1_000)
+            nowSeconds = System.currentTimeMillis() / 1_000
+        }
+    }
+    return nowSeconds
+}
 
 /**
  * Home surface (FED-002): full-screen vertical pager; only the settled page
@@ -172,7 +195,9 @@ fun FeedScreen(
     val scope = rememberCoroutineScope()
     val revealPendingAtTop = {
         scope.launch {
-            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            if (videoOnly && pagerState.currentPage != 0) {
+                pagerState.animateScrollToPage(0)
+            } else if (!videoOnly && (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0)) {
                 listState.animateScrollToItem(0)
             }
             viewModel.revealPendingNotes()
@@ -330,7 +355,7 @@ fun FeedScreen(
         }
 
         androidx.compose.animation.AnimatedVisibility(
-                    visible = !videoOnly && state.pendingNotes.isNotEmpty(),
+                    visible = state.pendingNotes.isNotEmpty(),
                     enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
                     exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = BitOSSpacing.xs),
@@ -645,7 +670,7 @@ private fun CaptionOverlay(note: FeedNote, state: FeedUiState, onFollow: (String
                     if (!profile?.nip05.isNullOrBlank()) Icon(Icons.Rounded.CheckCircle, contentDescription = "NIP-05 identity claim", tint = BitOSColors.primary, modifier = Modifier.padding(start = 4.dp).size(14.dp))
                 }
                 Text(
-                    formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
+                    formatTimeAgo(note.createdAt, rememberRelativeTimeNow(note.createdAt)),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xB3F8F8FF),
                 )
@@ -900,7 +925,7 @@ private fun TextNotePage(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
+                        formatTimeAgo(note.createdAt, rememberRelativeTimeNow(note.createdAt)),
                         style = MaterialTheme.typography.labelSmall,
                         color = BitOSColors.textTertiary,
                     )
@@ -1121,7 +1146,7 @@ private fun NoteCardRow(
                         Spacer(Modifier.width(4.dp))
                     }
                     Text(
-                        formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
+                        formatTimeAgo(note.createdAt, rememberRelativeTimeNow(note.createdAt)),
                         style = MaterialTheme.typography.labelSmall,
                         color = BitOSColors.textTertiary,
                     )

@@ -1,7 +1,12 @@
 # Web-to-Native Parity Audit
 
 Audit date: 2026-08-27  
-Web source: sibling `../bitos-nostr`, commit `fd4296dd5e42b5ed8224b47fde5654d538dbcfe3`
+Web source: sibling `../bitos-nostr-web` (at audit time `../bitos-nostr`), commit `fd4296dd5e42b5ed8224b47fde5654d538dbcfe3`
+
+> The web repo's own `docs/SYSTEM.md` (v0.6.3, 2026-08) is the living web
+> feature reference — re-check it before starting each later-wave surface
+> (communities, wallet/NWC, studio, trending sounds), because the web app
+> has shipped features since this audit.
 
 This audit records what the native plan took from the current web implementation. “Port” means preserve user-visible behavior/protocol, not copy Svelte/TypeScript code. “Redesign” means preserve the product intent with native security, lifecycle and media architecture. “Later” means it is outside public V1. “Reject” means the web mechanism must not become the native implementation.
 

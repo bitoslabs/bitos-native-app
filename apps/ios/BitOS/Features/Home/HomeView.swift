@@ -343,8 +343,9 @@ struct HomeView: View {
     /// the newly prepended cards are immediately visible. The scroll request
     /// is driven by the list's reader below; the store remains UI-agnostic.
     private func revealPendingAtTop() {
-        if !listAtTop { listScrollToTopTick += 1 }
+        if !videoOnly, !listAtTop { listScrollToTopTick += 1 }
         store.revealPendingNotes()
+        if videoOnly { topId = notes.first?.id }
     }
 
     private func storyViewerHosted(_ base: some View) -> some View {
@@ -486,7 +487,7 @@ struct HomeView: View {
                 }
                 // Float in the feed area immediately below the tabs, never
                 // above them, so the tab targets remain unobstructed.
-                if !videoOnly && !store.pendingNotes.isEmpty {
+                if !store.pendingNotes.isEmpty {
                     NewNotesPill(
                         count: store.pendingNotes.count,
                         authors: store.pendingAuthors,
@@ -1030,7 +1031,7 @@ private struct NoteCardRow: View {
                                     .font(.system(size: 10))
                                     .foregroundStyle(BitOSTheme.repost)
                             }
-                            Text(FeedFormat.timeAgo(createdAt: note.createdAt))
+                            RelativeTimeText(createdAt: note.createdAt)
                                 .font(.system(size: 11))
                                 .foregroundStyle(BitOSTheme.textTertiary)
                         }
@@ -1216,7 +1217,7 @@ private struct VideoNotePage: View {
                                 .accessibilityLabel("NIP-05 identity claim")
                         }
                     }
-                    Text(FeedFormat.timeAgo(createdAt: note.createdAt))
+                    RelativeTimeText(createdAt: note.createdAt)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.7))
                 }
@@ -1413,7 +1414,7 @@ private struct TextNotePage: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(BitOSTheme.textPrimary)
                             .lineLimit(1)
-                        Text(FeedFormat.timeAgo(createdAt: note.createdAt))
+                        RelativeTimeText(createdAt: note.createdAt)
                             .font(.caption2)
                             .foregroundStyle(BitOSTheme.textTertiary)
                     }
@@ -1621,6 +1622,26 @@ private struct FollowingPlaceholderView: View {
             message: "Create, import or connect a Nostr identity to build a following timeline.",
             symbol: "person.badge.key"
         )
+    }
+}
+
+/// A feed row updates its own label instead of invalidating the feed store.
+/// The task is cancelled when the lazy row leaves the visible hierarchy.
+private struct RelativeTimeText: View {
+    let createdAt: Int64
+    @State private var now = Date.now
+
+    var body: some View {
+        Text(FeedFormat.timeAgo(createdAt: createdAt, now: now))
+            .task(id: createdAt) {
+                while !Task.isCancelled {
+                    let age = max(0, Int64(now.timeIntervalSince1970) - createdAt)
+                    let delaySeconds: Int64 = age < 60 ? 1 : max(1, 60 - (age % 60))
+                    try? await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    now = .now
+                }
+            }
     }
 }
 

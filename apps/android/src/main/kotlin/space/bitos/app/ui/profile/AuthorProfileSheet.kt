@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -162,7 +162,7 @@ fun AuthorProfileContent(
                 item(key = "header") {
                     Row(
                         verticalAlignment = Alignment.Bottom,
-                        modifier = Modifier.offset(y = (-32).dp).padding(bottom = (-32).dp),
+                        modifier = Modifier.overlapAbove(32.dp),
                     ) {
                         // Avatar overlapping the banner
                         Box(
@@ -413,6 +413,22 @@ fun AuthorProfileContent(
         }
     }
 }
+
+/**
+ * Lets a header overlap the preceding banner while reserving only its visible height in the list.
+ * Compose padding cannot use negative values.
+ */
+private fun Modifier.overlapAbove(overlap: androidx.compose.ui.unit.Dp): Modifier =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val overlapPx = overlap.roundToPx()
+        layout(
+            width = placeable.width,
+            height = (placeable.height - overlapPx).coerceAtLeast(0),
+        ) {
+            placeable.placeRelative(x = 0, y = -overlapPx)
+        }
+    }
 
 @Composable
 private fun InfoChip(

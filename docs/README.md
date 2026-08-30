@@ -28,6 +28,7 @@ Start with [Native Platform Blueprint](./native/README.md).
 - [End-to-end UX/UI flows](./product/ux-ui-flows.md)
 - [Studio mass-production system](./product/studio-mass-production.md)
 
-The documents under `docs/source/` preserve prior product research and web/Flutter-era plans. They remain useful inputs, but `docs/native/` supersedes their mobile technology decisions for this repository.
-
-The HTML files under `docs/ui*` are UI references, not production requirements or architecture.
+Legacy web/Flutter-era plans and HTML mockups were removed from this repo
+(2026-08) after being merged into the unified feature spec and the
+`docs/native/` blueprint; git history and the sibling web repo preserve them.
+The web client's current feature reference is `../bitos-nostr-web/docs/SYSTEM.md`.

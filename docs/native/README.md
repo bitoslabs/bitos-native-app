@@ -274,8 +274,8 @@ Read all six before implementation. `delivery-plan.md` is the task ledger; the o
 The design was derived from:
 
 - `QA.md`, which chooses native iOS + native Android + a shared C++ media core.
-- Existing plans under `docs/source/`, especially the Bitz system plan, Studio production plan, mobile Studio UX, meme remix and Draw & Record specifications.
-- The sibling `../bitos-nostr` web product: routes, Nostr codecs, feed/ranking signals, media upload and publish state machine, Meme Studio schema, templates, sounds, remix, zaps, messaging and settings.
+- Legacy web-era product plans (Bitz system plan, Studio production plan, mobile Studio UX, meme remix and Draw & Record). They were removed from this repo's `docs/` in 2026-08 after being merged into the docs below; the web repo and git history preserve them.
+- The sibling `../bitos-nostr-web` web product: routes, Nostr codecs, feed/ranking signals, media upload and publish state machine, Meme Studio schema, templates, sounds, remix, zaps, messaging and settings. Its `docs/SYSTEM.md` is the living web feature reference.
 - Current primary Nostr and Blossom specifications linked in `nostr-infrastructure.md`.
 
 When documents disagree, use this order:
@@ -284,9 +284,9 @@ When documents disagree, use this order:
 2. This `docs/native/` blueprint.
 3. `QA.md` for the native-platform decision.
 4. Current web behavior as a product reference.
-5. Older `docs/source/` plans as research, not implementation authority.
+5. Legacy web-era plans (git history / web repo) as research, not implementation authority.
 
-The older Flutter recommendation in `docs/source/plan-bitz-implelemt.md` is superseded for this repository. Browser-only implementation details such as Canvas, MediaRecorder, Web Audio, IndexedDB, WebLN and `localStorage` are also not native architecture.
+The older Flutter-era recommendation is superseded for this repository. Browser-only implementation details such as Canvas, MediaRecorder, Web Audio, IndexedDB, WebLN and `localStorage` are also not native architecture.
 
 ## Non-negotiable principles
 

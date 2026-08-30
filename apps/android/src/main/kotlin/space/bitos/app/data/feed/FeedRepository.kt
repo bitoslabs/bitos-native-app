@@ -143,6 +143,13 @@ class FeedRepository(
 
     private var collectJob: Job? = null
     private var retryJob: Job? = null
+    /** The initial head is a snapshot. Later frames from this subscription are
+     * live arrivals and must not move the reader's current list. */
+    private var headSubscriptionId: String? = null
+    private var headExpectedRelays: Set<RelayUrl> = emptySet()
+    private val headEoseRelays = mutableSetOf<RelayUrl>()
+    private var initialSnapshotComplete = false
+    private var headSnapshotDeadline: Job? = null
     private var retryAttempt = 0
     private var subscriptionCounter = 0
     private var olderCounter = 0
@@ -184,6 +191,7 @@ class FeedRepository(
             pool.frames.collect { frame ->
                 NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
                     recordOlderEose(subId, frame.relay)
+                    recordHeadEose(subId, frame.relay)
                     return@collect
                 }
                 val relaySubscriptionId = NostrEventCodec.relayEventSubscriptionId(frame.message)
@@ -241,6 +249,8 @@ class FeedRepository(
 
     fun stop() {
         cancelActiveOlderBatch()
+        headSnapshotDeadline?.cancel()
+        headSnapshotDeadline = null
         pool.broadcast(NostrEventCodec.encodeClose(subscriptionId()))
         collectJob?.cancel()
         collectJob = null
@@ -360,9 +370,10 @@ class FeedRepository(
         }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
-        val knownBefore = HashSet<String>(knownNoteIds.size + pendingNotes.size).apply {
+        val knownBefore = HashSet<String>(knownNoteIds.size + pendingForYou.size + pendingFollowing.size).apply {
             addAll(knownNoteIds)
-            addAll(pendingNotes.map { it.id })
+            addAll(pendingForYou.map { it.id })
+            addAll(pendingFollowing.map { it.id })
             addAll(aggregator.snapshot().map { it.id })
         }
         val batch = OlderBatch(
@@ -628,9 +639,22 @@ class FeedRepository(
 
     private fun subscribe() {
         subscriptionCounter += 1
+        val subId = subscriptionId()
+        headSubscriptionId = subId
+        headExpectedRelays = pool.connectedRelays()
+        headEoseRelays.clear()
+        initialSnapshotComplete = false
+        headSnapshotDeadline?.cancel()
+        // Some relays do not send EOSE for a persistent subscription. Treat
+        // the bounded initial window as complete after a short deadline so
+        // live traffic cannot keep inserting cards indefinitely.
+        headSnapshotDeadline = scope.launch {
+            delay(HEAD_SNAPSHOT_MAX_WAIT_MS)
+            completeInitialSnapshot(subId)
+        }
         pool.broadcast(
             NostrEventCodec.encodeRequest(
-                subscriptionId(),
+                subId,
                 space.bitos.core.feed.BitzQuery.initialFilters(),
             ),
         )
@@ -639,20 +663,45 @@ class FeedRepository(
 
     private fun subscriptionId() = "bitos-feed-$subscriptionCounter"
 
+    private fun recordHeadEose(subscriptionId: String, relay: RelayUrl) {
+        if (subscriptionId != headSubscriptionId) return
+        headEoseRelays += relay
+        if (headExpectedRelays.isNotEmpty() && headEoseRelays.containsAll(headExpectedRelays)) {
+            completeInitialSnapshot(subscriptionId)
+        }
+    }
+
+    private fun completeInitialSnapshot(subscriptionId: String) {
+        if (subscriptionId != headSubscriptionId || initialSnapshotComplete) return
+        initialSnapshotComplete = true
+        headSnapshotDeadline?.cancel()
+        headSnapshotDeadline = null
+    }
+
     private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
         val note = FeedNote.from(event)
         if (note.id !in knownNoteIds) {
             knownNoteIds.add(note.id)
-            // APP-004: arrivals are held for the "N new notes" pill while
-            // the user is scrolled into the feed; tap/at-top reveals them.
-            if (!fromOlderPage && holdingNewNotes && mutableState.value.notes.isNotEmpty()) {
-                pendingNotes.addLast(note)
-                if (pendingNotes.size > PENDING_MAX) pendingNotes.removeFirst()
+            // Once the initial bounded snapshot is complete, every live
+            // arrival is held. The UI changes only the small pending pill;
+            // it never shifts the reader's list behind their finger.
+            val holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
+                aggregator.snapshot().isNotEmpty()
+            if (holdLiveArrival) {
+                pendingForYou.addLast(note)
+                if (pendingForYou.size > PENDING_MAX) pendingForYou.removeFirst()
             } else {
                 aggregator.insert(note)
             }
+            if (event.pubkey.value in followingAuthors) {
+                if (holdLiveArrival && followingWindow.snapshot().isNotEmpty()) {
+                    pendingFollowing.addLast(note)
+                    if (pendingFollowing.size > PENDING_MAX) pendingFollowing.removeFirst()
+                } else {
+                    followingWindow.insert(note)
+                }
+            }
         }
-        if (event.pubkey.value in followingAuthors) followingWindow.insert(note)
         absorbReply(note)
         enqueueProfile(event.pubkey.value)
         persist(event)
@@ -737,23 +786,24 @@ class FeedRepository(
         if (mutableState.value.filter == FeedFilter.LIKED) publishState()
     }
 
-    /** Hold = user is scrolled into the feed; false flushes (auto-reveal). */
-    fun holdNewNotes(hold: Boolean) {
-        if (hold == holdingNewNotes) return
-        holdingNewNotes = hold
-        if (!hold && pendingNotes.isNotEmpty()) revealPendingNotes()
-    }
+    /** Legacy UI hook. New arrivals are never auto-revealed merely because
+     * the reader reached the top; only [revealPendingNotes] changes the list. */
+    fun holdNewNotes(@Suppress("UNUSED_PARAMETER") hold: Boolean) = Unit
 
     fun revealPendingNotes() {
-        pendingNotes.forEach { aggregator.insert(it) }
-        pendingNotes.clear()
+        val pending = pendingFor(mutableState.value.timeline)
+        pending.forEach { windowFor(mutableState.value.timeline).insert(it) }
+        pending.clear()
         publishState()
     }
 
     private val knownNoteIds = HashSet<String>(512)
-    private val pendingNotes = ArrayDeque<FeedNote>()
-    private var holdingNewNotes = false
+    private val pendingForYou = ArrayDeque<FeedNote>()
+    private val pendingFollowing = ArrayDeque<FeedNote>()
     private var likedIds: Set<String> = emptySet()
+
+    private fun pendingFor(timeline: FeedTimeline): ArrayDeque<FeedNote> =
+        if (timeline == FeedTimeline.FOLLOWING) pendingFollowing else pendingForYou
 
     private fun absorbReply(note: FeedNote) {
         val target = note.replyTo ?: return
@@ -943,7 +993,7 @@ class FeedRepository(
             } else {
                 rankedForYou
             }).filter { it.pubkey !in hiddenSet && FeedFilters.passes(it, filter, ownPubkey, liked) },
-            pendingNotes = pendingNotes.toList(),
+            pendingNotes = pendingFor(mutableState.value.timeline).toList(),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
             profiles = run {
@@ -997,6 +1047,8 @@ class FeedRepository(
 
     private companion object {
         const val PENDING_MAX = 50
+        /** Persistent subscriptions may omit EOSE; bound initial catch-up. */
+        const val HEAD_SNAPSHOT_MAX_WAIT_MS = 2_500L
         const val PROFILE_BATCH = 48
         const val PROFILE_DRAIN_DELAY_MS = 250L
         const val PROFILE_FALLBACK_DELAY_MS = 900L

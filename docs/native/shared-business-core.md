@@ -37,35 +37,35 @@ KMP is not permission to share everything. Platform adapters are a deliberate ar
 
 ## 3. Repository layout
 
+Current tree as shipped (verified against `shared/business-core/src/`):
+
 ```text
 shared/
 └── business-core/
-    ├── build.gradle.kts
-    ├── src/
-    │   ├── commonMain/kotlin/com/bitos/core/
-    │   │   ├── model/
-    │   │   ├── protocol/
-    │   │   ├── identity/
-    │   │   ├── relay/
-    │   │   ├── feed/
-    │   │   ├── social/
-    │   │   ├── studio/
-    │   │   ├── publish/
-    │   │   ├── media/
-    │   │   ├── wallet/
-    │   │   ├── messaging/
-    │   │   ├── moderation/
-    │   │   ├── analytics/
-    │   │   ├── api/
-    │   │   └── util/
-    │   ├── commonTest/
-    │   ├── androidMain/
-    │   ├── androidUnitTest/
-    │   ├── iosMain/
-    │   └── iosTest/
-    ├── fixtures/
-    └── README.md
+    ├── build.gradle.kts          # KMP: android + iosArm64/iosSimulatorArm64/iosX64 + macosArm64 test
+    └── src/
+        ├── commonMain/kotlin/space/bitos/core/
+        │   ├── crypto/           # Fp256, Scalar256, Secp256k1, BIP-340 Schnorr sign/verify, NIP-44 v2
+        │   ├── nostr/            # NostrEventCodec, EventHasher, NIP-27, NIP-36, PoW, DeepLink, EventRef, QrCode
+        │   ├── model/            # NostrEvent, ProfileMetadata, contact/block/bookmark/relay lists,
+        │   │                     #   MediaMetadata, Blossom, Poll, Stories, Zap/ZapFormat/SentZapLedger,
+        │   │                     #   Notification(+filters/grouping), DmGrouping, OriginNote, Identifiers
+        │   ├── feed/             # FeedAggregator, FeedRanking, FeedFilters, ThreadAssembly, SearchResults,
+        │   │                     #   Bitz timeline/explore/search policy, AlgorithmPrefs, Remix, RepostParser
+        │   ├── publish/          # NoteComposer, ComposerDraft, ComposerRules, PublishReducer,
+        │   │                     #   SecureDmComposer (NIP-17 wrap), GifPickerContract
+        │   ├── identity/         # AccountRegistry, IdentitySigner, KeyImportForm, NostrKeyCodec (nsec/npub)
+        │   ├── settings/         # Settings, PrivacyPrefs, AppFacts, OnboardingContent, StaticPagesContent
+        │   ├── store/            # EventStoreContract — versioned SQLite DDL port implemented per platform
+        │   └── bridge/           # BusinessCoreBridge — narrow String/primitive interop surface for iOS (SBC-002)
+        └── commonTest/           # ~55 test files mirroring every package (JVM host + macOS/iOS lanes)
 ```
+
+Wave-scope packages that are *planned but not yet implemented* (relay
+transport, social graph services, studio, wallet beyond zap models, messaging
+beyond DM grouping, moderation, analytics, api) will be added under the same
+`space.bitos.core` root when their epics land — do not create the
+`com.bitos.core` namespace from earlier drafts.
 
 The media core remains at `native/media-core/`. Native apps depend on both cores, but BusinessCore does not directly depend on MediaCore. The iOS/Android adapter invokes MediaCore and returns typed results to BusinessCore. This avoids nested KMP -> C++ -> platform callbacks and makes cancellation/ownership understandable.
 

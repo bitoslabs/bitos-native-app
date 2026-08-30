@@ -121,6 +121,9 @@ Acceptance criteria:
 
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
+     -> cached notes render immediately; relay head fills one bounded snapshot
+     -> after EOSE (or a short deadline), live notes increment “New posts” only
+     -> tap “New posts” to reveal them at the top; the current reading position never jumps
      -> vertical swipe changes active player lease
      -> ten buffered Bitz remaining starts that mode's older-video query
      -> parallel relays merge by event id until EOSE; oldest time becomes next cursor
@@ -138,6 +141,8 @@ UI anatomy:
 - bottom author, caption, tags, sound and progress;
 - visible content-warning gate before playback;
 - one active audio player; warm next/previous players only;
+- relative time is `now`/seconds while a card is visible, then updates only on
+  minute boundaries; the feed store is never republished for a clock tick;
 - For You and Following paginate independently; exhausting one mode never
   disables loading in the other;
 - Explore reveals ten more tiles per local page and begins relay pagination ten

@@ -2,16 +2,15 @@
 
 > **What this file is:** the ONE merged reference of every feature surface, UI
 > field, widget, state, behavior and data source of the BitOS app — union of
-> the legacy web client (`docs/app-web-feature.md`) and the legacy Flutter
-> client (`docs/app-flutter-feature.md`), plus the design tokens
-> (`docs/DESIGN_SYSTEM.md`). It exists so the native SwiftUI + Compose
-> implementation can run at mass-production speed: open a surface section,
-> implement every checklist item top-to-bottom, mark it done in
-> [`native-ui-build-tracker.md`](./native-ui-build-tracker.md).
+> the legacy web and Flutter client feature audits (merged 2026-08-28; the
+> two source docs were removed from `docs/` afterwards and live in git
+> history), plus the design tokens (`docs/DESIGN_SYSTEM.md`). It exists so
+> the native SwiftUI + Compose implementation can run at mass-production
+> speed: open a surface section, implement every checklist item top-to-bottom,
+> mark it done in [`native-ui-build-tracker.md`](./native-ui-build-tracker.md).
 >
-> **Superseded inputs.** The two per-platform feature docs remain in `docs/`
-> as audit history. When they disagree, this file's *Native decision* column
-> wins. Engineering rules live in `docs/engineering/`; protocol/backend
+> **Superseded inputs.** The per-platform feature audits are fully merged
+> here; when they disagreed, this file's *Native decision* column won. Engineering rules live in `docs/engineering/`; protocol/backend
 > ownership in the other `docs/native/` files; the task ledger in
 > `delivery-plan.md` (epics SBC/PRO/ID/DAT/REL/FED/CAP/MED/EDT/MEM/PUB/SOC…)
 > covers infrastructure. This spec adds the **APP epic** (all user-facing UI
@@ -1058,8 +1057,8 @@ Native has all 12 hub sections; the gaps are fields and *application*
 - Web: language/region selects decorative (not persisted); help stubs;
   **"Clear cache" is a toast that clears nothing**; "Private account"
   toggle stored but unenforced; video EXIF stripping admitted incomplete;
-  `/pulse` is a fake showcase (already rejected by this spec);
-  `docs/ui-gap-audit.md` is stale (claims the wallet is missing — NWC
+  `/pulse` is a fake showcase (already rejected by this spec); the old web
+  ui-gap audit overstated gaps (it claimed the wallet was missing — NWC
   exists in web code).
 - Consequences already taken: native Clear-cache actually wipes (9.3-22),
   native FAQ is real (9.3-23), and APP-024 must *apply* Lao, not just
@@ -1139,7 +1138,8 @@ quick MEM editor → bitz composer → V2 studio suite · APP-014 NWC wallet.
 
 ---
 
-*Merge sources: `docs/app-flutter-feature.md` (54 KB Flutter audit),
-`docs/app-web-feature.md` (53 KB web audit), `docs/DESIGN_SYSTEM.md`
-(tokens). Legacy apps remain at `../bitos-nostr-flutter` and the web repo
-for reference reading only — never import framework code.*
+*Merge sources: the Flutter audit and web audit docs (54 KB / 53 KB,
+retired from `docs/` after the merge — see git history) and
+`docs/DESIGN_SYSTEM.md` (tokens). Legacy apps remain at
+`../bitos-nostr-flutter` and the web repo for reference reading only —
+never import framework code.*

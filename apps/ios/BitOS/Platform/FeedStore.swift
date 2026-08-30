@@ -106,6 +106,12 @@ final class FeedStore {
     private var retryAttempt = 0
     private var olderCounter = 0
     private var subscriptionCounter = 0
+    /// The persistent head first supplies a bounded snapshot; after EOSE (or
+    /// deadline), its frames become pending arrivals rather than list inserts.
+    private var headExpectedRelays: Set<RelayURL> = []
+    private var headEoseRelays: Set<RelayURL> = []
+    private var initialSnapshotComplete = false
+    private var headSnapshotDeadline: Task<Void, Never>?
     private var profileQueue: [String] = []
     private var requestedProfiles: Set<String> = []
     private var profileTimestamps: [String: Int64] = [:]
@@ -170,6 +176,8 @@ final class FeedStore {
 
     func stop() {
         cancelActiveOlderBatch()
+        headSnapshotDeadline?.cancel()
+        headSnapshotDeadline = nil
         collectTask?.cancel()
         collectTask = nil
         profileDrainTask?.cancel()
@@ -196,17 +204,20 @@ final class FeedStore {
         publishState()
     }
 
-    /// Hold = user is scrolled into the feed; setting false flushes
-    /// pending arrivals (auto-reveal at top).
+    /// Legacy UI hook. Reaching the top does not flush live arrivals: the
+    /// reader explicitly selects the pending pill to change the list.
     func holdNewNotes(_ hold: Bool) {
-        guard hold != holdingNewNotes else { return }
-        holdingNewNotes = hold
-        if !hold, !pendingNotes.isEmpty { revealPendingNotes() }
+        _ = hold
     }
 
     func revealPendingNotes() {
-        for note in pendingNotes { window?.insert(note) }
-        pendingNotes.removeAll()
+        if timeline == .following {
+            for note in pendingFollowing { followingWindow?.insert(note) }
+            pendingFollowing.removeAll()
+        } else {
+            for note in pendingForYou { window?.insert(note) }
+            pendingForYou.removeAll()
+        }
         publishState()
     }
 
@@ -461,6 +472,7 @@ final class FeedStore {
     private func absorb(_ frame: RelayFrame) {
         if let subId = client.relayEoseSubscriptionId(message: frame.message) {
             recordOlderEose(subscriptionId: subId, relay: frame.relay)
+            recordHeadEose(subscriptionId: subId, relay: frame.relay)
             return
         }
         guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue) else { return }
@@ -524,17 +536,26 @@ final class FeedStore {
         let note = client.feedNote(from: event)
         if !knownNoteIds.contains(note.id) {
             knownNoteIds.insert(note.id)
-            // APP-004: arrivals are held for the "N new notes" pill while
-            // the user is scrolled into the feed; tap/at-top reveals them.
-            if !fromOlderPage, holdingNewNotes, (window?.count() ?? 0) > 0 {
-                pendingNotes.append(note)
-                if pendingNotes.count > Self.pendingMax { pendingNotes.removeFirst(pendingNotes.count - Self.pendingMax) }
+            let holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
+                (window?.count() ?? 0) > 0
+            if holdLiveArrival {
+                pendingForYou.append(note)
+                if pendingForYou.count > Self.pendingMax {
+                    pendingForYou.removeFirst(pendingForYou.count - Self.pendingMax)
+                }
             } else {
                 window?.insert(note)
             }
-        }
-        if followingAuthors.contains(event.pubkey) {
-            followingWindow?.insert(note)
+            if followingAuthors.contains(event.pubkey) {
+                if holdLiveArrival && (followingWindow?.count() ?? 0) > 0 {
+                    pendingFollowing.append(note)
+                    if pendingFollowing.count > Self.pendingMax {
+                        pendingFollowing.removeFirst(pendingFollowing.count - Self.pendingMax)
+                    }
+                } else {
+                    followingWindow?.insert(note)
+                }
+            }
         }
         if let target = note.replyTo, var thread = commentThreads[target] {
             thread.append(note)
@@ -1004,11 +1025,41 @@ final class FeedStore {
 
     private func subscribe() {
         subscriptionCounter += 1
-        let request = client.feedRequest(subscriptionId: currentSubscriptionId)
-        Task { await pool.broadcast(request) }
+        let subscriptionId = currentSubscriptionId
+        initialSnapshotComplete = false
+        headExpectedRelays.removeAll()
+        headEoseRelays.removeAll()
+        headSnapshotDeadline?.cancel()
+        headSnapshotDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.headSnapshotMaxWaitMs))
+            guard !Task.isCancelled else { return }
+            self?.completeInitialSnapshot(subscriptionId: subscriptionId)
+        }
+        let request = client.feedRequest(subscriptionId: subscriptionId)
+        Task { [weak self, pool] in
+            let expectedRelays = await pool.connectedRelays()
+            guard let self, self.currentSubscriptionId == subscriptionId else { return }
+            self.headExpectedRelays = expectedRelays
+            await pool.broadcast(request)
+        }
     }
 
     private var currentSubscriptionId: String { "bitos-feed-\(subscriptionCounter)" }
+
+    private func recordHeadEose(subscriptionId: String, relay: RelayURL) {
+        guard subscriptionId == currentSubscriptionId else { return }
+        headEoseRelays.insert(relay)
+        if !headExpectedRelays.isEmpty && headEoseRelays.isSuperset(of: headExpectedRelays) {
+            completeInitialSnapshot(subscriptionId: subscriptionId)
+        }
+    }
+
+    private func completeInitialSnapshot(subscriptionId: String) {
+        guard subscriptionId == currentSubscriptionId, !initialSnapshotComplete else { return }
+        initialSnapshotComplete = true
+        headSnapshotDeadline?.cancel()
+        headSnapshotDeadline = nil
+    }
 
     // MARK: - Algorithm (APP-018 §3.18 — origin parity)
 
@@ -1062,6 +1113,7 @@ final class FeedStore {
         notes = (timeline == .following ? followingBase : rankedForYou(forYouBase)).filter {
             client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked)
         }
+        pendingNotes = timeline == .following ? pendingFollowing : pendingForYou
         comments = commentThreads
         var assembled: [String: [ThreadDisplayItem]] = [:]
         for (rootId, replies) in commentThreads {
@@ -1157,12 +1209,14 @@ final class FeedStore {
     private static let profileBatchSize = 48
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
+    private static let headSnapshotMaxWaitMs = 2_500
     private static let olderWindowMax = 200
 
     /// FED-004 walk bounds (shared `BitzTimelinePolicy` via the bridge):
     /// ≤ 6 batches per load-more, 4 s hard deadline per batch.
     private static let walkMaxBatches = 6
     private static let walkPageMaxWaitMs = 4_000
-    private var holdingNewNotes = false
     private var knownNoteIds: Set<String> = []
+    private var pendingForYou: [FeedNote] = []
+    private var pendingFollowing: [FeedNote] = []
 }

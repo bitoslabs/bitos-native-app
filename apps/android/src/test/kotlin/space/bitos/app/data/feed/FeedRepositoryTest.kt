@@ -71,17 +71,19 @@ class FeedRepositoryTest {
     }
 
     /**
-     * APP-004: arrivals hold while the user is scrolled into the feed
-     * (new-notes pill), reveal prepends them, and relay redelivery never
-     * duplicates a pending or inserted note.
+     * Live arrivals hold after the initial relay snapshot, reveal prepends
+     * them, and relay redelivery never duplicates a pending or inserted note.
      */
     @Test
     fun heldArrivalsWaitForRevealAndRedeliveryNeverDuplicates(): Unit = runBlocking {
         repository.start()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
+        }
         transport.emit(VALID_TEXT_NOTE_MESSAGE)
         withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
 
-        repository.holdNewNotes(true)
+        transport.emit("""["EOSE","bitos-feed-1"]""")
         transport.emit(VALID_SECOND_KEY_MESSAGE)
         val held = withTimeout(20_000) { repository.state.first { it.pendingNotes.size == 1 } }
         assertEquals(1, held.notes.size, "window must not jump while holding")
@@ -94,9 +96,30 @@ class FeedRepositoryTest {
         assertEquals(0, revealed.pendingNotes.size)
         assertEquals(2, revealed.notes.map { it.id }.toSet().size)
 
-        // At-top flushes future arrivals directly into the window.
-        repository.holdNewNotes(false)
+        // Returning to the top does not flush later arrivals.
         transport.emit(VALID_SECOND_KEY_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 2 && it.pendingNotes.isEmpty() } }
+    }
+
+    @Test
+    fun liveArrivalsAfterInitialEoseOnlyUpdateThePendingPill(): Unit = runBlocking {
+        repository.start()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
+        }
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+
+        // The persistent head is now live. No scroll-position signal is
+        // required: a reader at the top must still get a stable timeline.
+        transport.emit("""["EOSE","bitos-feed-1"]""")
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        val pending = withTimeout(20_000) {
+            repository.state.first { it.notes.size == 1 && it.pendingNotes.size == 1 }
+        }
+        assertEquals("second author note", pending.pendingNotes.single().content)
+
+        repository.revealPendingNotes()
         withTimeout(20_000) { repository.state.first { it.notes.size == 2 && it.pendingNotes.isEmpty() } }
     }
 
