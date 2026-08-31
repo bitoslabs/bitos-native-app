@@ -86,6 +86,8 @@ fun AuthorProfileScreen(
     identityViewModel: IdentityViewModel,
     notePublisher: space.bitos.app.data.publish.NotePublisher,
     onClose: () -> Unit,
+    /** APP-018 compact mode drives the note-card density on this surface. */
+    settingsStore: space.bitos.app.data.settings.SettingsStore,
     /** Author tap on a note card → swap this page to that author. */
     onOpenAuthor: (String) -> Unit = {},
     /** External-link tap → confirm sheet (never opens a browser unattended). */
@@ -104,6 +106,7 @@ fun AuthorProfileScreen(
     val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
     val identityState by identityViewModel.state.collectAsStateWithLifecycle()
     val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+    val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
 
     val profile = authorState.profile
@@ -500,6 +503,7 @@ fun AuthorProfileScreen(
                         // polls, full actions and the ⋯ menu. No fork.
                         space.bitos.app.ui.components.FeedNoteCard(
                             note = note,
+                            compact = settingsSnapshot.compactMode,
                             profile = feedState.profiles[note.pubkey],
                             bookmarked = note.id in feedState.bookmarkedIds || note.id in localActions.bookmarked,
                             liked = note.id in localActions.liked,

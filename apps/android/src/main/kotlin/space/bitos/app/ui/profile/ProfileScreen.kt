@@ -147,6 +147,9 @@ fun ProfileScreen(
         val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
         val identityState by identityViewModel.state.collectAsStateWithLifecycle()
         val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+        // APP-018 compact mode: note-card density follows the appearance
+        // setting on this surface too (same card as the home feed).
+        val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
         val profile = feedState.profiles[account.pubkeyHex]
         var tab by remember(account.pubkeyHex) { mutableStateOf(0) }
         val own = feedState.notes.filter { it.pubkey == account.pubkeyHex || it.repostedBy == account.pubkeyHex }
@@ -516,6 +519,7 @@ fun ProfileScreen(
                         // polls and the full action row — no fork.
                         space.bitos.app.ui.components.FeedNoteCard(
                             note = note,
+                            compact = settingsSnapshot.compactMode,
                             profile = feedState.profiles[note.pubkey],
                             bookmarked = note.id in feedState.bookmarkedIds || note.id in localActions.bookmarked,
                             liked = note.id in localActions.liked,

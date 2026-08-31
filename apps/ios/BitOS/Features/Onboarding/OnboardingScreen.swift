@@ -262,9 +262,13 @@ private struct WelcomeStep: View {
                     }
                     .accessibilityHidden(true)
                     .padding(.bottom, 28)
-                    Text(content.appName)
-                        .font(.system(size: 34, weight: .heavy))
-                        .foregroundStyle(BitOSTheme.textPrimary)
+                    // Official wordmark (light/dark asset variants) replaces
+                    // the legacy text title — same brand moment as the shell.
+                    Image("Wordmark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 30)
+                        .accessibilityLabel(content.appName)
                     Text(content.tagline)
                         .font(.system(size: 14))
                         .foregroundStyle(BitOSTheme.textSecondary)

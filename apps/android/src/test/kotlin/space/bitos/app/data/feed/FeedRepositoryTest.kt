@@ -16,8 +16,11 @@ import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayFrame
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.RelayTransport
+import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.RelayUrl
 import space.bitos.core.nostr.Sha256EventHasher
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -121,6 +124,38 @@ class FeedRepositoryTest {
 
         repository.revealPendingNotes()
         withTimeout(20_000) { repository.state.first { it.notes.size == 2 && it.pendingNotes.isEmpty() } }
+    }
+
+    @Test
+    fun pendingBufferCanDrainWhileAnotherThreadAddsAnArrival() {
+        val pending = PendingFeedNotes(maxItems = 100)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            pending.add(FeedTimeline.FOR_YOU, testNote("initial"))
+            val receivedIds = mutableSetOf<String>()
+            repeat(500) { index ->
+                val start = CountDownLatch(1)
+                val drain = executor.submit<List<FeedNote>> {
+                    start.await()
+                    pending.drain(FeedTimeline.FOR_YOU)
+                }
+                val add = executor.submit {
+                    start.await()
+                    pending.add(FeedTimeline.FOR_YOU, testNote("arrival-$index"))
+                }
+                start.countDown()
+                receivedIds += drain.get().map(FeedNote::id)
+                add.get()
+            }
+
+            receivedIds += pending.drain(FeedTimeline.FOR_YOU).map(FeedNote::id)
+            assertEquals(
+                (0 until 500).map { "arrival-$it" }.toSet() + "initial",
+                receivedIds,
+            )
+        } finally {
+            executor.shutdownNow()
+        }
     }
 
     /**
@@ -584,6 +619,19 @@ class FeedRepositoryTest {
         }
     }
 }
+
+private fun testNote(id: String) = FeedNote(
+    id = id,
+    pubkey = "author",
+    content = id,
+    createdAt = 0,
+    kind = 1,
+    replyTo = null,
+    hashtags = emptyList(),
+    mentions = emptyList(),
+    mediaUrls = emptyList(),
+    isProtocolPayload = false,
+)
 
 /** Deterministic in-memory transport double. */
 private class FakeRelayTransport(private val relay: RelayUrl) : RelayTransport {

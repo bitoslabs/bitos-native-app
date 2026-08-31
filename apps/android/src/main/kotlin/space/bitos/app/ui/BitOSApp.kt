@@ -402,6 +402,7 @@ fun BitOSApp(
                         homeViewModel = homeViewModel,
                         identityViewModel = identityViewModel,
                         notePublisher = notePublisher,
+                        settingsStore = settingsStore,
                         onClose = { authorRepository.close(); authorPageTarget = null },
                         onOpenAuthor = { authorPageTarget = it; authorRepository.open(it) },
                         onOpenExternalLink = { externalLinkTarget = it },

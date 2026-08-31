@@ -919,7 +919,12 @@ struct ProfileNoteCard: View {
     var onOpen: (() -> Void)? = nil
     /// Optional like · repost · zap row (profile surfaces; inert on "You").
     var actionRow: NoteActionRow? = nil
+    @Environment(SettingsStore.self) private var settings
     @State private var expanded = false
+
+    /// APP-018 functional setting: compact mode tightens card density
+    /// (same deltas as the home `NoteCardRow`).
+    private var compact: Bool { settings.state.compactMode }
 
     var body: some View {
         Group {
@@ -936,11 +941,11 @@ struct ProfileNoteCard: View {
     }
 
     private var card: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: compact ? 2 : 8) {
             HStack(spacing: 10) {
                 PubkeyAvatarView(
                     pubkey: note.pubkey,
-                    size: 36,
+                    size: compact ? 28 : 36,
                     picture: profile?.picture,
                     label: profile?.bestDisplayName
                 )
@@ -985,7 +990,7 @@ struct ProfileNoteCard: View {
             }
         }
         .padding(.horizontal, BitOSTheme.Spacing.screen)
-        .padding(.vertical, BitOSTheme.Spacing.md)
+        .padding(.vertical, compact ? 4 : BitOSTheme.Spacing.md)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(BitOSTheme.border.opacity(0.65))

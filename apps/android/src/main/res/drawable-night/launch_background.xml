@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Night launch floor: brand-dark color (values-night/colors.xml) under
+         the centered white wordmark (drawable-night-*/splash.png). Mirrors the
+         day layer-list; the legacy 1×1 background.png bitmap is gone. -->
     <item>
-        <bitmap android:gravity="fill" android:src="@drawable/background"/>
+        <color android:color="@color/splash_background" />
     </item>
     <item>
-        <bitmap android:gravity="center" android:src="@drawable/splash"/>
+        <bitmap android:gravity="center" android:src="@drawable/splash" />
     </item>
 </layer-list>

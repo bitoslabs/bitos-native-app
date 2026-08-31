@@ -222,7 +222,11 @@ Anatomy — **Boot splash** (legacy Flutter parity, implemented 2026-08-28):
       layer-list (bg + centered logo, `-night` variants), Android 12+
       `windowSplashScreen*` (vector bolt `bitos_splash_mark` + wordmark
       branding); `MainActivity` swaps to `Theme.BitOS` before Compose
-      mounts (legacy NormalTheme parity).
+      mounts (legacy NormalTheme parity). 2026-08-31: wordmark assets on
+      both platforms regenerate from the official masters
+      (`docs/logo-black.png` / `logo-white.png`, geometry-normalized);
+      launch is fully themed light/dark again (black wordmark on
+      `#F4F7FB`, white on `#0A0A0F`) after the APP-023 dark-only interim.
 - [x] **In-app boot screen** (`BootSplashScreen` SwiftUI/Compose port of the
       legacy Flutter widget): bolt in the shared flat-top hex avatar
       (breathing 1±2%/2 s, rotating sweep-gradient orbit stroke, orange

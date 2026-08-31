@@ -185,9 +185,12 @@ fun BootSplashScreen(
         ) {
             SplashHexAvatar(progress = progress, isDark = isDark)
             Spacer(Modifier.height(20.dp))
-            // Official wordmark (light/dark assets, ~26dp like the web/Flutter splash)
+            // Official wordmark, ~26dp like the web/Flutter splash. Pinned
+            // to the dark art: this component renders its own dark floor in
+            // both system modes, and qualifier resolution would follow the
+            // system rather than the forced scheme.
             Image(
-                painter = painterResource(R.drawable.bitos_branding),
+                painter = painterResource(R.drawable.bitos_branding_dark),
                 contentDescription = null,
                 modifier = Modifier.height(26.dp),
                 contentScale = ContentScale.Fit,

@@ -369,6 +369,54 @@ push toggles), relays live status dots, zap sats display.**
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-08-31 — Brand wordmark refresh (user-supplied masters
+  `docs/logo-black.png` light / `docs/logo-white.png` dark). Assets:
+  regenerated BOTH platforms from the masters with a shared geometry
+  contract — canvas 3.396:1, ink box matched across variants (the white
+  master ships faint edge bloom that inflated its ink box ~13% and made
+  the two renders different sizes; trimmed at alpha ≥16 the letterforms
+  are identical). iOS `Wordmark.imageset` now has proper 1x/2x/3x slots
+  × light/dark; `SplashLogo` light slots point at the black art (were
+  pinned to the dark files) and `SplashBackground` light appearance is
+  #F4F7FB — the launch chain is themed light/dark again per spec §Boot
+  splash, replacing the APP-023 dark-only interim. Android
+  `bitos_branding` + `splash` density ladders regenerated (day black /
+  night white); launch theming fixed TWO invisible-logo bugs: day launch
+  drew the black wordmark on the #0A0A0F APP-023 floor, and pre-12 night
+  launch tiled the light 1×1 `background.png` under the white wordmark —
+  now day = #F4F7FB floor under black (values), night = #0A0A0F floor
+  under white (values-night + drawable-night), v31 system-splash colors
+  resolve day/night through one `@color/splash_background`; dead
+  `background.png` + `splash_background_dark` removed. Surfaces: onboarding
+  welcome heroes (both platforms) and Settings footers now show the
+  official wordmark (theme-aware) instead of / above plain text. Found
+  while verifying: the iOS pbxproj from c9a4308 had
+  `DesignSystem/AccountSwitchOverlay.swift` in Sources but orphaned from
+  its group (broke every CLI build) and `Features/Inbox/ChatsView.swift`
+  on disk but missing from Sources — both repaired. Follow-up (user
+  report: home logo must be black on light / white on dark): in-app
+  wordmarks can NOT ride resource qualifiers — `drawable-night-*` follows
+  the SYSTEM uiMode while the shell follows the persisted
+  ThemeModeSetting, and the bolt's orange gradient rules out tinting, so
+  Android gained `LocalBitOSIsDark` (provided by `BitOSTheme`) + a plain
+  (non-qualified) `bitos_branding_dark` ladder (white art) + shared
+  `BrandWordmark` composable used by the home header, onboarding hero and
+  Settings footer; the night-qualified pair remains for the system-driven
+  launch chain. Follow-up fix (user report, light theme on a dark system
+  still showed the white wordmark): BOTH branches must use non-qualified
+  drawables — the light branch had loaded `bitos_branding`, whose
+  `drawable-night-*` resolution follows the SYSTEM uiMode, so
+  forced-Light-on-dark-system got the night (white) art; added the plain
+  `bitos_branding_light` ladder (black art) and the selector now picks
+  `_light`/`_dark`, never the qualified pair. iOS needed no code change (`.preferredColorScheme` drives
+  catalog appearance resolution) but both retained BootSplash components
+  now pin the dark wordmark art — they force a dark floor, and catalog /
+  qualifier resolution would follow the trait/system instead. Verified:
+  Android assembleDebug green; full-app Swift 6 typecheck (project flags) 0
+  errors. actool cannot run on this machine (no simulator runtimes; fails
+  identically on HEAD assets), so catalog compilation itself remains
+  unverified until runtimes are installed.
+
 - 2026-08-31 — APP-008 composer page polish (user report, Android).
   Found: the shell Scaffold already pads the system bars, and
   CreateNoteScreen's own Scaffold/TopAppBar re-applied the status-bar

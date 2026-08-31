@@ -176,7 +176,10 @@ struct BootSplashScreen: View {
                 VStack(spacing: 0) {
                     SplashHexAvatar(progress: t, colorScheme: colorScheme)
                         .padding(.bottom, 20)
-                    Image("Wordmark")
+                    // Dark art pinned: the splash is dark-forced in both
+                    // system modes, but catalog appearance resolution would
+                    // follow the trait — select the dark variant explicitly.
+                    Image("WordmarkDark")
                         .resizable()
                         .scaledToFit()
                         .frame(height: 26)

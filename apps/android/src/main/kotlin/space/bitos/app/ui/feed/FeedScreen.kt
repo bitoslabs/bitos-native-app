@@ -80,6 +80,7 @@ import space.bitos.app.player.VideoPlayerPool
 import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
+import space.bitos.app.ui.components.BrandWordmark
 import space.bitos.app.ui.components.FeedNoteCard
 import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.MediaRow
@@ -1351,13 +1352,9 @@ private fun FeedHeader(
                 .padding(start = BitOSSpacing.screen, end = BitOSSpacing.xs, top = BitOSSpacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Official wordmark, ~22dp like the web/Flutter app bar.
-            androidx.compose.foundation.Image(
-                painter = androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.bitos_branding),
-                contentDescription = "BitOS",
-                modifier = Modifier.height(22.dp),
-                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-            )
+            // Official wordmark, ~22dp like the web/Flutter app bar —
+            // theme-aware (black art on the light shell, white on dark).
+            BrandWordmark(height = 22.dp, contentDescription = "BitOS")
             Spacer(Modifier.weight(1f))
             // APP-004: content filter (spec §3.4: All/Original/Replies/Media/
             // Liked/Mine, single-select with checks).

@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.identity.IdentityPreview
 import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.ui.components.BrandWordmark
 import space.bitos.app.ui.components.DerivedIdentityCard
 import space.bitos.app.ui.components.HexAvatar
 import space.bitos.app.ui.components.HexShape
@@ -228,12 +229,9 @@ private fun WelcomeStep(onAddIdentity: () -> Unit, onBrowse: () -> Unit) {
                 Text("₿", color = BitOSColors.primary, fontSize = 40.sp, fontWeight = FontWeight.W800)
             }
             Spacer(Modifier.height(28.dp))
-            Text(
-                content.APP_NAME,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.W800,
-                color = BitOSColors.textPrimary,
-            )
+            // Official wordmark replaces the legacy text title — same brand
+            // moment as the shell (theme-aware black/white art).
+            BrandWordmark(height = 30.dp, contentDescription = content.APP_NAME)
             Spacer(Modifier.height(12.dp))
             Text(
                 content.TAGLINE,

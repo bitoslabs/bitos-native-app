@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Night splash floor: brand-dark under the white wordmark variant
+         (drawable-night-*/splash.png, bitos_branding). -->
+    <color name="splash_background">#0A0A0F</color>
+</resources>

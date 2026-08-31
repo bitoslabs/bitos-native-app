@@ -46,10 +46,19 @@ struct SettingsView: View {
             sectionGroup("SUPPORT", group: "SUPPORT")
             signOutSection
             Section {
+                // Official wordmark (light/dark asset variants) above the
+                // version line.
+                Image("Wordmark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 16)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityHidden(true)
                 Text("BitOS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") · settings v\(settingsSchemaVersion)")
                     .font(.system(size: 11))
                     .foregroundStyle(BitOSTheme.textTertiary)
                     .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
             }
         }
         .scrollContentBackground(.hidden)

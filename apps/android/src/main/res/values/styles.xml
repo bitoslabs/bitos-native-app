@@ -10,7 +10,8 @@
     <!-- Launch theme (legacy Flutter LaunchTheme parity): the branded
          window background (bg color + centered logo) shows while the
          process starts; MainActivity swaps to Theme.BitOS before
-         Compose mounts. Night densities resolve via drawable-night/. -->
+         Compose mounts. Themed light/dark: colors resolve via
+         values-night, wordmark bitmaps via drawable-night-*. -->
     <style name="Theme.BitOS.Launch">
         <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:windowFullscreen">false</item>

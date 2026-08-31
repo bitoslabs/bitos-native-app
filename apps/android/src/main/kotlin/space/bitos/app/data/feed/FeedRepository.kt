@@ -34,6 +34,43 @@ import space.bitos.core.store.EventStoreContract
 /** Which Home timeline the user is viewing. */
 enum class FeedTimeline { FOR_YOU, FOLLOWING }
 
+/**
+ * Thread-safe hand-off buffer for live arrivals that must not move the active
+ * feed. Relay projection runs on the application scope while reveal is a UI
+ * intent, so draining must be atomic with respect to a new arrival.
+ */
+internal class PendingFeedNotes(private val maxItems: Int) {
+    private val lock = Any()
+    private val forYou = ArrayDeque<FeedNote>()
+    private val following = ArrayDeque<FeedNote>()
+
+    fun add(timeline: FeedTimeline, note: FeedNote) = synchronized(lock) {
+        queueFor(timeline).apply {
+            addLast(note)
+            if (size > maxItems) removeFirst()
+        }
+    }
+
+    /** Removes and returns one immutable hand-off batch. */
+    fun drain(timeline: FeedTimeline): List<FeedNote> = synchronized(lock) {
+        queueFor(timeline).toList().also { queueFor(timeline).clear() }
+    }
+
+    fun snapshot(timeline: FeedTimeline): List<FeedNote> = synchronized(lock) {
+        queueFor(timeline).toList()
+    }
+
+    fun ids(): List<String> = synchronized(lock) {
+        buildList(forYou.size + following.size) {
+            addAll(forYou.map(FeedNote::id))
+            addAll(following.map(FeedNote::id))
+        }
+    }
+
+    private fun queueFor(timeline: FeedTimeline): ArrayDeque<FeedNote> =
+        if (timeline == FeedTimeline.FOLLOWING) following else forYou
+}
+
 /** Relay health as presented in the feed header. */
 data class RelayHealth(val connected: Int, val total: Int) {
     val isLive: Boolean get() = connected > 0
@@ -154,6 +191,8 @@ class FeedRepository(
 
     private val mutableState = MutableStateFlow(FeedUiState())
     val state: StateFlow<FeedUiState> = mutableState.asStateFlow()
+
+    private val pendingNotes = PendingFeedNotes(PENDING_MAX)
 
     private var collectJob: Job? = null
     private var retryJob: Job? = null
@@ -437,10 +476,9 @@ class FeedRepository(
         }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
-        val knownBefore = HashSet<String>(knownNoteIds.size + pendingForYou.size + pendingFollowing.size).apply {
+        val knownBefore = HashSet<String>(knownNoteIds.size).apply {
             addAll(knownNoteIds)
-            addAll(pendingForYou.map { it.id })
-            addAll(pendingFollowing.map { it.id })
+            addAll(pendingNotes.ids())
             addAll(aggregator.snapshot().map { it.id })
         }
         val batch = OlderBatch(
@@ -845,15 +883,13 @@ class FeedRepository(
             val holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
                 aggregator.snapshot().isNotEmpty()
             if (holdLiveArrival) {
-                pendingForYou.addLast(note)
-                if (pendingForYou.size > PENDING_MAX) pendingForYou.removeFirst()
+                pendingNotes.add(FeedTimeline.FOR_YOU, note)
             } else {
                 aggregator.insert(note)
             }
             if (event.pubkey.value in followingAuthors) {
                 if (holdLiveArrival && followingWindow.snapshot().isNotEmpty()) {
-                    pendingFollowing.addLast(note)
-                    if (pendingFollowing.size > PENDING_MAX) pendingFollowing.removeFirst()
+                    pendingNotes.add(FeedTimeline.FOLLOWING, note)
                 } else {
                     followingWindow.insert(note)
                 }
@@ -948,19 +984,14 @@ class FeedRepository(
     fun holdNewNotes(@Suppress("UNUSED_PARAMETER") hold: Boolean) = Unit
 
     fun revealPendingNotes() {
-        val pending = pendingFor(mutableState.value.timeline)
-        pending.forEach { windowFor(mutableState.value.timeline).insert(it) }
-        pending.clear()
+        val timeline = mutableState.value.timeline
+        val revealed = pendingNotes.drain(timeline)
+        revealed.forEach { windowFor(timeline).insert(it) }
         publishState()
     }
 
     private val knownNoteIds = HashSet<String>(512)
-    private val pendingForYou = ArrayDeque<FeedNote>()
-    private val pendingFollowing = ArrayDeque<FeedNote>()
     private var likedIds: Set<String> = emptySet()
-
-    private fun pendingFor(timeline: FeedTimeline): ArrayDeque<FeedNote> =
-        if (timeline == FeedTimeline.FOLLOWING) pendingFollowing else pendingForYou
 
     private fun absorbReply(note: FeedNote) {
         // Arrival keys on the direct parent; a nested reply whose parent
@@ -1222,7 +1253,7 @@ class FeedRepository(
                     it.id !in dismissedNoteIds &&
                     FeedFilters.passes(it, filter, ownPubkey, liked, protocolNotesVisible)
             },
-            pendingNotes = pendingFor(mutableState.value.timeline).toList(),
+            pendingNotes = pendingNotes.snapshot(mutableState.value.timeline),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
             profiles = run {

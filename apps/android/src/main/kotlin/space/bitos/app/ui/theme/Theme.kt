@@ -109,6 +109,15 @@ val BitOSLightColors: BitOSPalette = palette(DesignTokens.LIGHT)
 val LocalBitOSColors = staticCompositionLocalOf { BitOSDarkColors }
 
 /**
+ * Active appearance mode (the resolved ThemeModeSetting, not the system
+ * uiMode). Brand art that ships as day/night rasters but is NOT
+ * qualifier-selectable in-app (the wordmark's colored bolt rules out
+ * tinting, and `drawable-night-*` follows the *system* configuration)
+ * picks its variant from this local so it always matches the shell.
+ */
+val LocalBitOSIsDark = staticCompositionLocalOf { true }
+
+/**
  * Active palette (APP-023 appearance adapter): resolves the current
  * [LocalBitOSColors] so every screen that reads `BitOSColors.*` follows
  * the persisted theme (light/dark/system) and accent choice live. Reads
@@ -244,7 +253,10 @@ fun BitOSTheme(
     val colors = remember(darkTheme, accentColorHex) {
         applyAccent(if (darkTheme) BitOSDarkColors else BitOSLightColors, accentColorHex)
     }
-    CompositionLocalProvider(LocalBitOSColors provides colors) {
+    CompositionLocalProvider(
+        LocalBitOSColors provides colors,
+        LocalBitOSIsDark provides darkTheme,
+    ) {
         MaterialTheme(
             colorScheme = scheme(colors, darkTheme),
             typography = BitOSTypography,

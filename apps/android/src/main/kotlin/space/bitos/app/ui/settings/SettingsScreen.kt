@@ -73,6 +73,7 @@ import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayManager
 import space.bitos.app.data.settings.SettingsStore
 import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.ui.components.BrandWordmark
 import space.bitos.app.ui.components.HexShape
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.theme.BitOSColors
@@ -220,6 +221,13 @@ fun SettingsScreen(
             }
         }
 
+        // Official wordmark (theme-aware) above the version line.
+        BrandWordmark(
+            height = 16.dp,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(top = 16.dp),
+        )
         Text(
             "BitOS 1.0 · settings shared-contract parity",
             fontSize = 11.sp, color = BitOSColors.textTertiary,

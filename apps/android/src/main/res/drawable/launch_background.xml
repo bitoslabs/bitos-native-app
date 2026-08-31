@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- APP-023: solid brand-dark launch floor (was the light background.png
-         bitmap); matches the dark-only shell + v31 system splash in both
-         system modes. -->
+    <!-- Themed launch floor: day #F4F7FB (values) / night #0A0A0F
+         (values-night) under the matching black/white wordmark bitmap. -->
     <item>
         <color android:color="@color/splash_background" />
     </item>
