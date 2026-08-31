@@ -37,6 +37,14 @@ class SqliteEventCache(
         EventStoreContract.ddl.forEach(db::execSQL)
     }
 
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        // Write-ahead logging matches the iOS EventStore WAL pragma (audit
+        // R6 / performance-audit-and-plan.md Phase 3): batch flushes stay
+        // off the per-write fsync critical path.
+        db.enableWriteAheadLogging()
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // Deterministic ordered migrations from the shared contract.
         for (version in (oldVersion + 1)..newVersion) {
@@ -64,6 +72,40 @@ class SqliteEventCache(
             event.receivedFromRelay?.let { relay -> it.bindString(8, relay.value) } ?: it.bindNull(8)
             it.bindLong(9, System.currentTimeMillis())
             it.executeInsert()
+        }
+    }
+
+    /** One transaction per burst (audit R6): prepared once, committed once. */
+    override suspend fun upsertAll(events: List<NostrEvent>): Unit = withContext(Dispatchers.IO) {
+        if (events.isEmpty()) return@withContext
+        val db = writableDatabase
+        val statement = db.compileStatement(
+            "INSERT OR REPLACE INTO ${EventStoreContract.TABLE_EVENTS} (" +
+                "${EventStoreContract.COL_ID}, ${EventStoreContract.COL_PUBKEY}, ${EventStoreContract.COL_CREATED_AT}, " +
+                "${EventStoreContract.COL_KIND}, ${EventStoreContract.COL_TAGS}, ${EventStoreContract.COL_CONTENT}, " +
+                "${EventStoreContract.COL_SIG}, ${EventStoreContract.COL_RELAY}, ${EventStoreContract.COL_FIRST_SEEN_AT}) " +
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+        )
+        statement.use {
+            db.beginTransaction()
+            try {
+                for (event in events) {
+                    val signature = event.signature ?: continue
+                    it.bindString(1, event.id.value)
+                    it.bindString(2, event.pubkey.value)
+                    it.bindLong(3, event.createdAt)
+                    it.bindLong(4, event.kind.toLong())
+                    it.bindString(5, TagsCodec.encode(event.tags))
+                    it.bindString(6, event.content)
+                    it.bindString(7, signature)
+                    event.receivedFromRelay?.let { relay -> it.bindString(8, relay.value) } ?: it.bindNull(8)
+                    it.bindLong(9, System.currentTimeMillis())
+                    it.executeInsert()
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
         }
     }
 

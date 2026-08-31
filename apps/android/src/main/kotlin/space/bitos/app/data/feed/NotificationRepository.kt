@@ -268,10 +268,16 @@ class NotificationRepository(
         collectJob = scope.launch {
             pool.frames.collect { frame ->
                 absorbEose(frame)
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+                // Phase 0 trace: the frame trust gate (decode + ID +
+                // BIP-340) — pure CPU, non-suspending (PerfTrace contract).
+                val event = space.bitos.app.diagnostics.PerfTrace.section(
+                    space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
+                ) {
+                    runCatching {
+                        val decoded = NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
+                        if (NostrEventCodec.verifySignature(hasher, decoded)) decoded else null
+                    }.getOrNull()
+                } ?: return@collect
                 absorbBlockList(event)
                 absorbOrigin(event, frame.message)
                 absorbNotification(event, frame.message)

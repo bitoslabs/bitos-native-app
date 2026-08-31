@@ -152,7 +152,15 @@ class NotificationRepositoryTest {
         reloaded.setAccount(account.publicKeyHex())
         withTimeout(20_000) { reloaded.state.first { it.hasAccount } }
         transport.emit(relayFrame(oldEvent, actor1))
-        val redelivered = withTimeout(20_000) { reloaded.state.first { it.items.size == 1 } }
+        // Wait on the redelivered item itself, not a transient item COUNT:
+        // with the verify-once outcome cache (performance-audit §2.1) the
+        // replayed burst absorbs back-to-back and StateFlow conflation can
+        // skip intermediate sizes entirely.
+        val redelivered = withTimeout(20_000) {
+            reloaded.state.first { state ->
+                state.items.any { it.id == oldEvent.idHex } && oldEvent.idHex in state.readIds
+            }
+        }
         assertTrue(oldEvent.idHex in redelivered.readIds)
     }
 

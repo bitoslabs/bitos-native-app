@@ -51,7 +51,7 @@ class FeedRepositoryTest {
         transport = FakeRelayTransport(relay)
         pool = RelayPool(scope, listOf(relay)) { _, _ -> transport }
         cache = RecordingEventCache()
-        repository = FeedRepository(scope, pool, hasher, cache, bootstrapPollMs = 25)
+        repository = FeedRepository(scope, pool, hasher, cache, bootstrapPollMs = 25, publishCoalesceMs = 10)
     }
 
     @AfterTest

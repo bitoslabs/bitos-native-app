@@ -122,6 +122,7 @@ import space.bitos.app.ui.feed.ZapContent
 import space.bitos.app.ui.feed.CommentContent
 import space.bitos.app.ui.profile.AuthorProfileContent
 import space.bitos.app.ui.theme.AppIcons
+import space.bitos.app.ui.designsystem.AppSkeletonTile
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarFeedIcon
@@ -255,6 +256,7 @@ fun BitzScreen(
             canAutoplay = { autoplayAllowed(context, currentSettings.value.mediaAutoPlay) },
             rateProvider = { currentSettings.value.videoPlaybackRate.rate.toFloat() },
             mutedProvider = { currentSettings.value.videoMuted },
+            qualityProvider = { currentSettings.value.videoQuality },
         )
     }
     val playerBindings by pool.playerBindings.collectAsStateWithLifecycle()
@@ -341,7 +343,7 @@ fun BitzScreen(
     val bitzSettledId = playerNotes.getOrNull(pagerState.settledPage)?.id
     val bitzPrevId = playerNotes.getOrNull(pagerState.settledPage - 1)?.id
     val bitzNextId = playerNotes.getOrNull(pagerState.settledPage + 1)?.id
-    LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId) {
+    LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId, settingsSnapshot.videoQuality) {
         if (!authorMode && mode == BitzModeSetting.EXPLORE) {
             pool.releaseAll()
         } else {
@@ -968,6 +970,22 @@ private fun ExploreGrid(
         if (state.isLoadingOlder && !state.noMoreOlder) {
             item(key = "grid-loading") { ExploreLoadingTile() }
         }
+        // UX U7: exhausted walk — an explicit boundary spanning the grid
+        // instead of a silent dead-end at the last tile.
+        if (state.noMoreOlder && videos.isNotEmpty()) {
+            item(
+                key = "grid-caught-up",
+                span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+            ) {
+                Text(
+                    "You're all caught up",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = BitOSColors.textTertiary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 16.dp),
+                )
+            }
+        }
     }
         }
     }
@@ -1097,6 +1115,25 @@ private fun BitzTile(
                     onOpenAuthor = onOpenAuthor,
                 )
             }
+        }
+        // UX U8: duration affordance on the tile (shared formatter;
+        // top-end so it never collides with the footer's like count).
+        // Hidden while duration is unknown.
+        note.video?.durationSeconds?.takeIf { it > 0 }?.let { duration ->
+            Text(
+                space.bitos.core.model.MediaMetadata.formatDuration(duration),
+                color = Color.White,
+                style = androidx.compose.material3.MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    fontSize = 9.sp,
+                    letterSpacing = 0.sp,
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+            )
         }
     }
 }
@@ -1901,8 +1938,17 @@ private fun BitzSearchOverlay(
 
 @Composable
 private fun BitzLoading() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+    // UX U2: skeleton tiles in the explore-grid shape while the first relay
+    // page loads (§2.5 parity with the iOS skeleton grid).
+    Column(
+        Modifier.fillMaxSize().padding(top = 76.dp, start = 10.dp, end = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        repeat(2) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(3) { AppSkeletonTile(Modifier.weight(1f)) }
+            }
+        }
     }
 }
 

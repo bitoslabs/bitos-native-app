@@ -92,6 +92,7 @@ import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.rememberRelativeTimeNow
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.AppIcons
+import space.bitos.app.ui.designsystem.AppSkeletonRow
 import space.bitos.core.feed.FeedFilter
 import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.app.ui.theme.BitOSColors
@@ -190,6 +191,7 @@ fun FeedScreen(
             context = context,
             canAutoplay = { autoplayAllowed(context, currentSettings.value.mediaAutoPlay) },
             rateProvider = { currentSettings.value.videoPlaybackRate.rate.toFloat() },
+            qualityProvider = { currentSettings.value.videoQuality },
         )
     }
     val playerBindings by pool.playerBindings.collectAsStateWithLifecycle()
@@ -221,7 +223,7 @@ fun FeedScreen(
     val settledNoteId = feedNotes.getOrNull(pagerState.settledPage)?.id
     val prevNoteId = feedNotes.getOrNull(pagerState.settledPage - 1)?.id
     val nextNoteId = feedNotes.getOrNull(pagerState.settledPage + 1)?.id
-    LaunchedEffect(settledNoteId, prevNoteId, nextNoteId) {
+    LaunchedEffect(settledNoteId, prevNoteId, nextNoteId, settingsSnapshot.videoQuality) {
         pool.update(pagerState.settledPage, feedNotes)
     }
     // APP-004: arrivals are held while the user is scrolled into the ACTIVE
@@ -1266,7 +1268,13 @@ private fun NotesList(
     onOpenAttachment: (String) -> Unit = {},
 ) {
     androidx.compose.foundation.lazy.LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-        itemsIndexed(notes, key = { _, note -> note.id }) { index, note ->
+        itemsIndexed(
+            notes,
+            key = { _, note -> note.id },
+            // Stable content type: note rows and the pagination footer are
+            // different reuse pools (native-performance.md §6).
+            contentType = { _, _ -> "feed_note" },
+        ) { index, note ->
             space.bitos.app.ui.components.FeedNoteCard(
                 note = note,
                 profile = state.profiles[note.pubkey],
@@ -1316,10 +1324,23 @@ private fun NotesList(
         }
         // APP-004 pagination: footer spinner while an older page loads.
         if (state.isLoadingOlder) {
-            item(key = "older-footer") {
+            item(key = "older-footer", contentType = { "footer" }) {
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                 }
+            }
+        }
+        // UX U7: the walk is exhausted for this lane — an explicit boundary
+        // instead of a silent dead-end (parity with the iOS footer).
+        if (state.noMoreOlder && notes.isNotEmpty()) {
+            item(key = "caught-up-footer", contentType = { "footer" }) {
+                Text(
+                    "You're all caught up",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = BitOSColors.textTertiary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                )
             }
         }
     }
@@ -1532,8 +1553,11 @@ private fun TimelineTab(label: String, icon: androidx.compose.ui.graphics.vector
 
 @Composable
 private fun FeedLoading() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+    // UX U2 (§2.5 skeletons): matched skeleton rows instead of a bare
+    // spinner — the shape of the incoming content; shimmer honors reduce-
+    // motion inside AppSkeleton.
+    Column(Modifier.fillMaxSize()) {
+        repeat(6) { AppSkeletonRow() }
     }
 }
 

@@ -44,7 +44,15 @@ class VideoPlayerPool(
     private val canAutoplay: () -> Boolean = { true },
     private val rateProvider: () -> Float = { 1f },
     private val mutedProvider: () -> Boolean = { false },
+    /** APP-018 `bitos_video_quality` (UX U9), read live per reconciliation:
+     * AUTO = display-fitting pick, HIGH = tallest rung, LOW = data saver. */
+    private val qualityProvider: () -> space.bitos.core.settings.VideoQualitySetting =
+        { space.bitos.core.settings.VideoQualitySetting.AUTO },
 ) {
+
+    /** APP-018 quality preference currently prepared (UX U9). */
+    private var currentQuality: space.bitos.core.settings.VideoQualitySetting =
+        space.bitos.core.settings.VideoQualitySetting.AUTO
 
     private val players = LinkedHashMap<String, ExoPlayer>()
     private val mutablePlayers = MutableStateFlow<Map<String, ExoPlayer>>(emptyMap())
@@ -68,6 +76,17 @@ class VideoPlayerPool(
 
     /** Reconcile slots with [visibleIndex] ± 1 in [notes] (the paged list). */
     fun update(visibleIndex: Int, notes: List<FeedNote>) {
+        val quality = qualityProvider()
+        if (quality != currentQuality) {
+            // Preference change: release the bounded slots so this pass
+            // re-prepares at the new rung (at most three players rebuilt).
+            currentQuality = quality
+            players.values.forEach(ExoPlayer::release)
+            players.clear()
+            mediaSources.clear()
+            if (failoverSlot != null) failoverSlot = null
+            mutablePlayers.value = emptyMap()
+        }
         if (visibleIndex !in notes.indices) {
             players.values.forEach { it.playWhenReady = false }
             return
@@ -92,7 +111,7 @@ class VideoPlayerPool(
         val muted = mutedProvider()
         keep.forEach { note ->
             if (note.id !in players) {
-                val sources = MediaSources.forNote(note)
+                val sources = MediaSources.forNote(note, currentQuality)
                 mediaSources[note.id] = sources
                 players[note.id] = ExoPlayer.Builder(context).build().apply {
                     setMediaItem(MediaItem.fromUri(sources.current()))
@@ -217,10 +236,21 @@ internal class MediaSources private constructor(private val candidates: List<Str
         /** Display long edge for the rendition pick (hdpi range). */
         private const val TARGET_HEIGHT = 1920
 
-        fun forNote(note: FeedNote): MediaSources {
+        fun forNote(
+            note: FeedNote,
+            quality: space.bitos.core.settings.VideoQualitySetting,
+        ): MediaSources {
             val video = note.video ?: return MediaSources(listOf(""))
+            // Shared pick rule (UX U9): AUTO = tallest fitting the display,
+            // HIGH = tallest rung, LOW = data saver (shortest rung ≥360p,
+            // else shortest available).
+            val pick = when (quality) {
+                space.bitos.core.settings.VideoQualitySetting.HIGH -> video.selectTallestRendition()
+                space.bitos.core.settings.VideoQualitySetting.LOW -> video.selectDataSaverRendition()
+                space.bitos.core.settings.VideoQualitySetting.AUTO -> video.selectRendition(TARGET_HEIGHT)
+            }
             val ordered = buildList {
-                add(video.selectRendition(TARGET_HEIGHT))
+                add(pick)
                 video.fallbackUrls.forEach { add(it) }
                 video.renditions.forEach { add(it.url) }
             }.distinct()

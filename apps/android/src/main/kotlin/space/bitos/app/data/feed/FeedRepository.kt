@@ -143,6 +143,10 @@ class FeedRepository(
     /** Injectable so contract tests drive the cold-start bootstrap without
      * real-time waits; production polls at the shared health cadence. */
     private val bootstrapPollMs: Long = 2_000,
+    /** Relay-burst publication coalescing window (audit R3): absorption
+     * mutates state per frame, the UI projection publishes once per window.
+     * Injectable so contract tests run without real-time waits. */
+    private val publishCoalesceMs: Long = 150,
     /** Web feedPreferences parity: persisted reader opt-in that re-admits
      * protocol-payload notes into the feed windows. */
     private val showProtocolNotes: () -> Boolean = { false },
@@ -258,12 +262,19 @@ class FeedRepository(
                     return@collect
                 }
                 val relaySubscriptionId = NostrEventCodec.relayEventSubscriptionId(frame.message)
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                // Non-negotiable principle 2: verify ID AND signature before
-                // projection; unverified events never reach display state.
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+                // Phase 0 trace: the frame trust gate (decode + ID hash +
+                // BIP-340 verify) — pure CPU, non-suspending (PerfTrace
+                // contract; matches the iOS `relay.decode` signpost).
+                val event = space.bitos.app.diagnostics.PerfTrace.section(
+                    space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
+                ) {
+                    runCatching {
+                        val decoded = NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
+                        // Non-negotiable principle 2: verify ID AND signature before
+                        // projection; unverified events never reach display state.
+                        if (NostrEventCodec.verifySignature(hasher, decoded)) decoded else null
+                    }.getOrNull()
+                } ?: return@collect
                 when {
                     event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
                     event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
@@ -352,6 +363,12 @@ class FeedRepository(
         profileDrainJob?.cancel()
         profileFallbackJobs.forEach(Job::cancel)
         profileFallbackJobs.clear()
+        // Flush any coalesced publication + buffered persistence so stopped
+        // state is final.
+        publishJob?.cancel()
+        publishJob = null
+        publishState()
+        flushPendingPersist()
     }
 
     /** Muted authors are filtered from all feed windows (device-local). */
@@ -651,7 +668,7 @@ class FeedRepository(
         // aggregator-style keys is overkill for a bounded count window).
         zapCounts[target] = (zapCounts[target] ?: 0) + 1
         if (zapCounts.size > ZAP_TARGETS_MAX) zapCounts.remove(zapCounts.keys.first())
-        publishState()
+        requestPublish()
     }
 
     private fun absorbBookmarkList(event: NostrEvent) {
@@ -881,14 +898,14 @@ class FeedRepository(
             // arrival is held. The UI changes only the small pending pill;
             // it never shifts the reader's list behind their finger.
             val holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
-                aggregator.snapshot().isNotEmpty()
+                aggregator.size() > 0
             if (holdLiveArrival) {
                 pendingNotes.add(FeedTimeline.FOR_YOU, note)
             } else {
                 aggregator.insert(note)
             }
             if (event.pubkey.value in followingAuthors) {
-                if (holdLiveArrival && followingWindow.snapshot().isNotEmpty()) {
+                if (holdLiveArrival && followingWindow.size() > 0) {
                     pendingNotes.add(FeedTimeline.FOLLOWING, note)
                 } else {
                     followingWindow.insert(note)
@@ -912,7 +929,7 @@ class FeedRepository(
                 bookmarkedNoteMap.remove(bookmarkedNoteMap.keys.first())
             }
         }
-        publishState()
+        requestPublish()
     }
 
     /**
@@ -1022,7 +1039,7 @@ class FeedRepository(
             voters,
             space.bitos.core.model.PollVote(event.pubkey.value, option, event.createdAt),
         )
-        publishState()
+        requestPublish()
     }
 
     /** One-shot REQ for a poll's kind-1018 votes (called when it renders). */
@@ -1080,7 +1097,7 @@ class FeedRepository(
         }
         persist(event)
         profilesGeneration++
-        publishState()
+        requestPublish()
     }
 
     /** Cold-start hydration: newest cached verified events fill the window. */
@@ -1106,9 +1123,56 @@ class FeedRepository(
         }
     }
 
-    /** Fire-and-forget persistence of verified events; cache failures never break display. */
+    /** Fire-and-forget persistence of verified events; cache failures never break display.
+     * Bursts buffer and flush as ONE transaction (audit R6) — one fsync per
+     * batch instead of one per event. */
+    private val persistLock = Any()
+    private val pendingPersist = mutableListOf<NostrEvent>()
+
     private fun persist(event: NostrEvent) {
-        scope.launch { runCatching { cache.upsertVerified(event) } }
+        if (event.signature == null) return
+        val batch = synchronized(persistLock) {
+            pendingPersist.add(event)
+            if (pendingPersist.size >= PERSIST_BATCH_MAX) {
+                val taken = pendingPersist.toList()
+                pendingPersist.clear()
+                taken
+            } else {
+                null
+            }
+        } ?: return
+        scope.launch { runCatching { cache.upsertAll(batch) } }
+    }
+
+    /** Drains the persistence buffer (coalesced publish tick, stop). */
+    private fun flushPendingPersist() {
+        val batch = synchronized(persistLock) {
+            if (pendingPersist.isEmpty()) return
+            val taken = pendingPersist.toList()
+            pendingPersist.clear()
+            taken
+        }
+        scope.launch { runCatching { cache.upsertAll(batch) } }
+    }
+
+    // ── Coalesced UI publication (audit R3) ──────────────────────────
+
+    private var publishJob: Job? = null
+
+    /**
+     * Relay-burst absorption schedules ONE projection per
+     * [publishCoalesceMs] window — N absorbed events pay one full window
+     * snapshot + rank instead of N. Intent-driven paths (timeline/filter/
+     * reveal/follow/bookmark changes) publish synchronously for immediate
+     * feedback.
+     */
+    private fun requestPublish() {
+        if (publishJob?.isActive == true) return
+        publishJob = scope.launch {
+            delay(publishCoalesceMs)
+            publishState()
+            flushPendingPersist()
+        }
     }
 
     private val profileTimestamps = mutableMapOf<String, Long>()
@@ -1211,7 +1275,9 @@ class FeedRepository(
         profileFallbackJobs += fallback
     }
 
-    private fun publishState() {
+    private fun publishState() = space.bitos.app.diagnostics.PerfTrace.section(
+        space.bitos.app.diagnostics.PerfTrace.FEED_PUBLISH,
+    ) {
         val relayStates = pool.states
         val hiddenSet = mutedPubkeys + blockedPubkeys
         val filter = mutableState.value.filter
@@ -1353,6 +1419,9 @@ class FeedRepository(
 
         /** APP-015: by-id re-fetch bound for the bookmarks page. */
         const val BOOKMARK_FETCH_MAX = 100
+
+        /** Verified events per one transactional cache flush (audit R6). */
+        const val PERSIST_BATCH_MAX = 64
     }
 }
 
