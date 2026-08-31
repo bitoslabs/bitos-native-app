@@ -45,6 +45,13 @@ enum AppIcons {
         case people: Image("SolarUsersLinear")
         case user, userProfile: Image("SolarUserLinear")
         case qrCode: Image("SolarQrLinear")
+        case shieldCheck: Image("SolarShieldCheckLinear")
+        case eyeClosed: Image("SolarEyeClosedLinear")
+        case chart: Image("SolarChartLinear")
+        case hashtag: Image("SolarHashtagLinear")
+        case emoji: Image("SolarEmojiFunnyCircleLinear")
+        case gifFilm: Image("SolarFilmLinear")
+        case link: Image("SolarLinkCircleLinear")
         case home: Image("SolarHomeLinear")
         case bitz: Image("SolarPlayCircleLinear")
         case inbox: Image("SolarBellLinear")
@@ -105,6 +112,16 @@ enum AppIcons {
     static let reportIllicit = "exclamationmark.octagon"
     static let reportHarassment = "hand.raised"
     static let block = "hand.raised.slash"            // Solar: closest: closeCircle
+
+    // ── Composer toolbar (web Composer parity: shield-check PoW,
+    // eye-off sensitive, bar-chart poll, film GIF, hash, smile) ──────
+    static let shieldCheck = "shieldCheck"
+    static let eyeClosed = "eyeClosed"
+    static let chart = "chart"
+    static let hashtag = "hashtag"
+    static let emoji = "emoji"
+    static let gifFilm = "gifFilm"
+    static let link = "link"
 
     // ── Identity / navigation ────────────────────────────────────────
     static let user = "person.fill"                   // Solar: user

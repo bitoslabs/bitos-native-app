@@ -59,7 +59,8 @@ struct ComposerScreen: View {
     @State private var busy = false
     @State private var powTarget = 0
     @State private var powOutcome: PowOutcome?
-    @State private var powSheet = false
+    /// Web `showPow` parity: the panel rides inline under the field.
+    @State private var showPowPanel = false
     @State private var emojiSheet = false
     @State private var pollSheet = false
     @State private var gifSheet = false
@@ -128,7 +129,7 @@ struct ComposerScreen: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             Task {
@@ -143,30 +144,41 @@ struct ComposerScreen: View {
             refreshSuggestions()
             if !errorMessage.isEmpty { errorMessage = "" }
             if !seeded { saveDraft() }
+            invalidatePowTemplate()
         }
         .onChange(of: cursor) { _, _ in refreshSuggestions() }
         .onChange(of: focused) { _, _ in refreshSuggestions() }
-        .onChange(of: remoteImageUrls) { _, _ in if !seeded { saveDraft() } }
-        .onChange(of: contentWarningReason) { _, _ in if !seeded { saveDraft() } }
-        .onChange(of: contentWarningOn) { _, _ in if !seeded { saveDraft() } }
+        .onChange(of: remoteImageUrls) { _, _ in
+            if !seeded { saveDraft() }
+            invalidatePowTemplate()
+        }
+        .onChange(of: pickedImages.count) { _, _ in invalidatePowTemplate() }
+        .onChange(of: contentWarningReason) { _, _ in
+            if !seeded { saveDraft() }
+            invalidatePowTemplate()
+        }
+        .onChange(of: contentWarningOn) { _, _ in
+            if !seeded { saveDraft() }
+            invalidatePowTemplate()
+        }
         .onAppear {
             guard !restoredDraft else { return }
             restoredDraft = true
             if !seeded { restoreDraft() }
-        }
-        .sheet(isPresented: $powSheet) {
-            powSheetContent
-                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $emojiSheet) {
             emojiSheetContent
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $pollSheet) {
-            PollComposerSheet(publishing: busy) { question, options in
-                publishPoll(question: question, options: options)
-                pollSheet = false
-            }
+            PollComposerSheet(
+                publishing: busy,
+                onCancel: { pollSheet = false },
+                onPost: { question, options in
+                    publishPoll(question: question, options: options)
+                    pollSheet = false
+                }
+            )
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $gifSheet) {
@@ -228,6 +240,9 @@ struct ComposerScreen: View {
                         }
                     if !suggestions.isEmpty {
                         mentionSuggestions
+                    }
+                    if showPowPanel {
+                        powPanel
                     }
                     if mediaCount > 0 {
                         mediaGrid
@@ -333,7 +348,9 @@ struct ComposerScreen: View {
                     mediaThumb {
                         pickedImages.removeAll { $0.id == picked.id }
                     } content: {
-                        if let image = UIImage(data: picked.data) {
+                        if picked.mimeType.hasPrefix("video/") {
+                            videoThumbPlaceholder
+                        } else if let image = UIImage(data: picked.data) {
                             Image(uiImage: image).resizable().scaledToFill()
                         } else {
                             brokenThumbPlaceholder
@@ -359,6 +376,17 @@ struct ComposerScreen: View {
                 .font(.system(size: 18))
                 .foregroundStyle(BitOSTheme.textTertiary)
         }
+    }
+
+    /// Video pick tile (web Composer parity): surface + play glyph, no decode.
+    private var videoThumbPlaceholder: some View {
+        ZStack {
+            BitOSTheme.surfaceElevated
+            AppIcons.image(for: AppIcons.play)
+                .font(.system(size: 22))
+                .foregroundStyle(BitOSTheme.textSecondary)
+        }
+        .accessibilityLabel("Video attachment")
     }
 
     /// Removable 96 pt tile; the caller supplies the real media content.
@@ -409,27 +437,32 @@ struct ComposerScreen: View {
 
     private var toolbar: some View {
         HStack(spacing: 2) {
-            // Legacy toolbar order (minus Meme Studio, which awaits the
-            // studio phase): image · URL · GIF · poll · PoW · CW · hashtag · emoji.
+            // Web Composer order (Solar icon language): photo · video · URL ·
+            // GIF · poll · PoW · sensitive · hashtag · emoji.
             toolbarButton(AppIcons.photo, "Attach image", enabled: canAddImage, active: mediaCount > 0, badge: mediaCount > 0 ? "\(mediaCount)" : nil) {
-                emojiSheet = false
-                powSheet = false
-                // PhotosPicker lives in the overlay below; toggle via state.
                 pickerPrompt = true
             }
-            toolbarButton(AppIcons.globe, "Add Image URL", enabled: canAddImage) { urlAlert = true }
-            toolbarGlyphButton("GIF", "Add GIF", enabled: canAddImage) { gifSheet = true }
-            toolbarButton("chart.bar", "Create poll") { pollSheet = true }
-            toolbarButton(AppIcons.qrCode, "Proof of Work", enabled: pickedImages.isEmpty, active: powOutcome != nil || powTarget > 0,
-                          badge: powOutcome.map { "\($0.targetDifficulty)" } ?? (powTarget > 0 ? "\(powTarget)" : nil)) { powSheet = true }
-            toolbarButton(AppIcons.mute, "Content Warning", active: contentWarningOn) {
+            toolbarButton(AppIcons.video, "Attach video", enabled: canAddImage) {
+                videoPickerPrompt = true
+            }
+            toolbarButton(AppIcons.link, "Add image URL", enabled: canAddImage) { urlAlert = true }
+            toolbarButton(AppIcons.gifFilm, "Add GIF", enabled: canAddImage) { gifSheet = true }
+            toolbarButton(AppIcons.chart, "Create poll") { pollSheet = true }
+            // Badge shows a Mined difficulty only — a bare target is not yet
+            // attached to anything publish posts will carry.
+            toolbarButton(AppIcons.shieldCheck, "Proof of Work", enabled: pickedImages.isEmpty,
+                          active: showPowPanel || powOutcome != nil,
+                          badge: powOutcome.map { "\($0.targetDifficulty)" }) {
+                showPowPanel.toggle()
+            }
+            toolbarButton(AppIcons.eyeClosed, "Content Warning", active: contentWarningOn) {
                 contentWarningOn.toggle()
                 if !contentWarningOn { contentWarningReason = "" }
             }
-            toolbarButton("number", "Insert hashtag") {
+            toolbarButton(AppIcons.hashtag, "Insert hashtag") {
                 applyInsert(bridge.composerInsertHashtag(text: text, cursor: Int32(cursor)))
             }
-            toolbarButton("face.smiling", "Insert emoji") { emojiSheet = true }
+            toolbarButton(AppIcons.emoji, "Insert emoji") { emojiSheet = true }
             Spacer(minLength: BitOSTheme.Spacing.sm)
             charCounter
         }
@@ -438,27 +471,15 @@ struct ComposerScreen: View {
         .background(BitOSTheme.surface)
         .overlay(alignment: .top) { Divider().background(BitOSTheme.divider) }
         .photosPicker(isPresented: $pickerPrompt, selection: $pickerItem, matching: .images)
+        .photosPicker(isPresented: $videoPickerPrompt, selection: $pickerItem, matching: .videos)
     }
 
     @State private var pickerPrompt = false
-
-    /// Text-glyph toolbar button (GIF has no SF Symbol; the legacy app
-    /// renders a text-like glyph too).
-    private func toolbarGlyphButton(_ glyph: String, _ label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(glyph)
-                .font(.system(size: 12, weight: .heavy))
-                .foregroundStyle(enabled ? BitOSTheme.textSecondary : BitOSTheme.textTertiary.opacity(0.4))
-                .frame(width: 40, height: 40)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .accessibilityLabel(label)
-    }
+    @State private var videoPickerPrompt = false
 
     private func toolbarButton(_ symbol: String, _ label: String, enabled: Bool = true, active: Bool = false, badge: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            AppIcons.image(for: symbol)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(
                     !enabled ? BitOSTheme.textTertiary.opacity(0.4) :
@@ -508,28 +529,26 @@ struct ComposerScreen: View {
 
     // MARK: - Sheets
 
-    private var powSheetContent: some View {
-        let content = composedContent()
-        let tagsJson = derivedTags()
-        return PowCard(
+    /// Web Composer parity: the PoW panel rides inline under the field.
+    /// `.id` keys the card to the mining template — a mined nonce is valid
+    /// for exactly one (content, target, tags), so any edit resets the card
+    /// (and cancels an in-flight run via `onDisappear`).
+    private var powPanel: some View {
+        PowCard(
             target: $powTarget,
             mineChunk: { createdAt, startNonce, attempts in
                 await environment.notePublisher.minePowChunkWithTags(
-                    content: content,
+                    content: composedContent(),
                     targetDifficulty: Int32(powTarget),
                     createdAt: createdAt,
                     startNonce: startNonce,
                     attempts: attempts,
-                    tagsJson: tagsJson
+                    tagsJson: derivedTags()
                 )
             },
-            onMined: { outcome in
-                powOutcome = outcome
-                powSheet = false
-            }
+            onMined: { outcome in powOutcome = outcome }
         )
-        .padding(.horizontal, BitOSTheme.Spacing.screen)
-        .padding(.bottom, BitOSTheme.Spacing.xl)
+        .id("\(powTarget)|\(composedContent())|\(derivedTags())")
     }
 
     private var emojiSheetContent: some View {
@@ -667,6 +686,13 @@ struct ComposerScreen: View {
         return bridge.composerDeriveTags(content: composedContent(), contentWarningReason: reason) ?? "[]"
     }
 
+    /// A mined nonce is valid for exactly one (content, target, tags)
+    /// template; any edit voids it (the inline card's `.id` resets its own
+    /// phase the same way). Publishing must never ride a stale nonce.
+    private func invalidatePowTemplate() {
+        powOutcome = nil
+    }
+
     private func publishFailureText(_ result: PublishResult) -> String {
         switch result {
         case .signingRefused: return "Signing refused — add an identity first."
@@ -711,6 +737,8 @@ struct ComposerScreen: View {
         contentWarningOn = !cw.isEmpty
         contentWarningReason = cw
         powTarget = (map["pow"] as? KotlinInt)?.intValue ?? 0
+        // A draft that carries a difficulty reopens the inline panel.
+        if powTarget > 0 { showPowPanel = true }
         let mentions = (map["mentions"] as? [[String: Any]]) ?? []
         trackedMentions = mentions.compactMap { obj in
             guard let name = obj["n"] as? String, let npub = obj["u"] as? String else { return nil }
@@ -815,9 +843,11 @@ struct ComposerScreen: View {
     }
 
     /// APP-008 poll composer (legacy `PollComposer` parity): question ≤280,
-/// 2–6 choices ≤80, live counters, publish through the tags path.
+    /// 2–6 choices ≤80, live counters, publish through the tags path.
+    /// Cancel only dismisses — it must not trip the publish validator.
 private struct PollComposerSheet: View {
     let publishing: Bool
+    let onCancel: () -> Void
     let onPost: (String, [String]) -> Void
 
     @State private var question = ""
@@ -838,7 +868,7 @@ private struct PollComposerSheet: View {
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(BitOSTheme.textPrimary)
                 Spacer()
-                Button("Cancel") { onPost("", []) }.foregroundStyle(BitOSTheme.textSecondary)
+                Button("Cancel") { onCancel() }.foregroundStyle(BitOSTheme.textSecondary)
                 Button {
                     onPost(question, options)
                 } label: {
@@ -899,24 +929,35 @@ private struct PollComposerSheet: View {
 
 // MARK: - Published state
 
-/// Remote media tile: broken-image fallback on failure (legacy parity).
+/// Remote media tile: videos get a play tile (no decode), broken-image
+/// fallback on failure (legacy parity).
 private struct RemoteMediaThumb: View {
     let url: String
 
     var body: some View {
-        AsyncImage(url: URL(string: url)) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill()
-            case .failure:
-                ZStack {
-                    BitOSTheme.surfaceElevated
-                    AppIcons.image(for: AppIcons.brokenImage)
-                        .font(.system(size: 18))
-                        .foregroundStyle(BitOSTheme.textTertiary)
-                }
-            default:
+        if isVideoMediaUrl(url) {
+            ZStack {
                 BitOSTheme.surfaceElevated
+                AppIcons.image(for: AppIcons.play)
+                    .font(.system(size: 22))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .accessibilityLabel("Video attachment")
+        } else {
+            AsyncImage(url: URL(string: url)) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                case .failure:
+                    ZStack {
+                        BitOSTheme.surfaceElevated
+                        AppIcons.image(for: AppIcons.brokenImage)
+                            .font(.system(size: 18))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                    }
+                default:
+                    BitOSTheme.surfaceElevated
+                }
             }
         }
     }

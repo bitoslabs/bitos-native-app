@@ -39,6 +39,76 @@ class BusinessCoreBridgeTest {
         assertNull(bridge.decodeEvent("""["NOTICE","x"]""", "wss://relay.damus.io"))
     }
 
+    // ── APP-011 DM presentation bridge contract ──────────────────
+
+    private val me = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+    private val peer = "aa".repeat(32)
+
+    private fun dmMessage(id: String, author: String, at: Long, content: String = "hi"): Map<String, Any> =
+        mapOf(
+            "id" to id,
+            "authorPubkey" to author,
+            "peerPubkey" to peer,
+            "content" to content,
+            "createdAt" to at,
+        )
+
+    @Test
+    fun dmUnreadCountCountsPeerMessagesPastTheCursor() {
+        val messages = listOf(
+            dmMessage("01", peer, 100),
+            dmMessage("02", me, 150),
+            dmMessage("03", peer, 300),
+            dmMessage("04", peer, 400),
+        )
+        assertEquals(0, bridge.dmUnreadCount(messages, me, 500))
+        assertEquals(1, bridge.dmUnreadCount(messages, me, 350))
+        assertEquals(2, bridge.dmUnreadCount(messages, me, 200))
+        assertEquals(3, bridge.dmUnreadCount(messages, me, 0))
+        // My own messages are never unread, and empty input maps to 0.
+        assertEquals(0, bridge.dmUnreadCount(emptyList(), me, 0))
+    }
+
+    @Test
+    fun dmPreviewLineStaysGenericUntilOpened() {
+        val messages = listOf(
+            dmMessage("01", peer, 100),
+            dmMessage("02", me, 150),
+            dmMessage("03", peer, 300),
+        )
+        // Unread peer message → generic "New message", never plaintext.
+        assertEquals("New message", bridge.dmPreviewLine(messages, me, 200))
+        // Read everything → settled generic line.
+        assertEquals("Encrypted · decrypt in app", bridge.dmPreviewLine(messages, me, 300))
+        // Empty conversation → explicit placeholder.
+        assertEquals("No messages", bridge.dmPreviewLine(emptyList(), me, 0))
+    }
+
+    @Test
+    fun dmIsAcceptedAppliesDeclineWinsOverEverSentTo() {
+        // Declined wins over everything (explicit user intent).
+        assertFalse(bridge.dmIsAccepted(peer, everSentTo = listOf(peer), explicitlyAccepted = listOf(peer), explicitlyDeclined = listOf(peer)))
+        // Explicit accept.
+        assertTrue(bridge.dmIsAccepted(peer, everSentTo = emptyList(), explicitlyAccepted = listOf(peer), explicitlyDeclined = emptyList()))
+        // I replied once → auto-accepted.
+        assertTrue(bridge.dmIsAccepted(peer, everSentTo = listOf(peer), explicitlyAccepted = emptyList(), explicitlyDeclined = emptyList()))
+        // Fresh stranger → request bucket.
+        assertFalse(bridge.dmIsAccepted(peer, everSentTo = emptyList(), explicitlyAccepted = emptyList(), explicitlyDeclined = emptyList()))
+    }
+
+    @Test
+    fun dmNextCursorNeverRewinds() {
+        val messages = listOf(
+            dmMessage("01", peer, 100),
+            dmMessage("02", me, 500),
+        )
+        assertEquals(500, bridge.dmNextCursor(messages, currentCursor = 0))
+        // An already-newer cursor must not move backward.
+        assertEquals(900, bridge.dmNextCursor(messages, currentCursor = 900))
+        // Empty conversation keeps the cursor untouched.
+        assertEquals(42, bridge.dmNextCursor(emptyList(), currentCursor = 42))
+    }
+
     @Test
     fun authorRequestPagesBackwardAndStaysBounded() {
         val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
@@ -55,6 +125,29 @@ class BusinessCoreBridgeTest {
         // The limit is coerced into the 1..100 window either way.
         assertTrue(bridge.authorRequest("s3", author, limit = 9_999).contains("\"limit\":100"))
         assertTrue(bridge.authorRequest("s4", author, limit = 0).contains("\"limit\":1"))
+    }
+
+    @Test
+    fun deletionComposerBuildsBoundedKindFive() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val target = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        assertNotNull(bridge.composeDeletionEventId(listOf(target), author, "Deleted from BitOS", nowSeconds = 1_710_000_000))
+        // The wire frame carries the EVENT verb; content and tags come from
+        // the composer (asserted below).
+        val frame = bridge.deletionPublishMessage(listOf(target), author, "Deleted from BitOS", 1_710_000_000, "ab".repeat(64))
+        assertNotNull(frame)
+        assertTrue(frame.startsWith("""["EVENT","""), frame)
+        assertTrue(frame.contains("\"kind\":5"), frame)
+        assertTrue(frame.contains("""["e","$target"]"""), frame)
+        // Composer contract: dedupe + hex validation + default copy.
+        val composer = space.bitos.core.publish.NoteComposer(clock = { 1_710_000_000 })
+        val unsigned = composer.composeDeletion(listOf(target, target, "not-hex"), author)!!
+        assertEquals(5, unsigned.kind)
+        assertEquals(listOf(listOf("e", target)), unsigned.tags)
+        assertEquals("Deleted from BitOS", unsigned.content)
+        // Empty/invalid target sets refuse to compose.
+        assertNull(composer.composeDeletion(emptyList(), author))
+        assertNull(composer.composeDeletion(listOf("zz"), author))
     }
 
     @Test
@@ -205,6 +298,41 @@ class BusinessCoreBridgeTest {
         assertEquals("That is a public key (npub); import needs the secret (nsec).", npubInput.message)
         assertNull(npubInput.secretHex)
         assertEquals("EMPTY", bridge.keyImportCheck("  ").verdict)
+    }
+
+    @Test
+    fun nip22CommentTagsMatchWebShape() {
+        val target = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val kind22 = 22L
+        // Top-level: parent repeats the target; k carries the TARGET kind.
+        val top = bridge.commentTagsJson(target, target, kind22, null, null, "gm #bitcoin")!!
+        assertTrue(top.startsWith("["), top)
+        assertTrue(top.contains("""["E","$target"]"""), top)
+        assertTrue(top.contains("""["K","22"]"""), top)
+        assertTrue(top.contains("""["P","$target"]"""), top)
+        assertTrue(top.contains("""["e","$target"]"""), top)
+        assertTrue(top.contains("""["k","22"]"""), top)
+        assertTrue(top.contains("""["t","bitcoin"]"""), top)
+        // Nested: parent points at the comment being answered; k = 1111.
+        val parentComment = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val nested = bridge.commentTagsJson(target, target, kind22, parentComment, target, "re")!!
+        assertTrue(nested.contains("""["e","$parentComment"]"""), nested)
+        assertTrue(nested.contains("""["k","1111"]"""), nested)
+        // Kind-1 targets must use NIP-10 (web's intentional guard).
+        assertNull(bridge.commentTagsJson(target, target, 1L, null, null, "gm"))
+        // The compose/publish pair round-trips as a kind-1111 event frame.
+        val eventId = bridge.composeCommentWithTagsEventId("gm", target, 1_710_000_000, top)
+        assertNotNull(eventId)
+        val frame = bridge.commentWithTagsPublishMessage("gm", target, 1_710_000_000, "ab".repeat(64), top)!!
+        assertTrue(frame.startsWith("""["EVENT","""), frame)
+        assertTrue(frame.contains("\"kind\":1111"), frame)
+        // Thread REQs: the plain #e filter carries 1111; the #E variant
+        // catches uppercase-rooted comments.
+        val plain = bridge.commentsRequest("s", target)
+        assertTrue(plain.contains("\"kinds\":[1,1111,7,6,9735]"), plain)
+        val root = bridge.commentsRootRequest("s2", target)
+        assertTrue(root.contains("\"kinds\":[1111]"), root)
+        assertTrue(root.contains("\"#E\":[\"$target\"]"), root)
     }
 
     private companion object {

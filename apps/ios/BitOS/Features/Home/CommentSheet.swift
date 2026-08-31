@@ -68,7 +68,7 @@ struct CommentSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear { store.loadComments(targetEventId: note.id) }
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }

@@ -26,7 +26,7 @@ struct ComposerSheet: View {
                     }
                 }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     @ViewBuilder

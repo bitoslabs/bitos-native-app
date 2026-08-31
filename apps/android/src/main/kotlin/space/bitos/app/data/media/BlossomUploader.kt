@@ -14,10 +14,11 @@ import space.bitos.core.publish.NoteComposer
 import java.util.concurrent.TimeUnit
 
 /**
- * Blossom (BUD-02) uploader: hash → challenge → signed kind-24242 auth →
- * PUT bytes → verify the returned hash matches the local one. Hash mismatch
- * is security-visible and blocking (PUB-002/006): the pipeline refuses to
- * build a descriptor from an unverified upload.
+ * Blossom (BUD-02/11) uploader: hash → signed kind-24242 auth → Base64url
+ * `Authorization: Nostr` header → `PUT {server}/upload` → verify the
+ * returned hash matches the local one. Hash mismatch is security-visible
+ * and blocking (PUB-002/006): the pipeline refuses to build a descriptor
+ * from an unverified upload.
  */
 class BlossomUploader(
     private val http: OkHttpClient = OkHttpClient.Builder()
@@ -31,6 +32,11 @@ class BlossomUploader(
     /**
      * Uploads [bytes] and returns the verified descriptor. The SHA-256 is
      * computed locally first and checked against the server's response.
+     *
+     * BUD-02/11 flow: sign the kind-24242 auth upfront (production servers
+     * reject the unauthenticated probe with 400, not the 401 challenge of
+     * the legacy spec draft), `PUT {server}/upload` with the Base64url
+     * `Authorization: Nostr` token, accept 200/201.
      */
     suspend fun upload(
         bytes: ByteArray,
@@ -42,27 +48,12 @@ class BlossomUploader(
         if (bytes.isEmpty() || bytes.size > Blossom.MAX_FILE_BYTES) throw UploadFailure("file out of bounds")
         val localHash = Sha256EventHasher.sha256(bytes)
             .joinToString("") { ((it.toInt() and 0xf0) ushr 4).toString(16) + (it.toInt() and 0x0f).toString(16) }
+        val endpoint = Blossom.uploadUrl(serverUrl)
+        // Fallback when a server never sends a 401 challenge: now + 10 min,
+        // clamped into the window [3]composeUploadAuth enforces.
+        val expiration = nowSeconds + 600
 
-        // 1. Unauthenticated PUT -> expect 401 with the Nostr challenge.
-        val firstCall = http.newCall(
-            Request.Builder()
-                .url(serverUrl)
-                .put(bytes.toRequestBody(mimeType.toMediaType()))
-                .build(),
-        )
-        val challengeHeader = firstCall.execute().use { response ->
-            if (response.code == 200) {
-                // Some servers accept the first PUT; verify and return.
-                val body = response.body?.string()
-                return@withContext verifiedDescriptor(body, localHash, mimeType, bytes)
-            }
-            if (response.code != 401) throw UploadFailure("server rejected upload: ${response.code}")
-            response.header("WWW-Authenticate") ?: throw UploadFailure("server sent no auth challenge")
-        }
-
-        // 2. Compose + sign the kind-24242 auth event with the challenge's
-        //    expiration (fallback now+600s).
-        val expiration = Blossom.challengeExpiration(challengeHeader) ?: (nowSeconds + 600)
+        // 1. Compose + sign the kind-24242 auth event.
         val composer = NoteComposer(clock = { nowSeconds })
         val auth = composer.composeUploadAuth(
             authorPubkey = signer.publicKeyHex(),
@@ -73,19 +64,23 @@ class BlossomUploader(
             nowSeconds = nowSeconds,
         ) ?: throw UploadFailure("auth event rejected")
         val signature = signer.sign(auth.messageBytes()) ?: throw UploadFailure("signing refused")
-        val authHeader = "Nostr " + Blossom.encodeQueryComponent(
-            composer.publishMessage(auth, signature) ?: throw UploadFailure("auth frame rejected"),
-        )
+        val authHeader = Blossom.authorizationHeaderValue(
+            composer.signedEventJson(auth, signature) ?: throw UploadFailure("auth frame rejected"),
+        ) ?: throw UploadFailure("auth header rejected")
 
-        // 3. Authenticated PUT.
+        // 2. Authenticated PUT /upload (BUD-02: 201 new, 200 already stored).
         val body = http.newCall(
             Request.Builder()
-                .url(serverUrl)
+                .url(endpoint)
                 .header("Authorization", authHeader)
+                .header("X-SHA-256", localHash)
                 .put(bytes.toRequestBody(mimeType.toMediaType()))
                 .build(),
         ).execute().use { response ->
-            if (!response.isSuccessful) throw UploadFailure("upload failed: ${response.code}")
+            if (response.code != 200 && response.code != 201) {
+                val reason = response.header("X-Reason") ?: response.body?.string()?.take(200)
+                throw UploadFailure("upload failed: ${response.code}${reason?.let { " $it" } ?: ""}")
+            }
             response.body?.string()?.takeIf { it.length <= 65_536 } ?: throw UploadFailure("empty server response")
         }
 

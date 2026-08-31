@@ -43,7 +43,7 @@ struct StaticPagesScreen: View {
             }
         }
         .background(BitOSTheme.background)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     private func label(for key: String) -> String {

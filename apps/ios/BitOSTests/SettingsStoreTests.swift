@@ -54,6 +54,37 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.state.defaultZapAmount, 21)
     }
 
+    // MARK: - Appearance hooks (APP-023: theme + accent apply app-wide)
+
+    func testThemeChangesSyncDesignSystemOverride() {
+        store.set(.light)
+        XCTAssertEqual(BitOSTheme.modeOverride, .light)
+        XCTAssertEqual(BitOSTheme.preferredScheme, .light)
+        store.set(.system)
+        XCTAssertEqual(BitOSTheme.modeOverride, nil)
+        XCTAssertEqual(BitOSTheme.preferredScheme, nil)
+        store.set(.dark)
+        XCTAssertEqual(BitOSTheme.modeOverride, .dark)
+        // Corrupt wire falls back to dark (product default), never crashes.
+        defaults.set("neon", forKey: "bitos_theme_mode")
+        store.reload()
+        XCTAssertEqual(BitOSTheme.modeOverride, .dark)
+    }
+
+    func testAccentChoiceSyncsOverrideAndFallsBackToBrand() {
+        // Default: no override — the brand bitcoin orange renders.
+        XCTAssertEqual(store.state.accentColorHex, "#F7931A")
+        XCTAssertEqual(BitOSTheme.accentOverride, 0xF7931A)
+        // Palette pick round-trips through shared validation (canonicalized
+        // to uppercase) and re-syncs the override.
+        XCTAssertTrue(store.setAccentColor(hex: "#6366f1"))
+        XCTAssertEqual(store.state.accentColorHex, "#6366F1")
+        XCTAssertEqual(BitOSTheme.accentOverride, 0x6366F1)
+        // Rejected values persist nothing and keep the last good accent.
+        XCTAssertFalse(store.setAccentColor(hex: "orange"))
+        XCTAssertEqual(BitOSTheme.accentOverride, 0x6366F1)
+    }
+
     func testClearCacheKeepsProtectedDeviceGlobals() {
         store.set(.system)
         store.set(SettingsFeedTimeline.trending)

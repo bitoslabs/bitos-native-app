@@ -14,6 +14,46 @@ data class Poll(val question: String, val options: List<PollOption>) {
     val totalOptions: Int get() = options.size
 }
 
+/** One absorbed kind-1018 vote. */
+data class PollVote(val pubkey: String, val optionIndex: Int, val at: Long)
+
+/** UI projection: counts per option index, total, and my vote. */
+data class PollTally(val counts: Map<Int, Int>, val total: Int, val myVote: Int?)
+
+/**
+ * Web `rebuildPoll` parity: deterministic vote tallying with the
+ * latest-vote-per-pubkey rule — a voter's newest kind-1018 wins, changing
+ * your vote moves it, and the UI reads bounded projections.
+ */
+class PollVotes {
+
+    /** Absorbs one vote into the per-pubkey map (latest `at` wins; equal
+     *  `at` keeps the existing entry — first relay wins, deterministic). */
+    fun absorb(byPubkey: MutableMap<String, PollVote>, vote: PollVote) {
+        val prev = byPubkey[vote.pubkey]
+        if (prev != null && prev.at >= vote.at) return
+        byPubkey[vote.pubkey] = vote
+    }
+
+    /** Tallies counts + total + my vote from the per-pubkey map. */
+    fun tally(byPubkey: Map<String, PollVote>, myPubkey: String?): PollTally {
+        val counts = HashMap<Int, Int>()
+        for (vote in byPubkey.values) {
+            counts[vote.optionIndex] = (counts[vote.optionIndex] ?: 0) + 1
+        }
+        return PollTally(
+            counts = counts,
+            total = byPubkey.size,
+            myVote = myPubkey?.let { byPubkey[it]?.optionIndex },
+        )
+    }
+
+    companion object {
+        /** Relay fan-in bound per poll (hostile events stay bounded). */
+        const val MAX_VOTERS = 200
+    }
+}
+
 object PollContract {
 
     const val TAG = "poll_option"

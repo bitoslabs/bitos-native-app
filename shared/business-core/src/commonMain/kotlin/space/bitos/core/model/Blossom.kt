@@ -1,9 +1,10 @@
 package space.bitos.core.model
 
 /**
- * Blossom (BUD-01/02) shared rules. HTTP is platform-side; auth-event
- * composition, challenge parsing and descriptor building live here so both
- * apps produce byte-identical protocol behavior.
+ * Blossom (BUD-01/02/11) shared rules. HTTP is platform-side; auth-event
+ * composition, challenge parsing, the upload-endpoint URL and the BUD-11
+ * header encoding live here so both apps produce byte-identical protocol
+ * behavior.
  */
 object Blossom {
 
@@ -11,6 +12,25 @@ object Blossom {
     const val AUTH_KIND = 24_242
 
     const val MAX_FILE_BYTES = 64L * 1024 * 1024
+
+    /** BUD-02: the blob upload endpoint is `PUT {server}/upload`. */
+    fun uploadUrl(serverUrl: String): String {
+        if (serverUrl.length > 2048) return serverUrl
+        val trimmed = serverUrl.trimEnd('/')
+        if (trimmed.endsWith("/upload")) return trimmed
+        return "$trimmed/upload"
+    }
+
+    /**
+     * BUD-11: `Authorization: Nostr <base64url(signed event JSON)>`.
+     * Padding is included — verified against production servers that reject
+     * the unpadded form.
+     */
+    fun authorizationHeaderValue(signedEventJson: String): String? {
+        if (!signedEventJson.startsWith("{") || !signedEventJson.endsWith("}")) return null
+        if (signedEventJson.length > 65_536) return null
+        return "Nostr " + encodeBase64(signedEventJson.encodeToByteArray())
+    }
 
     class UploadAuth(
         val serverUrl: String,
@@ -21,14 +41,18 @@ object Blossom {
     )
 
     /**
-     * Parses a `WWW-Authenticate: Nostr <urlencoded-json>` challenge header.
+     * Parses a `WWW-Authenticate: Nostr <base64url-json>` challenge header
+     * (BUD-11 tokens; the legacy percent-encoded form is also accepted).
      * Returns the expiration it carries, or null when absent/malformed —
-     * the client then falls back to now + 10 minutes.
+     * the caller then falls back to now + 10 minutes.
      */
     fun challengeExpiration(headerValue: String): Long? {
         val prefix = "Nostr "
         if (!headerValue.startsWith(prefix)) return null
-        val decoded = decodeQueryComponent(headerValue.removePrefix(prefix)) ?: return null
+        val payload = headerValue.removePrefix(prefix)
+        val decoded = decodeBase64(payload)?.decodeToString()
+            ?: decodeQueryComponent(payload)
+            ?: return null
         val root = runCatching {
             kotlinx.serialization.json.Json.parseToJsonElement(decoded)
         }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
@@ -85,6 +109,72 @@ object Blossom {
                 }
             }
         }
+    }
+
+    /**
+     * Base64 (URL-safe alphabet, padded) of the BUD-11 token bytes. Padding
+     * is mandatory: production servers reject unpadded payloads.
+     */
+    fun encodeBase64(bytes: ByteArray): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val out = StringBuilder(((bytes.size + 2) / 3) * 4)
+        var index = 0
+        while (index < bytes.size) {
+            val b0: Int = bytes[index].toInt() and 0xff
+            val b1: Int = if (index + 1 < bytes.size) (bytes[index + 1].toInt() and 0xff) else -1
+            val b2: Int = if (index + 2 < bytes.size) (bytes[index + 2].toInt() and 0xff) else -1
+            out.append(alphabet[b0 ushr 2])
+            out.append(alphabet[((b0 and 0x03) shl 4) or (if (b1 >= 0) b1 ushr 4 else 0)])
+            if (b1 < 0) {
+                out.append("==")
+                break
+            }
+            out.append(alphabet[((b1 and 0x0f) shl 2) or (if (b2 >= 0) b2 ushr 6 else 0)])
+            if (b2 < 0) {
+                out.append('=')
+                break
+            }
+            out.append(alphabet[b2 and 0x3f])
+            index += 3
+        }
+        return out.toString()
+    }
+
+    /**
+     * Tolerant Base64 decode (URL-safe or standard alphabet, padded or raw).
+     * Returns null for any malformed payload — callers fall back to the
+     * legacy percent-encoded form.
+     */
+    fun decodeBase64(value: String): ByteArray? {
+        val out = ArrayList<Byte>(value.length * 3 / 4 + 4)
+        var buffer = 0
+        var bits = 0
+        var padding = false
+        for (c in value) {
+            if (c == '=') {
+                padding = true
+                continue
+            }
+            if (padding) return null
+            val v = when {
+                c in 'A'..'Z' -> c - 'A'
+                c in 'a'..'z' -> c - 'a' + 26
+                c in '0'..'9' -> c - '0' + 52
+                c == '-' || c == '+' -> 62
+                c == '_' || c == '/' -> 63
+                else -> return null
+            }
+            buffer = (buffer shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                out.add(((buffer ushr bits) and 0xff).toByte())
+                buffer = buffer and ((1 shl bits) - 1)
+            }
+        }
+        // 6 leftover bits means a dangling single character.
+        if (bits == 6) return null
+        return out.toByteArray()
     }
 
     private fun hexDigit(c: Char): Int? = when (c) {

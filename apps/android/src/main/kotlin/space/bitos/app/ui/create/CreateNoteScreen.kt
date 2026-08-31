@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,7 +30,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -72,6 +73,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import space.bitos.app.R
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.media.BlossomUploader
 import space.bitos.app.data.media.DefaultBlossomServer
@@ -91,11 +93,11 @@ import space.bitos.core.publish.ComposerRules
 /**
  * APP-008 note composer PAGE (legacy Flutter `CreateView` parity — a full
  * screen, not a sheet): author header, mention-aware field with @-autocomplete,
- * ≤4 image grid (gallery picks + URLs), content-warning field, upload
- * status, toolbar (image/URL/CW/hashtag/emoji/PoW) with the 4,000/16,000
- * character counter, and the published success state. All rules come from
- * shared `ComposerRules`; uploads run hash-verified through Blossom before
- * anything is signed.
+ * ≤4 image/video tiles (gallery picks + URLs), content-warning field, upload
+ * status, Solar toolbar (image/video/URL/GIF/poll/PoW/CW/hashtag/emoji — web
+ * Composer parity) with the 4,000/16,000 character counter, and the published
+ * success state. All rules come from shared `ComposerRules`; uploads run
+ * hash-verified through Blossom before anything is signed.
  */
 @androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
@@ -137,7 +139,9 @@ fun CreateNoteScreen(
     var powOutcome by remember { mutableStateOf<PowOutcome?>(null) }
     var powTarget by remember { mutableStateOf(restored?.powTarget ?: 0) }
     var showEmoji by remember { mutableStateOf(false) }
-    var showPow by remember { mutableStateOf(false) }
+    // Web `showPow` parity: the panel rides inline under the field, and a
+    // draft that carries a difficulty reopens it.
+    var showPow by remember { mutableStateOf((restored?.powTarget ?: 0) > 0) }
     var showUrlDialog by remember { mutableStateOf(false) }
     var showPoll by remember { mutableStateOf(false) }
     var showGif by remember { mutableStateOf(false) }
@@ -178,6 +182,13 @@ fun CreateNoteScreen(
     )
     LaunchedEffect(draft) { if (!seeded) draftStore?.save(draft) }
 
+    // PowCard enforces "a mined nonce is valid for exactly one template"
+    // while its sheet is open; the same edit rule must void a completed
+    // mine here, or publish would ride a nonce mined for older content.
+    LaunchedEffect(field.text, remoteImageUrls.size, pickedKeys.size, contentWarningOn, contentWarningReason) {
+        powOutcome = null
+    }
+
     fun pickMention(suggestion: ComposerRules.MentionSuggestion) {
         val cursor = field.selection.end
         val start = field.text.lastIndexOf('@', cursor - 1)
@@ -191,6 +202,12 @@ fun CreateNoteScreen(
     val galleryPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.GetContent(),
     ) { uri -> uri?.let { pickedKeys += "${it}|${context.contentResolver.getType(it) ?: "image/png"}" } }
+
+    // Web Composer parity: photo *and* video pickers; a video rides the
+    // same Blossom upload path and renders as a play tile in the feed.
+    val videoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+    ) { uri -> uri?.let { pickedKeys += "${it}|${context.contentResolver.getType(it) ?: "video/mp4"}" } }
 
     /** Upload-before-sign (legacy parity): local picks become public URLs. */
     fun publish() {
@@ -247,9 +264,13 @@ fun CreateNoteScreen(
 
     Scaffold(
         containerColor = BitOSColors.background,
+        // The shell scaffold already pads the system bars; re-applying the
+        // status-bar inset here doubled the space above the header.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
-                title = { Text("Create Post", style = MaterialTheme.typography.headlineMedium) },
+                title = { Text("Create Post", style = MaterialTheme.typography.titleLarge) },
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 navigationIcon = {
                     IconButton(onClick = {
                         if (!published && !draft.isEmpty) showDiscardConfirm = true else onClose()
@@ -371,6 +392,27 @@ fun CreateNoteScreen(
                         }
                     }
                 }
+                // Web Composer parity: the PoW panel rides inline under the
+                // field (toggled from the toolbar), never a bottom sheet.
+                if (showPow) {
+                    PowCard(
+                        target = powTarget,
+                        onTargetChange = { powTarget = it },
+                        content = ComposerRules.composeContent(
+                            ComposerRules.rewriteMentions(field.text, trackedMentions),
+                            remoteImageUrls,
+                        ),
+                        pubkeyHex = identity.account?.pubkeyHex ?: "",
+                        // Template tags must byte-match the published event.
+                        baseTags = ComposerRules.deriveTags(
+                            field.text,
+                            contentWarningReason.takeIf { contentWarningOn },
+                        ),
+                        // Null = invalidation notify (template changed); only a
+                        // real outcome feeds the publish path/badge.
+                        onMined = { outcome -> powOutcome = outcome },
+                    )
+                }
                 // Media grid: real thumbnails (legacy parity), removable.
                 if (mediaCount > 0) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
@@ -381,11 +423,16 @@ fun CreateNoteScreen(
                         }
                         items(pickedKeys.toList()) { key ->
                             MediaThumb(onRemove = { pickedKeys.remove(key) }) {
-                                space.bitos.app.ui.components.LocalUriImage(
-                                    uri = android.net.Uri.parse(key.substringBeforeLast('|')),
-                                    resolver = context.contentResolver,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
+                                val mime = key.substringAfterLast('|', "image/png")
+                                if (mime.startsWith("video/")) {
+                                    ComposerVideoTile()
+                                } else {
+                                    space.bitos.app.ui.components.LocalUriImage(
+                                        uri = android.net.Uri.parse(key.substringBeforeLast('|')),
+                                        resolver = context.contentResolver,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                             }
                         }
                     }
@@ -456,16 +503,19 @@ fun CreateNoteScreen(
                 mediaCount = mediaCount,
                 contentWarningOn = contentWarningOn,
                 powAvailable = pickedKeys.isEmpty(),
-                powActive = powOutcome != null || powTarget > 0,
-                powBadge = powOutcome?.targetDifficulty?.toString() ?: powTarget.takeIf { it > 0 }?.toString(),
+                powActive = showPow || powOutcome != null,
+                // Badge shows a Mined difficulty only — a bare target is not
+                // yet attached to anything publish posts will carry.
+                powBadge = powOutcome?.targetDifficulty?.toString(),
                 counter = counter,
                 onPickImage = { if (canAddImage) galleryPicker.launch("image/*") },
+                onPickVideo = { if (canAddImage) videoPicker.launch("video/*") },
                 onAddUrl = { showUrlDialog = true },
                 onGif = { if (canAddImage) showGif = true },
                 onToggleCw = { contentWarningOn = !contentWarningOn; if (!contentWarningOn) contentWarningReason = "" },
                 onHashtag = { insert(ComposerRules::insertHashtag) },
                 onEmoji = { showEmoji = true },
-                onPow = { showPow = true },
+                onPow = { showPow = !showPow },
                 onPoll = { showPoll = true },
             )
         }
@@ -512,55 +562,35 @@ fun CreateNoteScreen(
         }
     }
 
-    if (showPow) {
-        ModalBottomSheet(onDismissRequest = { showPow = false }) {
-            PowCard(
-                target = powTarget,
-                onTargetChange = { powTarget = it },
-                content = ComposerRules.composeContent(
-                    ComposerRules.rewriteMentions(field.text, trackedMentions),
-                    remoteImageUrls,
-                ),
-                pubkeyHex = identity.account?.pubkeyHex ?: "",
-                // Template tags must byte-match the published event.
-                baseTags = ComposerRules.deriveTags(
-                    field.text,
-                    contentWarningReason.takeIf { contentWarningOn },
-                ),
-                onMined = { outcome ->
-                    powOutcome = outcome
-                    showPow = false
-                },
-                modifier = Modifier.padding(horizontal = BitOSSpacing.screen).padding(bottom = BitOSSpacing.xl),
-            )
-        }
-    }
-
     if (showPoll) {
-        PollComposerSheet(
-            publishing = busy,
-            onPost = { question, options ->
-                val pollTags = space.bitos.core.model.PollContract.pollTags(question, options)
-                if (pollTags != null) {
-                    val tags = pollTags + space.bitos.core.publish.ComposerRules.deriveTags(question.trim())
-                        .filter { it.firstOrNull() == "t" }
-                    busy = true
-                    scope.launch {
-                        try {
-                            notePublisher.publishNoteWith(
-                                question.trim(), tags,
-                                { identityViewModel.createSigner() }, DefaultRelays.writeUrls,
-                            )
-                            published = true
-                        } finally {
-                            busy = false
+        // Same presentation as the emoji/PoW sheets and GIF picker: a modal
+        // bottom sheet, not a bare column stacked over the composer page.
+        ModalBottomSheet(onDismissRequest = { showPoll = false }, containerColor = BitOSColors.surface) {
+            PollComposerSheet(
+                publishing = busy,
+                onPost = { question, options ->
+                    val pollTags = space.bitos.core.model.PollContract.pollTags(question, options)
+                    if (pollTags != null) {
+                        val tags = pollTags + space.bitos.core.publish.ComposerRules.deriveTags(question.trim())
+                            .filter { it.firstOrNull() == "t" }
+                        busy = true
+                        scope.launch {
+                            try {
+                                notePublisher.publishNoteWith(
+                                    question.trim(), tags,
+                                    { identityViewModel.createSigner() }, DefaultRelays.writeUrls,
+                                )
+                                published = true
+                            } finally {
+                                busy = false
+                            }
                         }
                     }
-                }
-                showPoll = false
-            },
-            onDismiss = { showPoll = false },
-        )
+                    showPoll = false
+                },
+                onDismiss = { showPoll = false },
+            )
+        }
     }
 
     if (showGif) {
@@ -643,6 +673,19 @@ private fun MediaThumb(onRemove: () -> Unit, content: @Composable () -> Unit) {
     }
 }
 
+/** Video tile (web Composer parity): dark surface + play glyph, no decode. */
+@Composable
+private fun ComposerVideoTile() {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(BitOSColors.surfaceElevated),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(AppIcons.Play, contentDescription = "Video", tint = BitOSColors.textSecondary, modifier = Modifier.size(32.dp))
+    }
+}
+
 /** Remote tile: decodes on IO; broken-image fallback on failure (legacy parity). */
 private sealed interface MediaTileState {
     data object Loading : MediaTileState
@@ -652,6 +695,10 @@ private sealed interface MediaTileState {
 
 @Composable
 private fun RemoteMediaTile(url: String) {
+    if (space.bitos.app.ui.components.isVideoMediaUrl(url)) {
+        ComposerVideoTile()
+        return
+    }
     var state by remember(url) { mutableStateOf<MediaTileState>(MediaTileState.Loading) }
     LaunchedEffect(url) {
         state = space.bitos.app.ui.components.loadBitmap(url)?.let(MediaTileState::Ready) ?: MediaTileState.Failed
@@ -680,6 +727,7 @@ private fun ComposerToolbar(
     powBadge: String?,
     counter: ComposerRules.CounterState,
     onPickImage: () -> Unit,
+    onPickVideo: () -> Unit,
     onAddUrl: () -> Unit,
     onGif: () -> Unit,
     onToggleCw: () -> Unit,
@@ -697,16 +745,17 @@ private fun ComposerToolbar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            // Legacy toolbar order (minus Meme Studio, which awaits the
-            // studio phase): image · URL · GIF · poll · PoW · CW · hashtag · emoji.
-            ToolbarButton(AppIcons.Photo, "Attach image", enabled = canAddImage, active = mediaCount > 0, badge = mediaCount.takeIf { it > 0 }?.toString(), onClick = onPickImage)
-            ToolbarButton(AppIcons.Globe, "Add image URL", enabled = canAddImage, onClick = onAddUrl)
-            ToolbarButton(AppIcons.Gif, "Add GIF", enabled = canAddImage, onClick = onGif)
-            ToolbarButton(AppIcons.Poll, "Create poll", onClick = onPoll)
-            ToolbarButton(AppIcons.QrCode, "Proof of Work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
-            ToolbarButton(AppIcons.Mute, "Content Warning", active = contentWarningOn, onClick = onToggleCw)
-            ToolbarButton(Icons.Rounded.Tag, "Insert hashtag", onClick = onHashtag)
-            ToolbarButton(AppIcons.Chat, "Insert emoji", onClick = onEmoji)
+            // Web Composer order (Solar Linear icon language): photo · video ·
+            // URL · GIF · poll · PoW · sensitive · hashtag · emoji.
+            ToolbarButton(painterResource(R.drawable.solar_gallery_linear), "Attach image", enabled = canAddImage, active = mediaCount > 0, badge = mediaCount.takeIf { it > 0 }?.toString(), onClick = onPickImage)
+            ToolbarButton(painterResource(R.drawable.solar_video_linear), "Attach video", enabled = canAddImage, onClick = onPickVideo)
+            ToolbarButton(painterResource(R.drawable.solar_link_circle_linear), "Add image URL", enabled = canAddImage, onClick = onAddUrl)
+            ToolbarButton(painterResource(R.drawable.solar_film_linear), "Add GIF", enabled = canAddImage, onClick = onGif)
+            ToolbarButton(painterResource(R.drawable.solar_chart_linear), "Create poll", onClick = onPoll)
+            ToolbarButton(painterResource(R.drawable.solar_shield_check_linear), "Proof of Work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
+            ToolbarButton(painterResource(R.drawable.solar_eye_closed_linear), "Content Warning", active = contentWarningOn, onClick = onToggleCw)
+            ToolbarButton(painterResource(R.drawable.solar_hashtag_linear), "Insert hashtag", onClick = onHashtag)
+            ToolbarButton(painterResource(R.drawable.solar_emoji_linear), "Insert emoji", onClick = onEmoji)
             Spacer(Modifier.width(BitOSSpacing.sm))
             CharCounter(counter)
         }
@@ -715,7 +764,7 @@ private fun ComposerToolbar(
 
 @Composable
 private fun ToolbarButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.painter.Painter,
     label: String,
     enabled: Boolean = true,
     active: Boolean = false,
@@ -813,7 +862,7 @@ private fun PollComposerSheet(
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Create poll", style = MaterialTheme.typography.headlineMedium)
+            Text("Create poll", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onDismiss) { Text("Cancel") }
             Button(

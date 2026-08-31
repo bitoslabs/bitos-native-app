@@ -230,6 +230,7 @@ fun StoryViewer(
 private val BitOSTransparent = Color(0x33FFFFFF)
 
 /** `#hex>to>#hex` → vertical gradient. */
+@Composable
 internal fun parseGradient(token: String): Brush {
     val match = Regex("#([0-9a-fA-F]{6})>to>#([0-9a-fA-F]{6})").find(token) ?: return BitOSColors.background.let { Brush.verticalGradient(listOf(it, it)) }
     val from = Color(android.graphics.Color.parseColor("#${match.groupValues[1]}"))

@@ -105,6 +105,9 @@ fun ProfileScreen(
     privacyPrefs: space.bitos.app.data.settings.PrivacyPrefsStore,
     /** APP-014: opens the zap wallet (local sent ledger + received). */
     onOpenZaps: () -> Unit = {},
+    /** Web ProfileBitzGrid parity: opens the author-scoped reels player
+     *  at the tapped tile (one shared player, context-aware data). */
+    onOpenBitzPlayer: (pubkey: String, noteId: String) -> Unit = { _, _ -> },
     profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
 ) {
     var showSettings by remember { mutableStateOf(false) }
@@ -131,6 +134,8 @@ fun ProfileScreen(
     var showEdit by remember { mutableStateOf(false) }
     var showQr by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showFollowing by remember { mutableStateOf(false) }
+    var showFollowersInfo by remember { mutableStateOf(false) }
     var npubCopied by remember { mutableStateOf(false) }
     val profileEditState by identityViewModel.profileEditState.collectAsStateWithLifecycle()
     val account = state.account
@@ -138,6 +143,10 @@ fun ProfileScreen(
     if (account != null) {
         // ── Own profile page (legacy Flutter profile_view parity) ──────
         val feedState by homeViewModel.state.collectAsStateWithLifecycle()
+        val localActions by homeViewModel.localActions.collectAsStateWithLifecycle()
+        val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
+        val identityState by identityViewModel.state.collectAsStateWithLifecycle()
+        val publisherState by notePublisher.state.collectAsStateWithLifecycle()
         val profile = feedState.profiles[account.pubkeyHex]
         var tab by remember(account.pubkeyHex) { mutableStateOf(0) }
         val own = feedState.notes.filter { it.pubkey == account.pubkeyHex || it.repostedBy == account.pubkeyHex }
@@ -145,8 +154,35 @@ fun ProfileScreen(
         val tabReplies = own.filter { it.replyTo != null && it.repostedBy == null }
         val tabBitz = own.filter { it.video != null || it.mediaUrls.isNotEmpty() }
         val tabReposts = own.filter { it.repostedBy == account.pubkeyHex }
-        val tabs = listOf("Notes", "Replies", "Bitz", "Reposts")
-        val content = listOf(tabNotes, tabReplies, tabBitz, tabReposts)[tab]
+        // Web full-page profile parity: a Zaps tab fed by the same merged
+        // ledger as the zap wallet (local sent + verified received 9735).
+        val notificationsState by notifications.state.collectAsStateWithLifecycle()
+        val receivedZaps = notificationsState.items.filter { it.kind == space.bitos.core.model.NotificationKind.ZAP }
+        val zapSummary = remember(receivedZaps, account.pubkeyHex) {
+            space.bitos.core.model.AuthorZaps.summary(
+                pubkey = account.pubkeyHex,
+                receivedSats = receivedZaps.map { (it.amountMsat ?: 0) / 1000 },
+                receivedFrom = receivedZaps.map { it.authorPubkey },
+                sentRecords = homeViewModel.sentZapRecords(),
+            )
+        }
+        val zapEntries = remember(receivedZaps, zapSummary) {
+            space.bitos.core.model.SentZapLedger.ledger(
+                sent = homeViewModel.sentZapRecords().filter { it.recipientPubkey == account.pubkeyHex },
+                receivedSats = receivedZaps.map { (it.amountMsat ?: 0) / 1000 },
+                receivedFrom = receivedZaps.map { it.authorPubkey },
+                receivedAt = receivedZaps.map { it.createdAt },
+                receivedNote = receivedZaps.map { it.targetEventId },
+            ).filter { it.peerPubkey == account.pubkeyHex || it.direction == space.bitos.core.model.SentZapLedger.Direction.RECEIVED }
+        }
+        val tabs = listOf("Notes", "Replies", "Bitz", "Reposts", "Zaps")
+        val content = listOf(tabNotes, tabReplies, tabBitz, tabReposts)[tab.coerceAtMost(3)]
+        // Shared-card interaction targets (home-feed parity):
+        // thread sheet, note zap, link confirm, note-ref open.
+        var threadTarget by remember { mutableStateOf<space.bitos.core.feed.FeedNote?>(null) }
+        var zapNoteTarget by remember { mutableStateOf<space.bitos.core.feed.FeedNote?>(null) }
+        var externalLink by remember { mutableStateOf<String?>(null) }
+        var noteRefTarget by remember { mutableStateOf<String?>(null) }
 
         LazyColumn(
             modifier = Modifier
@@ -383,8 +419,11 @@ fun ProfileScreen(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
                     StatPill("Posts", formatCount(tabNotes.size))
-                    StatPill("Following", formatCount(feedState.following.size))
-                    StatPill("Bitz", formatCount(tabBitz.size))
+                    StatPill("Following", formatCount(feedState.following.size), onClick = { showFollowing = true })
+                    StatPill("Followers", "—", onClick = { showFollowersInfo = true })
+                    // Web stats-row parity: truthful sats figure from the
+                    // merged ledger (tapping opens the zap wallet).
+                    StatPill("Sats zapped", space.bitos.core.model.ZapFormat.sats(zapSummary.totalSats), onClick = onOpenZaps)
                 }
             }
 
@@ -428,7 +467,24 @@ fun ProfileScreen(
             }
 
             // ── Tab content (cards · strips · 3-col grid · empty states) ──
-            if (content.isEmpty()) {
+            if (tab == 4) {
+                // Zaps tab (web "Zaps" parity): merged ledger entries.
+                if (zapEntries.isEmpty()) {
+                    item(key = "zaps-empty") { ZapTabEmptyState() }
+                } else {
+                    item(key = "zaps-list") {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            zapEntries.take(50).forEach { entry ->
+                                space.bitos.app.ui.zap.ZapLedgerRow(
+                                    entry = entry,
+                                    profile = feedState.profiles[entry.peerPubkey],
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+            } else if (content.isEmpty()) {
                 item(key = "empty") { TabEmptyState(tab) }
             } else if (tab == 2) {
                 item(key = "bitz-grid") {
@@ -436,7 +492,15 @@ fun ProfileScreen(
                         content.take(60).chunked(3).forEach { rowNotes ->
                             Row(Modifier.fillMaxWidth()) {
                                 rowNotes.forEach { note ->
-                                    BitzGridTile(note, Modifier.weight(1f).padding(1.dp))
+                                    BitzGridTile(
+                                        note,
+                                        Modifier
+                                            .weight(1f)
+                                            .padding(1.dp)
+                                            .clickable(onClickLabel = "Play bitz") {
+                                                onOpenBitzPlayer(account.pubkeyHex, note.id)
+                                            },
+                                    )
                                 }
                                 repeat(3 - rowNotes.size) { Spacer(Modifier.weight(1f).padding(1.dp)) }
                             }
@@ -448,11 +512,110 @@ fun ProfileScreen(
                     Column {
                         if (tab == 1) ReplyContextStrip()
                         if (tab == 3) RepostHeader(note, feedState.profiles)
-                        ProfileNoteCard(note, profile)
+                        // Same card as the home feed: rich body, media,
+                        // polls and the full action row — no fork.
+                        space.bitos.app.ui.components.FeedNoteCard(
+                            note = note,
+                            profile = feedState.profiles[note.pubkey],
+                            bookmarked = note.id in feedState.bookmarkedIds || note.id in localActions.bookmarked,
+                            liked = note.id in localActions.liked,
+                            resolveMentionName = { hex -> feedState.profiles[hex]?.bestDisplayName },
+                            onLike = { homeViewModel.toggleLike(note) },
+                            onBookmark = { homeViewModel.toggleBookmark(note.id) },
+                            onComment = { threadTarget = note },
+                            onRepost = { homeViewModel.repost(note) },
+                            onZap = {
+                                homeViewModel.loadZaps(note.id)
+                                zapNoteTarget = note
+                            },
+                            onAuthor = { }, // own page: nowhere to navigate
+                            isMuted = homeViewModel.isMuted(note.pubkey),
+                            onMuteToggle = { homeViewModel.toggleMute(note.pubkey) },
+                            onReport = { reason -> homeViewModel.report(note, reason) },
+                            pollTally = feedState.pollTallies[note.id],
+                            canVotePoll = identityState.account != null,
+                            onLoadPollVotes = { homeViewModel.loadPollVotes(note.id) },
+                            onVotePoll = { optionIndex -> homeViewModel.votePoll(note, optionIndex) },
+                            onOpenExternalLink = { externalLink = it },
+                            onOpenNoteRef = { noteRefTarget = it },
+                        )
                     }
                 }
             }
             item(key = "bottom-space") { Spacer(Modifier.height(32.dp)) }
+        }
+
+        // ── Shared-card overlays (home-feed parity) ─────────────────────
+        threadTarget?.let { target ->
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { threadTarget = null }) {
+                space.bitos.app.ui.feed.CommentThreadSheet(
+                    note = target,
+                    viewModel = homeViewModel,
+                    identityViewModel = identityViewModel,
+                    publisherState = publisherState,
+                    onDismiss = { threadTarget = null },
+                )
+            }
+        }
+        zapNoteTarget?.let { target ->
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { homeViewModel.dismissZap(); zapNoteTarget = null },
+            ) {
+                space.bitos.app.ui.feed.ZapContent(
+                    note = target,
+                    lud16 = feedState.profiles[target.pubkey]?.lud16,
+                    state = zapState,
+                    profileName = feedState.profiles[target.pubkey]?.bestDisplayName,
+                    hasIdentity = identityState.account != null,
+                    zapCount = feedState.zapCounts[target.id] ?: 0,
+                    paidRequestIds = feedState.zapRequestIds[target.id] ?: emptySet(),
+                    onPaid = { sats, memo -> homeViewModel.onZapPaid(target, sats, memo) },
+                    onAmountSelected = homeViewModel::selectZapAmount,
+                    onZap = { sats, comment, anonymous ->
+                        homeViewModel.selectZapAmount(sats)
+                        homeViewModel.zap(target, comment, anonymous)
+                    },
+                    onClose = { homeViewModel.dismissZap(); zapNoteTarget = null },
+                    profilePictureUrl = feedState.profiles[target.pubkey]?.picture,
+                )
+            }
+        }
+        externalLink?.let { url ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { externalLink = null },
+                title = { Text("Open external link?") },
+                text = {
+                    Text(
+                        url,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                        externalLink = null
+                    }) { Text("Open", color = BitOSColors.primary) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { externalLink = null }) { Text("Cancel", color = BitOSColors.textSecondary) }
+                },
+            )
+        }
+        noteRefTarget?.let { raw ->
+            androidx.compose.runtime.LaunchedEffect(raw) {
+                // In-place note-ref open (home parity): fetch then thread.
+                repeat(20) {
+                    val fetched = homeViewModel.refNote(raw)
+                    if (fetched != null) {
+                        threadTarget = fetched
+                        return@LaunchedEffect
+                    }
+                    kotlinx.coroutines.delay(150)
+                }
+                noteRefTarget = null
+            }
         }
     } else {
         val importFocus = remember { FocusRequester() }
@@ -515,6 +678,19 @@ fun ProfileScreen(
             },
             dismissButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },
         )
+    }
+
+    if (showFollowing && account != null) {
+        ConnectionsBottomSheet(
+            title = "Following",
+            pubkeys = homeViewModel.state.value.following,
+            profiles = homeViewModel.state.value.profiles,
+            onDismiss = { showFollowing = false },
+        )
+    }
+
+    if (showFollowersInfo) {
+        FollowersInfoBottomSheet(onDismiss = { showFollowersInfo = false })
     }
 
     if (showEdit && state.account != null) {
@@ -613,7 +789,8 @@ private fun BrowseOnlyPanel(onCreate: () -> Unit, onImport: () -> Unit) {
 
 /**
  * Secret-key login panel (ID-004): the shared [SecretKeyField] plus the
- * review action, gated to a valid key by the shared rule.
+ * review action, gated to a valid key by the shared rule. A READY key also
+ * previews the derived identity (KF-6) before anything is stored.
  */
 @Composable
 private fun ImportPanel(
@@ -623,7 +800,8 @@ private fun ImportPanel(
     focusRequester: FocusRequester,
 ) {
     var input by remember { mutableStateOf("") }
-    val ready = secretKeyReady(input)
+    val check = remember(input) { space.bitos.core.identity.KeyImportForm.check(input) }
+    val ready = check.verdict == space.bitos.core.identity.KeyImportVerdict.READY
     Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surfaceElevated, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
             Text("Log in with a secret key", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
@@ -639,6 +817,9 @@ private fun ImportPanel(
                     .fillMaxWidth()
                     .focusRequester(focusRequester),
             )
+            if (ready) {
+                space.bitos.app.ui.components.DerivedIdentityCard(check)
+            }
             Button(
                 onClick = { onSubmit(input) },
                 enabled = ready,
@@ -659,17 +840,95 @@ private fun ImportPanel(
 // ── Own-profile helpers (legacy parity) ────────────────────────────────
 
 @Composable
-internal fun StatPill(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+internal fun StatPill(label: String, value: String, onClick: (() -> Unit)? = null) {
+    Column(
+        modifier = if (onClick == null) Modifier else Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClickLabel = "$label connections", onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.W700, color = BitOSColors.textPrimary)
         Spacer(Modifier.height(2.dp))
         Text(label, fontSize = 12.sp, color = BitOSColors.textSecondary)
     }
 }
 
-/// Slim “replying to …” affordance above each reply card.
+/** Canonical contacts from the active account's newest verified kind-3. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun ReplyContextStrip() {
+private fun ConnectionsBottomSheet(
+    title: String,
+    pubkeys: Set<String>,
+    profiles: Map<String, space.bitos.core.model.ProfileMetadata>,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = BitOSColors.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            Text(title, modifier = Modifier.fillMaxWidth(), fontSize = 18.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            if (pubkeys.isEmpty()) {
+                Text("You are not following anyone yet.", color = BitOSColors.textSecondary, modifier = Modifier.padding(vertical = 20.dp))
+            } else {
+                pubkeys.sorted().take(100).forEach { pubkey ->
+                    val profile = profiles[pubkey]
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        space.bitos.app.ui.components.PubkeyAvatar(pubkey = pubkey, size = 42, pictureUrl = profile?.picture, label = profile?.bestDisplayName)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(profile?.bestDisplayName?.takeIf { it.isNotBlank() } ?: space.bitos.app.ui.components.shortPubkey(pubkey), fontWeight = FontWeight.W700, color = BitOSColors.textPrimary)
+                            profile?.name?.takeIf { it.isNotBlank() }?.let { Text("@$it", fontSize = 12.sp, color = BitOSColors.textSecondary) }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** Nostr relays cannot truthfully enumerate followers from a profile alone. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun FollowersInfoBottomSheet(onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = BitOSColors.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(20.dp)) {
+            Text("Followers", modifier = Modifier.fillMaxWidth(), fontSize = 18.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            Text("Follower lists are not a canonical Nostr profile field. Connected relays may omit unfollows or older contact lists, so BitOS does not show an unreliable count.", color = BitOSColors.textSecondary)
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/// Zaps-tab empty state (web parity: honest zero, nothing fake).
+@Composable
+private fun ZapTabEmptyState() {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("⚡", fontSize = 34.sp, color = BitOSColors.zap)
+        Spacer(Modifier.height(12.dp))
+        Text("No zaps yet", fontSize = 14.sp, color = BitOSColors.textSecondary)
+    }
+}
+
+/// Slim “replying to …” affordance above each reply card.
+/// Shared with the author profile page.
+@Composable
+internal fun ReplyContextStrip() {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -701,86 +960,6 @@ private fun RepostHeader(note: space.bitos.core.feed.FeedNote, profiles: Map<Str
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
-}
-
-/// Compact profile note card: author row, clamped content, media preview.
-/// Shared with the author profile page. X-style: the whole card opens the
-/// note's thread when [onOpen] is provided.
-@Composable
-internal fun ProfileNoteCard(
-    note: space.bitos.core.feed.FeedNote,
-    profile: space.bitos.core.model.ProfileMetadata?,
-    onOpen: () -> Unit = {},
-) {
-    var expanded by remember(note.id) { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClickLabel = "Open note thread") { onOpen() }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            space.bitos.app.ui.components.PubkeyAvatar(
-                pubkey = note.pubkey,
-                size = 36,
-                pictureUrl = profile?.picture,
-                label = profile?.bestDisplayName,
-            )
-            Spacer(Modifier.width(10.dp))
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        profile?.bestDisplayName ?: space.bitos.app.ui.components.shortPubkey(note.pubkey),
-                        fontSize = 14.sp, fontWeight = FontWeight.W600, color = BitOSColors.textPrimary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    if (!profile?.nip05.isNullOrBlank()) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = BitOSColors.accent, modifier = Modifier.size(12.dp))
-                    }
-                }
-                Text(
-                    space.bitos.app.ui.components.formatTimeAgo(note.createdAt, System.currentTimeMillis() / 1000),
-                    fontSize = 11.sp, color = BitOSColors.textTertiary,
-                )
-            }
-        }
-        if (note.content.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                note.content,
-                fontSize = 14.sp, color = BitOSColors.textPrimary,
-                maxLines = if (expanded) Int.MAX_VALUE else 6,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (note.content.length > 280) {
-                Text(
-                    if (expanded) "Show less" else "Show more",
-                    fontSize = 12.sp, fontWeight = FontWeight.W700, color = BitOSColors.primary,
-                    modifier = Modifier
-                        .padding(top = 2.dp)
-                        .clickable { expanded = !expanded },
-                )
-            }
-        }
-        // Media preview: images row / video tile.
-        val images = note.mediaUrls.filterNot { it.hasVideoExtension() }
-        if (note.video != null) {
-            VideoTile(posterUrl = note.video?.posterUrl ?: note.video?.url, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-        } else if (images.isNotEmpty()) {
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                images.take(3).forEach { url ->
-                    coil.compose.AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(104.dp).clip(RoundedCornerShape(8.dp)),
-                    )
-                }
-            }
-        }
-    }
-    Box(Modifier.fillMaxWidth().height(1.dp).padding(start = 62.dp).background(BitOSColors.border.copy(alpha = 0.65f)))
 }
 
 /// Shared empty state for the timeline tabs (icon 48 @50% + message).

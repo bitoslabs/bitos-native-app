@@ -28,6 +28,8 @@ struct MoreView: View {
     @State private var health = RelayHealth(connected: 0, total: 0)
     /** APP-015: the Saved (bookmarks) page. */
     @State private var showSaved = false
+    /** APP-014: the zap wallet (sent ledger + received receipts). */
+    @State private var showZaps = false
 
     var body: some View {
         NavigationStack {
@@ -115,6 +117,12 @@ struct MoreView: View {
                     tile("Profile", caption: "Your identity", symbol: AppIcons.user) {
                         onOpenProfile()
                     }
+                    // APP-014: same wallet surface the You page opens (menu
+                    // item + "Sats zapped" pill) — one entry point per
+                    // identity, no fork.
+                    tile("Zap wallet", caption: "Sent & received sats", symbol: AppIcons.zap) {
+                        showZaps = true
+                    }
                     tile("Settings", caption: "Preferences & relays", symbol: AppIcons.settings) {
                         showSettingsSection = "about"
                     }
@@ -123,10 +131,6 @@ struct MoreView: View {
                     tile("Saved", caption: "Your bookmarked notes", symbol: AppIcons.bookmark) {
                         showSaved = true
                     }
-                }
-                Section("Coming soon") {
-                    Label("Zap ledger — wallet page (APP-014)", image: "SolarBoltLinear")
-                        .foregroundStyle(BitOSTheme.textSecondary)
                 }
                 Section("About") {
                     Button("About BitOS") { showStatic = "about" }
@@ -161,6 +165,13 @@ struct MoreView: View {
             .fullScreenCover(isPresented: $showSaved) {
                 BookmarksView()
                     .environment(environment)
+            }
+            // APP-014: the zap wallet is a full-screen cover over the hub
+            // (same surface the You page presents).
+            .fullScreenCover(isPresented: $showZaps) {
+                ZapsView { showZaps = false }
+                    .environment(environment)
+                    .environment(environment.identityStore)
             }
             .fullScreenCover(item: $switchTarget) { target in
                 AccountSwitchOverlayView(
@@ -222,7 +233,7 @@ struct MoreView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {

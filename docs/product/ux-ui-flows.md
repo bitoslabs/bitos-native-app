@@ -16,6 +16,10 @@
 ```text
 Home       For You / Following / Latest
 Discover   Search / creators / topics / sounds / templates
+           (topics + hashtag results carry Follow/Following toggles backed
+           by the account's NIP-51 interest set — kind 30015, d=interest —
+           synced from relays newest-head-wins, published on every toggle,
+           web `hashtag-follows` parity)
 Create     Camera / import / Quick MEM / project library
 Inbox      Activity / zaps / messages
 Profile    Identity / posts / saved / Creator Studio / settings
@@ -58,6 +62,15 @@ First signed action
 - Remote/external signer rejection returns to the pending action without data loss.
 - Multi-account switch shows the active identity before signing or paying.
 
+**Implementation status (2026-08):** the launch path is implemented on both
+platforms as the identity onboarding flow (docs/ui/app-01-onboarding-identity.html;
+shared copy contract `IdentityOnboardingContent`, replacing the APP-002
+carousel): Welcome → Add identity → Import/Backup gate → npub confirmation,
+exiting into the feed either as guest (Browse now) or with the confirmed
+identity. NIP-46 and NIP-55 render as visible "Soon" method cards (the
+signer port already reserves them); tapping explains they arrive in a future
+build — never a dead link, never a hidden option.
+
 ### 4.1 Secret-key login field rules (ID-004, shared `KeyImportForm`)
 
 The import field is one deterministic rule shared by Compose and SwiftUI
@@ -72,6 +85,7 @@ keys are accepted alongside `nsec`.
 | KF-3 | Feedback is live and specific before submit: npub-instead-of-nsec, too short/too long, internal whitespace, wrong prefix, invalid checksum — and a green "valid key" state; a submit error clears as soon as the text changes. |
 | KF-4 | The review/submit action is the primary action of its surface and is enabled only when the input resolves to a usable secret (nsec or 64-hex). |
 | KF-5 | Every control (field, paste, reveal, copy) carries an accessibility label; state is never communicated by color alone (icon + text). |
+| KF-6 | A READY input previews the derived identity live before submit: the shared rule returns the derived x-only pubkey and npub, and the surface renders a hex avatar + monospace npub + copy chip (onboarding import step, You-tab import panel, More-hub add-account sheet). |
 
 ### 4.2 Creation confirmation + one-time backup gate
 
@@ -79,6 +93,7 @@ keys are accepted alongside `nsec`.
 |---|---|
 | CB-1 | Confirming any key shows the derived npub (monospace, truncating middle), a copy-npub action, and copy that matches the case: new key, import, or active-account switch ("stays sealed", never "overwritten"). |
 | CB-2 | For a freshly generated key the confirm gate is the backup moment: a "Secret key (backup)" section offers an explicit reveal (never automatic) with monospace nsec, copy action and a never-share warning; the confirm label acknowledges the backup ("I saved my key"). |
+| CB-2b | The backup confirm stays disabled until the user checks an explicit acknowledgment ("I saved my key somewhere safe and understand it can't be recovered.") — on the onboarding backup screen and in the shared confirm dialog/sheet alike. |
 | CB-3 | Imported keys are not offered a backup reveal (the user already holds the key) — the gate asks them to verify the npub instead. |
 | CB-4 | The secret crosses to the view only inside the preview transaction; it is never logged, persisted, or shown outside the confirm gate. |
 
@@ -108,6 +123,7 @@ Acceptance criteria:
 | # | Given / When / Then |
 |---|---|
 | AC-1 | Given a signed-in account, when the profile tab opens, then the cover renders edge-to-edge with the brand gradient + hex pattern fallback, keeps a full 160pt of visible height under the status bar (legacy banner:avatar ratio), and the hex avatar overlaps the banner bottom by half, with drop shadow — no tint over the photo. |
+| AC-1a | The You surface requests the active account's kind-0 head independently of the notes feed; a quiet account therefore renders its published identity. Tapping Following opens the canonical newest-kind-3 contact list. Followers remain an explanatory surface with no count, because relays cannot enumerate them reliably without inventing stale follows. |
 | AC-2 | When the Notes·Replies·Bitz·Reposts rail is scrolled to the top, it pins under the status bar with the page background (no contrasting surface block) and keeps content masked behind it. |
 | AC-3 | When the camera chip is tapped, a source sheet offers "Take photo" (hidden when no camera) and "Choose from library"; after a photo is chosen, the chip shows a spinner ("Uploading") until the Blossom upload resolves, then the avatar preview shows the uploaded image. |
 | AC-3b | The editor opens as a full page with a back chevron in the header and a full-width Save pill (spinner while publishing); back cancels without publishing. |
@@ -148,8 +164,27 @@ User stories:
    by verified event id.
 6. **Note cards are X-style detail entries** — every note card (sheet notes
    list, page Notes/Replies tabs) renders inline media (up to three square
-   images or one 16:9 video tile) and opens the note's thread sheet on tap;
-   Bitz grid tiles open the same thread.
+   images or one 16:9 video tile), carries a like · repost · zap action row
+   (real shared-core publishes: kind-7 reaction, kind-6 repost, NIP-57 note
+   zap), and opens the note's thread sheet on tap; Bitz grid tiles open the
+   same thread.
+7. **Own notes are deletable (NIP-09)** — the shared core composes bounded
+   kind-5 deletions (`composeDeletion`, ≤50 targets, hex-validated); the
+   thread sheet offers Delete on the root card and reply rows for the
+   signed-in author's own notes with a confirmation, publishing the kind-5
+   and hiding the row locally (the root deletes close the sheet). Unlikes
+   use the same path: the feed stores remember MY kind-7 event id per liked
+   note (web `myEventId` parity) and an unlike publishes its kind-5
+   deletion.
+8. **Profile moderation** — the full page's ⋯ menu adds Mute/Unmute (local
+   mute store) and Report user (kind-1984 with a reason prompt, p-tag only)
+   for other accounts, matching the web ProfileActionMenu set. The ⋯ menu
+   renders as the shared AppMenu popover on both platforms — rounded pill
+   rows with a press fill, web MenuItem parity (the iOS system Menu and the
+   Android raw DropdownMenu are not used here).
+9. **Diagnostic copies** — the thread sheet's raw-note dialog offers Copy
+   note ID · Copy author npub · Copy note text alongside the raw fields
+   (web PostCard menu parity).
 
 Acceptance criteria:
 
@@ -166,9 +201,20 @@ Comment bottom-sheet anatomy (both platforms):
 
 - header "Comments N" + close;
 - root card (author row tappable → profile sheet; like · replies · zap+sats ·
-  repost · bookmark · raw ⋯);
+  repost · bookmark · raw ⋯ with Copy note ID · Copy author npub · Copy note
+  text · Open attachment (through the external-link confirm gate) · Copy
+  attachment URL; Delete on own notes);
+- **NIP-22 auto-switch (ADR-003, web `feed.comment` parity)**: a non-kind-1
+  root (video/picture Bitz) publishes kind-1111 comments — uppercase `E/K/P`
+  root tags + lowercase `e/k` parent tags (parent = the answered comment, or
+  the target for top-level) — while kind-1 roots keep NIP-10 replies; PoW
+  rides only the kind-1 path; thread REQs query BOTH `#e` and `#E`
+  (case-sensitive relay filters) with kinds `[1,1111,7,6,9735]`, and
+  kind-1111 events project into the open thread only, never feed windows;
 - threaded replies behind depth rails, per-reply Like (+count) · Zap (+sats) ·
-  Reply, reply avatars/names tappable → profile sheet;
+  Reply, reply avatars/names tappable → profile sheet; the interaction shape
+  is capped at two levels (root comment → one reply), matching the web flow;
+  older/deeper remote replies remain visible flattened at the second level.
 - identity-gated composer (sub-reply targeting chip, gallery · GIF · URL ·
   PoW options, pill input + circular send), keyboard never covers the bar.
 
@@ -210,7 +256,21 @@ UI anatomy:
   because relay offsets are not portable;
 - Explore prefetches a bounded adjacent poster window so newly revealed rows do
   not wait on full-size image decoding;
-- data-saver/quality indication only when it helps the user.
+- data-saver/quality indication only when it helps the user;
+- polls (APP-008, web `Poll.svelte`/`votePoll` parity): a kind-1 note with
+  `poll_option` tags renders as option rows; votes lazy-load once per poll
+  (one-shot kind-1018 `#e` REQ, ≤200 voters) and tapping an option publishes
+  a kind-1018 (`e` + `response <index>` tags, empty content) with an
+  optimistic local flip; tallies use the shared latest-vote-per-pubkey rule
+  (changing your vote moves it); after voting, rows show proportional bars,
+  percentages, counts and the total, with your choice highlighted.
+- local ranking signals (web interaction-profile parity): every card's ⋯
+  menu offers **Not interested** (hide + demote author + demote topics),
+  **Hide this note**, **Show less/more from \<author\>** and **Show
+  less/more about #tag**. Dismissed notes never surface on any window (the
+  shared ranker's one intentional drop); author demotions multiply the
+  score by 0.25 and topic demotions by 0.5 (stackable, deterministic); all
+  three sets are device-local, bounded and persisted — never published.
 
 ## 6. Quick create flow
 
@@ -321,9 +381,41 @@ Attribution does not claim legal permission. Unavailable/unsupported assets offe
 
 - Comments open as a bottom sheet on phone and side panel on tablet; keyboard never covers composer/post action.
 - A zap opens amount/message/recipient review, then native NWC approval. Pending, paid and failed are distinct.
+- The zap wallet (APP-014: local sent ledger merged with verified kind-9735 receipts) is one surface with three entry points on both platforms — the You page ⋯ menu, the You page "Sats zapped" stat pill, and the More hub Account group "Zap wallet" tile beside Profile. Hubs never render disabled placeholders for surfaces that exist.
 - Non-atomic split payments list each recipient result; never show a single success if some failed.
 - Report collects reason, optional details and block/mute follow-up without exposing reporter identity publicly.
 - Secure messages keep notification payload generic and fetch/decrypt only inside the app.
+
+### 11.1 Inbox activity surface (APP-012, mock 06 `scr-activity` parity)
+
+The Activity tab renders verified events targeting the account as full-width
+bordered rows (no cards), matching `docs/ui/app-06-inbox-activity-messages.html`
+on both platforms:
+
+- Header "Inbox" + ⋯ menu: mark all read, search, per-type mutes (filters).
+- One chip row — All (orange) / ⚡ Zaps / ♥ Likes / Follows / Mentions —
+  replaces the old tab+chip pair; Mentions covers mentions and replies.
+- Row taxonomy: aggregated zap rows (avatar stack, amber summed sats, bolt),
+  like rows with a "+N" hex plate and heart, repost rows with the repeat
+  glyph, follow rows with a working **Follow back** pill (optimistic kind-3
+  publish; "Following ✓" when already followed), mention/reply quote cards
+  with @handles highlighted in brand orange, and dimmed zap-out rows from
+  the local APP-014 sent-zap ledger with a PAID chip.
+- Day sections Today / Yesterday / Earlier (one collapsed "Earlier"), a 3 dp
+  left accent stripe marks unread rows, and the footer restates the
+  verified-events promise ("no invented counts, no engagement theater").
+- Row taps deep-link to the thread sheet (verified origin) or author sheet and
+  mark the row read; long-press keeps mark-read / view-profile / copy-note-id
+  / raw-JSON / mute-this-type; visible-mark-read stays 1.4 s and blocked or
+  muted authors never render.
+- Web `notifications.svelte` functional parity: pagination ("Load older
+  notifications" pages history with `until` REQs until "End of relay
+  results"), an offline card with Reconnect when the head REQ never answers,
+  zap receipts in their own relay filter (never crowded out), kind-16 generic
+  reposts, negative reactions never notify, quote-mentions deep-link to the
+  quoted note, zap targets prefer the receipt's second `e` tag, titles name up
+  to two actors ("A, B and 3 others"), and mention/reply cards render the
+  note's own cleaned excerpt plus a media strip behind the NIP-36 cover.
 
 ## 12. Visual system
 
@@ -348,3 +440,8 @@ Attribution does not claim legal permission. Unavailable/unsupported assets offe
 ## 14. UX acceptance artifact
 
 Every feature PR includes its state matrix, primary/secondary/destructive actions, back behavior, permission moment, offline/recovery behavior, accessibility labels/actions and analytics consent impact. A happy-path mock is not a complete flow.
+
+Interactive HTML mockups for the flows in this document live in `docs/ui/`
+(start at `docs/ui/index.html`). They render the state matrices above —
+loading/empty/offline/error/permission variants sit next to each happy path —
+and use the token set from `docs/DESIGN_SYSTEM.md`.

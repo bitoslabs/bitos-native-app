@@ -423,7 +423,7 @@ private fun AppearanceDetail(
             selected = snapshot.themeMode.wire,
         ) { store.setRaw(space.bitos.core.settings.SettingsContract.KEY_THEME_MODE, it) }
     }
-    Footnote("Light surfaces land with the theming wave (APP-023); the preference is already persisted.")
+    Footnote("Applies immediately — System follows your device's light/dark setting.")
     DetailCard("Text Size") {
         OptionRow(
             title = "Text size",
@@ -431,7 +431,7 @@ private fun AppearanceDetail(
             selected = snapshot.fontSize.wire,
         ) { store.setRaw(space.bitos.core.settings.SettingsContract.KEY_FONT_SIZE, it) }
     }
-    Footnote("Text scaling applies app-wide with the theming wave (APP-023).")
+    Footnote("Text scaling applies app-wide on top of your system font scale.")
     DetailCard("Layout") {
         PrefRow("Compact mode", snapshot.compactMode) {
             store.setRaw(space.bitos.core.settings.SettingsContract.KEY_COMPACT_MODE, if (it) "1" else "0")
@@ -443,7 +443,7 @@ private fun AppearanceDetail(
             onPick = { store.setRaw(space.bitos.core.settings.SettingsContract.KEY_ACCENT_COLOR, it) },
         )
     }
-    Footnote("Light surfaces and app-wide accent/font scaling apply with the theming wave (APP-023); the choices are already persisted.")
+    Footnote("Accent restyles brand actions app-wide immediately.")
 }
 
 @Composable
@@ -603,6 +603,7 @@ private fun MixBar(setting: space.bitos.core.feed.SurfaceSetting) {
     }
 }
 
+@Composable
 private fun signalColor(signal: space.bitos.core.feed.AlgorithmSignal): Color = when (signal) {
     space.bitos.core.feed.AlgorithmSignal.RECENCY -> BitOSColors.primary
     space.bitos.core.feed.AlgorithmSignal.ENGAGEMENT -> BitOSColors.like

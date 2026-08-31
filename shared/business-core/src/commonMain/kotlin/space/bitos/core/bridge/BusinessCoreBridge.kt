@@ -2451,7 +2451,11 @@ class BusinessCoreBridge {
         return composer.composeUploadAuth(authorPubkey, serverUrl, fileHashHex, sizeBytes, expirationSeconds, nowSeconds)?.idHex
     }
 
-    /** The URL-encoded Nostr auth header value from the signed kind-24242. */
+    /** BUD-02: the `PUT {server}/upload` endpoint for a server base URL. */
+    fun blossomUploadUrl(serverUrl: String): String =
+        space.bitos.core.model.Blossom.uploadUrl(serverUrl)
+
+    /** The BUD-11 `Nostr <base64url(event)>` header value from the signed kind-24242. */
     fun uploadAuthHeader(
         authorPubkey: String,
         serverUrl: String,
@@ -2465,8 +2469,10 @@ class BusinessCoreBridge {
         val unsigned = composer.composeUploadAuth(
             authorPubkey, serverUrl, fileHashHex, sizeBytes, expirationSeconds, createdAtSeconds,
         ) ?: return null
-        val frame = composer.publishMessage(unsigned, signatureHex) ?: return null
-        return "Nostr " + space.bitos.core.model.Blossom.encodeQueryComponent(frame)
+        // BUD-11: the Authorization token is the signed event object `{...}`
+        // under Base64url — never the `["EVENT", {...}]` relay frame.
+        val eventJson = composer.signedEventJson(unsigned, signatureHex) ?: return null
+        return space.bitos.core.model.Blossom.authorizationHeaderValue(eventJson)
     }
 
     /** Parses a WWW-Authenticate challenge's expiration, or null. */

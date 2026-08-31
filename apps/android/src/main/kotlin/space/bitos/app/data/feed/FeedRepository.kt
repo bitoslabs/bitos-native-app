@@ -20,6 +20,7 @@ import space.bitos.core.feed.FeedNote
 import space.bitos.core.feed.FeedRanking
 import space.bitos.core.feed.RankingContext
 import space.bitos.core.bridge.BusinessCoreBridge
+import space.bitos.core.identity.AccountBootstrap
 import space.bitos.core.model.ContactList
 import space.bitos.core.model.NostrEvent
 import space.bitos.core.model.NostrKinds
@@ -76,6 +77,11 @@ data class FeedUiState(
     val zapRequestIds: Map<String, Set<String>> = emptyMap(),
     /** APP-009 live per-note tallies (reactions/reposts/zaps+msat, shared rule). */
     val tallies: Map<String, space.bitos.core.feed.NoteTally> = emptyMap(),
+    /** My kind-7 reaction event id per liked note (web `myEventId` parity) —
+     *  the kind-5 unlike target. */
+    val myReactionEventIds: Map<String, String> = emptyMap(),
+    /** APP-008 poll tallies per poll note id (latest-vote-per-pubkey rule). */
+    val pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
     /** Muted authors' notes are filtered from all windows (device-local). */
     val muted: Set<String> = emptySet(),
     /** Blocked authors (NIP-51 10004 head) — filtered like mutes, relay-derived. */
@@ -97,6 +103,9 @@ class FeedRepository(
     /** Injectable so contract tests drive the APP-004 empty-feed backoff
      * without real-time waits; production uses the shared-core policy. */
     private val retryDelayMs: (Int) -> Long = EmptyFeedRetry::delayMs,
+    /** Injectable so contract tests drive the cold-start bootstrap without
+     * real-time waits; production polls at the shared health cadence. */
+    private val bootstrapPollMs: Long = 2_000,
     /** Web feedPreferences parity: persisted reader opt-in that re-admits
      * protocol-payload notes into the feed windows. */
     private val showProtocolNotes: () -> Boolean = { false },
@@ -124,6 +133,8 @@ class FeedRepository(
     private val zapCounts = mutableMapOf<String, Int>()
     private val zapRequestIdsBuffer = LinkedHashMap<String, LinkedHashSet<String>>()
     private val talliesBuffer = LinkedHashMap<String, space.bitos.core.feed.NoteTally>()
+    /** My kind-7 event id per liked note (kind-5 unlike target, bounded). */
+    private val myReactionEventIds = LinkedHashMap<String, String>()
     private val tallyTargets = LinkedHashSet<String>()
     private val bookmarked = linkedSetOf<String>()
     private val profiles = mutableMapOf<String, ProfileMetadata>()
@@ -146,6 +157,16 @@ class FeedRepository(
 
     private var collectJob: Job? = null
     private var retryJob: Job? = null
+    /**
+     * Cold-start account bootstrap (shared `AccountBootstrap`): the one-shot
+     * account heads fired in [setAccount] are lost when no relay socket is
+     * open yet, so a connectivity watcher re-issues them while unresolved.
+     */
+    private var connectivityJob: Job? = null
+    private var accountHeadAttempts = IntArray(4)
+    private var bookmarkHeadReceived = false
+    private var blockHeadReceived = false
+    private var lastConnectedRelays = 0
     /** The initial head is a snapshot. Later frames from this subscription are
      * live arrivals and must not move the reader's current list. */
     private var headSubscriptionId: String? = null
@@ -218,7 +239,20 @@ class FeedRepository(
                     event.kind == NostrKinds.GENERIC_REACTION -> {
                         // APP-009: kind-7 reactions tally per thread note.
                         tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
+                        // Web `myEventId` parity: remember MY reaction event
+                        // per note so an unlike can publish its kind-5.
+                        val account = accountPubkey
+                        if (account != null && event.pubkey.value == account) {
+                            event.eTaggedIds().firstOrNull()?.let { target ->
+                                myReactionEventIds[target] = event.id.value
+                            }
+                        }
                     }
+                    // NIP-22 comments (ADR-003): kind-1111 projects into the
+                    // comment thread only — never the feed windows.
+                    event.kind == NostrKinds.VIDEO_COMMENT -> absorbReply(FeedNote.from(event))
+                    // APP-008 poll votes: kind-1018 tallies per poll note.
+                    event.kind == NostrKinds.POLL_RESPONSE -> absorbPollVote(event)
                     FeedNote.isFeedKind(event.kind) -> {
                         val note = FeedNote.from(event)
                         recordOlderEvent(relaySubscriptionId, event, note)
@@ -247,6 +281,21 @@ class FeedRepository(
                 subscribe()
             }
         }
+        // Cold-start bootstrap: re-issue the account heads (profile/contacts/
+        // bookmarks/blocks) that [setAccount] fired before any socket opened.
+        // Polled rather than edge-driven: a relay that reconnects to the same
+        // connected count must still grant a fresh re-issue pass.
+        connectivityJob = scope.launch {
+            while (true) {
+                delay(bootstrapPollMs)
+                val connected = connectedRelayCount()
+                if (AccountBootstrap.shouldOpenEpisode(lastConnectedRelays, connected)) {
+                    accountHeadAttempts = IntArray(accountHeadAttempts.size)
+                }
+                lastConnectedRelays = connected
+                reissueUnresolvedAccountHeads(connected)
+            }
+        }
         subscribe()
     }
 
@@ -259,6 +308,8 @@ class FeedRepository(
         collectJob = null
         retryJob?.cancel()
         retryJob = null
+        connectivityJob?.cancel()
+        connectivityJob = null
         profileDrainJob?.cancel()
         profileFallbackJobs.forEach(Job::cancel)
         profileFallbackJobs.clear()
@@ -277,8 +328,21 @@ class FeedRepository(
 
     private var algorithm: AlgorithmSnapshot? = null
 
+    /** Local ranking signals (hide + author/tag demotions). */
+    private var dismissedNoteIds: Set<String> = emptySet()
+    private var demotedAuthors: Set<String> = emptySet()
+    private var demotedTags: Set<String> = emptySet()
+
     fun setMuted(muted: Set<String>) {
         mutedPubkeys = muted
+        publishState()
+    }
+
+    /** Local ranking signals (web interaction-profile parity). */
+    fun setInteractionProfile(dismissed: Set<String>, authors: Set<String>, tags: Set<String>) {
+        dismissedNoteIds = dismissed
+        demotedAuthors = authors
+        demotedTags = tags
         publishState()
     }
 
@@ -555,6 +619,8 @@ class FeedRepository(
     private fun absorbBookmarkList(event: NostrEvent) {
         val account = accountPubkey ?: return
         if (event.pubkey.value != account) return
+        // The account's bookmark head resolved — the bootstrap stops re-asking.
+        bookmarkHeadReceived = true
         bookmarkCandidates.add(event)
         val newest = space.bitos.core.model.BookmarkList.newest(bookmarkCandidates) ?: return
         bookmarked.clear()
@@ -566,6 +632,8 @@ class FeedRepository(
     private fun absorbBlockList(event: NostrEvent) {
         val account = accountPubkey ?: return
         if (event.pubkey.value != account) return
+        // The account's block head resolved — the bootstrap stops re-asking.
+        blockHeadReceived = true
         blockCandidates.add(event)
         val newest = space.bitos.core.model.BlockList.newest(blockCandidates) ?: return
         blockedPubkeys = space.bitos.core.model.BlockList.blockedPubkeys(newest) ?: blockedPubkeys
@@ -614,6 +682,14 @@ class FeedRepository(
         }
         val filter = COMMENT_FILTER_PREFIX + targetEventId + COMMENT_FILTER_SUFFIX
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-comments-$targetEventId".take(64), filter))
+        // NIP-22 companion REQ: uppercase-`E` rooted comments are invisible
+        // to the plain `#e` filter (relay tag filters are case-sensitive).
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                "bitos-comments-e-$targetEventId".take(64),
+                COMMENT_ROOT_FILTER_PREFIX + targetEventId + COMMENT_FILTER_SUFFIX,
+            )
+        )
         publishState()
     }
 
@@ -625,28 +701,97 @@ class FeedRepository(
         bookmarkCandidates.clear()
         bookmarked.clear()
         blockCandidates.clear()
+        myReactionEventIds.clear()
         blockedPubkeys = emptySet()
         followingSubscribed = false
+        // Shared `AccountBootstrap`: a new account episode re-arms the head
+        // re-issue budget and the received flags.
+        accountHeadAttempts = IntArray(accountHeadAttempts.size)
+        bookmarkHeadReceived = false
+        blockHeadReceived = false
         mutableState.value = mutableState.value.copy(
             accountPubkey = pubkey,
             followingResolved = pubkey == null,
         )
         if (pubkey != null) {
-            val request = NostrEventCodec.encodeRequest(
-                "bitos-contacts",
-                CONTACT_FILTER_PREFIX + pubkey + CONTACT_FILTER_SUFFIX,
-            )
-            pool.broadcast(request)
-            pool.broadcast(
-                NostrEventCodec.encodeRequest(
-                    "bitos-bookmarks",
-                    BOOKMARK_FILTER_PREFIX + pubkey + BOOKMARK_FILTER_SUFFIX,
-                ),
-            )
-            // Blocked-author head (NIP-51 kind 10004): newest verified wins.
-            NostrEventCodec.encodeBlockListRequest("bitos-blocks", pubkey)?.let(pool::broadcast)
+            // The signed-in profile is not necessarily an author in the feed.
+            // Request its kind-0 head explicitly so the You surface has a
+            // fresh projection on a cold start and after account switching.
+            requestProfile(pubkey, force = true)
+            requestContactHead(pubkey)
+            requestBookmarkHead(pubkey)
+            requestBlockHead(pubkey)
         }
         publishState()
+    }
+
+    // ── One-shot account heads (kind-0 / kind-3 / 30003 / 10004) ──────────
+    //
+    // A cold start composes these before any relay socket opened and the
+    // transport drops them silently; [reissueUnresolvedAccountHeads] asks
+    // again on connectivity until each head resolves (shared
+    // `AccountBootstrap` budget, reset when connectivity grows).
+
+    private fun requestContactHead(pubkey: String) {
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                "bitos-contacts",
+                CONTACT_FILTER_PREFIX + pubkey + CONTACT_FILTER_SUFFIX,
+            ),
+        )
+    }
+
+    private fun requestBookmarkHead(pubkey: String) {
+        pool.broadcast(
+            NostrEventCodec.encodeRequest(
+                "bitos-bookmarks",
+                BOOKMARK_FILTER_PREFIX + pubkey + BOOKMARK_FILTER_SUFFIX,
+            ),
+        )
+    }
+
+    private fun requestBlockHead(pubkey: String) {
+        NostrEventCodec.encodeBlockListRequest("bitos-blocks", pubkey)?.let(pool::broadcast)
+    }
+
+    private fun reissueUnresolvedAccountHeads(connectedRelays: Int) {
+        val pubkey = accountPubkey ?: return
+        if (AccountBootstrap.shouldReissue(
+                resolved = profiles.containsKey(pubkey),
+                attempts = accountHeadAttempts[HEAD_PROFILE],
+                connectedRelays = connectedRelays,
+            )
+        ) {
+            accountHeadAttempts[HEAD_PROFILE] += 1
+            requestProfile(pubkey, force = true)
+        }
+        if (AccountBootstrap.shouldReissue(
+                resolved = mutableState.value.followingResolved,
+                attempts = accountHeadAttempts[HEAD_CONTACTS],
+                connectedRelays = connectedRelays,
+            )
+        ) {
+            accountHeadAttempts[HEAD_CONTACTS] += 1
+            requestContactHead(pubkey)
+        }
+        if (AccountBootstrap.shouldReissue(
+                resolved = bookmarkHeadReceived,
+                attempts = accountHeadAttempts[HEAD_BOOKMARKS],
+                connectedRelays = connectedRelays,
+            )
+        ) {
+            accountHeadAttempts[HEAD_BOOKMARKS] += 1
+            requestBookmarkHead(pubkey)
+        }
+        if (AccountBootstrap.shouldReissue(
+                resolved = blockHeadReceived,
+                attempts = accountHeadAttempts[HEAD_BLOCKS],
+                connectedRelays = connectedRelays,
+            )
+        ) {
+            accountHeadAttempts[HEAD_BLOCKS] += 1
+            requestBlockHead(pubkey)
+        }
     }
 
     private fun subscribe() {
@@ -818,10 +963,55 @@ class FeedRepository(
         if (timeline == FeedTimeline.FOLLOWING) pendingFollowing else pendingForYou
 
     private fun absorbReply(note: FeedNote) {
-        val target = note.replyTo ?: return
-        val thread = commentThreads[target] ?: return
+        // Arrival keys on the direct parent; a nested reply whose parent
+        // comment has no open thread falls back to its root tag so the
+        // thread the reader opened still receives it (NIP-10 + NIP-22).
+        val thread = commentThreads[note.replyTo]
+            ?: note.threadRootId?.let { commentThreads[it] }
+            ?: return
         thread[note.id] = note
         if (thread.size > COMMENT_PER_TARGET_MAX) thread.remove(thread.keys.first())
+    }
+
+    // ── APP-008 poll votes (web `rebuildPoll` parity) ───────────────────
+
+    /** pollId → pubkey → latest vote. Bounded: ≤16 polls × MAX_VOTERS. */
+    private val pollVoters = LinkedHashMap<String, LinkedHashMap<String, space.bitos.core.model.PollVote>>()
+    private val pollVotes = space.bitos.core.model.PollVotes()
+    private val pollVotesRequested = HashSet<String>()
+
+    private fun absorbPollVote(event: NostrEvent) {
+        val target = event.tags.firstOrNull { it.firstOrNull() == "e" }?.getOrNull(1) ?: return
+        val option = event.tags.firstOrNull { it.firstOrNull() == "response" }?.getOrNull(1)?.toIntOrNull() ?: return
+        if (option < 0 || option > 255) return
+        val voters = pollVoters.getOrPut(target) { LinkedHashMap() }
+        if (pollVoters.size > POLL_TARGETS_MAX) pollVoters.remove(pollVoters.keys.first())
+        if (voters.size >= space.bitos.core.model.PollVotes.MAX_VOTERS && event.pubkey.value !in voters) return
+        pollVotes.absorb(
+            voters,
+            space.bitos.core.model.PollVote(event.pubkey.value, option, event.createdAt),
+        )
+        publishState()
+    }
+
+    /** One-shot REQ for a poll's kind-1018 votes (called when it renders). */
+    fun loadPollVotes(targetEventId: String) {
+        if (!pollVotesRequested.add(targetEventId)) return
+        pollVoters.getOrPut(targetEventId) { LinkedHashMap() }
+        val filter = """{"kinds":[${NostrKinds.POLL_RESPONSE}],"#e":["$targetEventId"],"limit":${space.bitos.core.model.PollVotes.MAX_VOTERS}}"""
+        pool.broadcast(NostrEventCodec.encodeRequest("bitos-pollvotes-$targetEventId".take(64), filter))
+        publishState()
+    }
+
+    /** Optimistic local vote before the kind-1018 relay echo lands. */
+    fun applyOptimisticPollVote(pollId: String, optionIndex: Int) {
+        val account = accountPubkey ?: return
+        val voters = pollVoters.getOrPut(pollId) { LinkedHashMap() }
+        pollVotes.absorb(
+            voters,
+            space.bitos.core.model.PollVote(account, optionIndex, System.currentTimeMillis() / 1_000),
+        )
+        publishState()
     }
 
     private fun absorbContactList(event: NostrEvent) {
@@ -831,6 +1021,10 @@ class FeedRepository(
         val newest = ContactList.newest(contactCandidates) ?: return
         followingAuthors.clear()
         followingAuthors.addAll(ContactList.followedPubkeys(newest))
+        // A contact list can contain people that have not posted in the
+        // current feed window. Resolve their kind-0 metadata for connection
+        // surfaces rather than showing anonymous placeholder rows.
+        followingAuthors.forEach(::enqueueProfile)
         followingSubscribed = false
         subscribeFollowing()
         mutableState.value = mutableState.value.copy(followingResolved = true)
@@ -934,6 +1128,17 @@ class FeedRepository(
         }?.let(FeedNote::from)
     }
 
+    /** Requests a profile head for a native surface outside the feed window. */
+    fun requestProfile(pubkey: String, force: Boolean = false) {
+        if (pubkey.isBlank()) return
+        if (force) {
+            profileRequestCounter += 1
+            pool.broadcast(bridge.profileRequest("bitos-profile-head-$profileRequestCounter", listOf(pubkey)))
+            return
+        }
+        enqueueProfile(pubkey)
+    }
+
     private fun enqueueProfile(pubkey: String) {
         if (profiles.containsKey(pubkey)) return
         if (pubkey !in profileQueue && pubkey !in requestedProfiles) {
@@ -993,19 +1198,30 @@ class FeedRepository(
                     following = followingAuthors,
                     zapCounts = zapCounts.toMap(),
                     replyCounts = commentThreads.mapValues { it.value.size },
+                    dismissedNoteIds = dismissedNoteIds,
+                    mutedAuthors = demotedAuthors,
+                    mutedTags = demotedTags,
                 ),
             )
         } ?: forYouWindow
         val followingSnapshot = followingWindow.snapshot()
         val allWindow: (List<FeedNote>) -> Int = { window ->
-            window.count { it.pubkey !in hiddenSet && (protocolNotesVisible || !it.isProtocolPayload) }
+            window.count {
+                it.pubkey !in hiddenSet &&
+                    it.id !in dismissedNoteIds &&
+                    (protocolNotesVisible || !it.isProtocolPayload)
+            }
         }
         mutableState.value = mutableState.value.copy(
             notes = (if (mutableState.value.timeline == FeedTimeline.FOLLOWING) {
                 followingSnapshot
             } else {
                 rankedForYou
-            }).filter { it.pubkey !in hiddenSet && FeedFilters.passes(it, filter, ownPubkey, liked, protocolNotesVisible) },
+            }).filter {
+                it.pubkey !in hiddenSet &&
+                    it.id !in dismissedNoteIds &&
+                    FeedFilters.passes(it, filter, ownPubkey, liked, protocolNotesVisible)
+            },
             pendingNotes = pendingFor(mutableState.value.timeline).toList(),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
@@ -1045,6 +1261,10 @@ class FeedRepository(
             zapCounts = zapCounts.toMap(),
             zapRequestIds = zapRequestIdsBuffer.mapValues { it.value.toSet() },
             tallies = talliesBuffer.toMap(),
+            myReactionEventIds = myReactionEventIds.toMap(),
+            pollTallies = pollVoters.mapValues { (_, voters) ->
+                pollVotes.tally(voters, ownPubkey)
+            },
             muted = mutedPubkeys,
             blocked = blockedPubkeys,
             relayHealth = RelayHealth(
@@ -1062,6 +1282,12 @@ class FeedRepository(
         const val PENDING_MAX = 50
         /** Persistent subscriptions may omit EOSE; bound initial catch-up. */
         const val HEAD_SNAPSHOT_MAX_WAIT_MS = 2_500L
+
+        /** Indexes into [accountHeadAttempts] (shared `AccountBootstrap`). */
+        const val HEAD_PROFILE = 0
+        const val HEAD_CONTACTS = 1
+        const val HEAD_BOOKMARKS = 2
+        const val HEAD_BLOCKS = 3
         const val PROFILE_BATCH = 48
         const val PROFILE_DRAIN_DELAY_MS = 250L
         const val PROFILE_FALLBACK_DELAY_MS = 900L
@@ -1075,7 +1301,9 @@ class FeedRepository(
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
         const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":["""
         const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
-        const val COMMENT_FILTER_PREFIX = """{"kinds":[1,7,6,9735],"#e":["""
+        const val COMMENT_FILTER_PREFIX = """{"kinds":[1,1111,7,6,9735],"#e":["""
+    /** NIP-22 companion: kind-1111 comments root-tagged with UPPERCASE `E`. */
+    const val COMMENT_ROOT_FILTER_PREFIX = """{"kinds":[1111],"#E":["""
         const val BOOKMARK_FILTER_PREFIX = """{"kinds":[30003],"authors":["""
         const val BOOKMARK_FILTER_SUFFIX = """],"#d":[""],"limit":1}"""
         const val ZAP_FILTER_PREFIX = """{"kinds":[9735],"#e":["""
@@ -1083,6 +1311,8 @@ class FeedRepository(
         const val ZAP_TARGETS_MAX = 16
         const val COMMENT_FILTER_SUFFIX = """],"limit":50}"""
         const val COMMENT_TARGETS_MAX = 16
+        /** APP-008 poll vote window bound (matches the thread cache). */
+        const val POLL_TARGETS_MAX = 16
         const val COMMENT_PER_TARGET_MAX = 100
 
         /** APP-007 Chain: ancestor cache + per-hop fetch wait (3 s). */

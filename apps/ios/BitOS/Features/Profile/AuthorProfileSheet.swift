@@ -59,7 +59,7 @@ struct AuthorProfileSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear { environment.authorStore.open(authorPubkey: authorPubkey) }
         .onDisappear { environment.authorStore.close() }
         .fullScreenCover(isPresented: $showInlineFull) {

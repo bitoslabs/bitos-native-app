@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -40,6 +41,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -160,6 +162,13 @@ fun BitzScreen(
     searchRepository: SearchRepository,
     retapTick: Int = 0,
     sensitiveShowByDefault: Boolean = false,
+    /** Web `/bitz?author=<npub>` parity: author-scoped playback from a
+     *  profile Bitz-grid tile. Null = the normal 3-tab surface. */
+    authorPubkey: String? = null,
+    /** Deep-link: the tapped profile grid tile lands first on screen. */
+    initialNoteId: String? = null,
+    /** Author-mode back bar → returns to the profile. */
+    onExitAuthorMode: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
     onOpenComposer: () -> Unit = {},
     /** Spec §3.7 record entry: opens the Create hub (camera/import). */
@@ -184,9 +193,24 @@ fun BitzScreen(
     val scope = rememberCoroutineScope()
     val bitzHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
 
+    // ── Author mode (web `/bitz?author=<npub>` parity) ──────────────
+    // The same player surface scoped to one author: the page, the action
+    // rail, comments/zap/remix sheets all work against the author's own
+    // verified window. The tab rail is replaced by a back-to-profile bar
+    // and the feed stays in loaded (chronological) order so the deep-linked
+    // tile lands exactly where the user tapped in the profile grid.
+    val authorMode = authorPubkey != null
+    if (authorMode) {
+        // One REQ per author (open() resets the store; never re-issue on
+        // list changes). The deep-link jump resolves once the window holds
+        // the tapped tile (see pendingJumpId below).
+        LaunchedEffect(authorPubkey) { authorRepository.open(authorPubkey!!) }
+    }
+
     // ── Mode (persisted through the shared settings contract) ─────────
-    var mode by remember { mutableStateOf(settingsSnapshot.bitzMode) }
-    LaunchedEffect(mode) {
+    var mode by remember { mutableStateOf(if (authorMode) BitzModeSetting.FOR_YOU else settingsSnapshot.bitzMode) }
+    if (!authorMode) {
+        LaunchedEffect(mode) {
         // Three tabs (legacy Flutter parity): the pills drive the same
         // shared window Home uses — Following selects the follows
         // timeline, For-you/Explore the global one.
@@ -202,17 +226,26 @@ fun BitzScreen(
             BitzModeSetting.EXPLORE ->
                 if (current != FeedTimeline.FOR_YOU) viewModel.selectTimeline(FeedTimeline.FOR_YOU)
         }
+        }
     }
 
     // ── Window + splice (search picks land ahead of the window) ────────
-    val videos = remember(state.notes) { state.notes.filter { it.video != null } }
+    val videos = remember(state.notes) {
+        if (authorMode) authorState.notes.filter { it.video != null } else state.notes.filter { it.video != null }
+    }
     val spliced = remember { mutableStateListOf<FeedNote>() }
 
     // The paged list is the active tab's window (legacy `displayedEvents`):
-    // search picks spliced ahead, then the verified video window.
+    // search picks spliced ahead, then the verified video window. Author
+    // mode plays the author's owned window in loaded order (no splice —
+    // playback scope must match the profile grid).
     val playerNotes = remember(videos, spliced.toList()) {
-        val windowIds = videos.mapTo(HashSet(videos.size)) { it.id }
-        spliced.filterNot { it.id in windowIds } + videos
+        if (authorMode) {
+            videos
+        } else {
+            val windowIds = videos.mapTo(HashSet(videos.size)) { it.id }
+            spliced.filterNot { it.id in windowIds } + videos
+        }
     }
 
     // ── Player pool (bounded three-slot reconciliation) ────────────────
@@ -280,6 +313,8 @@ fun BitzScreen(
     }
 
     fun selectMode(next: BitzModeSetting) {
+        // Author playback has no mode rail (web parity) — swipes stay inert.
+        if (authorMode) return
         if (mode == next) {
             // Re-tap on the active pill: back to top; at top, refresh.
             if (next == BitzModeSetting.EXPLORE) {
@@ -307,7 +342,7 @@ fun BitzScreen(
     val bitzPrevId = playerNotes.getOrNull(pagerState.settledPage - 1)?.id
     val bitzNextId = playerNotes.getOrNull(pagerState.settledPage + 1)?.id
     LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId) {
-        if (mode == BitzModeSetting.EXPLORE) {
+        if (!authorMode && mode == BitzModeSetting.EXPLORE) {
             pool.releaseAll()
         } else {
             pool.update(pagerState.settledPage, playerNotes)
@@ -315,17 +350,23 @@ fun BitzScreen(
     }
     // APP-004 hold rule: arrivals wait while the user is scrolled in.
     LaunchedEffect(pagerState.settledPage) {
-        viewModel.holdNewNotes(pagerState.settledPage != 0)
+        if (!authorMode) viewModel.holdNewNotes(pagerState.settledPage != 0)
     }
     // Prepare the next ten videos before the active tab reaches its edge.
+    // Author mode pages the author's own REQ backward (same 5-note pages
+    // as the profile grid — one store, one cursor).
     LaunchedEffect(
         pagerState.settledPage,
         playerNotes.size,
         state.isLoadingOlder,
         state.noMoreOlder,
     ) {
-        if (playerNotes.isNotEmpty() &&
-            !state.noMoreOlder && !state.isLoadingOlder &&
+        if (playerNotes.isEmpty()) return@LaunchedEffect
+        if (authorMode) {
+            if (pagerState.settledPage >= playerNotes.size - 2 && authorState.canLoadMore && !authorState.isLoadingMore) {
+                authorRepository.loadMoreNotes()
+            }
+        } else if (!state.noMoreOlder && !state.isLoadingOlder &&
             pagerState.settledPage >= playerNotes.size - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         ) {
             viewModel.loadOlder()
@@ -385,6 +426,11 @@ fun BitzScreen(
             pendingJumpId = null
         }
     }
+    if (authorMode && initialNoteId != null) {
+        // Web `#bitz=<id>` parity: the tapped profile grid tile is the first
+        // thing on screen; the resolver above waits for the author window.
+        LaunchedEffect(Unit) { pendingJumpId = initialNoteId }
+    }
 
     fun openInPlayer(note: FeedNote) {
         if (note.id in videos.map { it.id }) {
@@ -418,6 +464,7 @@ fun BitzScreen(
      * steps back one mode. Sheet/search overlays swallow the gesture.
      */
     fun handleHorizontalSwipe(left: Boolean) {
+        if (authorMode) return
         if (showSearch || commentsTarget != null || chainTarget != null ||
             zapTarget != null || authorTarget != null || remixAskTarget != null
         ) {
@@ -458,7 +505,72 @@ fun BitzScreen(
     }
 
     Box(Modifier.fillMaxSize().background(BitOSColors.background)) {
-        when (mode) {
+        if (authorMode) {
+            // Author mode: same pager + rail, data scoped to one author
+            // (web `/bitz?author=` parity). The tab rail becomes a
+            // back-to-profile bar over the media.
+            when {
+                authorState.isLoading && playerNotes.isEmpty() -> BitzLoading()
+                playerNotes.isEmpty() -> BitzMessage(
+                    title = "No Bitz yet",
+                    body = "Short videos this creator publishes will collect here.",
+                )
+                else -> VerticalPager(state = pagerState) { page ->
+                    val note = playerNotes[page]
+                    BitzVideoPage(
+                        note = note,
+                        state = state,
+                        actions = actions,
+                        pool = pool,
+                        player = playerBindings[note.id],
+                        isSettled = pagerState.settledPage == page,
+                        muted = settingsSnapshot.videoMuted,
+                        sensitiveShowByDefault = sensitiveShowByDefault,
+                        revealed = revealed,
+                        onHorizontalSwipe = ::handleHorizontalSwipe,
+                        onToggleMute = {
+                            settingsStore.setRaw(
+                                SettingsContract.KEY_VIDEO_MUTED,
+                                if (settingsSnapshot.videoMuted) "0" else "1",
+                            )
+                        },
+                        onLike = viewModel::toggleLike,
+                        onBookmark = viewModel::toggleBookmark,
+                        onComment = { commentsTarget = it },
+                        onRepost = viewModel::repost,
+                        // Author mode: the follow button reflects this author.
+                        onFollow = { viewModel.toggleFollow(authorPubkey!!) },
+                        onZap = {
+                            viewModel.loadZaps(it.id)
+                            viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                            zapTarget = it
+                        },
+                        onRemix = ::handleRemix,
+                        onChain = {
+                            chainTarget = it
+                            viewModel.loadRemixChain(it)
+                        },
+                        // Author mode owns one scope: identity taps leave the
+                        // player for the full profile (no inner sheet — it
+                        // would re-open the shared repository and wipe this
+                        // author's window).
+                        onAuthor = {
+                            onExitAuthorMode()
+                            onOpenAuthorProfile(authorPubkey ?: note.pubkey)
+                        },
+                        isMuted = viewModel.isMuted(note.pubkey),
+                        onMuteToggle = { viewModel.toggleMute(note.pubkey) },
+                        onReport = { reason -> viewModel.report(note, reason) },
+                    )
+                }
+            }
+            BitzAuthorBar(
+                title = authorState.profile?.bestDisplayName
+                    ?: shortPubkey(authorPubkey ?: ""),
+                onBack = onExitAuthorMode,
+                onOpenAuthor = { authorPubkey?.let(onOpenAuthorProfile) },
+            )
+        } else when (mode) {
             BitzModeSetting.EXPLORE -> ExploreGrid(
                 state = state,
                 videos = videos,
@@ -545,20 +657,23 @@ fun BitzScreen(
 
         // Glass top chrome floats over the media (spec §3.7). Refresh is NOT
         // a header button: re-tap the active Bitz tab (bottom bar) or
-        // long-press it to refresh (user decision 2026-08-28).
-        BitzTopBar(
-            mode = mode,
-            onSelectMode = ::selectMode,
-            onSearch = { showSearch = true },
-            onRecord = onOpenCreate,
-        )
+        // long-press it to refresh (user decision 2026-08-28). Author mode
+        // replaces it with the back-to-profile bar above.
+        if (!authorMode) {
+            BitzTopBar(
+                mode = mode,
+                onSelectMode = ::selectMode,
+                onSearch = { showSearch = true },
+                onRecord = onOpenCreate,
+            )
+        }
         // No "New note" FAB (user decision 2026-08-29): creation entries are
         // the header record button and the feed FAB.
     }
 
-    authorTarget?.let { authorPubkey ->
+    authorTarget?.let { targetPubkey ->
         space.bitos.app.ui.profile.AuthorProfileSheetHost(
-            authorPubkey = authorPubkey,
+            authorPubkey = targetPubkey,
             state = authorState,
             feedState = state,
             homeViewModel = viewModel,
@@ -615,6 +730,8 @@ fun BitzScreen(
                 },
                 // UX-010: author taps inside the thread open the profile sheet.
                 onOpenAuthor = { authorTarget = it },
+                onDelete = viewModel::deleteNote,
+                onComment = viewModel::comment,
                 onClose = { commentsTarget = null },
             )
         }
@@ -675,6 +792,51 @@ fun BitzScreen(
 // ─────────────────────────────────────────────────────────────────────
 // Glass top chrome (spec §3.7): pills · record · search
 // ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Author-mode chrome (web `/bitz?author=` back-to-profile bar): back chevron
+ * + creator name; the name opens the full profile. Replaces the mode rail.
+ */
+@Composable
+private fun BitzAuthorBar(
+    title: String,
+    onBack: () -> Unit,
+    onOpenAuthor: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0x99000000), Color.Transparent),
+                ),
+            )
+            .statusBarsPadding()
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(
+                Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = "Back to profile",
+                tint = Color.White,
+            )
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.W800,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClickLabel = "Open full profile") { onOpenAuthor() },
+        )
+        // Status spacer keeps the bar symmetric with the leading back button.
+        Spacer(Modifier.width(48.dp))
+    }
+}
 
 @Composable
 private fun BitzTopBar(

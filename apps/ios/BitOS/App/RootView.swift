@@ -101,9 +101,10 @@ struct RootView: View {
         .onChange(of: settings.state.showProtocolNotes, initial: true) { _, enabled in
             environment.feedStore.setShowProtocolNotes(enabled)
         }
-        // Tokens are dark-only until APP-023; the persisted theme preference
-        // (SettingsStore) will drive this once light surfaces exist.
-        .preferredColorScheme(.dark)
+        // APP-018/APP-023 functional setting: the persisted theme applies
+        // app-wide (SettingsStore also syncs BitOSTheme.modeOverride so the
+        // dynamic palette tokens follow; system = follow the device).
+        .preferredColorScheme(settings.state.themeMode.colorScheme)
         .environment(environment.identityStore)
         // One shared feed store backs Home and Bitz. Own its relay lifecycle
         // at the shell so switching tabs never closes and reopens the same
@@ -131,7 +132,7 @@ struct RootView: View {
                 onClose: { chatZapPeer = nil }
             )
             .environment(environment.identityStore)
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
         }
         // UX-010: chat header → full in-app profile page.
         .sheet(item: Binding(
@@ -194,7 +195,7 @@ struct RootView: View {
         )) {
             if let deepLinkInvoice {
                 LightningInvoiceSheet(invoiceUri: deepLinkInvoice)
-                    .preferredColorScheme(.dark)
+                    .preferredColorScheme(BitOSTheme.preferredScheme)
             }
         }
     }

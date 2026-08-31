@@ -138,6 +138,22 @@
   hand-rolled JDK HTTP server (2 tests). Bridge media seam for iOS.
   Capture/import UI (CAP) feeds it next.
 
+- 2026-08-31 — Fixed Blossom uploads failing against every production
+  server (profile avatar/banner, note media, comments — all call sites):
+  the client PUT the server root instead of `PUT {server}/upload` (BUD-02)
+  and sent the auth token as a percent-encoded `["EVENT",{...}]` relay
+  frame instead of BUD-11 `Authorization: Nostr <base64url(event JSON)>`
+  (padded). Also removed the unauthenticated-probe/401-challenge round
+  trip (real servers answer the probe with 400 + `X-Reason`) — the
+  kind-24242 token is now signed upfront with `t/expiration/x/size/server`
+  tags and human-readable content, mirroring the working web client; iOS
+  now accepts 200 and 201. Shared core gained `Blossom.uploadUrl`,
+  `Blossom.authorizationHeaderValue`, Base64url codec and tolerant
+  challenge parsing (base64url or legacy percent-encoded); Android/iOS
+  uploaders + tests updated, full app typechecks (Swift 6 strict) and all
+  tests green. Verified live against blossom.primal.net: 200 +
+  hash parity.
+
 - 2026-08-27 — CAP-005 + PUB media path end-to-end: import → publish sheets
   on both apps (GetContent / PhotosPicker, bounded reads, caption, staged
   progress); `publishMediaNote` on both publishers; kind-22 round-trip

@@ -23,12 +23,30 @@ class NotificationExtractorTest {
 
     @Test
     fun extractsReplyMentionReactionRepost() {
+        // Marker-tagged thread → reply on the reply marker id.
         val reply = NotificationExtractor.extract(
-            event(1, listOf(listOf("e", targetId), listOf("p", me)), "nice post"), me,
+            event(
+                1,
+                listOf(
+                    listOf("e", "20cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a", "", "root"),
+                    listOf("e", targetId, "", "reply"),
+                    listOf("p", me),
+                ),
+                "nice post",
+            ),
+            me,
         )!!
         assertEquals(NotificationKind.REPLY, reply.kind)
         assertEquals(targetId, reply.targetEventId)
         assertEquals("nice post", reply.summary)
+
+        // Plain-e note (no markers) is a standalone mention quoting that note
+        // (web `mention` parity: open the quoted origin, not the mention).
+        val quoteMention = NotificationExtractor.extract(
+            event(1, listOf(listOf("e", targetId), listOf("p", me)), "look at this"), me,
+        )!!
+        assertEquals(NotificationKind.MENTION, quoteMention.kind)
+        assertEquals(targetId, quoteMention.targetEventId)
 
         val mention = NotificationExtractor.extract(
             event(1, listOf(listOf("p", me)), "hey ${"2d".repeat(8)} check this"), me,
@@ -40,11 +58,52 @@ class NotificationExtractorTest {
             event(7, listOf(listOf("e", targetId), listOf("p", me)), "+"), me,
         )!!
         assertEquals(NotificationKind.REACTION, reaction.kind)
+        assertEquals(targetId, reaction.targetEventId)
+
+        // Negative reactions never notify (web `isPositiveReaction` parity).
+        assertNull(NotificationExtractor.extract(
+            event(7, listOf(listOf("e", targetId), listOf("p", me)), "-"), me,
+        ))
 
         val repost = NotificationExtractor.extract(
             event(6, listOf(listOf("e", targetId), listOf("p", me)), ""), me,
         )!!
         assertEquals(NotificationKind.REPOST, repost.kind)
+        assertEquals(targetId, repost.targetEventId)
+    }
+
+    @Test
+    fun extractsGenericReposts() {
+        // NIP-18 kind 16 with an e tag → repost on that id.
+        val tagged = NotificationExtractor.extract(
+            event(16, listOf(listOf("e", targetId), listOf("p", me)), "{}"), me,
+        )!!
+        assertEquals(NotificationKind.REPOST, tagged.kind)
+        assertEquals(targetId, tagged.targetEventId)
+
+        // Kind 16 without e tags embeds the target event JSON.
+        val embedded = NotificationExtractor.extract(
+            event(16, listOf(listOf("p", me)), "{\"id\":\"$targetId\",\"kind\":1,\"pubkey\":\"$other\"}"), me,
+        )!!
+        assertEquals(NotificationKind.REPOST, embedded.kind)
+        assertEquals(targetId, embedded.targetEventId)
+    }
+
+    @Test
+    fun zapTargetsPreferSecondETag() {
+        // Receipts carry the request's own `e` first; the zapped note second.
+        val otherTarget = "30cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val zap = NotificationExtractor.extract(
+            event(9735, listOf(listOf("p", me), listOf("e", targetId), listOf("e", otherTarget)), ""), me,
+        )!!
+        assertEquals(NotificationKind.ZAP, zap.kind)
+        assertEquals(otherTarget, zap.targetEventId)
+
+        // Single-e receipts still resolve.
+        val single = NotificationExtractor.extract(
+            event(9735, listOf(listOf("p", me), listOf("e", targetId)), ""), me,
+        )!!
+        assertEquals(targetId, single.targetEventId)
     }
 
     @Test

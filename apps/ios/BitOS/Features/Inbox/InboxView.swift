@@ -86,7 +86,7 @@ struct InboxView: View {
                     store.setAccount(environment.identityStore.account?.pubkeyHex)
                 }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     @ViewBuilder
@@ -540,7 +540,7 @@ private struct RawEventSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 }
 

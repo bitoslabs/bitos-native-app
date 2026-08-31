@@ -320,7 +320,7 @@ struct HomeView: View {
         .sensoryFeedback(.impact, trigger: likeTick) { _, _ in
             settings.state.hapticEnabled
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     /// Modifier chain split into named stages — one giant expression times
@@ -456,7 +456,7 @@ struct HomeView: View {
                     onSeen: { environment.storiesStore.markSeen($0) },
                     onClose: { environment.storiesStore.openViewer(nil) }
                 )
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(BitOSTheme.preferredScheme)
             }
         }
     }

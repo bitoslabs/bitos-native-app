@@ -89,7 +89,7 @@ struct VideoPreviewScreen: View {
             }
             .padding(BitOSTheme.Spacing.lg)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear(perform: setup)
         .onDisappear {
             player?.pause()

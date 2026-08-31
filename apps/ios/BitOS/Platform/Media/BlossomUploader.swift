@@ -2,9 +2,10 @@ import BusinessCore
 import CryptoKit
 import Foundation
 
-/// Blossom (BUD-02) uploader: hash → challenge → signed kind-24242 auth →
-/// PUT bytes → verify the returned hash matches the local one. Hash mismatch
-/// is blocking and security-visible (PUB-002/006).
+/// Blossom (BUD-02/11) uploader: hash → signed kind-24242 auth → Base64url
+/// `Authorization: Nostr` header → `PUT {server}/upload` → verify the
+/// returned hash matches the local one. Hash mismatch is blocking and
+/// security-visible (PUB-002/006).
 struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see FrameworkBusinessCoreClient
 
     struct UploadFailure: Error { let message: String }
@@ -31,25 +32,13 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         let localHash = sha256Hex(bytes)
         let account = await identity.account
         guard let account else { throw UploadFailure(message: "signing refused") }
+        // BUD-02: uploads live at {server}/upload; the auth token expires in
+        // 10 minutes (signed upfront — production servers reject the legacy
+        // unauthenticated probe with 400, never the 401 challenge).
+        let endpoint = bridge.blossomUploadUrl(serverUrl: serverUrl)
+        let expiration = nowSeconds + 600
 
-        var request = URLRequest(url: URL(string: serverUrl)!)
-        request.httpMethod = "PUT"
-        request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
-        request.httpBody = bytes
-
-        // 1. Unauthenticated PUT -> expect a 401 challenge.
-        let (emptyData, firstResponse) = try await URLSession.shared.data(for: request)
-        guard let http = firstResponse as? HTTPURLResponse else { throw UploadFailure(message: "no response") }
-        if http.statusCode == 200 {
-            return try verified(from: String(data: emptyData, encoding: .utf8), localHash: localHash, mime: mimeType, size: bytes.count)
-        }
-        guard http.statusCode == 401 else { throw UploadFailure(message: "server rejected upload: \(http.statusCode)") }
-        guard let challenge = http.value(forHTTPHeaderField: "WWW-Authenticate") else {
-            throw UploadFailure(message: "server sent no auth challenge")
-        }
-
-        // 2. Compose + sign the kind-24242 auth event with the challenge's expiration.
-        let expiration = bridge.blossomChallengeExpiration(headerValue: challenge)?.int64Value ?? (nowSeconds + 600)
+        // 1. Compose + sign the kind-24242 auth event.
         guard let authId = bridge.composeUploadAuthEventId(
             authorPubkey: account.pubkeyHex,
             serverUrl: serverUrl,
@@ -69,15 +58,17 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
             signatureHex: signature
         ) else { throw UploadFailure(message: "auth header rejected") }
 
-        // 3. Authenticated PUT.
-        var authed = URLRequest(url: URL(string: serverUrl)!)
+        // 2. Authenticated PUT /upload (BUD-02: 201 new, 200 already stored).
+        var authed = URLRequest(url: URL(string: endpoint)!)
         authed.httpMethod = "PUT"
         authed.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        authed.setValue(localHash, forHTTPHeaderField: "X-SHA-256")
         authed.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         authed.httpBody = bytes
         let (data, response) = try await URLSession.shared.data(for: authed)
-        guard let http2 = response as? HTTPURLResponse, http2.statusCode == 200 else {
-            throw UploadFailure(message: "upload failed")
+        guard let http2 = response as? HTTPURLResponse, http2.statusCode == 200 || http2.statusCode == 201 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw UploadFailure(message: "upload failed: \(code)")
         }
         return try verified(from: String(data: data, encoding: .utf8), localHash: localHash, mime: mimeType, size: bytes.count)
     }

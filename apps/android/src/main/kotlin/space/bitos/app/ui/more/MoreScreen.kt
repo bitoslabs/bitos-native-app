@@ -75,6 +75,8 @@ fun MoreScreen(
     onOpenLightning: () -> Unit,
     /** APP-015: opens the Saved (bookmarks) page. */
     onOpenSaved: () -> Unit = {},
+    /** APP-014: opens the zap wallet (sent ledger + received receipts). */
+    onOpenZaps: () -> Unit = {},
     onClose: () -> Unit,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
@@ -205,23 +207,15 @@ fun MoreScreen(
         GroupLabel("Account")
         HubCard {
             MoreTile(icon = Icons.Outlined.Person, label = "Profile", caption = "Your identity", onClick = onOpenProfile)
+            // APP-014: same wallet surface the You page opens (menu item +
+            // "Sats zapped" pill) — one entry point per identity, no fork.
+            MoreTile(icon = Icons.Outlined.Bolt, label = "Zap wallet", caption = "Sent & received sats", onClick = onOpenZaps)
             MoreTile(icon = Icons.Outlined.Settings, label = "Settings", caption = "Preferences & relays", onClick = onOpenSettings)
         }
 
         GroupLabel("Library")
         HubCard {
             MoreTile(icon = Icons.Outlined.Bookmark, label = "Saved", caption = "Your bookmarked notes", onClick = onOpenSaved)
-        }
-
-        GroupLabel("Coming soon")
-        HubCard {
-            MoreTile(
-                icon = Icons.Outlined.Bolt,
-                label = "Zap ledger",
-                caption = "Wallet page (APP-014)",
-                onClick = {},
-                enabled = false,
-            )
         }
 
         GroupLabel("About")

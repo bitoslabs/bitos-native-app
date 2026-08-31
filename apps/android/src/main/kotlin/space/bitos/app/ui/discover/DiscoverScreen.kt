@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -91,7 +92,11 @@ fun DiscoverScreen(
         )
 
         if (input.isBlank()) {
-            TopicChips { topic -> input = "#$topic" }
+            TopicChips(
+            onTopic = { topic -> input = "#$topic" },
+            isFollowed = { homeViewModel?.isHashtagFollowed(it) == true },
+            onToggleFollow = { homeViewModel?.toggleHashtagFollow(it) },
+        )
         } else {
             SearchResults(
                 state = state,
@@ -124,7 +129,11 @@ fun DiscoverScreen(
 }
 
 @Composable
-private fun TopicChips(onTopic: (String) -> Unit) {
+private fun TopicChips(
+    onTopic: (String) -> Unit,
+    isFollowed: (String) -> Boolean = { false },
+    onToggleFollow: (String) -> Unit = {},
+) {
     LazyColumn(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = BitOSSpacing.screen),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
@@ -151,9 +160,21 @@ private fun TopicChips(onTopic: (String) -> Unit) {
                         )
                     }
                     Spacer(Modifier.width(BitOSSpacing.md))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text("#$topic", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
                         Text("Search across connected relays", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+                    }
+                    val followed = isFollowed(topic)
+                    TextButton(
+                        onClick = { onToggleFollow(topic) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            if (followed) "Following ✓" else "Follow",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W700,
+                            color = if (followed) BitOSColors.textTertiary else BitOSColors.primary,
+                        )
                     }
                 }
             }
@@ -373,7 +394,12 @@ private fun PeopleTab(
 
 /** APP-010 Hashtags tab: ranked hits from the shared fan-in. */
 @Composable
-private fun HashtagsTab(hits: List<space.bitos.core.feed.SearchResults.HashtagHit>, onPick: (String) -> Unit) {
+private fun HashtagsTab(
+    hits: List<space.bitos.core.feed.SearchResults.HashtagHit>,
+    onPick: (String) -> Unit,
+    isFollowed: (String) -> Boolean = { false },
+    onToggleFollow: (String) -> Unit = {},
+) {
     LazyColumn(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             horizontal = BitOSSpacing.screen,
@@ -397,12 +423,25 @@ private fun HashtagsTab(hits: List<space.bitos.core.feed.SearchResults.HashtagHi
                         fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
                         color = BitOSColors.primary,
                     )
-                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.width(BitOSSpacing.sm))
                     Text(
                         "${'$'}{hit.count} note" + if (hit.count == 1) "" else "s",
                         style = MaterialTheme.typography.labelSmall,
                         color = BitOSColors.textTertiary,
+                        modifier = Modifier.weight(1f),
                     )
+                    val followed = isFollowed(hit.tag)
+                    TextButton(
+                        onClick = { onToggleFollow(hit.tag) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            if (followed) "Following ✓" else "Follow",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
+                            color = if (followed) BitOSColors.textTertiary else BitOSColors.primary,
+                        )
+                    }
                 }
             }
         }

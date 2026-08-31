@@ -26,18 +26,29 @@ class BlossomTest {
             nowSeconds = 1_710_000_000,
         )!!
         assertEquals(Blossom.AUTH_KIND, auth.kind)
-        assertEquals("", auth.content)
+        // BUD-11: the token content MUST be human-readable.
+        assertEquals("Upload Blob", auth.content)
         assertEquals(
             listOf(
                 listOf("t", "upload"),
                 listOf("expiration", "1710000600"),
                 listOf("x", hash),
                 listOf("size", "123456"),
+                listOf("server", "cdn.example"),
             ),
             auth.tags,
         )
-        // Signature attachment: the frame is URL-encoded into the auth header,
-        // never published to relays.
+        // The auth token is the signed event object `{...}` under Base64url.
+        val eventJson = composer.signedEventJson(auth, "aa".repeat(64))!!
+        val header = Blossom.authorizationHeaderValue(eventJson)!!
+        assertTrue(header.startsWith("Nostr "), header)
+        val token = header.removePrefix("Nostr ")
+        // Padded Base64url only (servers reject unpadded tokens).
+        assertTrue(token.matches(Regex("^[A-Za-z0-9_-]+={0,2}$")), token)
+        val decodedJson = Blossom.decodeBase64(token)!!.decodeToString()
+        assertEquals(eventJson, decodedJson)
+        assertTrue(decodedJson.contains("\"kind\":24242"), decodedJson)
+        // Signature attachment: the event parses back through the relay frame.
         val frame = composer.publishMessage(auth, "aa".repeat(64))!!
         val decoded = NostrEventCodec.decodeClientEventFrame(
             Sha256EventHasher, frame, RelayUrl.parse("wss://relay.test"),
@@ -114,12 +125,40 @@ class BlossomTest {
     }
 
     @Test
+    fun uploadEndpointsJoinUnderBud02() {
+        assertEquals("https://cdn.example/upload", Blossom.uploadUrl("https://cdn.example"))
+        assertEquals("https://cdn.example/upload", Blossom.uploadUrl("https://cdn.example/"))
+        assertEquals("https://cdn.example/upload", Blossom.uploadUrl("https://cdn.example/upload"))
+        assertEquals("http://127.0.0.1:3000/upload", Blossom.uploadUrl("http://127.0.0.1:3000"))
+    }
+
+    @Test
+    fun base64UrlRoundTrip() {
+        // RFC 4648 test vector + the UTF-8 boundary cases the token hits (JSON with tags).
+        assertEquals("eyJhIjoxfQ==", Blossom.encodeBase64("""{"a":1}""".encodeToByteArray()))
+        assertTrue(Blossom.decodeBase64("eyJhIjoxfQ")!!.decodeToString().startsWith("""{"a"""))
+        assertEquals("AAA=", Blossom.encodeBase64(byteArrayOf(0, 0)))
+        assertTrue(Blossom.decodeBase64("AA")!!.contentEquals(byteArrayOf(0)))
+        // Standard alphabet and padding are tolerated on decode.
+        assertTrue(Blossom.decodeBase64("AA==")!!.contentEquals(byteArrayOf(0)))
+        // Malformed payloads are rejected, not crashed on.
+        assertNull(Blossom.decodeBase64("A"))
+        assertNull(Blossom.decodeBase64("AB==C"))
+        assertNull(Blossom.decodeBase64("!"))
+    }
+
+    @Test
     fun challengeParsingAndEncodingRoundTrip() {
+        // BUD-11 servers challenge with Base64url JSON.
+        val token = Blossom.encodeBase64("""{"tags":[["expiration","1710000600"]]}""".encodeToByteArray())
+        assertEquals(1_710_000_600, Blossom.challengeExpiration("Nostr $token"))
+        // The legacy percent-encoded form stays parseable.
         val encoded = Blossom.encodeQueryComponent("""{"tags":[["expiration","1710000600"]]}""")
         assertEquals(1_710_000_600, Blossom.challengeExpiration("Nostr $encoded"))
         // '+' decodes as space per query rules.
         assertEquals("{a b}", Blossom.decodeQueryComponent("%7Ba+b%7D"))
         assertNull(Blossom.challengeExpiration("Bearer xyz"))
         assertNull(Blossom.challengeExpiration("Nostr %zz-bad"))
+        assertNull(Blossom.challengeExpiration("Nostr !!"))
     }
 }

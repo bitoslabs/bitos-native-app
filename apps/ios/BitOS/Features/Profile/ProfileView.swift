@@ -121,7 +121,7 @@ struct ProfileView: View {
             .environment(environment)
             .environment(identity)
             .environment(settings)
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
         }
         .sheet(item: $store.preview) { preview in
             ConfirmIdentitySheet(

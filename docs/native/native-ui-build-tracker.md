@@ -52,26 +52,26 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-001 | Boot, Auth & Identity §3.1 | W1 | ◐ | ◐ | ✅ | create/import/backup gate exist; app icon + native launch live; branded boot splash (animated gradient border, no spin) disabled at app entry — native system splash → shell directly for fast access (user decision 2026-08-28), component retained (APP-022); missing: switcher overlay polish, masked key echo, guest entry |
 | APP-002 | Onboarding carousel §3.2 | W1 | ✅ | ✅ | ✅ | 4-page carousel live both platforms over shared `OnboardingContent` (legacy copy verbatim, icon tokens); animated dots + step counter + Next/Get Started/Skip; `hasOnboarded` first-launch gate |
 | APP-003 | App shell §3.3 | W1 | ◐ | ◐ | n/a | tabs+retention done; re-tap-to-top/refresh on Home+Bitz shipped (X pattern: scroll-to-top, at-top → refresh); badges, lazy mount audit remain |
-| APP-004 | Home feed surface §3.4 | W1 | ✅ | ✅ | ✅ | V1 complete: wordmark/apps-grid header, underline tabs + live counts, X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain |
+| APP-004 | Home feed surface §3.4 | W1 | ✅ | ✅ | ✅ | V1 complete: wordmark/apps-grid header, underline tabs (Following note-count label removed 2026-08-30), X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain |
 | APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
 | APP-006 | Stories §3.6 | W3 | ◐ | ◐ | ✅ | bar + full-screen viewer + seen persistence live BOTH platforms (2026-08-29) over shared kind-30315 rules (TTL/expiration, ≤12/author, d-tag replace; 7 common tests); create card + own-first ordering, composer + mass publish remain |
 | APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share) + delivered: rendition+mirror failover chain, 3-tab set (Explore/Following/For you — legacy Flutter parity; W2 trending/zapped REMOVED by user decision, wires migrate to default), the Flutter-parity load-more walk (fresh-playable budget, duplicate pages auto-continue, per-tab windows) and the legacy-Flutter Explore tab UX (caption+author+likes tile scrim, blurred sensitive tiles, trailing spinner tile, footer buttons REMOVED); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), PoW/remix/sound/split chips, dwell ranking |
-| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation, caret-accurate @-autocomplete: cursor-tracking iOS field + focus/query-gated Android panel, bare `@` lists all candidates) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, legacy toolbar order, tinted error banner and selection-aware Android field; PoW gated while picks pending |
-| APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ◐ | comments exist; X-style threading, naddr resolution, live deltas, reply-bar options remain |
+| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation, caret-accurate @-autocomplete: cursor-tracking iOS field + focus/query-gated Android panel, bare `@` lists all candidates) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, web-parity Solar toolbar order (image · video · URL · GIF · poll · PoW · CW · hashtag · emoji), tinted error banner and selection-aware Android field; PoW gated while picks pending |
+| APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ✅ | remainder: [W] comment refresh control; zap-live chip on root card rides APP-004 W2 |
 | APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
-| APP-011 | Messages/DMs §3.11 | W2 | ◐ | ◐ | ✅ | NIP-17/44 E2EE DMs end-to-end BOTH platforms (2026-08-28): conversation list + encrypted chat bubbles + send over shared `Nip44` v2 + `SecureDmComposer` (gift-wrap w/ throwaway key); new-chat dialog, media bodies, delivery ticks, NIP-04 fallback remain; calls/groups W3 |
+| APP-011 | Messages/DMs §3.11 | W2 | ◐ | ◐ | ✅ | NIP-17/44 E2EE DMs end-to-end BOTH platforms (2026-08-28): conversation list + encrypted chat bubbles + send over shared `Nip44` v2 + `SecureDmComposer` (gift-wrap w/ throwaway key); 2026-08-30 parity wave: mock-complete UX both platforms — generic NIP-17 previews + unread dots, message-requests section (decline-wins), read cursors (bounded 512) + Chats shell badge (unread+requests, "9+"), delivery ticks (relay OK), encryption banner + E2EE header line, new-chat by npub, chat ⚡ zap chip (→ author zap pipeline); attachments/reactions/calls/groups + NIP-04 fallback remain |
 | APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
 | APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page at legacy-Flutter parity (2026-08-29): edge-to-edge hero (gradient + hex pattern + scrims, avatar glow band), glass controls, identity block (cyan verified, npub copy chip, chips), Edit pill + ⋯ menu, completion card w/ progress bar, stats (K/M), about chips, pinned tabs w/ real content (cards/strips/3-col grid/empty states); view+edit live; follower sheets, banner lightbox, other-user action row remain |
 | APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; 2026-08-29 LNURL wire fix (invoicable again): bare 9734 object in the `nostr` param (was a relay frame servers reject), bech32 `lnurl` param, LUD-16 local-part case preserved + percent-encoded, provider `reason`/`errors` surfaced, weak `nostrPubkey` degrades to plain pay (fixture lnurl-pay-v1.json); LUD-21 verify poll remains; NWC W4 |
 | APP-015 | Bookmarks §3.15 | W1 | ✅ | ✅ | ✅ | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test |
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
-| APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero + multi-account switch row + Following/Relays stat tiles + tile groups (live surfaces only) + honest coming-soon tiles + meta rows; remains: QR dialog, wallet tile (APP-014), Communities/Meme tiles (W3/W4), bookmark page link (APP-015) |
-| APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), theme/font/accent application (APP-023), i18n strings (APP-024) |
+| APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero (npub copy + identity-QR dialog) + multi-account switch row + Following/Relays stat tiles + live tile groups (Discover, Lightning, Profile, Zap wallet APP-014, Settings, Saved APP-015) + About/Privacy/Terms meta rows; remains: Communities/Meme tiles (W3/W4) |
+| APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), i18n strings (APP-024) |
 | APP-019 | Studio §3.19 | W4 | ◐ | ◐ | ◐ | camera/trim/publish live (CAP/PUB); editor W4 |
 | APP-020 | Static pages §3.20 | W1 | ✅ | ✅ | ✅ | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens |
 | APP-021 | Trending sounds §3.21 | W3 | ☐ | ☐ | ☐ | needs shared-sounds (kind 30078) |
 | APP-022 | Component library §4 | W1 | ◐ | ◐ | n/a | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain |
-| APP-023 | Tokens & theming §2 | W1 | ◐ | ◐ | n/a | dark tokens live; launch chain (system splash + boot splash) forced dark-only in BOTH system modes to match the dark-only shell — light-mode light-splash→black-shell cut fixed; light mode, accents, font scale remain (restore #F4F7FB splash + light launch art when light tokens land) |
+| APP-023 | Tokens & theming §2 | W1 | ✅ | ✅ | n/a | dark + light tokens live; theme (light/dark/system), accent palette, font scale and compact mode now APPLY app-wide from the shared settings contract (Android: `BitOSTheme(darkTheme, accentColorHex)` + dynamic `BitOSColors` palette + system-bar contrast sync; iOS: `SettingsStore` syncs `BitOSTheme.modeOverride`/`accentOverride` live and the shell/sheets drive `preferredColorScheme`); launch chain (system splash + boot splash) stays dark-branded (dark-only art); reduced-motion/high-contrast toggles remain (§2.6) |
 | APP-024 | i18n en/lo §7 | W1 | ☐ | ☐ | n/a | string tables + wiring |
 
 ---
@@ -180,10 +180,10 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] Root fetch + comments list + reply publish (W0)
 - [x] Root resolution: shared `EventRefs` parses note1/nevent1/naddr1 (± `nostr:`, TLV author + ≤4 relay hints, lenient-but-strict → null on invalid) + `requestFilter` (by id / newest NIP-33 `#d` version); Discover search treats a ref query as a root fetch and opens the thread sheet on arrival (both platforms)
 - [x] X-style threading: shared `ThreadAssembly` — NIP-10 root/parent anchors (`rootAndParent`: markers win, legacy first/last positional), chronological children, depth cap 8 flattening, cycle guard (visited-set; unreachable cycles surface as orphans), missing-parent replies surface at top level flagged, window ≤200 — `FeedNote` carries `threadRootId`/`threadParentId` from the projection; Android `threads` state + indented rows w/ conversation rail + orphan note; iOS `ThreadDisplayItem` via bridge `threadItemsJson` (stable JSON shape) + same rendering
-- [x] Root action row full (reply count, like+count, repost+count, zap "N · 21K" sats, ⋯ raw-note dialog) — live via shared `NoteTally`; share/delete-own kind-5 remain
+- [x] Root action row full (reply count, like+count, repost+count, zap "N · 21K" sats, ⋯ raw-note dialog) — live via shared `NoteTally`; 2026-08-30: ⋯ menu completed both platforms — Share (shared `NoteShare` copy through `NoteShare.text`/bridge `noteShareText` → ACTION_SEND chooser / `ShareSheet`) + Copy link (`https://njump.me/<id>`); delete-own kind-5 shipped with the raw dialog
 - [x] Live deltas: shared `NoteTally`/`NoteTallies` (kind-7/6/9735 merge + summed zap msat, ≤32 bounded window; 3 common tests) — thread REQ widened to kinds [1,7,6,9735]; root card AND reply rows show live counts on both platforms — replies render inline reactions/zaps+sats deltas
 - [x] Reply bar: media chips, GIF/URL/gallery/PoW options, participant p-tags — legacy `_ThreadReplyBar` parity on BOTH platforms: shared `NoteComposer.replyTags` (ALWAYS both NIP-10 markers `['e',root,'','root']+['e',target,'','reply']`; participant p-tags = target author + target's p-tags, 64-hex, deduped, ≤16; content entities/hashtags via `ComposerRules.deriveTags` merged per kind — 4 common tests + bridge `replyTagsJson` contract test) and the reply rides the tags-aware note path (`publishNoteWith`/`publishPowNoteWith` Android, `publishNote(tags:)`/`publishPowNote(tags:)` iOS) with PoW mined over the byte-exact template; bar UI = reply-to chip on sub-replies (rows get a Reply action that retargets), `AttachmentPreviewRow` (new shared component both platforms, spec §4: 64dp tiles, cover thumbnails, video play surface, bottom-left GIF badge, always-visible ✕), options row gallery · GIF · URL · PoW ("N bits" label), pill input (radius 20, 1–4 lines) + circular send with spinner; gallery picks upload hash-verified through Blossom BEFORE the URL joins the reply (legacy order); GIFs embed through the APP-008 picker; clear-on-ACK only (legacy clears on success)
-- [ ] States: loading/invalid/not-found + contextual back (ref search covers invalid: no REQ issued; not-found copy pending)
+- [x] States: loading/invalid/not-found + contextual back — 2026-08-30: shared `ThreadOpen.classify` (bech32 + bare 64-hex fallback) + `ThreadOpenCopy` (locked wording both platforms via bridge `threadOpen*` getters); Android `RefOpenPlate` dialog in FeedScreen + iOS `RefOpenPlate` alert in HomeView: Invalid = no REQ issued, Loading polls 3 s (20×150 ms) → thread sheet, NotFound offers Retry + Add relay (applies nevent TLV hints through the platform relay manager); ref search path unchanged
 - [x] TEST: `ThreadAssemblyTest` (10: markers, positional forms, chronological order, cycle×2 fixtures, orphan surfacing, depth cap, window bound) + `EventRefTest` (5: note/nevent/naddr round-trips built with the internal TLV encoder, invalid → null, request filters); shared lanes 230/230
 
 ### APP-010 — Discover (spec §3.10)
@@ -199,13 +199,15 @@ Wave legend per spec §8. W0 foundation is prior work.
 
 ### APP-011 — Messages/DMs (spec §3.11) — W2 (DMs), W3 (calls/groups)
 
-- [x] Conversation list: rows (avatar/preview/time), empty + connecting states — shared `DmGrouping` (4 tests); search, tabs All/Unread, delivery ticks remain
-- [ ] New-chat dialog: paste npub, following picks, recents; `?to=` deep link
-- [x] Chat: header (avatar + short pubkey, back), encrypted bubbles (sent right/accent, received left/surface, timestamps), BitosPlainTextField input + Send — NIP-44 v2 + NIP-17 end-to-end; day dividers, delivery ticks, NIP-05 remain
+- [x] Conversation list: rows (avatar/preview/time), empty + connecting states — shared `DmGrouping` (4 tests); 2026-08-30: generic NIP-17 previews ("New message" — never plaintext outside the chat), unread dots, NIP-17 privacy banner; search, tabs All/Unread remain
+- [x] Message requests section: "N waiting — accepting never reveals you read them" — shared `DmPresentation.isAccepted` (decline wins; sending auto-accepts) + accept/decline actions; unread from non-accepted peers counts via request badge, not conversation unread
+- [x] Read model: per-peer read cursors persisted bounded 512 (SharedPreferences / UserDefaults), opening a conversation marks read via shared `DmPresentation.nextCursor` (never rewinds); unreadCount feeds the Chats shell badge ("9+" cap) both platforms with shell-level account wiring
+- [x] New-chat dialog: paste npub, following picks, recents; `?to=` deep link (npub/hex paste with validation via shared npub codec — "Not a valid npub or hex pubkey."; following picks + `?to=` deep link remain)
+- [x] Chat: header (avatar + short pubkey/name → profile, back), encrypted bubbles (sent right/accent, received left/surface, timestamps), BitosPlainTextField input + Send — NIP-44 v2 + NIP-17 end-to-end; 2026-08-30: "End-to-end encrypted · NIP-17" header line, encryption banner ("decrypt only in this app — never in a push notification"), ⚡ Zap chip → author zap pipeline, delivery ticks (`sending…` → `· delivered` via relay-OK absorption); day dividers, NIP-05 remain
+- [x] SHARED: NIP-44 v2 (`Nip44` — ECDH conv key + HKDF + pure-Kotlin ChaCha20 + power-of-two padding + HMAC-SHA256, 8 tests) + NIP-17 gift-wrap (`SecureDmComposer` — rumor→seal→wrap with throwaway key + randomized timestamps, 5 tests) + presentation rules (`DmPresentation` — unread/preview/acceptance/cursor, 5 tests; bridge `dmUnreadCount`/`dmPreviewLine`/`dmIsAccepted`/`dmNextCursor` locked by bridge contract tests) so SwiftUI and Compose derive identical state — 323/323 shared lanes green; NIP-04 fallback + protocol negotiation follow
+- [x] TEST: encrypt/decrypt vectors (NIP-44/ECDH fixtures); DmPresentation common suite + bridge contract tests; delivery state machine (relay-OK absorption covered by repo/store behavior; Android `DmRepositoryTest` cursor/acceptance round-trips via prefs port)
 - [ ] Message body: media detection (image/video/file), inline player, lightbox, links, encrypted indicator
 - [ ] Input bar: autogrow, attach image/file, emoji, send, previews + progress
-- [x] SHARED: NIP-44 v2 (`Nip44` — ECDH conv key + HKDF + pure-Kotlin ChaCha20 + power-of-two padding + HMAC-SHA256, 8 tests) + NIP-17 gift-wrap (`SecureDmComposer` — rumor→seal→wrap with throwaway key + randomized timestamps, 5 tests) — 323/323 shared lanes green; NIP-04 fallback + protocol negotiation follow
-- [ ] TEST: encrypt/decrypt vectors; delivery state machine
 - [ ] W3 calls (post SOC-010 review): ringer, panel, quality HUD, outcomes
 - [ ] W3 groups NIP-29: list/join/messages/members/admin/leave
 
@@ -237,6 +239,9 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] About expandable (2026-08-29): 5-line clamp, Show more at 240 chars
 - [x] Completion card (2026-08-29): sparkles tile, "{score}% · N steps to go", primary→cyan 8-pt progress bar, missing-field pill chips, Finish pill
 - [x] Sticky tabs (2026-08-29): pinned 48-pt rail (page-background — no surface block, underline indicator, outline/15 divider) — Notes/Replies (replying-to strip)/Bitz (3-col grid, video scrim+play)/Reposts (reposted-by header) with per-tab empty states; profile note cards (author row, 6-line clamp + show more, media row/video tile, hairline dividers)
+  - 2026-08-30 refactor: profile note cards replaced by the shared `FeedNoteCard` (`apps/android/.../ui/components/FeedNoteCard.kt`) — the exact home-feed card (NIP-27 rich body, media lightbox, polls, like·comment·repost·zap·bookmark, ⋯ mute/report menu). Own + author profile pages now render notes identically to the home feed; the bespoke `ProfileNoteCard` was removed.
+  - 2026-08-30 web-stats parity (both platforms): own-profile stats row gains "Sats zapped" (tap → zap wallet) from the new shared `AuthorZaps` rule (local sent records + verified received 9735 receipts — never unverifiable relay totals) via bridge `authorZapsSummary`; own profile gains a 5th "Zaps" tab (merged ledger entries, newest first, ⚡ empty state) reusing the wallet ledger row (Android `ZapLedgerRow` / iOS `ZapLedgerRowView` + shared `ZapsView.decodeLedgerRows`). Author profile adds "Zapped by you" stat + "Zaps" tab (4th) from local `SentZapLedger` records filtered by `recipientPubkey == authorPubkey`.
+  - 2026-08-31 web Bitz-tab parity (both platforms): profile Bitz-tab tiles now open the shared reels player scoped to that author (web `ProfileBitzGrid` → `/bitz?author=<npub>#bitz=<id>` parity) — same player page with the full action rail, deep-linked at the tapped tile (chronological order so the tapped video is first), author window paged by the profile's own REQ (page 5, `until` cursor). Author chrome replaces the mode rail with a back-to-profile bar (creator name opens the full profile); mode switching, side-swipe, new-note splicing and global-session freshness are all bypassed in author mode. Android: `BitzScreen(authorPubkey, initialNoteId, onExitAuthorMode)` hosted as a `BackHandler`-guarded overlay in `BitOSApp.kt` (`authorBitzTarget`), reusing the app-wide `authorRepository`. iOS: `BitzView` gains the same params + private `AuthorStore`; hosted via `.fullScreenCover(item: $bitzPlayerTarget)` from both `ProfileView` and `AuthorProfilePage` (`BitzPlayerTarget`). In author mode an inner author tap exits the player and opens the full profile page (the shared author repo/sheet would be re-scoped and wipe the window).
 - [x] Guest state (browse-first panels); npub/hex param resolution for the author sheet
 - [x] Editor as a legacy page + step flow (2026-08-29): full-screen page with back header + full-width Save pill (not a bottom sheet); source sheet step ("Take photo" via UIImagePickerController / TakePicturePreview, or library picker) → center-crop (EXIF-normalized on iOS) → Blossom upload → live preview header (`_ProfileHeaderPreview` parity: banner 120 + change pill, hex avatar 88 + 28-pt camera chip); Save gated while an upload is in flight (sign only after upload+hash); full 8-field kind-0 form retained
 - [ ] W2: Media gallery + heatmap, Liked/Pinned/Zaps tabs, mini identity; banner lightbox; follower/following sheets; other-user action row parity (Follow·Message·Zap + mute/block/report)
@@ -275,10 +280,10 @@ Wave legend per spec §8. W0 foundation is prior work.
 
 ### APP-017 — More/You hub (spec §3.17)
 
-- [ ] Guest freedom card; profile hero (avatar, name, npub chip, QR, stat tiles)
-- [ ] Tile groups Explore/Library/Account per spec
-- [ ] Account switch row → switcher sheet
-- [ ] Meta rows About/Privacy/Terms
+- [x] Guest freedom card; profile hero (avatar, name, npub chip, QR dialog, stat tiles) — both platforms
+- [x] Tile groups Explore/Library/Account per spec — all tiles live surfaces: Discover, Lightning & Zaps (settings deep-link), Profile, Zap wallet (APP-014 full-screen cover, 2026-08-31), Settings, Saved (APP-015); the dead "coming soon" zap-ledger tile is gone — never dead links
+- [x] Account switch row → switcher sheet (branded switch overlay)
+- [x] Meta rows About/Privacy/Terms (APP-020 static covers)
 
 ### APP-018 — Settings hub + sections (spec §3.18)
 
@@ -288,7 +293,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] `relays` manager: shared `RelayListContract` (bounded ≤16, url-unique, ≥1 role; versioned JSON wire; NIP-65 r-tag projection incl. omitted-marker = read+write) + `composeRelayList` — CRUD + per-relay read/write toggles + live status dots + kind-10002 publish to the set's write relays; edits apply to the live pool immediately (add/remove connect/disconnect sockets); persisted managed set boots the pool on cold start (defaults when empty/corrupt); adapter-contract tests both platforms
 - [x] Algorithm ranking (origin `algorithm-plan.md` parity): shared `AlgorithmContract` + `FeedRanking.rank` drive the live For-You order on both platforms (presets/freshness/signal weights + mix bar; off = chronological; Following always chronological)
 - [x] Privacy v3: sensitive-media default (drives SensitiveCover) + blocked-users manage (kind-10004 head, unblock publishes a new head; blocked set filters feeds + inbox)
-- [ ] Theme/font/accent application app-wide (APP-023); language strings (APP-024)
+- [x] Theme/font/accent application app-wide (APP-023): light/dark/system + accent palette + font scale apply live from the shared settings contract on both platforms; language strings (APP-024) remain
 
 #### APP-018a — Flutter parity audit (source: `~/Desktop/bitos/bitos-nostr-flutter`, audited 2026-08-28)
 
@@ -363,6 +368,129 @@ push toggles), relays live status dots, zap sats display.**
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-08-31 — APP-008 composer page polish (user report, Android).
+  Found: the shell Scaffold already pads the system bars, and
+  CreateNoteScreen's own Scaffold/TopAppBar re-applied the status-bar
+  inset — the double padding was the extra gap above the "Create Post"
+  header (title also used `headlineMedium` instead of the M3 top-bar
+  `titleLarge`). Fixed by zeroing the page's window insets (shell
+  supplies them) + `titleLarge`. The shell tab bar no longer renders
+  under the composer page (`bottomBar` gated on `!showCreateNote`).
+  Toolbar moved to web Composer order (image · video · URL · GIF ·
+  poll · PoW · CW · hashtag · emoji) on bundled Solar Linear drawables
+  (icon-system.md path: gallery/video-library/link-circle/film-frame/
+  chart/shield-check/eye-closed/hashtag/emoji-funny-circle — PoW drops
+  the QR glyph and CW the speaker-off glyph for the web's shield-check
+  and eye-off semantics). Video attach is new: `video/*` picker rides
+  the existing Blossom upload-before-sign path with its real MIME,
+  composer shows a play tile (no decode), and the feed already renders
+  bare video links with the fullscreen player. Two follow-up bugs
+  found in the same pass: the PoW sheet dismissed itself on open
+  (PowCard's initial invalidation fires `onMined(null)`, which the
+  page also treated as "close" — now only a completed mine closes it,
+  the toolbar badge shows a Mined difficulty only, and any template
+  edit voids a completed nonce outside the sheet, matching PowCard's
+  one-template rule), and the poll composer rendered as a bare column
+  outside any surface — it now presents in a ModalBottomSheet like the
+  emoji/PoW/GIF sheets. Follow-up UX pass on the same surface (user
+  ask): the PoW panel now rides INLINE under the input field (web
+  `showPow` parity — the toolbar toggles it, a restored draft with a
+  difficulty reopens it, no bottom sheet; a completed mine no longer
+  needs to close anything), and PowCard's state rows weight their text
+  so Mine/Retry/Cancel/Clear keep intrinsic width and never wrap; the
+  exhausted state gained a warning glyph, the attempt count and the
+  stuck target ("No nonce found after 5,000,000 hashes at N bits"),
+  with locale-grouped hash counts in the mining row too. No
+  shared-core change.
+
+- 2026-08-31 — APP-008 composer parity pass mirrored to iOS (user ask:
+  "you implement iOS and Android?"). The iOS page already had the two
+  shell-level fixes for free (fullScreenCover hides the tab bar; inline
+  nav title), so this pass ports the rest: toolbar now renders through
+  `AppIcons.image(for:)` — seven new bundled Solar imagesets
+  (hashtag/emoji-funny/eye-closed/chart/film/link-circle/shield-check,
+  same official SVGs as Android) replace the raw SF Symbols and the
+  text "GIF" glyph, in the web order with the QR→shield-check and
+  speaker→eye-closed semantic swaps; video attach rides the existing
+  PhotosPicker (a second `.videos` picker) with play tiles for local
+  and remote video URLs; the PoW panel moved from a `.sheet` to INLINE
+  under the field (toolbar toggle, restored drafts reopen it, `.id`
+  keys the card to the mining template per its own contract, template
+  edits void a completed nonce — iOS previously had no such void and
+  could publish a stale nonce); PollComposerSheet Cancel now dismisses
+  instead of tripping the publish validator with an empty question
+  (spurious error banner); PowCard's exhausted state matches Android
+  (warning glyph, grouped counts, "at N bits", fixedSize buttons).
+  Verification note: the strict Swift-6 fallback gate was red on the
+  in-flight APP-023 theme work — `BitOSTheme` color statics had landed
+  as `static var` (the dynamic `UIColor` closure makes `let`
+  behavior-identical) and `modeOverride` needed the set-once-at-launch
+  `nonisolated(unsafe)` annotation; both fixed, gate now passes with
+  zero errors. A later script run failed in the Gradle step on
+  `Blossom.kt` (`ushr`/`and` unresolved, all three iOS Kotlin targets)
+  — that file was being edited concurrently during this session and is
+  not part of this change.
+
+- 2026-08-31 — APP-017 zap wallet tile (both platforms; closes the last
+  live-surface gap on the More hub). The wallet page itself (APP-014
+  ZapsScreen/ZapsView) had shipped reachable only from the You page (⋯
+  menu item + "Sats zapped" pill) while the More hub still rendered a
+  disabled "Coming soon → Zap ledger" placeholder. Both hubs now expose
+  a live Zap wallet tile in the Account group, directly under Profile
+  (Android MoreScreen `onOpenZaps` → the existing `showZaps` overlay in
+  BitOSApp; iOS MoreView `showZaps` fullScreenCover presenting ZapsView)
+  and the placeholder section is removed. One wallet surface, three
+  entry points (You menu, You stat pill, More tile) — no fork.
+
+- 2026-08-30 — APP-009 thread states + ⋯ menu parity (both platforms;
+  mock `app-10-note-thread`, closes the last §3.9 checkbox). SHARED: new
+  `ThreadOpen` (classify: bech32 via `EventRefs.parse` + bare 64-char
+  lowercase-hex fallback → `EventRef`) and `ThreadOpenCopy` (locked
+  plate copy: loading/invalid/not-found titles+bodies, Retry, Add
+  relay) — bridge `eventRefParse` now classifies through it (hex ids
+  accepted) + 8 new `threadOpen*` getters; 4 common tests (hex accept,
+  non-hex/non-bech32 reject, uppercase-hex reject, copy locked).
+  ANDROID: `RefOpenPlate` (Loading/Invalid/NotFound) in FeedScreen —
+  invalid never issues a REQ, loading polls `refNote` 20×150 ms then
+  opens the sheet, not-found offers Retry + Add relay (applies nevent
+  TLV hints through the new `relayManager` param). IOS: `RefOpenPlate`
+  enum + alert in HomeView (same state machine, copy via `ThreadCopy`
+  facade, Add relay through `environment.relayManager`); CommentSheet
+  root-card ⋯ menu gains Share (`noteShareText` → `ShareSheet`) and
+  Copy link (`njump.me/<id>`) matching Android. Deferred: [W] comment
+  refresh control; live zap chip on root card rides APP-004 W2;
+  orphan-chip wording ("orphan → top-level" vs current fallback label).
+  Verified: shared androidHost green, Android compileDebugKotlin green,
+  iOS xcframework rebuilt + SwiftUI typecheck clean.
+
+- 2026-08-30 — APP-011 DM mock-parity wave (both platforms; mock
+  `app-06-inbox-activity-messages`). SHARED: new `DmPresentation`
+  (unread count, generic NIP-17 preview line, request acceptance with
+  decline-wins, monotonic read cursor; 5 common tests) and bridge
+  exposure `dmUnreadCount`/`dmPreviewLine`/`dmIsAccepted`/`dmNextCursor`
+  (+ bridge contract tests) — iOS now consumes the same rulebook as
+  Android instead of mirroring it in Swift (removed the interim
+  `DmRules` enum that violated the shared-rules architecture). ANDROID:
+  `DmRepository` grew read cursors (SharedPreferences port, bounded
+  512), accept/decline requests, delivery tracking (relay-OK absorption
+  → `· delivered`, 10 s watcher) and list/request partitioning; DmScreen
+  got unread dots, generic previews, message-requests header, new-chat
+  npub dialog, NIP-17 banners, ⚡ zap chip (→ ZapContent author zap) and
+  profile routing; Chats shell badge (unread + requests, "9+" cap).
+  IOS: `DmStore` rewritten around the bridge rules (cursors +
+  UserDefaults bounded 512, accept/decline, OK-receipt delivery);
+  `DmScreen` rebuilt to parity (avatar/name rows, unread dots, requests
+  section, new-chat sheet with npub validation, chat header with E2EE
+  line + ⚡ Zap → ZapSheet profile mode + avatar→AuthorProfileSheet,
+  encryption banner, delivery suffixes); RootView gains the Chats badge
+  and shell-level `dmStore.setAccount`; stale Wave-2 `ChatsView.swift`
+  removed. Found+fixed en route: Kotlin Int bridges as Swift Int32
+  (`Int(...)` clamp); `interestSetCreatedAt` returns `KotlinLong?`
+  (HashtagFollowsStore — unblock via `int64Value`). Validation: shared
+  `testAndroidHostTest` green; Android `compileDebugKotlin` green; iOS
+  framework rebuilt + SwiftUI type-check clean. Next: attachments/
+  reactions/calls/groups remain W2/W3 per checklist.
 
 - 2026-08-29 — Comment sheet legacy-UI completion (user request, both
   platforms; layered on the reply-bar work that landed in f0fba90).
@@ -2053,6 +2181,47 @@ fixed, what's next.
   the tests target's phase IDs 905/906, malformed stories fileRefs, and
   three build files missing from the app sources phase); audit script
   confirms zero duplicate/dangling IDs and `xcodebuild -list` opens again.
+
+- 2026-08-30 — Dropdown popover rows full web-MenuItem parity (user ask:
+  rounded option items like the web version). Web source of truth
+  (`bitos-nostr-web` Popover/MenuItem/MenuDivider Svelte): panel =
+  rounded-xl p-1.5 + shadow-pop; each row = rounded-lg (8) pill whose
+  fill appears on hover (white 6% normal, error tone destructive).
+  iOS `AppMenu.swift`: rows now carry a `Radius.sm` press pill
+  (`AppMenuItemPressStyle` — press = web hover; destructive keeps the red
+  label but its bg only fills on press, web rest state is flat), divider
+  inset 12→6 to span the padded content width like web's 1px rule.
+  Android `AppMenu.kt`: `AppMenuDropdown` drops Material3
+  `DropdownMenuItem` (square edge-to-edge highlight) for custom
+  `AppMenuPillRow`s — rounded-8 clip, press fill via interactionSource
+  (no ripple; the fill is the feedback), 6 dp inset column, shared
+  `AppMenuRowContent` with the sheet row. Author-profile pages migrated
+  onto the shared popover (they were the only raw menus left): Android
+  `AuthorProfileScreen` raw DropdownMenu → `AppMenuDropdown` (report
+  flagged destructive, mute icon flips with state); iOS
+  `AuthorProfilePage` system `Menu` → `AppMenuPresentation` popover via
+  the ProfileView anchor-button pattern. All other popover call sites
+  (Home/Inbox/Bitz/Profile more-menus) inherit the pill styling through
+  the shared components. Verified: iOS `swiftc -typecheck` clean for all
+  touched files (sole remaining error is the concurrent session's
+  in-flight FeedStore.swift, untouched here); Android Kotlin frontend
+  clean for all touched files (module build fails only on the concurrent
+  session's `TextOverflow.Middle` in SecretKeyField/OnboardingScreen,
+  untouched here). No behavior changes — styling + component routing
+  only.
+
+- 2026-08-30 — Follow-up (user report): popover WIDTH must auto-fit the
+  text labels like the old dropdowns, not render as one fixed card.
+  iOS `AppMenuLayout.width` (fixed 248) replaced by
+  `width(entries:)` — widest label measured with fixed 13/w600 font
+  metrics + row chrome (icon slot, 12×2 row padding, 6×2 card inset),
+  clamped to [208, 280] (floor = web Popover `min-w-52`). Keeps the
+  clamp math pure/deterministic; AppMenuTests updated (floor assert +
+  fit/cap cases; bounds sanity-checked against real SF metrics: 16×M →
+  253, 60×M → cap 280). Android dropdown column gains the same
+  `defaultMinSize(minWidth = 208.dp)` floor under its intrinsic width
+  so short menus stay uniform-width. Android compile green; iOS
+  typecheck green for touched files.
 
 - 2026-08-28 — Merged `app-flutter-feature.md` + `app-web-feature.md` +
   `DESIGN_SYSTEM.md` into `app-unified-feature-spec.md` (APP epic, 24

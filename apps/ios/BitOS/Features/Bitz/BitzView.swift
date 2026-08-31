@@ -332,12 +332,12 @@ struct BitzView: View {
             BitzSearchOverlay(onOpenNote: openInPlayer, onDismiss: { showSearch = false })
                 .environment(environment)
                 .environment(settings)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(BitOSTheme.preferredScheme)
         }
         // T4: record entry → the Create hub (camera/import capture flow).
         .fullScreenCover(isPresented: $showCreateHub) {
             CreateView()
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(BitOSTheme.preferredScheme)
         }
     }
 
@@ -384,7 +384,7 @@ struct BitzView: View {
     private var decoratedRoot: some View {
         rootContent
         .background(BitOSTheme.background)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear {
             if mode == nil { mode = settings.state.bitzMode }
             startPathMonitor()

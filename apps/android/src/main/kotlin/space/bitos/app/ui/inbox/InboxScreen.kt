@@ -1,14 +1,18 @@
 package space.bitos.app.ui.inbox
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,19 +20,16 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import kotlinx.coroutines.delay
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,12 +41,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.data.feed.AuthorRepository
 import space.bitos.app.data.feed.NotificationRepository
@@ -55,35 +67,62 @@ import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.feed.CommentThreadSheet
 import space.bitos.app.ui.feed.HomeViewModel
-import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
-import space.bitos.app.ui.components.PubkeyAvatar
+import space.bitos.app.ui.components.HexShape
+import space.bitos.app.ui.components.RingHexAvatar
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
-import space.bitos.app.ui.profile.AuthorProfileContent
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.core.feed.FeedNote
-import space.bitos.core.model.NotificationActivity
 import space.bitos.core.model.NotificationFilters
 import space.bitos.core.model.NotificationGroup
-import space.bitos.core.model.NotificationItem
 import space.bitos.core.model.NotificationKind
 import space.bitos.core.model.NotificationSections
-import space.bitos.core.model.NotificationTab
+import space.bitos.core.model.ProfileMetadata
+import space.bitos.core.model.SentZapRecord
 import java.time.LocalDate
-import java.time.ZoneId
 
 /**
- * Activity surface (SOC-005 + APP-012): verified events targeting the
- * account — day-sectioned, iOS-style aggregated rows ("A and N others…"),
- * tabs/chips per the shared filter rules, zap sats, origin-note previews,
- * per-type mutes, visible-mark-read (1.4 s), deep links (thread/author)
- * and a per-row ⋯ menu (mark read / copy id / raw JSON).
+ * Activity surface (SOC-005 + APP-012, mock 06 `scr-activity` parity):
+ * verified events targeting the account rendered as full-width bordered
+ * rows — avatar stacks with "+N" plates, amber zap sats, a Follow-back
+ * pill, mention quote cards with highlighted @handles, local sent-zap
+ * (zap-out) rows from the APP-014 ledger with PAID chips, day sections
+ * (Today / Yesterday / Earlier) and the mock chip filter row
+ * (All / Zaps / Likes / Follows / Mentions). Visible-mark-read (1.4 s),
+ * blocked-author filtering, per-type mutes, search, mark-all-read and the
+ * long-press row menu ride the same shared rules as before.
  */
+
+/** Mock 06 chip row: one-of-five source filter (single-select). */
+private enum class InboxFilter(val label: String, val icon: ImageVector? = null) {
+    ALL("All"),
+    ZAPS("Zaps", AppIcons.Zap),
+    LIKES("Likes", AppIcons.Heart),
+    FOLLOWS("Follows"),
+    MENTIONS("Mentions"),
+}
+
+/** Unified section row: relay-verified groups + local sent-zap rows. */
+private sealed interface ActivityRow {
+    val newestAt: Long
+
+    data class Group(val group: NotificationGroup) : ActivityRow {
+        override val newestAt: Long get() = group.newestAt
+    }
+
+    data class SentZap(val record: SentZapRecord) : ActivityRow {
+        override val newestAt: Long get() = record.createdAt
+    }
+}
+
+/** Day bucket after title collapse (mock: Today / Yesterday / Earlier). */
+private data class DisplaySection(val title: String?, val rows: List<ActivityRow>)
+
 @androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun InboxScreen(
@@ -102,11 +141,10 @@ fun InboxScreen(
     val feedState by homeViewModel.state.collectAsStateWithLifecycle()
     val publishState by notePublisher.state.collectAsStateWithLifecycle()
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(NotificationTab.ALL) }
-    var activity by rememberSaveable { mutableStateOf(NotificationActivity.NONE) }
+    var filter by rememberSaveable { mutableStateOf(InboxFilter.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
-    var muteMenu by remember { mutableStateOf(false) }
+    var headerMenu by remember { mutableStateOf(false) }
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
     var authorTarget by remember { mutableStateOf<String?>(null) }
 
@@ -127,48 +165,36 @@ fun InboxScreen(
         }
     }
 
+    val profiles = feedState.profiles
+
+    // APP-014 zap-out rows: the sent side is a local ledger, reloaded on
+    // every entry to the tab (records only change from other surfaces).
+    val sentZaps = remember { homeViewModel.sentZapRecords() }
+
+    val sections = remember(state.items, state.readIds, filter, query, profiles, feedState.blocked, sentZaps) {
+        displaySections(state, filter, query, profiles, feedState.blocked, sentZaps)
+    }
+
+    // Fetch previews for whatever targets are visible (groups + zap-out).
+    LaunchedEffect(state.items, sentZaps) {
+        notifications.requestOrigins(
+            state.items.mapNotNull { it.targetEventId }.distinct() +
+                sentZaps.mapNotNull { it.targetNoteId }.distinct(),
+        )
+    }
+
     Column(Modifier.fillMaxSize().background(BitOSColors.background)) {
-        Row(
-            Modifier.fillMaxWidth()
-                .padding(
-                    start = BitOSSpacing.screen,
-                    end = BitOSSpacing.screen,
-                    top = BitOSSpacing.md,
-                    bottom = BitOSSpacing.sm,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Activity", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.weight(1f))
-            Box {
-                IconButton(onClick = { muteMenu = true }) {
-                    Icon(
-                        AppIcons.Filter,
-                        contentDescription = "Mute notification types",
-                        tint = if (state.mutedKinds.isEmpty()) BitOSColors.textSecondary else BitOSColors.primary,
-                    )
-                }
-                AppMenuDropdown(
-                    expanded = muteMenu,
-                    onDismissRequest = { muteMenu = false },
-                    entries = NotificationKind.entries.map { kind ->
-                        AppMenuEntry.Item(
-                            AppMenuItem(
-                                id = kind.name,
-                                label = muteLabel(kind),
-                                checked = kind !in state.mutedKinds,
-                            ),
-                        )
-                    },
-                    onSelect = { id ->
-                        NotificationKind.entries.firstOrNull { it.name == id }?.let { kind ->
-                            val next = if (kind in state.mutedKinds) state.mutedKinds + kind else state.mutedKinds - kind
-                            notifications.setMutedKinds(next)
-                        }
-                    },
-                )
-            }
-        }
+        InboxHeader(
+            mutedKinds = state.mutedKinds,
+            menuExpanded = headerMenu,
+            onToggleMenu = { headerMenu = it },
+            onMarkAllRead = notifications::markAllRead,
+            onOpenSearch = { searchOpen = true },
+            onToggleMute = { kind ->
+                val next = if (kind in state.mutedKinds) state.mutedKinds - kind else state.mutedKinds + kind
+                notifications.setMutedKinds(next)
+            },
+        )
         when {
             !state.hasAccount -> InboxPlaceholder(
                 title = "Activity needs an identity",
@@ -176,60 +202,48 @@ fun InboxScreen(
             )
             else -> {
                 // APP-012 search row: name/content contains over the shared rule.
-                NotificationSearchRow(
-                    query = query,
-                    onQueryChange = { query = it },
-                    expanded = searchOpen,
-                    onToggle = { searchOpen = !searchOpen || query.isNotEmpty() },
-                )
-                InboxTabs(
-                    state = state,
-                    selected = tab,
-                    onSelect = { tab = it },
-                )
-                ActivityChips(selected = activity, onSelect = { chip ->
-                    activity = if (activity == chip) NotificationActivity.NONE else chip
-                })
-                val filtered = remember(state.items, state.readIds, tab, activity, query, feedState.profiles, feedState.blocked) {
-                    state.items.filter { item ->
-                        item.authorPubkey !in feedState.blocked && // APP-012 blocked-author filtering (kind-10004 head)
-                            NotificationFilters.tabMatches(item.kind, tab, isRead = item.id in state.readIds) &&
-                            NotificationFilters.activityMatches(item.kind, activity) &&
-                            NotificationFilters.queryMatches(
-                                item,
-                                query,
-                                feedState.profiles[item.authorPubkey]?.bestDisplayName,
-                            )
-                    }
+                if (searchOpen || query.isNotEmpty()) {
+                    NotificationSearchRow(
+                        query = query,
+                        onQueryChange = { query = it },
+                        expanded = searchOpen,
+                        onToggle = { searchOpen = !searchOpen || query.isNotEmpty() },
+                    )
                 }
-                // Fetch previews for whatever targets are visible.
-                LaunchedEffect(state.items) {
-                    notifications.requestOrigins(state.items.mapNotNull { it.targetEventId }.distinct())
-                }
-                if (state.items.isEmpty()) {
-                    InboxPlaceholder(
-                        title = if (state.loaded) "No notifications yet" else "Connecting to relays…",
-                        message = if (state.loaded) {
+                FilterChipRow(selected = filter, onSelect = { filter = it })
+                when {
+                    state.items.isEmpty() && sentZaps.isEmpty() && state.offline -> InboxOfflineCard(
+                        onReconnect = notifications::reconnect,
+                    )
+                    state.items.isEmpty() && sentZaps.isEmpty() -> InboxPlaceholder(
+                        title = if (state.connected) "No notifications yet" else "Loading activity from relays…",
+                        message = if (state.connected) {
                             "Notifications appear when someone replies, mentions you, reacts, reposts or zaps you."
                         } else {
                             "Your activity feed fills once a relay connection succeeds."
                         },
                     )
-                } else if (filtered.isEmpty()) {
-                    InboxPlaceholder(
+                    sections.isEmpty() -> InboxPlaceholder(
                         title = "Nothing in this filter",
                         message = if (query.isNotBlank()) {
-                            "No notifications match “${query.trim()}”. Clear the search or switch tabs to see more."
+                            "No notifications match “${query.trim()}”. Clear the search or switch filters to see more."
                         } else {
-                            "Switch tabs or clear the activity chips to see all notifications."
+                            "Switch filters to see other activity."
                         },
                     )
-                } else {
-                    GroupedNotificationList(
-                        filtered = filtered,
+                    else -> ActivityList(
+                        sections = sections,
                         state = state,
+                        profiles = profiles,
+                        following = feedState.following,
                         sensitiveShowByDefault = sensitiveShowByDefault,
                         onMarkRead = notifications::markRead,
+                        onFollow = homeViewModel::toggleFollow,
+                        onToggleMute = { kind ->
+                            val next = if (kind in state.mutedKinds) state.mutedKinds - kind else state.mutedKinds + kind
+                            notifications.setMutedKinds(next)
+                        },
+                        onLoadMore = notifications::loadMore,
                         onOpenThread = { note -> threadTarget = note },
                         onOpenAuthor = { pubkey -> authorTarget = pubkey },
                     )
@@ -269,121 +283,228 @@ fun InboxScreen(
     }
 }
 
+/** Mock 06 header: "Inbox" + ⋯ (mark all read · search · type filters). */
 @Composable
-private fun InboxTabs(state: NotificationUiState, selected: NotificationTab, onSelect: (NotificationTab) -> Unit) {
-    val unread = state.items.count { it.id !in state.readIds }
-    val mentions = state.items.count { it.kind == NotificationKind.MENTION }
-    val replies = state.items.count { it.kind == NotificationKind.REPLY }
-    val counts = mapOf(
-        NotificationTab.ALL to state.items.size,
-        NotificationTab.UNREAD to unread,
-        NotificationTab.MENTIONS to mentions,
-        NotificationTab.REPLIES to replies,
-    )
-    ScrollableTabRow(
-        selectedTabIndex = NotificationTab.entries.indexOf(selected),
-        edgePadding = BitOSSpacing.screen,
-        containerColor = Color.Transparent,
-        divider = {},
+private fun InboxHeader(
+    mutedKinds: Set<NotificationKind>,
+    menuExpanded: Boolean,
+    onToggleMenu: (Boolean) -> Unit,
+    onMarkAllRead: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onToggleMute: (NotificationKind) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        NotificationTab.entries.forEach { option ->
-            Tab(
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                text = {
-                    Text("${option.label()} (${counts[option] ?: 0})", fontWeight = FontWeight.SemiBold)
+        Text("Inbox", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.weight(1f))
+        Box {
+            IconButton(onClick = { onToggleMenu(true) }) {
+                Icon(AppIcons.More, contentDescription = "Inbox options", tint = BitOSColors.textPrimary)
+            }
+            AppMenuDropdown(
+                expanded = menuExpanded,
+                onDismissRequest = { onToggleMenu(false) },
+                entries = buildList {
+                    add(AppMenuEntry.Item(AppMenuItem("read-all", "Mark all read", icon = AppIcons.Check)))
+                    add(AppMenuEntry.Item(AppMenuItem("search", "Search", icon = AppIcons.Search)))
+                    add(AppMenuEntry.Divider)
+                    NotificationKind.entries.forEach { kind ->
+                        add(
+                            AppMenuEntry.Item(
+                                AppMenuItem(
+                                    id = kind.name,
+                                    label = muteLabel(kind),
+                                    checked = kind !in mutedKinds,
+                                ),
+                            ),
+                        )
+                    }
+                },
+                onSelect = { id ->
+                    when (id) {
+                        "read-all" -> onMarkAllRead()
+                        "search" -> onOpenSearch()
+                        else -> NotificationKind.entries.firstOrNull { it.name == id }?.let(onToggleMute)
+                    }
                 },
             )
         }
     }
 }
 
-private fun NotificationTab.label(): String = when (this) {
-    NotificationTab.ALL -> "All"
-    NotificationTab.UNREAD -> "Unread"
-    NotificationTab.MENTIONS -> "Mentions"
-    NotificationTab.REPLIES -> "Replies"
-}
-
-private fun NotificationActivity.label(): String = when (this) {
-    NotificationActivity.ZAPS -> "Zaps"
-    NotificationActivity.LIKES -> "Likes"
-    NotificationActivity.REPOSTS -> "Reposts"
-    NotificationActivity.FOLLOWS -> "Follows"
-    NotificationActivity.NONE -> "All"
-}
-
+/** Mock 06 chip row: All (orange) / ⚡ Zaps / ♥ Likes / Follows / Mentions. */
 @Composable
-private fun ActivityChips(selected: NotificationActivity, onSelect: (NotificationActivity) -> Unit) {
+private fun FilterChipRow(selected: InboxFilter, onSelect: (InboxFilter) -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = BitOSSpacing.screen, vertical = BitOSSpacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        listOf(NotificationActivity.ZAPS, NotificationActivity.LIKES, NotificationActivity.REPOSTS, NotificationActivity.FOLLOWS)
-            .forEach { chip ->
-                FilterChip(
-                    selected = chip == selected,
-                    onClick = { onSelect(chip) },
-                    label = { Text(chip.label()) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = BitOSColors.surface,
-                        selectedContainerColor = BitOSColors.primaryContainer,
-                    ),
-                )
+        InboxFilter.entries.forEach { option ->
+            val active = option == selected
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = if (active) BitOSColors.primary.copy(alpha = 0.14f) else BitOSColors.surface,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (active) BitOSColors.primary.copy(alpha = 0.4f) else BitOSColors.border,
+                ),
+                modifier = Modifier.clickable(onClickLabel = "Filter ${option.label}") { onSelect(option) },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    option.icon?.let { icon ->
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                    Text(
+                        option.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.W600,
+                        color = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+                    )
+                }
             }
+        }
     }
 }
 
+/** Bordered full-width rows + day headers + paging + verified-events footer. */
 @Composable
-private fun GroupedNotificationList(
-    filtered: List<NotificationItem>,
+private fun ActivityList(
+    sections: List<DisplaySection>,
     state: NotificationUiState,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
     sensitiveShowByDefault: Boolean,
     onMarkRead: (List<String>) -> Unit,
+    onFollow: (String) -> Unit,
+    onToggleMute: (NotificationKind) -> Unit,
+    onLoadMore: () -> Unit,
     onOpenThread: (FeedNote) -> Unit,
     onOpenAuthor: (String) -> Unit,
 ) {
-    val sections = remember(filtered) { NotificationSections.sections(filtered, System.currentTimeMillis() / 1000) }
     var rawJsonFor by remember { mutableStateOf<String?>(null) }
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = BitOSSpacing.screen, vertical = BitOSSpacing.sm),
-        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-    ) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         sections.forEach { section ->
-            item(key = "section-${section.epochDay}") {
-                Text(
-                    sectionTitle(section.epochDay),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = BitOSColors.textTertiary,
-                    modifier = Modifier.padding(top = BitOSSpacing.sm, bottom = BitOSSpacing.xs),
-                )
-            }
-            section.groups.forEach { group ->
-                item(key = group.id) {
-                    NotificationGroupRow(
-                        group = group,
-                        isRead = group.itemIds.all { it in state.readIds },
-                        origin = group.targetEventId?.let { state.origins[it] },
-                        sensitiveShowByDefault = sensitiveShowByDefault,
-                        onMarkRead = { onMarkRead(group.itemIds) },
-                        onOpen = {
-                            val originReady = group.targetEventId
-                                ?.let { state.origins[it] } as? OriginNoteState.Ready
-                            val note = originReady?.let { originFeedNote(group.targetEventId!!, it.note) }
-                            if (note != null) {
-                                onOpenThread(note)
-                            } else {
-                                group.actors.firstOrNull()?.let(onOpenAuthor)
-                            }
-                        },
-                        onShowRaw = {
-                            rawJsonFor = group.itemIds.firstOrNull { it in state.rawEvents }
-                                ?.let { state.rawEvents[it] }
-                        },
+            section.title?.let { title ->
+                item(key = "section-$title-${section.rows.firstOrNull()?.newestAt}") {
+                    Text(
+                        title.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.W700,
+                        letterSpacing = 1.sp,
+                        color = BitOSColors.textTertiary,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 2.dp),
                     )
                 }
+            }
+            section.rows.forEach { row ->
+                item(key = rowKey(row), contentType = "activity-row") {
+                    when (row) {
+                        is ActivityRow.Group -> {
+                            val group = row.group
+                            val isRead = group.itemIds.all { it in state.readIds }
+                            val rowActions = RowActions(
+                                isRead = isRead,
+                                targetEventId = group.targetEventId,
+                                kind = group.kind,
+                                actorPubkey = group.actors.firstOrNull(),
+                                isMuted = group.kind in state.mutedKinds,
+                                onMarkRead = { onMarkRead(group.itemIds) },
+                                // Web `openRow`: opening marks the row read.
+                                onOpen = {
+                                    if (!isRead) onMarkRead(group.itemIds)
+                                    openGroup(group, state, onOpenThread, onOpenAuthor)
+                                },
+                                onOpenAuthor = { group.actors.firstOrNull()?.let(onOpenAuthor) },
+                                onToggleMute = { onToggleMute(group.kind) },
+                                onShowRaw = {
+                                    rawJsonFor = group.itemIds.firstOrNull { it in state.rawEvents }
+                                        ?.let { state.rawEvents[it] }
+                                },
+                            )
+                            if (group.kind == NotificationKind.MENTION || group.kind == NotificationKind.REPLY) {
+                                MentionCardRow(
+                                    group = group,
+                                    preview = group.itemIds.firstOrNull()?.let { state.previews[it] },
+                                    sensitiveShowByDefault = sensitiveShowByDefault,
+                                    profiles = profiles,
+                                    actions = rowActions,
+                                )
+                            } else {
+                                GroupRow(
+                                    group = group,
+                                    origin = group.targetEventId?.let { state.origins[it] },
+                                    profiles = profiles,
+                                    following = following,
+                                    onFollow = onFollow,
+                                    actions = rowActions,
+                                )
+                            }
+                        }
+                        is ActivityRow.SentZap -> SentZapRow(
+                            record = row.record,
+                            origin = row.record.targetNoteId?.let { state.origins[it] },
+                            profiles = profiles,
+                            onOpen = { openSentZap(row.record, state, onOpenThread, onOpenAuthor) },
+                        )
+                    }
+                }
+            }
+        }
+        item(key = "paging-footer") {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                when {
+                    state.loadingMore -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 16.dp),
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = BitOSColors.textSecondary,
+                        )
+                        Text(
+                            "Loading older activity…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = BitOSColors.textSecondary,
+                        )
+                    }
+                    state.hasMore -> TextButton(
+                        onClick = onLoadMore,
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        Text("Load older notifications", fontWeight = FontWeight.W600)
+                    }
+                    else -> Text(
+                        "End of relay results",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BitOSColors.textTertiary,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Activity is built from events your relays can verify — no invented counts, no engagement theater.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = BitOSColors.textTertiary,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
@@ -401,15 +522,91 @@ private fun GroupedNotificationList(
     }
 }
 
-private fun sectionTitle(epochDay: Long): String {
-    val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone).toEpochDay()
-    return when (epochDay) {
-        today -> "Today"
-        today - 1 -> "Yesterday"
-        else -> LocalDate.ofEpochDay(epochDay).dayOfWeek.name.lowercase()
-            .replaceFirstChar { it.uppercase() }
-    }
+/** Shared long-press ⋯ menu affordance for relay-verified rows. */
+private class RowActions(
+    val isRead: Boolean,
+    val targetEventId: String?,
+    val kind: NotificationKind,
+    val actorPubkey: String?,
+    val isMuted: Boolean,
+    val onMarkRead: () -> Unit,
+    val onOpen: () -> Unit,
+    val onOpenAuthor: () -> Unit,
+    val onToggleMute: () -> Unit,
+    val onShowRaw: () -> Unit,
+)
+
+@Composable
+private fun RowMenuHost(
+    actions: RowActions,
+    expanded: Boolean,
+    onExpand: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clipboard = LocalClipboardManager.current
+    AppMenuDropdown(
+        expanded = expanded,
+        onDismissRequest = { onExpand(false) },
+        entries = buildList {
+            if (!actions.isRead) add(AppMenuEntry.Item(AppMenuItem("read", "Mark read", icon = AppIcons.Check)))
+            actions.actorPubkey?.let {
+                add(AppMenuEntry.Item(AppMenuItem("profile", "View profile", icon = AppIcons.User)))
+            }
+            if (actions.targetEventId != null) {
+                add(AppMenuEntry.Item(AppMenuItem("copy", "Copy note id", icon = AppIcons.Copy)))
+            }
+            add(AppMenuEntry.Item(AppMenuItem("raw", "Raw event JSON", icon = AppIcons.AppsGrid)))
+            add(
+                AppMenuEntry.Item(
+                    AppMenuItem(
+                        "mute",
+                        if (actions.isMuted) "Unmute this type" else "Mute this type",
+                        icon = AppIcons.Mute,
+                    ),
+                ),
+            )
+        },
+        onSelect = { id ->
+            when (id) {
+                "read" -> actions.onMarkRead()
+                "profile" -> actions.onOpenAuthor()
+                "copy" -> clipboard.setText(AnnotatedString(actions.targetEventId ?: ""))
+                "raw" -> actions.onShowRaw()
+                "mute" -> actions.onToggleMute()
+            }
+        },
+        modifier = modifier,
+    )
+}
+
+private fun rowKey(row: ActivityRow): String = when (row) {
+    is ActivityRow.Group -> "g-${row.group.id}"
+    is ActivityRow.SentZap -> "z-${row.record.id}"
+}
+
+private fun nowSeconds(): Long = System.currentTimeMillis() / 1000
+
+/** Deep link: verified origin note → thread sheet; otherwise → author. */
+private fun openGroup(
+    group: NotificationGroup,
+    state: NotificationUiState,
+    onOpenThread: (FeedNote) -> Unit,
+    onOpenAuthor: (String) -> Unit,
+) {
+    val originReady = group.targetEventId?.let { state.origins[it] } as? OriginNoteState.Ready
+    val note = originReady?.let { originFeedNote(group.targetEventId!!, it.note) }
+    if (note != null) onOpenThread(note) else group.actors.firstOrNull()?.let(onOpenAuthor)
+}
+
+private fun openSentZap(
+    record: SentZapRecord,
+    state: NotificationUiState,
+    onOpenThread: (FeedNote) -> Unit,
+    onOpenAuthor: (String) -> Unit,
+) {
+    val originReady = record.targetNoteId?.let { state.origins[it] } as? OriginNoteState.Ready
+    val note = originReady?.let { originFeedNote(record.targetNoteId!!, it.note) }
+    if (note != null) onOpenThread(note) else onOpenAuthor(record.recipientPubkey)
 }
 
 /** Thread-root note built from the verified origin preview (full content). */
@@ -426,6 +623,74 @@ private fun originFeedNote(targetEventId: String, origin: space.bitos.core.model
     isProtocolPayload = false,
 )
 
+/**
+ * Shared-rule filtering + mock chip mapping, day sections with sent-zap
+ * rows merged in, and the mock title collapse (Today / Yesterday / one
+ * "Earlier" for everything older).
+ */
+private fun displaySections(
+    state: NotificationUiState,
+    filter: InboxFilter,
+    query: String,
+    profiles: Map<String, ProfileMetadata>,
+    blocked: Set<String>,
+    sentZaps: List<SentZapRecord>,
+): List<DisplaySection> {
+    val filtered = state.items.filter { item ->
+        item.authorPubkey !in blocked && // APP-012 blocked-author filtering (kind-10004 head)
+            NotificationFilters.queryMatches(item, query, profiles[item.authorPubkey]?.bestDisplayName) &&
+            filterMatches(item.kind, filter)
+    }
+    val zapOutIncluded = filter == InboxFilter.ALL || filter == InboxFilter.ZAPS
+    // Zap-out rows are local ledger records, not notifications — an active
+    // search indexes notifications only, so they stay out of query results.
+    val zapOutRows = if (zapOutIncluded && query.isBlank()) sentZaps else emptyList()
+    val now = System.currentTimeMillis() / 1000
+    val today = NotificationSections.epochDayOf(now)
+    val oldestDay = today - (NotificationSections.MAX_SECTIONS - 1)
+
+    val byDay = LinkedHashMap<Long, MutableList<ActivityRow>>()
+    NotificationSections.sections(filtered, now).forEach { section ->
+        byDay[section.epochDay] = section.groups.map { ActivityRow.Group(it) }.toMutableList()
+    }
+    zapOutRows.forEach { record ->
+        val day = NotificationSections.epochDayOf(record.createdAt)
+        if (day in oldestDay..today + 1) {
+            byDay.getOrPut(day) { mutableListOf() }.add(ActivityRow.SentZap(record))
+        }
+    }
+
+    var previousTitle: String? = null
+    return byDay.entries
+        .sortedByDescending { it.key }
+        .map { (day, rows) ->
+            val raw = sectionTitle(day)
+            val title = if (raw == previousTitle) null else raw
+            previousTitle = raw
+            DisplaySection(title, rows.sortedByDescending { it.newestAt })
+        }
+        .filter { it.rows.isNotEmpty() }
+}
+
+/** Mock 06 titles: Today / Yesterday / Earlier (collapsed, not repeated). */
+private fun sectionTitle(epochDay: Long): String {
+    val today = LocalDate.now().toEpochDay()
+    return when (epochDay) {
+        today -> "Today"
+        today - 1 -> "Yesterday"
+        else -> "Earlier"
+    }
+}
+
+/** Mock chip → shared filter rules (Mentions covers mentions + replies). */
+private fun filterMatches(kind: NotificationKind, filter: InboxFilter): Boolean = when (filter) {
+    InboxFilter.ALL -> true
+    InboxFilter.ZAPS -> kind == NotificationKind.ZAP
+    InboxFilter.LIKES -> kind == NotificationKind.REACTION
+    InboxFilter.FOLLOWS -> kind == NotificationKind.FOLLOW
+    InboxFilter.MENTIONS -> kind == NotificationKind.MENTION || kind == NotificationKind.REPLY
+}
+
 private fun muteLabel(kind: NotificationKind): String = when (kind) {
     NotificationKind.REPLY -> "Replies"
     NotificationKind.MENTION -> "Mentions"
@@ -435,103 +700,508 @@ private fun muteLabel(kind: NotificationKind): String = when (kind) {
     NotificationKind.FOLLOW -> "Follows"
 }
 
+/** One bordered row for aggregated kinds (zap/likes/repost/follow). */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NotificationGroupRow(
+private fun GroupRow(
     group: NotificationGroup,
-    isRead: Boolean,
     origin: OriginNoteState?,
-    sensitiveShowByDefault: Boolean,
-    onMarkRead: () -> Unit,
-    onOpen: () -> Unit,
-    onShowRaw: () -> Unit,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
+    onFollow: (String) -> Unit,
+    actions: RowActions,
 ) {
-    val clipboard = LocalClipboardManager.current
     var menuExpanded by remember { mutableStateOf(false) }
-
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = BitOSColors.surface,
-        modifier = Modifier.clickable(onClick = onOpen),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(BitOSSpacing.base), verticalAlignment = Alignment.CenterVertically) {
-            if (!isRead) {
-                Box(
-                    Modifier.size(4.dp).background(BitOSColors.primary, RoundedCornerShape(2.dp)),
-                )
-                Spacer(Modifier.width(BitOSSpacing.sm))
-            }
-            Box { AvatarStack(group) }
-            Spacer(Modifier.width(BitOSSpacing.md))
+    Box(Modifier.fillMaxWidth().background(BitOSColors.background)) {
+        RowMenuHost(actions, menuExpanded, { menuExpanded = it }, Modifier.align(Alignment.TopEnd))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = actions.onOpen, onLongClick = { menuExpanded = true })
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            GroupLeading(group, profiles)
             Column(Modifier.weight(1f)) {
                 Text(
-                    groupTitleLine(group),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.W600,
-                    color = group.kind.tint(),
+                    groupTitle(group, profiles, originIsBitz(origin)),
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (group.sampleSummary.isNotBlank() && group.kind != NotificationKind.REPOST && group.kind != NotificationKind.FOLLOW) {
+                groupSubtitle(group, origin)?.let { subtitle ->
                     Text(
-                        group.sampleSummary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = BitOSColors.textSecondary,
-                        maxLines = 2,
+                        subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
-                OriginPreview(origin, group, sensitiveShowByDefault)
+            }
+            GroupTrailing(group, following, onFollow)
+        }
+        if (!actions.isRead) {
+            UnreadStripe(kindTint(group.kind))
+        }
+        RowDivider()
+    }
+}
+
+/** The mock 3 dp left accent bar marking an unread row. */
+@Composable
+private fun BoxScope.UnreadStripe(tint: Color) {
+    Spacer(
+        Modifier
+            .fillMaxHeight()
+            .width(3.dp)
+            .background(tint)
+            .align(Alignment.CenterStart),
+    )
+}
+
+@Composable
+private fun BoxScope.RowDivider() {
+    HorizontalDivider(
+        modifier = Modifier.align(Alignment.BottomCenter),
+        thickness = 1.dp,
+        color = BitOSColors.border,
+    )
+}
+
+/** Avatar stack (zap/likes/repost) or single verified avatar (follow). */
+@Composable
+private fun GroupLeading(group: NotificationGroup, profiles: Map<String, ProfileMetadata>) {
+    if (group.kind == NotificationKind.FOLLOW) {
+        val actor = group.actors.firstOrNull()
+        RingHexAvatar(
+            pubkey = actor ?: "00".repeat(32),
+            size = 40,
+            label = actor?.let { profiles[it]?.bestDisplayName },
+            imageUrl = actor?.let { profiles[it]?.picture },
+            verified = actor?.let { profiles[it]?.nip05 } != null,
+        )
+        return
+    }
+    if (group.actors.isEmpty()) {
+        // Anonymous zap receipts: an amber bolt plate stands in for actors.
+        HexKindPlate(tint = BitOSColors.zap) {
+            Icon(AppIcons.Zap, contentDescription = "Zaps", tint = BitOSColors.zap, modifier = Modifier.size(16.dp))
+        }
+        return
+    }
+    val withPlate = group.actorCount > 3
+    val actors = if (withPlate) group.actors.take(2) else group.actors.take(3)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        actors.forEachIndexed { index, actor ->
+            Box(
+                Modifier
+                    .offset(x = if (index == 0) 0.dp else (-8).dp)
+                    .zIndex((actors.size - index).toFloat()),
+            ) {
+                RingHexAvatar(
+                    pubkey = actor,
+                    size = 40,
+                    label = profiles[actor]?.bestDisplayName,
+                    imageUrl = profiles[actor]?.picture,
+                    verified = index == 0 && profiles[actor]?.nip05 != null,
+                )
+            }
+        }
+        if (withPlate) {
+            HexCountPlate(count = group.actorCount - actors.size, modifier = Modifier.offset(x = (-8).dp))
+        }
+    }
+}
+
+/** Dim hex tile used for the anonymous-zap bolt plate. */
+@Composable
+private fun HexKindPlate(tint: Color, content: @Composable () -> Unit) {
+    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(HexShape()).background(tint.copy(alpha = 0.4f)))
+        Box(
+            Modifier.size(36.dp).clip(HexShape()).background(BitOSColors.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
+}
+
+/** Mock "+12" hex plate for aggregated actors beyond the shown stack. */
+@Composable
+private fun HexCountPlate(count: Int, modifier: Modifier = Modifier) {
+    Box(modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(HexShape()).background(BitOSColors.border))
+        Box(
+            Modifier.size(36.dp).clip(HexShape()).background(BitOSColors.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "+$count",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.W700,
+                color = BitOSColors.textSecondary,
+            )
+        }
+    }
+}
+
+/** Trailing affordance per kind: bolt / heart / repost icon / follow pill. */
+@Composable
+private fun GroupTrailing(
+    group: NotificationGroup,
+    following: Set<String>,
+    onFollow: (String) -> Unit,
+) {
+    when (group.kind) {
+        NotificationKind.ZAP -> Icon(
+            AppIcons.Zap,
+            contentDescription = "Zap",
+            tint = BitOSColors.zap,
+            modifier = Modifier.size(18.dp),
+        )
+        NotificationKind.REACTION -> Icon(
+            AppIcons.Heart,
+            contentDescription = "Like",
+            tint = BitOSColors.like,
+            modifier = Modifier.size(18.dp),
+        )
+        NotificationKind.REPOST -> Icon(
+            AppIcons.Repost,
+            contentDescription = "Repost",
+            tint = BitOSColors.repost,
+            modifier = Modifier.size(18.dp),
+        )
+        NotificationKind.FOLLOW -> {
+            val actor = group.actors.firstOrNull()
+            when {
+                actor == null -> Unit
+                actor in following -> Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.Transparent,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border),
+                ) {
+                    Text(
+                        "Following ✓",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.W700,
+                        color = BitOSColors.textTertiary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
+                else -> Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = BitOSColors.textPrimary,
+                    modifier = Modifier.clickable(onClickLabel = "Follow back") { onFollow(actor) },
+                ) {
+                    Text(
+                        "Follow back",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.W700,
+                        color = BitOSColors.background,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
+                    )
+                }
+            }
+        }
+        else -> Unit
+    }
+}
+
+/** Zap-out row (APP-014): dimmed local-ledger record with a PAID chip. */
+@Composable
+private fun SentZapRow(
+    record: SentZapRecord,
+    origin: OriginNoteState?,
+    profiles: Map<String, ProfileMetadata>,
+    onOpen: () -> Unit,
+) {
+    val name = profiles[record.recipientPubkey]?.bestDisplayName ?: shortPubkey(record.recipientPubkey)
+    val excerpt = (origin as? OriginNoteState.Ready)?.note?.excerpt?.takeIf { it.isNotBlank() }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .alpha(0.8f)
+            .background(BitOSColors.background),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                AppIcons.Zap,
+                contentDescription = "Zap sent",
+                tint = BitOSColors.textTertiary,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(Modifier.weight(1f)) {
                 Text(
-                    formatTimeAgo(group.newestAt, System.currentTimeMillis() / 1000) +
-                        if (group.itemIds.size > 1) " · ${group.itemIds.size}" else "",
+                    buildAnnotatedString {
+                        append("You zapped ")
+                        withStyle(SpanStyle(fontWeight = FontWeight.W700)) { append(name) }
+                        withStyle(SpanStyle(fontWeight = FontWeight.W700)) { append(" ${formatSats(record.amountSats * 1_000)}") }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    listOfNotNull(excerpt?.let { "“$it”" }, "paid", formatTimeAgo(record.createdAt, nowSeconds())).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = Color.Transparent,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.success.copy(alpha = 0.4f)),
+            ) {
+                Text(
+                    "PAID",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.W700,
+                    color = BitOSColors.success,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+            }
+        }
+        RowDivider()
+    }
+}
+
+/** Mention/reply row (mock): header line + quoted content card (web preview
+ * parity: cleaned excerpt + media strip behind the NIP-36 cover). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MentionCardRow(
+    group: NotificationGroup,
+    preview: space.bitos.core.model.OriginNote?,
+    sensitiveShowByDefault: Boolean,
+    profiles: Map<String, ProfileMetadata>,
+    actions: RowActions,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val actor = group.actors.firstOrNull()
+    val name = actor?.let { profiles[it]?.bestDisplayName } ?: "Someone"
+    Box(Modifier.fillMaxWidth().background(BitOSColors.background)) {
+        RowMenuHost(actions, menuExpanded, { menuExpanded = it }, Modifier.align(Alignment.TopEnd))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = actions.onOpen, onLongClick = { menuExpanded = true })
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                RingHexAvatar(
+                    pubkey = actor ?: "00".repeat(32),
+                    size = 32,
+                    label = profiles[actor]?.bestDisplayName,
+                    imageUrl = actor?.let { profiles[it]?.picture },
+                )
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.W700)) { append(name) }
+                        append(if (group.kind == NotificationKind.REPLY) " replied to your note" else " mentioned you")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    formatTimeAgo(group.newestAt, nowSeconds()),
                     style = MaterialTheme.typography.labelSmall,
                     color = BitOSColors.textTertiary,
                 )
             }
-            Box {
-                androidx.compose.material3.IconButton(onClick = { menuExpanded = true }) {
-                    androidx.compose.material3.Icon(
-                        AppIcons.More,
-                        contentDescription = "Notification options",
-                        tint = BitOSColors.textSecondary,
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = BitOSColors.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        mentionAnnotated(preview?.excerpt?.takeIf { it.isNotBlank() } ?: group.sampleSummary),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.textSecondary,
+                        lineHeight = 18.sp,
                     )
+                    preview?.let { note ->
+                        if (note.mediaUrls.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            NotificationMediaStrip(note, sensitiveShowByDefault)
+                        }
+                    }
                 }
-                AppMenuDropdown(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    entries = buildList {
-                        if (!isRead) add(AppMenuEntry.Item(AppMenuItem("read", "Mark read", icon = AppIcons.Check)))
-                        group.targetEventId?.let {
-                            add(AppMenuEntry.Item(AppMenuItem("copy", "Copy note id", icon = AppIcons.Copy)))
-                        }
-                        add(AppMenuEntry.Item(AppMenuItem("raw", "Raw event JSON", icon = AppIcons.AppsGrid)))
-                    },
-                    onSelect = { id ->
-                        when (id) {
-                            "read" -> onMarkRead()
-                            "copy" -> clipboard.setText(AnnotatedString(group.targetEventId ?: ""))
-                            "raw" -> onShowRaw()
-                        }
-                    },
+            }
+        }
+        if (!actions.isRead) {
+            UnreadStripe(kindTint(group.kind))
+        }
+        RowDivider()
+    }
+}
+
+/** APP-012 media strip: ≤4 16:9 tiles behind a NIP-36 cover (APP-018 gate). */
+@Composable
+private fun NotificationMediaStrip(
+    note: space.bitos.core.model.OriginNote,
+    sensitiveShowByDefault: Boolean,
+) {
+    var revealed by remember(note.id) { mutableStateOf(false) }
+    var lightboxUrl by remember(note.id) { mutableStateOf<String?>(null) }
+    lightboxUrl?.let { url ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { lightboxUrl = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            space.bitos.app.ui.components.MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
+        }
+    }
+    if (note.contentWarning && !revealed && !sensitiveShowByDefault) {
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = BitOSColors.surfaceOverlay,
+            modifier = Modifier.clickable(onClickLabel = "Reveal sensitive media") { revealed = true },
+        ) {
+            Row(
+                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(AppIcons.Photo, contentDescription = null, tint = BitOSColors.textTertiary, modifier = Modifier.size(13.dp))
+                Text(
+                    "Sensitive content — tap to reveal",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textTertiary,
                 )
+            }
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            note.mediaUrls.forEach { url ->
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = BitOSColors.surfaceOverlay,
+                    modifier = Modifier
+                        .size(width = 56.dp, height = 32.dp)
+                        .clickable(onClickLabel = "Open media") { lightboxUrl = url },
+                ) {
+                    space.bitos.app.ui.feed.PosterImage(url = url, modifier = Modifier.fillMaxSize())
+                }
             }
         }
     }
 }
 
+/** @handles and nostr:npub tokens render in brand orange (mock parity). */
+private val mentionToken = Regex("(?:@[A-Za-z0-9_.]+|nostr:npub1[0-9a-z]+)")
+
 @Composable
-private fun AvatarStack(group: NotificationGroup) {
-    val actors = group.actors.ifEmpty { listOf("") }
-    Box {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            actors.take(3).forEachIndexed { index, actor ->
-                PubkeyAvatar(
-                    pubkey = actor.ifEmpty { "00".repeat(32) },
-                    size = if (index == 0) 40 else 28,
-                    modifier = if (index == 0) Modifier else Modifier.offset(x = (-10).dp),
-                )
+private fun mentionAnnotated(content: String): AnnotatedString = buildAnnotatedString {
+    var cursor = 0
+    for (match in mentionToken.findAll(content)) {
+        append(content.substring(cursor, match.range.first))
+        withStyle(SpanStyle(color = BitOSColors.primary)) { append(match.value) }
+        cursor = match.range.last + 1
+    }
+    append(content.substring(cursor))
+}
+
+/** "A, B and N others zapped 1,021 sats" — two named actors max (web
+ * `actorSummary` parity), bold names, amber sats. */
+@Composable
+private fun groupTitle(
+    group: NotificationGroup,
+    profiles: Map<String, ProfileMetadata>,
+    isBitz: Boolean,
+): AnnotatedString = buildAnnotatedString {
+    fun nameAt(index: Int): String? = group.actors.getOrNull(index)
+        ?.let { profiles[it]?.bestDisplayName ?: shortPubkey(it) }
+    val named = listOfNotNull(nameAt(0), nameAt(1).takeIf { group.actorCount >= 2 })
+    val others = (group.actorCount - named.size).coerceAtLeast(0)
+    fun leadActors() {
+        named.forEachIndexed { index, actor ->
+            if (index > 0) append(", ")
+            withStyle(SpanStyle(fontWeight = FontWeight.W700)) { append(actor) }
+        }
+        if (others > 0) append(" and $others other${if (others == 1) "" else "s"}")
+    }
+    when (group.kind) {
+        NotificationKind.ZAP -> {
+            if (named.isEmpty()) {
+                val count = group.itemIds.size
+                append("${count} zap${if (count == 1) "" else "s"} on your note")
+            } else {
+                leadActors()
+                append(" zapped ")
+                if (group.totalMsat > 0) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.W700, color = BitOSColors.zap)) {
+                        append(formatSats(group.totalMsat))
+                    }
+                }
             }
         }
-        KindBadge(group.kind, Modifier.align(Alignment.BottomEnd))
+        NotificationKind.REACTION -> {
+            if (named.isEmpty()) {
+                append("Someone liked your ${if (isBitz) "Bitz" else "note"}")
+            } else {
+                leadActors()
+                append(" liked your ${if (isBitz) "Bitz" else "note"}")
+            }
+        }
+        NotificationKind.REPOST -> {
+            if (named.isEmpty()) append("Someone") else leadActors()
+            append(" reposted your note")
+        }
+        NotificationKind.FOLLOW -> {
+            if (named.isEmpty()) append("Someone") else leadActors()
+            append(" followed you")
+        }
+        else -> Unit
     }
 }
+
+/** "“note excerpt” · 2m ago" — the quote rides the verified origin preview. */
+private fun groupSubtitle(group: NotificationGroup, origin: OriginNoteState?): String? {
+    val excerpt = (origin as? OriginNoteState.Ready)?.note?.excerpt?.takeIf { it.isNotBlank() }
+    val time = formatTimeAgo(group.newestAt, nowSeconds())
+    return when (group.kind) {
+        NotificationKind.FOLLOW -> time
+        NotificationKind.ZAP, NotificationKind.REACTION, NotificationKind.REPOST ->
+            if (excerpt != null) "“$excerpt” · $time" else time
+        else -> null
+    }
+}
+
+private fun originIsBitz(origin: OriginNoteState?): Boolean =
+    (origin as? OriginNoteState.Ready)?.note?.kind == 22
+
+/** Unread stripe tint per kind (zap amber, like pink, repost green…). */
+@Composable
+private fun kindTint(kind: NotificationKind): Color = when (kind) {
+    NotificationKind.ZAP -> BitOSColors.zap
+    NotificationKind.REACTION -> BitOSColors.like
+    NotificationKind.REPOST -> BitOSColors.repost
+    NotificationKind.FOLLOW -> BitOSColors.primary
+    NotificationKind.MENTION -> BitOSColors.accent
+    NotificationKind.REPLY -> BitOSColors.reply
+}
+
+/** "21 sats" / "1,234 sats" / "500 msat" for fractional amounts. */
+private fun formatSats(msat: Long): String =
+    if (msat % 1_000 == 0L) "%,d sats".format(msat / 1_000) else "%,d msat".format(msat)
 
 /** APP-012 expandable search row (name/content; shared predicate applies). */
 @Composable
@@ -544,12 +1214,12 @@ private fun NotificationSearchRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.screen)
-            .padding(bottom = BitOSSpacing.sm),
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        androidx.compose.material3.IconButton(onClick = onToggle) {
+        IconButton(onClick = onToggle) {
             Icon(
                 AppIcons.Search,
                 contentDescription = if (expanded) "Close search" else "Search notifications",
@@ -574,175 +1244,11 @@ private fun NotificationSearchRow(
             )
         }
         if (query.isNotEmpty()) {
-            androidx.compose.material3.TextButton(onClick = { onQueryChange("") }) {
+            TextButton(onClick = { onQueryChange("") }) {
                 Text("Clear", color = BitOSColors.primary, fontWeight = FontWeight.W600)
             }
         }
     }
-}
-
-@Composable
-private fun OriginPreview(origin: OriginNoteState?, group: NotificationGroup, sensitiveShowByDefault: Boolean) {
-    val state = origin ?: return
-    when (state) {
-        is OriginNoteState.Loading -> Text(
-            "Loading note…",
-            style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textTertiary,
-            maxLines = 1,
-        )
-        is OriginNoteState.Unavailable -> Text(
-            "Note unavailable",
-            style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textTertiary,
-            maxLines = 1,
-        )
-        is OriginNoteState.Ready -> {
-            var revealed by remember(state.note.id) { mutableStateOf(false) }
-            var lightboxUrl by remember(state.note.id) { mutableStateOf<String?>(null) }
-            lightboxUrl?.let { url ->
-                androidx.compose.ui.window.Dialog(onDismissRequest = { lightboxUrl = null }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-                    MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state.note.kind == 22 || (state.note.thumbUrl != null && state.note.mediaUrls.isEmpty())) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = BitOSColors.surfaceOverlay,
-                    modifier = Modifier.size(width = 44.dp, height = 28.dp),
-                ) {
-                    if (state.note.kind == 22) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            androidx.compose.material3.Icon(
-                                AppIcons.Play,
-                                contentDescription = "Video note",
-                                tint = BitOSColors.textSecondary,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.width(BitOSSpacing.sm))
-            }
-            Column {
-                Text(
-                    state.note.excerpt.ifEmpty { "Media note" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BitOSColors.textSecondary,
-                    maxLines = 2,
-                )
-                // APP-012 media strip: ≤4 16:9 tiles behind a NIP-36 cover
-                // (the APP-018 sensitive-media default gates it).
-                if (state.note.mediaUrls.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    if (state.note.contentWarning && !revealed && !sensitiveShowByDefault) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = BitOSColors.surfaceOverlay,
-                            modifier = Modifier
-                                .clickable(onClickLabel = "Reveal sensitive media") { revealed = true },
-                        ) {
-                            Row(
-                                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(
-                                    AppIcons.Photo,
-                                    contentDescription = null,
-                                    tint = BitOSColors.textTertiary,
-                                    modifier = Modifier.size(13.dp),
-                                )
-                                Text(
-                                    "Sensitive content — tap to reveal",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = BitOSColors.textTertiary,
-                                )
-                            }
-                        }
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            state.note.mediaUrls.forEach { url ->
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = BitOSColors.surfaceOverlay,
-                                    modifier = Modifier
-                                        .size(width = 56.dp, height = 32.dp)
-                                        .clickable(onClickLabel = "Open media") { lightboxUrl = url },
-                                ) {
-                                    space.bitos.app.ui.feed.PosterImage(url = url, modifier = Modifier.fillMaxSize())
-                                }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    shortPubkey(state.note.authorPubkey) + " · " + formatTimeAgo(state.note.createdAt, System.currentTimeMillis() / 1000),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = BitOSColors.textTertiary,
-                    maxLines = 1,
-                )
-            }
-        }
-        }
-    }
-}
-
-@Composable
-private fun KindBadge(kind: NotificationKind, modifier: Modifier = Modifier) {
-    val (symbol, tint) = when (kind) {
-        NotificationKind.REPLY -> "💬" to BitOSColors.reply
-        NotificationKind.MENTION -> "@" to BitOSColors.accent
-        NotificationKind.REACTION -> "❤" to BitOSColors.like
-        NotificationKind.REPOST -> "↻" to BitOSColors.repost
-        NotificationKind.ZAP -> "⚡" to BitOSColors.zap
-        NotificationKind.FOLLOW -> "+1" to BitOSColors.primary
-    }
-    Surface(shape = RoundedCornerShape(8.dp), color = tint.copy(alpha = 0.15f), modifier = modifier.size(18.dp)) {
-        Text(symbol, style = MaterialTheme.typography.labelSmall, color = tint)
-    }
-}
-
-/** "pk1…abc and 2 others liked your note" (iOS-style aggregation) with zap sats. */
-private fun groupTitleLine(group: NotificationGroup): String {
-    val verb = when (group.kind) {
-        NotificationKind.REPLY -> "replied to your note"
-        NotificationKind.MENTION -> "mentioned you"
-        NotificationKind.REACTION -> "liked your note"
-        NotificationKind.REPOST -> "reposted your note"
-        NotificationKind.ZAP -> "zapped your note"
-        NotificationKind.FOLLOW -> "followed you"
-    }
-    val sats = if (group.kind == NotificationKind.ZAP && group.totalMsat > 0) {
-        " · " + formatSats(group.totalMsat)
-    } else {
-        ""
-    }
-    if (group.kind == NotificationKind.ZAP && group.actors.isEmpty()) {
-        val count = group.itemIds.size
-        return "$count zap${if (count == 1) "" else "s"} on your note$sats"
-    }
-    val primary = group.actors.firstOrNull()?.let { shortPubkey(it) } ?: "Someone"
-    val others = group.actorCount - 1
-    val attribution = when {
-        others <= 0 -> "$primary $verb"
-        else -> "$primary and $others other${if (others == 1) "" else "s"} $verb"
-    }
-    return attribution + sats
-}
-
-/** "21 sats" / "1,234 sats" / "500 msat" for fractional amounts. */
-private fun formatSats(msat: Long): String =
-    if (msat % 1_000 == 0L) "%,d sats".format(msat / 1_000) else "%,d msat".format(msat)
-
-private fun NotificationKind.tint(): Color = when (this) {
-    NotificationKind.ZAP -> BitOSColors.zap
-    NotificationKind.REACTION -> BitOSColors.like
-    NotificationKind.REPOST -> BitOSColors.repost
-    NotificationKind.FOLLOW -> BitOSColors.primary
-    else -> BitOSColors.textPrimary
 }
 
 @Composable
@@ -754,6 +1260,41 @@ private fun InboxPlaceholder(title: String, message: String) {
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(message, style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+        }
+    }
+}
+
+/** Web parity offline card: the head REQ never answered — offer retry. */
+@Composable
+private fun InboxOfflineCard(onReconnect: () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(BitOSSpacing.xxl), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+        ) {
+            Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.error.copy(alpha = 0.12f)) {
+                Icon(
+                    AppIcons.Globe,
+                    contentDescription = null,
+                    tint = BitOSColors.error,
+                    modifier = Modifier.padding(14.dp).size(26.dp),
+                )
+            }
+            Text("Couldn't reach relays", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "We'll keep retrying, or tap below to try again.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.textSecondary,
+            )
+            Button(
+                onClick = onReconnect,
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier.padding(top = BitOSSpacing.sm),
+            ) {
+                Icon(AppIcons.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Reconnect", fontWeight = FontWeight.W700)
+            }
         }
     }
 }

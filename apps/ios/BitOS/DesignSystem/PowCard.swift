@@ -143,13 +143,14 @@ struct PowCard: View {
                         .font(.system(size: 13, weight: .semibold))
                         .buttonStyle(.bordered)
                         .tint(BitOSTheme.zap)
+                        .fixedSize()
                 }
             }
         case .mining(let attempts):
             HStack {
                 ProgressView()
                     .controlSize(.small)
-                Text("Mining… \(attempts) hashes")
+                Text("Mining… \(attempts.formatted()) hashes")
                     .font(.system(size: 11))
                     .foregroundStyle(BitOSTheme.textSecondary)
                 Spacer()
@@ -159,6 +160,7 @@ struct PowCard: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(BitOSTheme.error)
+                .fixedSize()
             }
         case .mined(let outcome):
             VStack(alignment: .leading, spacing: 4) {
@@ -173,8 +175,11 @@ struct PowCard: View {
                 .foregroundStyle(BitOSTheme.textTertiary)
             }
         case .exhausted(let attempts):
-            HStack {
-                Text("No nonce found after \(attempts) hashes. Retry or lower the target.")
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.warning)
+                Text("No nonce found after \(attempts.formatted()) hashes at \(target) bits. Lower the target and retry.")
                     .font(.system(size: 11))
                     .foregroundStyle(BitOSTheme.warning)
                 Spacer()
@@ -182,6 +187,7 @@ struct PowCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .buttonStyle(.bordered)
                     .tint(BitOSTheme.warning)
+                    .fixedSize()
             }
         }
     }

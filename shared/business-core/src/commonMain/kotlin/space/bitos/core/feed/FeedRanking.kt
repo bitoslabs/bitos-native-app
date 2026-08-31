@@ -31,6 +31,14 @@ data class RankingContext(
     val reactionCounts: Map<String, Int> = emptyMap(),
     /** Reply counts per note id (thread children) — engagement input. */
     val replyCounts: Map<String, Int> = emptyMap(),
+    /** Locally dismissed note ids (hide / not-interested) — they never
+     *  surface on the ranked surface (web `dismissNote` parity). */
+    val dismissedNoteIds: Set<String> = emptySet(),
+    /** Ranking-level author demotions (web `toggleMutedAuthor` — softer
+     *  than a protocol mute: notes demote, they do not disappear). */
+    val mutedAuthors: Set<String> = emptySet(),
+    /** Ranking-level topic demotions (web `toggleMutedTag`). */
+    val mutedTags: Set<String> = emptySet(),
 )
 
 /**
@@ -66,17 +74,22 @@ object FeedRanking {
         snapshot: AlgorithmSnapshot,
         ctx: RankingContext,
     ): List<FeedNote> {
-        val setting = snapshot.surfaces[surface]?.takeIf { it.enabled } ?: return chronological(notes)
+        // Local negative feedback (web interaction-profile parity):
+        // dismissed notes are the ranker's one intentional drop — hiding is
+        // the user's explicit act, never an algorithmic accident.
+        val visible = if (ctx.dismissedNoteIds.isEmpty()) notes else notes.filter { it.id !in ctx.dismissedNoteIds }
+        val setting = snapshot.surfaces[surface]?.takeIf { it.enabled } ?: return chronological(visible)
         val active = setting.signals.values
             .filter { it.enabled && it.weight > 0.0 }
-        if (active.isEmpty()) return chronological(notes)
+        if (active.isEmpty()) return chronological(visible)
+
         val totalWeight = active.sumOf { it.weight }
 
         val maxZaps = (ctx.zapCounts.values.maxOrNull() ?: 0).coerceAtLeast(1)
         val maxEngagement = (ctx.reactionCounts.values.sumOf { it }
             + ctx.replyCounts.values.sumOf { it }).coerceAtLeast(1)
 
-        val ranked = notes
+        val ranked = visible
             .map { note ->
                 var score = 0.0
                 for ((signal, config) in setting.signals) {
@@ -90,6 +103,10 @@ object FeedRanking {
                         maxEngagement = maxEngagement,
                     ) * config.weight / totalWeight
                 }
+                // Demotions multiply the final score (bounded 0..1 after
+                // weight normalization); both can stack deterministically.
+                if (note.pubkey in ctx.mutedAuthors) score *= AUTHOR_DEMOTION
+                if (note.hashtags.any { it in ctx.mutedTags }) score *= TAG_DEMOTION
                 note to score
             }
             .sortedWith(
@@ -108,6 +125,10 @@ object FeedRanking {
      * Deterministic: same input → same output.
      */
     private const val MAX_CONSECUTIVE = 2
+
+    /** Web interaction-profile demotions: strong for authors, softer for topics. */
+    private const val AUTHOR_DEMOTION = 0.25
+    private const val TAG_DEMOTION = 0.5
 
     private fun applyDiversity(ranked: List<FeedNote>): List<FeedNote> {
         val output = ArrayList<FeedNote>(ranked.size)

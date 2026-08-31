@@ -1,10 +1,12 @@
 package space.bitos.app.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -34,7 +36,8 @@ import space.bitos.app.ui.theme.BitOSSpacing
  * Identity confirmation gate (shared: You tab + More hub add-account),
  * ID-004. For a freshly generated key this is also the one-time backup
  * moment: the secret can be revealed and copied here — deliberately, never
- * automatically — before it is sealed.
+ * automatically — and the confirm action stays disabled until the user
+ * acknowledges the backup (mockup scr-backup gate).
  */
 @Composable
 fun ConfirmIdentityDialog(
@@ -48,6 +51,7 @@ fun ConfirmIdentityDialog(
     onDismiss: () -> Unit,
 ) {
     var revealed by remember { mutableStateOf(false) }
+    var savedAcknowledged by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
     AlertDialog(
@@ -100,6 +104,10 @@ fun ConfirmIdentityDialog(
                         onToggle = { revealed = !revealed },
                         onCopy = { clipboard.setText(AnnotatedString(secretNsec)) },
                     )
+                    BackupAcknowledgementRow(
+                        checked = savedAcknowledged,
+                        onCheckedChange = { savedAcknowledged = it },
+                    )
                 } else if (!isNewKey) {
                     Text(
                         "Imported keys are already in your possession; no backup is needed here.",
@@ -110,12 +118,40 @@ fun ConfirmIdentityDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm, enabled = !busy) {
+            Button(onClick = onConfirm, enabled = !busy && (!isNewKey || savedAcknowledged)) {
                 Text(if (busy) "Storing…" else if (isNewKey) "I saved my key" else "Use this identity")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** CB-2: the backup gate only opens once the user owns the consequence. */
+@Composable
+private fun BackupAcknowledgementRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 2.dp),
+    ) {
+        androidx.compose.material3.Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.size(24.dp),
+        )
+        Text(
+            "I saved my key somewhere safe and understand it can't be recovered.",
+            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
 }
 
 /** One-time backup reveal for a generated key: explicit show + copy. */

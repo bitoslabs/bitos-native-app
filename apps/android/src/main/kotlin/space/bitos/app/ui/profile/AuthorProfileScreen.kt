@@ -23,11 +23,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +59,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.data.feed.AuthorRepository
 import space.bitos.app.data.feed.FeedUiState
 import space.bitos.app.identity.IdentityViewModel
+import space.bitos.app.ui.components.AppMenuDropdown
+import space.bitos.app.ui.components.AppMenuEntry
+import space.bitos.app.ui.components.AppMenuItem
 import space.bitos.app.ui.components.HexShape
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatCount
@@ -81,6 +86,15 @@ fun AuthorProfileScreen(
     identityViewModel: IdentityViewModel,
     notePublisher: space.bitos.app.data.publish.NotePublisher,
     onClose: () -> Unit,
+    /** Author tap on a note card → swap this page to that author. */
+    onOpenAuthor: (String) -> Unit = {},
+    /** External-link tap → confirm sheet (never opens a browser unattended). */
+    onOpenExternalLink: (String) -> Unit = {},
+    /** note1/nevent1/naddr1 tap → thread host (owned by the caller). */
+    onOpenNoteRef: (String) -> Unit = {},
+    /** Web ProfileBitzGrid parity: opens the author-scoped reels player
+     *  at the tapped tile (one shared player, context-aware data). */
+    onOpenBitzPlayer: (pubkey: String, noteId: String) -> Unit = { _, _ -> },
 ) {
     BackHandler(onBack = onClose)
     LaunchedEffect(authorPubkey) { authorRepository.open(authorPubkey) }
@@ -102,13 +116,26 @@ fun AuthorProfileScreen(
     var npubCopied by remember { mutableStateOf(false) }
     // X-style: tapping a note/grid tile opens its thread.
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
+    // Note zap from a profile card.
+    var zapNoteTarget by remember { mutableStateOf<FeedNote?>(null) }
+    // Report user (kind-1984, p-tag only — web ProfileActionMenu parity).
+    var showReportDialog by remember { mutableStateOf(false) }
+    var reportReason by remember { mutableStateOf("") }
+    val localActions by homeViewModel.localActions.collectAsStateWithLifecycle()
 
     val notes = authorState.notes
     val tabNotes = notes.filter { it.replyTo == null }
     val tabReplies = notes.filter { it.replyTo != null }
     val tabBitz = notes.filter { it.video != null || it.mediaUrls.isNotEmpty() }
-    val tabs = listOf("Notes", "Replies", "Bitz")
-    val content = listOf(tabNotes, tabReplies, tabBitz)[tab]
+    // Web full-page profile parity: the Zaps tab shows what THIS viewer
+    // verifiably zapped this author (local ledger — signed by us). Relays
+    // cannot truthfully enumerate everyone else's zaps to an author, so
+    // we never render an unverifiable total.
+    val sentToAuthor = remember(authorPubkey, feedState) {
+        homeViewModel.sentZapRecords().filter { it.recipientPubkey == authorPubkey }
+    }
+    val tabs = listOf("Notes", "Replies", "Bitz", "Zaps")
+    val content = listOf(tabNotes, tabReplies, tabBitz)[tab.coerceAtMost(2)]
 
     Column(
         Modifier
@@ -146,38 +173,48 @@ fun AuthorProfileScreen(
                         tint = BitOSColors.textPrimary,
                     )
                 }
-                androidx.compose.material3.DropdownMenu(
-                    expanded = showMoreMenu,
-                    onDismissRequest = { showMoreMenu = false },
-                ) {
-                    val npub = remember(authorPubkey) {
-                        space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
-                    }
-                    DropdownMenuItem(
-                        text = { Text("Copy profile link") },
-                        onClick = {
-                            npub?.let { clipboard.setText(AnnotatedString("https://njump.me/$it")) }
-                            showMoreMenu = false
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(if (npubCopied) "npub copied" else "Copy npub") },
-                        onClick = {
-                            npub?.let { clipboard.setText(AnnotatedString(it)) }
-                            npubCopied = true
-                            showMoreMenu = false
-                        },
-                    )
+                val npub = remember(authorPubkey) {
+                    space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
+                }
+                // Web ProfileActionMenu parity: copy affordances, then the
+                // moderation group (report is destructive-toned on web).
+                val menuEntries = buildList {
+                    add(AppMenuEntry.Item(AppMenuItem("copy-link", "Copy profile link", Icons.Outlined.Link)))
+                    add(AppMenuEntry.Item(AppMenuItem("copy-npub", if (npubCopied) "npub copied" else "Copy npub", AppIcons.Copy)))
                     if (hasLightning) {
-                        DropdownMenuItem(
-                            text = { Text("Copy lightning address") },
-                            onClick = {
-                                profile?.lud16?.let { clipboard.setText(AnnotatedString(it)) }
-                                showMoreMenu = false
-                            },
+                        add(AppMenuEntry.Item(AppMenuItem("copy-lightning", "Copy lightning address", AppIcons.Zap)))
+                    }
+                    if (identityState.account?.pubkeyHex != authorPubkey) {
+                        add(AppMenuEntry.Divider)
+                        add(
+                            AppMenuEntry.Item(
+                                AppMenuItem(
+                                    "mute",
+                                    if (homeViewModel.isMuted(authorPubkey)) "Unmute author" else "Mute author",
+                                    Icons.AutoMirrored.Rounded.VolumeOff,
+                                )
+                            )
                         )
+                        add(AppMenuEntry.Item(AppMenuItem("report", "Report user…", Icons.Outlined.Flag, destructive = true)))
                     }
                 }
+                AppMenuDropdown(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
+                    entries = menuEntries,
+                    onSelect = { id ->
+                        when (id) {
+                            "copy-link" -> npub?.let { clipboard.setText(AnnotatedString("https://njump.me/$it")) }
+                            "copy-npub" -> npub?.let {
+                                clipboard.setText(AnnotatedString(it))
+                                npubCopied = true
+                            }
+                            "copy-lightning" -> profile?.lud16?.let { clipboard.setText(AnnotatedString(it)) }
+                            "mute" -> homeViewModel.toggleMute(authorPubkey)
+                            "report" -> showReportDialog = true
+                        }
+                    }
+                )
             }
         }
 
@@ -353,6 +390,13 @@ fun AuthorProfileScreen(
                     StatPill("Posts", formatCount(tabNotes.size.toLong()))
                     StatPill("Replies", formatCount(tabReplies.size.toLong()))
                     StatPill("Bitz", formatCount(tabBitz.size.toLong()))
+                    // Web stats parity: sats THIS viewer zapped the author
+                    // (locally verified ledger — the only truthful figure).
+                    StatPill(
+                        "Zapped by you",
+                        space.bitos.core.model.ZapFormat.sats(sentToAuthor.sumOf { it.amountSats }),
+                        onClick = { showZap = true },
+                    )
                 }
             }
 
@@ -394,7 +438,32 @@ fun AuthorProfileScreen(
             }
 
             // ── Tab content (cards · 3-col grid · loading · empty) ──────
-            if (authorState.isLoading && notes.isEmpty()) {
+            if (tab == 3) {
+                // Zaps tab (web parity): this viewer's verified zaps to the
+                // author, from the same shared ledger as the wallet.
+                if (sentToAuthor.isEmpty()) {
+                    item(key = "zaps-empty") { AuthorZapsEmptyState() }
+                } else {
+                    item(key = "zaps-list") {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            sentToAuthor.take(50).forEach { record ->
+                                space.bitos.app.ui.zap.ZapLedgerRow(
+                                    entry = space.bitos.core.model.SentZapLedger.LedgerEntry(
+                                        direction = space.bitos.core.model.SentZapLedger.Direction.SENT,
+                                        sats = record.amountSats,
+                                        peerPubkey = record.recipientPubkey,
+                                        createdAt = record.createdAt,
+                                        memo = record.memo,
+                                        targetNoteId = record.targetNoteId,
+                                    ),
+                                    profile = feedState.profiles[record.recipientPubkey],
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+            } else if (authorState.isLoading && notes.isEmpty()) {
                 item(key = "loading") {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
@@ -413,7 +482,9 @@ fun AuthorProfileScreen(
                                         Modifier
                                             .weight(1f)
                                             .padding(1.dp)
-                                            .clickable(onClickLabel = "Open note thread") { threadTarget = note },
+                                            .clickable(onClickLabel = "Play bitz") {
+                                                onOpenBitzPlayer(authorPubkey, note.id)
+                                            },
                                     )
                                 }
                                 repeat(3 - rowNotes.size) { Spacer(Modifier.weight(1f).padding(1.dp)) }
@@ -423,7 +494,37 @@ fun AuthorProfileScreen(
                 }
             } else {
                 items(content.take(50), key = { "note-${it.id}" }) { note ->
-                    ProfileNoteCard(note, profile, onOpen = { threadTarget = note })
+                    Column {
+                        if (tab == 1) space.bitos.app.ui.profile.ReplyContextStrip()
+                        // Same card as the home feed — rich body, media,
+                        // polls, full actions and the ⋯ menu. No fork.
+                        space.bitos.app.ui.components.FeedNoteCard(
+                            note = note,
+                            profile = feedState.profiles[note.pubkey],
+                            bookmarked = note.id in feedState.bookmarkedIds || note.id in localActions.bookmarked,
+                            liked = note.id in localActions.liked,
+                            resolveMentionName = { hex -> feedState.profiles[hex]?.bestDisplayName },
+                            onLike = { homeViewModel.toggleLike(note) },
+                            onBookmark = { homeViewModel.toggleBookmark(note.id) },
+                            onComment = { threadTarget = note },
+                            onRepost = { homeViewModel.repost(note) },
+                            onZap = {
+                                homeViewModel.loadZaps(note.id)
+                                zapNoteTarget = note
+                            },
+                            onAuthor = { onOpenAuthor(note.pubkey) },
+                            isMuted = homeViewModel.isMuted(note.pubkey),
+                            onMuteToggle = { homeViewModel.toggleMute(note.pubkey) },
+                            onReport = { reason -> homeViewModel.report(note, reason) },
+                            pollTally = feedState.pollTallies[note.id],
+                            canVotePoll = identityState.account != null,
+                            onLoadPollVotes = { homeViewModel.loadPollVotes(note.id) },
+                            onVotePoll = { optionIndex -> homeViewModel.votePoll(note, optionIndex) },
+                            onOpenAttachment = { onOpenExternalLink(it) },
+                            onOpenExternalLink = { onOpenExternalLink(it) },
+                            onOpenNoteRef = { onOpenNoteRef(it) },
+                        )
+                    }
                 }
             }
             // Pages of five arrive on demand — this sentinel asks for the
@@ -462,6 +563,72 @@ fun AuthorProfileScreen(
         }
     }
 
+    // Note zap from a profile card (web PostCard zap parity).
+    val zapNote = zapNoteTarget
+    if (zapNote != null) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { homeViewModel.dismissZap(); zapNoteTarget = null },
+        ) {
+            space.bitos.app.ui.feed.ZapContent(
+                note = zapNote,
+                lud16 = profile?.lud16,
+                state = zapState,
+                profileName = profile?.bestDisplayName,
+                hasIdentity = identityState.account != null,
+                zapCount = feedState.zapCounts[zapNote.id] ?: 0,
+                paidRequestIds = feedState.zapRequestIds[zapNote.id] ?: emptySet(),
+                onPaid = { sats, memo -> homeViewModel.onZapPaid(zapNote, sats, memo) },
+                onAmountSelected = homeViewModel::selectZapAmount,
+                onZap = { sats, comment, anonymous ->
+                    homeViewModel.selectZapAmount(sats)
+                    homeViewModel.zap(zapNote, comment, anonymous)
+                },
+                onClose = { homeViewModel.dismissZap(); zapNoteTarget = null },
+                profilePictureUrl = profile?.picture,
+            )
+        }
+    }
+
+    // Report user (kind-1984, p-tag only).
+    if (showReportDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showReportDialog = false; reportReason = "" },
+            title = { Text("Report this user") },
+            text = {
+                Column {
+                    Text("The report is published as a kind-1984 event.", fontSize = 12.sp, color = BitOSColors.textSecondary)
+                    Spacer(Modifier.height(8.dp))
+                    space.bitos.app.ui.components.BitosTextField(
+                        value = reportReason,
+                        onValueChange = { reportReason = it.take(140) },
+                        placeholder = "Reason (spam, harassment…)",
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    val reason = reportReason.trim()
+                    showReportDialog = false
+                    reportReason = ""
+                    if (reason.isNotEmpty()) {
+                        notePublisher.publishReport(
+                            targetEventId = null,
+                            targetPubkey = authorPubkey,
+                            reason = reason,
+                            signerProvider = { identityViewModel.createSigner() },
+                            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                        )
+                    }
+                }) { Text("Report", color = BitOSColors.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showReportDialog = false; reportReason = "" }) {
+                    Text("Cancel", color = BitOSColors.textSecondary)
+                }
+            },
+        )
+    }
+
     // Profile zap (NIP-57 p-tag only, no target note).
     if (showZap) {
         androidx.compose.material3.ModalBottomSheet(
@@ -486,10 +653,22 @@ fun AuthorProfileScreen(
     }
 }
 
+/** Zaps-tab empty state: honest zero — nothing fake. */
+@Composable
+private fun AuthorZapsEmptyState() {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("⚡", fontSize = 34.sp, color = BitOSColors.zap)
+        Spacer(Modifier.height(12.dp))
+        Text("You haven't zapped this author yet", fontSize = 14.sp, color = BitOSColors.textSecondary)
+    }
+}
+
 /** Shared empty state for the author tabs (icon 48 @50% + message). */
 @Composable
-private fun AuthorTabEmptyState(tab: Int) {
-    val (icon, message) = when (tab) {
+private fun AuthorTabEmptyState(tab: Int) {    val (icon, message) = when (tab) {
         1 -> AppIcons.Comment to "No replies yet"
         2 -> AppIcons.Photo to "No bitz yet"
         else -> AppIcons.Pen to "No posts yet"

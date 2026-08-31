@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -79,6 +80,7 @@ import space.bitos.app.player.VideoPlayerPool
 import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
+import space.bitos.app.ui.components.FeedNoteCard
 import space.bitos.app.ui.components.MediaLightbox
 import space.bitos.app.ui.components.MediaRow
 import space.bitos.app.ui.components.PubkeyAvatar
@@ -86,6 +88,7 @@ import space.bitos.app.ui.components.AnimatedLikeIcon
 import space.bitos.app.ui.components.RichText
 import space.bitos.app.ui.components.SensitiveCover
 import space.bitos.app.ui.components.formatTimeAgo
+import space.bitos.app.ui.components.rememberRelativeTimeNow
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.core.feed.FeedFilter
@@ -97,24 +100,14 @@ import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
 
 /**
- * A visible row owns its relative-time clock. It ticks each second only for
- * the first minute, then wakes on minute boundaries; relay state is never
- * republished just to advance a label.
+ * APP-009 ref-open states plate (mockup app-10 "Loading / not found"):
+ * the shared `ThreadOpen` classification drives which plate shows; the
+ * not-found plate carries the nevent TLV relay hints for Retry/Add relay.
  */
-@Composable
-private fun rememberRelativeTimeNow(createdAtSeconds: Long): Long {
-    var nowSeconds by remember(createdAtSeconds) {
-        mutableLongStateOf(System.currentTimeMillis() / 1_000)
-    }
-    LaunchedEffect(createdAtSeconds) {
-        while (true) {
-            val age = (nowSeconds - createdAtSeconds).coerceAtLeast(0)
-            val delaySeconds = if (age < 60) 1L else (60 - (age % 60)).coerceAtLeast(1L)
-            delay(delaySeconds * 1_000)
-            nowSeconds = System.currentTimeMillis() / 1_000
-        }
-    }
-    return nowSeconds
+private sealed interface RefOpenPlate {
+    data object Loading : RefOpenPlate
+    data object Invalid : RefOpenPlate
+    data class NotFound(val raw: String, val hints: List<String>) : RefOpenPlate
 }
 
 /**
@@ -145,6 +138,8 @@ fun FeedScreen(
     retapTick: Int = 0,
     /** APP-006: stories bar + viewer. */
     storiesRepository: space.bitos.app.data.stories.StoriesRepository? = null,
+    /** APP-009 not-found "Add relay" applies nevent TLV hints here. */
+    relayManager: space.bitos.app.data.relay.RelayManager? = null,
     /** UX-010: opens the in-app full profile page for a pubkey. */
     onOpenAuthorProfile: (String) -> Unit = {},
 ) {
@@ -158,12 +153,21 @@ fun FeedScreen(
     var zapTarget by androidx.compose.runtime.remember { mutableStateOf<FeedNote?>(null) }
     /** External-link confirm sheet (never opens the browser unattended). */
     var externalLink by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
-    /** In-place note-ref open (note1/nevent1/naddr1 → thread sheet). */
+    /** In-place note-ref open (note1/nevent1/naddr1/hex → thread sheet). */
     var refOpenTarget by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
+    /** APP-009 states plate: Loading → Loaded | Invalid | NotFound
+     *  (shared `ThreadOpen` classification + `ThreadOpenCopy` strings). */
+    var refOpenState by androidx.compose.runtime.remember { mutableStateOf<RefOpenPlate?>(null) }
     var authorTarget by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     val authorState by authorRepository.state.collectAsStateWithLifecycle()
     val zapState by viewModel.zapState.collectAsStateWithLifecycle()
     val identityState by identityViewModel.state.collectAsStateWithLifecycle()
+    // Local ranking signals (web interaction-profile parity).
+    val interactionProfile = viewModel.interaction
+    val demotedAuthorIds by (interactionProfile?.demotedAuthors
+        ?: kotlinx.coroutines.flow.MutableStateFlow(emptySet())).collectAsStateWithLifecycle()
+    val demotedTagSet by (interactionProfile?.demotedTags
+        ?: kotlinx.coroutines.flow.MutableStateFlow(emptySet())).collectAsStateWithLifecycle()
     val context = LocalContext.current
     // APP-006: stories bar + viewer.
     val storiesState by (storiesRepository?.state
@@ -313,6 +317,14 @@ fun FeedScreen(
                                 onAuthor = { authorTarget = it }, isMuted = viewModel.isMuted(feedNotes[page].pubkey),
                                 onMuteToggle = { viewModel.toggleMute(feedNotes[page].pubkey) },
                                 onReport = { reason -> viewModel.report(feedNotes[page], reason) },
+                                authorDemoted = feedNotes[page].pubkey in demotedAuthorIds,
+                                tagDemoted = feedNotes[page].hashtags.firstOrNull()?.let { it in demotedTagSet } == true,
+                                interactionAuthorName = state.profiles[feedNotes[page].pubkey]?.bestDisplayName,
+                                onNotInterested = { viewModel.notInterested(feedNotes[page]) },
+                                onHideNote = { viewModel.hideNote(feedNotes[page]) },
+                                onToggleAuthorDemotion = { viewModel.toggleShowLessFrom(feedNotes[page].pubkey) },
+                                onToggleTagDemotion = viewModel::toggleShowLessAbout,
+                                onOpenAttachment = { externalLink = it },
                             )
                         } else NotesList(
                             notes = feedNotes, state = state, actions = actions, viewModel = viewModel,
@@ -325,6 +337,10 @@ fun FeedScreen(
                                 viewModel.toggleLike(note)
                             },
                             onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
+                            pollTallies = state.pollTallies,
+                            canVotePoll = identityState.account != null,
+                            onVotePoll = { note, optionIndex -> viewModel.votePoll(note, optionIndex) },
+                            onOpenAttachment = { externalLink = it },
                             onOpenExternalLink = { externalLink = it },
                             onOpenNoteRef = { raw ->
                                 // In-place note-ref open (web parity): fetch
@@ -449,25 +465,116 @@ fun FeedScreen(
                 },
                 // UX-010: author taps inside the thread open the profile sheet.
                 onOpenAuthor = { authorTarget = it },
+                onDelete = viewModel::deleteNote,
+                onComment = viewModel::comment,
                 onClose = { showCommentsFor = null },
             )
         }
     }
 
-    // In-place note-ref open: poll the bounded side-store until the head
-    // arrives (3 s), then show the thread sheet.
+    // In-place note-ref open (web parity, mockup app-10 states): classify
+    // immediately (invalid never issues a REQ), poll the bounded side-store
+    // for 3 s, then either open the thread sheet or surface Not found with
+    // Retry / Add relay (nevent TLV hints).
     LaunchedEffect(refOpenTarget) {
         val raw = refOpenTarget ?: return@LaunchedEffect
+        val ref = space.bitos.core.feed.ThreadOpen.classify(raw)
+        if (ref == null) {
+            refOpenTarget = null
+            refOpenState = RefOpenPlate.Invalid
+            return@LaunchedEffect
+        }
+        refOpenState = RefOpenPlate.Loading
         repeat(20) {
             val fetched = viewModel.refNote(raw)
             if (fetched != null) {
                 refOpenTarget = null
+                refOpenState = null
                 showCommentsFor = fetched
                 return@LaunchedEffect
             }
             kotlinx.coroutines.delay(150)
         }
         refOpenTarget = null
+        refOpenState = RefOpenPlate.NotFound(
+            raw = raw,
+            hints = ref.relayHints,
+        )
+    }
+
+    // APP-009 states plate: loading / invalid / not-found + retry actions.
+    refOpenState?.let { plate ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { refOpenState = null },
+            title = {
+                Text(
+                    when (plate) {
+                        RefOpenPlate.Loading -> space.bitos.core.feed.ThreadOpenCopy.LOADING_TITLE
+                        RefOpenPlate.Invalid -> space.bitos.core.feed.ThreadOpenCopy.INVALID_TITLE
+                        is RefOpenPlate.NotFound -> space.bitos.core.feed.ThreadOpenCopy.NOT_FOUND_TITLE
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.W700,
+                )
+            },
+            text = {
+                Column {
+                    if (plate is RefOpenPlate.Loading) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.dp,
+                            color = BitOSColors.primary,
+                        )
+                        Spacer(Modifier.height(BitOSSpacing.sm))
+                    }
+                    Text(
+                        when (plate) {
+                            RefOpenPlate.Loading -> "REQ ids / coordinate · readable relays"
+                            RefOpenPlate.Invalid -> space.bitos.core.feed.ThreadOpenCopy.INVALID_BODY
+                            is RefOpenPlate.NotFound -> space.bitos.core.feed.ThreadOpenCopy.NOT_FOUND_BODY
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                    if (plate is RefOpenPlate.NotFound && plate.hints.isNotEmpty()) {
+                        Spacer(Modifier.height(BitOSSpacing.sm))
+                        Text(
+                            "Author relay hints:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BitOSColors.textTertiary,
+                        )
+                        plate.hints.forEach { hint ->
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                when (plate) {
+                    is RefOpenPlate.NotFound -> {
+                        androidx.compose.material3.TextButton(onClick = {
+                            val raw = plate.raw
+                            refOpenState = null
+                            refOpenTarget = raw
+                            viewModel.openNoteReference(raw)
+                        }) { Text(space.bitos.core.feed.ThreadOpenCopy.RETRY, color = BitOSColors.primary) }
+                    }
+                    RefOpenPlate.Loading, RefOpenPlate.Invalid -> {}
+                }
+            },
+            dismissButton = {
+                if (plate is RefOpenPlate.NotFound && plate.hints.isNotEmpty()) {
+                    androidx.compose.material3.TextButton(onClick = {
+                        plate.hints.forEach { hint -> relayManager?.add(hint) }
+                        refOpenState = null
+                    }) { Text(space.bitos.core.feed.ThreadOpenCopy.ADD_RELAY, color = BitOSColors.primary) }
+                }
+            },
+        )
     }
 
     // External-link confirm: the browser only opens on an explicit Open.
@@ -567,9 +674,24 @@ private fun FeedPage(
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    /** Local ranking signals (web interaction-profile parity). */
+    authorDemoted: Boolean = false,
+    tagDemoted: Boolean = false,
+    interactionAuthorName: String? = null,
+    onNotInterested: () -> Unit = {},
+    onHideNote: () -> Unit = {},
+    onToggleAuthorDemotion: () -> Unit = {},
+    onToggleTagDemotion: (String) -> Unit = {},
+    /** Opens the first attachment through the external-link confirm gate. */
+    onOpenAttachment: (String) -> Unit = {},
 ) {
     if (note.video != null) {
-        VideoNotePage(note, state, actions, pool, player, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor, isMuted, onMuteToggle, onReport)
+        VideoNotePage(
+            note, state, actions, pool, player, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor,
+            isMuted, onMuteToggle, onReport,
+            authorDemoted, tagDemoted, interactionAuthorName,
+            onNotInterested, onHideNote, onToggleAuthorDemotion, onToggleTagDemotion, onOpenAttachment,
+        )
     } else {
         TextNotePage(note, state, actions, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor)
     }
@@ -610,6 +732,15 @@ private fun VideoNotePage(
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    /** Local ranking signals (web interaction-profile parity). */
+    authorDemoted: Boolean = false,
+    tagDemoted: Boolean = false,
+    interactionAuthorName: String? = null,
+    onNotInterested: () -> Unit = {},
+    onHideNote: () -> Unit = {},
+    onToggleAuthorDemotion: () -> Unit = {},
+    onToggleTagDemotion: (String) -> Unit = {},
+    onOpenAttachment: (String) -> Unit = {},
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         PosterImage(
@@ -652,6 +783,13 @@ private fun VideoNotePage(
             isMuted = isMuted,
             onMuteToggle = onMuteToggle,
             onReport = onReport,
+            authorDemoted = authorDemoted,
+            tagDemoted = tagDemoted,
+            interactionAuthorName = interactionAuthorName,
+            onNotInterested = onNotInterested,
+            onHideNote = onHideNote,
+            onToggleAuthorDemotion = onToggleAuthorDemotion,
+            onToggleTagDemotion = onToggleTagDemotion,
             modifier = Modifier.align(Alignment.CenterEnd),
         )
     }
@@ -741,6 +879,15 @@ private fun VideoActionRail(
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    /** Local ranking signals (web interaction-profile parity). */
+    authorDemoted: Boolean = false,
+    tagDemoted: Boolean = false,
+    interactionAuthorName: String? = null,
+    onNotInterested: () -> Unit = {},
+    onHideNote: () -> Unit = {},
+    onToggleAuthorDemotion: () -> Unit = {},
+    onToggleTagDemotion: (String) -> Unit = {},
+    onOpenAttachment: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -781,6 +928,14 @@ private fun VideoActionRail(
             onSaveToggle = { onBookmark(note.id) },
             onMuteToggle = onMuteToggle,
             onReport = onReport,
+            authorDemoted = authorDemoted,
+            tagDemoted = tagDemoted,
+            authorName = interactionAuthorName,
+            onNotInterested = onNotInterested,
+            onHideNote = onHideNote,
+            onToggleAuthorDemotion = onToggleAuthorDemotion,
+            onToggleTagDemotion = onToggleTagDemotion,
+            onOpenAttachment = onOpenAttachment,
         )
     }
 }
@@ -798,6 +953,16 @@ private fun MoreMenuButton(
     onSaveToggle: () -> Unit,
     onMuteToggle: () -> Unit,
     onReport: (String) -> Unit,
+    /** Local ranking signals (web interaction-profile parity). */
+    authorDemoted: Boolean = false,
+    tagDemoted: Boolean = false,
+    authorName: String? = null,
+    onNotInterested: () -> Unit = {},
+    onHideNote: () -> Unit = {},
+    onToggleAuthorDemotion: () -> Unit = {},
+    onToggleTagDemotion: (String) -> Unit = {},
+    /** Opens the first attachment through the external-link confirm gate. */
+    onOpenAttachment: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -812,6 +977,15 @@ private fun MoreMenuButton(
         SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
     }
     if (showSheet) {
+        // Web PostCard menu parity: attachment actions when media rides along.
+        val attachmentEntries: List<AppMenuEntry> = if (note.mediaUrls.isNotEmpty()) {
+            listOf(
+                AppMenuEntry.Item(AppMenuItem("open-attachment", "Open attachment", icon = AppIcons.Globe)),
+                AppMenuEntry.Item(AppMenuItem("copy-attachment", "Copy attachment URL", icon = AppIcons.Copy)),
+            )
+        } else {
+            emptyList()
+        }
         space.bitos.app.ui.components.AppBottomSheetMenu(
             onDismissRequest = { showSheet = false },
             title = "Post actions",
@@ -824,6 +998,30 @@ private fun MoreMenuButton(
                 AppMenuEntry.Item(AppMenuItem("copy-text", "Copy note text", icon = AppIcons.Pen)),
                 AppMenuEntry.Item(AppMenuItem("copy-npub", "Copy author npub", icon = AppIcons.User)),
                 AppMenuEntry.Divider,
+                // Web interaction-profile parity: local ranking signals.
+                AppMenuEntry.Item(AppMenuItem("not-interested", "Not interested", icon = AppIcons.Close)),
+                AppMenuEntry.Item(AppMenuItem("hide-note", "Hide this note", icon = AppIcons.Delete)),
+                AppMenuEntry.Item(
+                    AppMenuItem(
+                        "show-less-from",
+                        (if (authorDemoted) "Show more from " else "Show less from ") + (authorName ?: "this author"),
+                        icon = AppIcons.User,
+                    ),
+                ),
+                *if (note.hashtags.isNotEmpty()) {
+                    arrayOf(
+                        AppMenuEntry.Item(
+                            AppMenuItem(
+                                "show-less-about",
+                                (if (tagDemoted) "Show more about #" else "Show less about #") + note.hashtags.first(),
+                                icon = AppIcons.Delete,
+                            ),
+                        ),
+                        AppMenuEntry.Divider,
+                    )
+                } else {
+                    arrayOf(AppMenuEntry.Divider)
+                },
                 AppMenuEntry.Item(
                     AppMenuItem("mute", if (isMuted) "Unmute author" else "Mute author", icon = AppIcons.Mute),
                 ),
@@ -831,7 +1029,7 @@ private fun MoreMenuButton(
                 AppMenuEntry.Item(AppMenuItem("report-spam", "Report as spam", icon = AppIcons.ReportSpam, destructive = true)),
                 AppMenuEntry.Item(AppMenuItem("report-illicit", "Report as illicit", icon = AppIcons.ReportIllicit, destructive = true)),
                 AppMenuEntry.Item(AppMenuItem("report-harassment", "Report as harassment", icon = AppIcons.ReportHarassment, destructive = true)),
-            ),
+            ) + attachmentEntries,
             onSelect = { id ->
                 when (id) {
                     "share" -> {
@@ -845,7 +1043,15 @@ private fun MoreMenuButton(
                     "copy-id" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.id))
                     "copy-text" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.content))
                     "copy-npub" -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(npub))
+                    "open-attachment" -> note.mediaUrls.firstOrNull()?.let(onOpenAttachment)
+                    "copy-attachment" -> note.mediaUrls.firstOrNull()?.let {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
+                    }
                     "mute" -> onMuteToggle()
+                    "not-interested" -> onNotInterested()
+                    "hide-note" -> onHideNote()
+                    "show-less-from" -> onToggleAuthorDemotion()
+                    "show-less-about" -> note.hashtags.firstOrNull()?.let(onToggleTagDemotion)
                     "report-spam" -> onReport("spam")
                     "report-illicit" -> onReport("illicit")
                     "report-harassment" -> onReport("harassment")
@@ -1052,10 +1258,15 @@ private fun NotesList(
     onRepost: (FeedNote) -> Unit,
     onOpenExternalLink: (String) -> Unit = {},
     onOpenNoteRef: (String) -> Unit = {},
+    /** APP-008 poll voting. */
+    pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
+    canVotePoll: Boolean = false,
+    onVotePoll: (FeedNote, Int) -> Unit = { _, _ -> },
+    onOpenAttachment: (String) -> Unit = {},
 ) {
     androidx.compose.foundation.lazy.LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         itemsIndexed(notes, key = { _, note -> note.id }) { index, note ->
-            NoteCardRow(
+            space.bitos.app.ui.components.FeedNoteCard(
                 note = note,
                 profile = state.profiles[note.pubkey],
                 bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked,
@@ -1070,6 +1281,20 @@ private fun NotesList(
                 isMuted = viewModel.isMuted(note.pubkey),
                 onMuteToggle = { viewModel.toggleMute(note.pubkey) },
                 onReport = { reason -> viewModel.report(note, reason) },
+                // Local ranking signals (web interaction-profile parity).
+                authorDemoted = viewModel.interaction?.isAuthorDemoted(note.pubkey) == true,
+                tagDemoted = note.hashtags.firstOrNull()?.let { viewModel.interaction?.isTagDemoted(it) == true } == true,
+                interactionAuthorName = state.profiles[note.pubkey]?.bestDisplayName,
+                onNotInterested = { viewModel.notInterested(note) },
+                onHideNote = { viewModel.hideNote(note) },
+                onToggleAuthorDemotion = { viewModel.toggleShowLessFrom(note.pubkey) },
+                onToggleTagDemotion = viewModel::toggleShowLessAbout,
+                // APP-008 poll voting.
+                pollTally = pollTallies[note.id],
+                canVotePoll = canVotePoll,
+                onLoadPollVotes = { viewModel.loadPollVotes(note.id) },
+                onVotePoll = { optionIndex -> onVotePoll(note, optionIndex) },
+                onOpenAttachment = onOpenAttachment,
                 onOpenExternalLink = onOpenExternalLink,
                 onOpenNoteRef = onOpenNoteRef,
                 sensitiveShowByDefault = sensitiveShowByDefault,
@@ -1082,7 +1307,9 @@ private fun NotesList(
                 androidx.compose.material3.HorizontalDivider(
                     thickness = 0.5.dp,
                     color = BitOSColors.divider,
-                    modifier = Modifier.padding(start = 68.dp),
+                    // Feed separators mark the next item boundary, not the
+                    // text column: span the entire viewport like the web UI.
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -1097,200 +1324,10 @@ private fun NotesList(
     }
 }
 
-@Composable
-private fun NoteCardRow(
-    note: FeedNote,
-    profile: space.bitos.core.model.ProfileMetadata?,
-    bookmarked: Boolean,
-    liked: Boolean,
-    resolveMentionName: (String) -> String?,
-    onLike: () -> Unit,
-    onBookmark: () -> Unit,
-    onComment: () -> Unit,
-    onRepost: () -> Unit,
-    onZap: () -> Unit,
-    onAuthor: () -> Unit,
-    isMuted: Boolean,
-    onMuteToggle: () -> Unit,
-    onReport: (String) -> Unit,
-    /** External-link tap → confirm sheet (owned by the screen). */
-    onOpenExternalLink: (String) -> Unit = {},
-    /** note1/nevent1/naddr1 tap → in-place thread open. */
-    onOpenNoteRef: (String) -> Unit = {},
-    sensitiveShowByDefault: Boolean = false,
-    mediaPreview: Boolean = true,
-    compact: Boolean = false,
-) {
-    var revealed by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
-    // APP-005 Show more/less: font-scale-safe line clamp.
-    var expanded by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
-    var canExpand by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf(false) }
-    var lightboxUrl by androidx.compose.runtime.remember(note.id) { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    lightboxUrl?.let { url ->
-        androidx.compose.ui.window.Dialog(onDismissRequest = { lightboxUrl = null }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-            MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
-        }
-    }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.screen, vertical = if (compact) 4.dp else BitOSSpacing.md),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else BitOSSpacing.sm),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clickable(onClickLabel = "Open author profile") { onAuthor() },
-                contentAlignment = Alignment.Center,
-            ) {
-                PubkeyAvatar(
-                    pubkey = note.pubkey,
-                    size = if (compact) 28 else 36,
-                    pictureUrl = profile?.picture,
-                    label = profile?.bestDisplayName,
-                    hasLightning = !profile?.lud16.isNullOrBlank(),
-                )
-            }
-            Spacer(Modifier.width(BitOSSpacing.sm))
-            Column(
-                Modifier
-                    .clickable(onClickLabel = "Open author profile") { onAuthor() }
-                    .padding(vertical = 6.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(profile?.bestDisplayName ?: shortPubkey(note.pubkey), style = MaterialTheme.typography.titleSmall, color = BitOSColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (!profile?.nip05.isNullOrBlank()) Icon(Icons.Rounded.CheckCircle, contentDescription = "NIP-05 identity claim", tint = BitOSColors.primary, modifier = Modifier.padding(start = 4.dp).size(13.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (note.repostedBy != null) {
-                        SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(10.dp))
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    Text(
-                        formatTimeAgo(note.createdAt, rememberRelativeTimeNow(note.createdAt)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = BitOSColors.textTertiary,
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            MoreMenuButton(
-                note = note,
-                isSaved = bookmarked,
-                isMuted = isMuted,
-                onSaveToggle = onBookmark,
-                onMuteToggle = onMuteToggle,
-                onReport = onReport,
-            )
-        }
-        if (note.contentWarning && !revealed && !sensitiveShowByDefault) {
-            SensitiveCover(onReveal = { revealed = true })
-        } else {
-            RichText(
-                tokens = androidx.compose.runtime.remember(note.content) { space.bitos.core.nostr.Nip27.tokenize(note.content) },
-                hiddenMediaUrls = remember(note.mediaUrls) { note.mediaUrls.toSet() },
-                resolveMentionName = resolveMentionName,
-                onOpenNoteRef = onOpenNoteRef,
-                onOpenExternalLink = onOpenExternalLink,
-                maxLines = if (expanded) Int.MAX_VALUE else NOTE_COLLAPSE_LINES,
-                onOverflow = { canExpand = it },
-                onOpenProfile = { onAuthor() },
-            )
-            if (canExpand || expanded) {
-                androidx.compose.material3.TextButton(
-                    onClick = { expanded = !expanded },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                ) {
-                    Text(
-                        if (expanded) "Show less" else "Show more",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = BitOSColors.primary,
-                    )
-                }
-            }
-            note.poll?.let { poll -> PollOptions(poll) }
-            if (mediaPreview) {
-                MediaRow(urls = note.mediaUrls, onOpen = { lightboxUrl = it })
-            } else {
-                Text(
-                    if (note.mediaUrls.size == 1) "1 attachment (previews off)" else "${note.mediaUrls.size} attachments (previews off)",
-                    fontSize = 12.sp, color = BitOSColors.textTertiary,
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
-            // User decision 2026-08-29: order [like · comment · repost ·
-            // zap · bookmark]; APP-005 §2.4 scale-bounce + haptic on like.
-            AnimatedLikeIcon(
-                liked = liked,
-                tint = if (liked) BitOSColors.like else BitOSColors.textSecondary,
-                iconSize = 18.dp,
-                onClick = onLike,
-            )
-            CardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
-            CardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
-            CardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
-            CardAction(if (bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark, if (bookmarked) "Remove bookmark" else "Bookmark", if (bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary, onBookmark)
-        }
-    }
-}
-
-/** APP-005: bodies collapse beyond 8 lines (line-based, so font scaling
- * cannot break the clamp); full-screen card pages never clamp. */
-private const val NOTE_COLLAPSE_LINES = 8
-
-/** APP-008 poll display (V1): question + option rows; voting/bars land
- * with the response-format decision (legacy is compose-only). */
-@Composable
-private fun PollOptions(poll: space.bitos.core.model.Poll) {
-    Column(
-        Modifier.fillMaxWidth().padding(top = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        poll.options.forEach { option ->
-            Surface(shape = RoundedCornerShape(8.dp), color = BitOSColors.surface) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .size(18.dp)
-                            .border(1.5.dp, BitOSColors.textTertiary, androidx.compose.foundation.shape.CircleShape),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        option.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = BitOSColors.textPrimary,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        Text(
-            "Poll · ${poll.totalOptions} options",
-            style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textTertiary,
-        )
-    }
-}
-
-@Composable
-private fun CardAction(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.semantics { contentDescription = label }) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-    }
-}
-
-@Composable
-private fun CardAction(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.semantics { contentDescription = label }) {
-        SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-    }
-}
+// ---------------------------------------------------------------------
+// Note card internals (FeedNoteCard / PollOptions / CardAction) now live
+// in ui/components/FeedNoteCard.kt — shared with the profile surfaces.
+// ---------------------------------------------------------------------
 
 /**
  * Home header (legacy Flutter parity): wordmark + filter/search actions,
@@ -1370,9 +1407,9 @@ private fun FeedHeader(
                 .padding(horizontal = BitOSSpacing.screen),
             verticalAlignment = Alignment.Bottom,
         ) {
-            TimelineTab("For You", AppIcons.Sparkles, state.timeline == FeedTimeline.FOR_YOU, 0) { onTimeline(FeedTimeline.FOR_YOU) }
+            TimelineTab("For You", AppIcons.Sparkles, state.timeline == FeedTimeline.FOR_YOU) { onTimeline(FeedTimeline.FOR_YOU) }
             Spacer(Modifier.width(BitOSSpacing.lg))
-            TimelineTab("Following", AppIcons.People, state.timeline == FeedTimeline.FOLLOWING, state.followingCount) { onTimeline(FeedTimeline.FOLLOWING) }
+            TimelineTab("Following", AppIcons.People, state.timeline == FeedTimeline.FOLLOWING) { onTimeline(FeedTimeline.FOLLOWING) }
             Spacer(Modifier.weight(1f))
         }
     }
@@ -1472,9 +1509,9 @@ private fun GuestBanner(onGetStarted: () -> Unit) {
     }
 }
 
-/** Underline tab (legacy parity: icon + label, primary underline, hairline row border) + live note count (spec §3.4). */
+/** Underline tab (legacy parity: icon + label, primary underline, hairline row border — spec §3.4). */
 @Composable
-private fun TimelineTab(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, count: Int, onClick: () -> Unit) {
+private fun TimelineTab(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
     val tint = if (selected) BitOSColors.primary else BitOSColors.textSecondary
     Column(
         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
@@ -1492,15 +1529,6 @@ private fun TimelineTab(label: String, icon: androidx.compose.ui.graphics.vector
                 fontWeight = if (selected) FontWeight.W700 else FontWeight.W600,
                 color = tint,
             )
-            if (count > 0) {
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    if (count > 999) "999+" else "$count",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.W600,
-                    color = tint.copy(alpha = 0.7f),
-                )
-            }
         }
     }
 }

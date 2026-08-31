@@ -4,12 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import space.bitos.app.ui.theme.AppIcons
@@ -65,6 +63,9 @@ data class PowOutcome(
 private const val MAX_DIFFICULTY = 30
 private const val CHUNK_ATTEMPTS = 20_000L
 private const val HARD_ATTEMPT_CAP = 5_000_000L
+
+/** Locale-grouped attempt counts ("5,000,000 hashes"). */
+private val GROUPED = java.text.NumberFormat.getIntegerInstance()
 
 /** Compact difficulty pill with segmented hash-strength bar. */
 @Composable
@@ -237,7 +238,7 @@ fun PowCard(
         when {
             outcome != null -> Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -245,6 +246,7 @@ fun PowCard(
                     fontSize = 11.sp,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     color = BitOSColors.textSecondary,
+                    modifier = Modifier.weight(1f),
                 )
                 androidx.compose.material3.TextButton(onClick = {
                     outcome = null
@@ -253,12 +255,16 @@ fun PowCard(
             }
             mining -> Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = BitOSColors.zap)
-                    Text("Mining… $attempts hashes", fontSize = 11.sp, color = BitOSColors.textSecondary)
+                    Text("Mining… ${GROUPED.format(attempts)} hashes", fontSize = 11.sp, color = BitOSColors.textSecondary)
                 }
                 androidx.compose.material3.TextButton(onClick = { stop(notify = false) }) {
                     Text("Cancel", color = BitOSColors.error)
@@ -266,19 +272,31 @@ fun PowCard(
             }
             exhausted -> Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "No nonce found after $attempts hashes. Retry or lower the target.",
-                    fontSize = 11.sp,
-                    color = BitOSColors.warning,
-                )
+                Row(
+                    Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        AppIcons.ReportSpam,
+                        contentDescription = null,
+                        tint = BitOSColors.warning,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        "No nonce found after ${GROUPED.format(attempts)} hashes at $target bits. Lower the target and retry.",
+                        fontSize = 11.sp,
+                        color = BitOSColors.warning,
+                    )
+                }
                 OutlinedButton(onClick = { startMining() }) { Text("Retry") }
             }
             else -> Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -286,8 +304,8 @@ fun PowCard(
                     else "Optional; higher targets take exponentially longer.",
                     fontSize = 11.sp,
                     color = BitOSColors.textTertiary,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(8.dp))
                 if (target > 0) {
                     Button(onClick = { startMining() }) { Text("Mine") }
                 }

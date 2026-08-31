@@ -224,7 +224,7 @@ struct OnboardingScreen: View {
             }
         }
         .background(BitOSTheme.background)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         // Confirmation closes the loop: once the preview is sealed into the
         // keychain the success screen finishes the flow.
         .onChange(of: store.preview) { _, preview in

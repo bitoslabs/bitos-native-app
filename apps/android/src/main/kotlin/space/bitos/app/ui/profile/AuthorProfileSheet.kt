@@ -94,6 +94,12 @@ fun AuthorProfileContent(
     onOpenNote: (FeedNote) -> Unit = {},
     /** Next older notes page (five at a time). */
     onLoadMore: () -> Unit = {},
+    /** Card action row (web PostCard parity). */
+    onLike: (FeedNote) -> Unit = {},
+    onRepost: (FeedNote) -> Unit = {},
+    onZapNote: (FeedNote) -> Unit = {},
+    /** Locally liked note ids (optimistic toggles from the feed store). */
+    likedIds: Set<String> = emptySet(),
 ) {
     LaunchedEffect(authorPubkey) { onOpen(authorPubkey) }
 
@@ -452,7 +458,16 @@ fun AuthorProfileContent(
                 }
 
                 items(state.notes, key = { it.id }) { note ->
-                    AuthorNoteCard(note, profile, onClick = { onOpenNote(note) })
+                    AuthorNoteCard(
+                        note,
+                        profile,
+                        onClick = { onOpenNote(note) },
+                        isLiked = note.id in likedIds,
+                        tally = feedState.tallies[note.id],
+                        onLike = { onLike(note) },
+                        onRepost = { onRepost(note) },
+                        onZap = { onZapNote(note) },
+                    )
                 }
 
                 // Pages of five arrive on demand — this sentinel asks for
@@ -508,9 +523,13 @@ fun AuthorProfileSheetHost(
     var showZap by remember { mutableStateOf(false) }
     // X-style: the tapped note's thread opens above the profile sheet.
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
+    // Note zap from a profile card (web PostCard zap parity).
+    var zapNoteTarget by remember { mutableStateOf<FeedNote?>(null) }
     val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
     val identityState by identityViewModel.state.collectAsStateWithLifecycle()
     val publisherState by notePublisher.state.collectAsStateWithLifecycle()
+    val localActions by homeViewModel.localActions.collectAsStateWithLifecycle()
+    val feedStateLive by homeViewModel.state.collectAsStateWithLifecycle()
 
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onClose) {
         AuthorProfileContent(
@@ -523,8 +542,40 @@ fun AuthorProfileSheetHost(
             onOpenFullProfile = onOpenFullProfile,
             onOpenNote = { threadTarget = it },
             onLoadMore = onLoadMore,
+            onLike = homeViewModel::toggleLike,
+            onRepost = homeViewModel::repost,
+            onZapNote = { note ->
+                homeViewModel.loadZaps(note.id)
+                zapNoteTarget = note
+            },
+            likedIds = localActions.liked,
             onClose = onClose,
         )
+    }
+
+    val zapNote = zapNoteTarget
+    if (zapNote != null) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { homeViewModel.dismissZap(); zapNoteTarget = null },
+        ) {
+            space.bitos.app.ui.feed.ZapContent(
+                note = zapNote,
+                lud16 = state.profile?.lud16,
+                state = zapState,
+                profileName = state.profile?.bestDisplayName,
+                hasIdentity = identityState.account != null,
+                zapCount = feedStateLive.zapCounts[zapNote.id] ?: 0,
+                paidRequestIds = feedStateLive.zapRequestIds[zapNote.id] ?: emptySet(),
+                onPaid = { sats, memo -> homeViewModel.onZapPaid(zapNote, sats, memo) },
+                onAmountSelected = homeViewModel::selectZapAmount,
+                onZap = { sats, comment, anonymous ->
+                    homeViewModel.selectZapAmount(sats)
+                    homeViewModel.zap(zapNote, comment, anonymous)
+                },
+                onClose = { homeViewModel.dismissZap(); zapNoteTarget = null },
+                profilePictureUrl = state.profile?.picture,
+            )
+        }
     }
 
     val thread = threadTarget
@@ -600,10 +651,99 @@ private fun InfoChip(
     }
 }
 
-/// X-style card: time + media badge, clamped content, inline media preview
-/// (image row / 16:9 video tile); the whole card opens the note's thread.
+/// Compact like · repost · zap row shared by profile-surface note cards
+/// (web PostCard action-bar parity; comment opens the thread sheet).
 @Composable
-private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?, onClick: () -> Unit = {}) {
+internal fun ProfileCardActions(
+    isLiked: Boolean = false,
+    tally: space.bitos.core.feed.NoteTally? = null,
+    onLike: () -> Unit,
+    onRepost: () -> Unit,
+    onZap: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xl),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = if (isLiked) "Unlike" else "Like") { onLike() }
+                .padding(vertical = 2.dp),
+        ) {
+            space.bitos.app.ui.theme.SolarFeedIconImage(
+                if (isLiked) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
+                contentDescription = null,
+                tint = if (isLiked) BitOSColors.like else BitOSColors.textSecondary,
+                modifier = Modifier.size(14.dp),
+            )
+            val likes = tally?.reactions ?: 0
+            if (likes > 0) {
+                Spacer(Modifier.width(4.dp))
+                Text("$likes", style = MaterialTheme.typography.labelSmall, color = if (isLiked) BitOSColors.like else BitOSColors.textSecondary)
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = "Repost") { onRepost() }
+                .padding(vertical = 2.dp),
+        ) {
+            space.bitos.app.ui.theme.SolarFeedIconImage(
+                space.bitos.app.ui.theme.SolarFeedIcon.Repost,
+                contentDescription = null,
+                tint = BitOSColors.repost,
+                modifier = Modifier.size(14.dp),
+            )
+            val reposts = tally?.reposts ?: 0
+            if (reposts > 0) {
+                Spacer(Modifier.width(4.dp))
+                Text("$reposts", style = MaterialTheme.typography.labelSmall, color = BitOSColors.repost)
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = "Zap") { onZap() }
+                .padding(vertical = 2.dp),
+        ) {
+            space.bitos.app.ui.theme.SolarFeedIconImage(
+                space.bitos.app.ui.theme.SolarFeedIcon.Zap,
+                contentDescription = null,
+                tint = BitOSColors.zap,
+                modifier = Modifier.size(14.dp),
+            )
+            val sats = (tally?.zapMillisats ?: 0L) / 1000L
+            if (sats > 0) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    space.bitos.core.model.ZapFormat.sats(sats),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.zap,
+                )
+            }
+        }
+    }
+}
+
+/// X-style card: time + media badge, clamped content, inline media preview
+/// (image row / 16:9 video tile); optional action row; the whole card opens
+/// the note's thread.
+@Composable
+private fun AuthorNoteCard(
+    note: FeedNote,
+    profile: ProfileMetadata?,
+    onClick: () -> Unit = {},
+    isLiked: Boolean = false,
+    tally: space.bitos.core.feed.NoteTally? = null,
+    onLike: () -> Unit = {},
+    onRepost: () -> Unit = {},
+    onZap: () -> Unit = {},
+) {
     var expanded by remember(note.id) { mutableStateOf(false) }
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -668,6 +808,18 @@ private fun AuthorNoteCard(note: FeedNote, profile: ProfileMetadata?, onClick: (
                     }
                 }
             }
+            // Action row (like · repost · zap), web PostCard parity.
+            androidx.compose.material3.HorizontalDivider(
+                color = BitOSColors.divider.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            ProfileCardActions(
+                isLiked = isLiked,
+                tally = tally,
+                onLike = onLike,
+                onRepost = onRepost,
+                onZap = onZap,
+            )
         }
     }
 }

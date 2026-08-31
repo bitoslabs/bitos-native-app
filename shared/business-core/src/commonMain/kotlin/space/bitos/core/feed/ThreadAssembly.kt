@@ -19,8 +19,13 @@ data class ThreadItem(
 
 object ThreadAssembly {
 
-    /** Indentation bound (deeper replies flatten at this depth). */
-    const val MAX_DEPTH = 8
+    /**
+     * Web-parity conversation shape: a comment on the root (depth 0) may
+     * have one reply (depth 1). Older/deeper remote threads remain visible,
+     * flattened at depth 1, but the native UI never offers a third-level
+     * reply action.
+     */
+    const val MAX_DEPTH = 1
 
     /** Bounded thread window (spec: size-bounded aggregates). */
     const val MAX_ITEMS = 200

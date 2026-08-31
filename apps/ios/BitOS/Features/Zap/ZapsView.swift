@@ -117,7 +117,7 @@ struct ZapsView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     private var ledgerContent: some View {

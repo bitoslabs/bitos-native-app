@@ -69,7 +69,7 @@ struct CameraScreen: View {
                 .padding(BitOSTheme.Spacing.lg)
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear { requestAccess() }
         .onDisappear {
             session.stopRunning()

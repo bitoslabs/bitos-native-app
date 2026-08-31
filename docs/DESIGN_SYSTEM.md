@@ -4,6 +4,48 @@
 
 ---
 
+## 0. Native implementation map (single source of truth chain)
+
+Token *values* are owned once by the versioned shared contract
+`shared/business-core/src/commonMain/kotlin/space/bitos/core/design/DesignTokens.kt`
+(SCHEMA_VERSION 1) and mirrored into both platforms — extend, don't fork:
+
+| Layer | File | Owns |
+|:--|:--|:--|
+| Contract | `shared/.../design/DesignTokens.kt` | both palettes (dark default + AA-tuned light), type/spacing/radius/avatar/motion scales, hex geometry fractions, WCAG 2.1 contrast engine |
+| Contract tests | `shared/.../commonTest/.../design/DesignTokensTest.kt` | contrast floors per mode (§2.6 as executable rules), dark-legacy value pins, scale invariants |
+| SwiftUI | `apps/ios/BitOS/DesignSystem/BitOSTheme.swift` | dynamic dark/light `Color`s (trait-resolved + `modeOverride` for APP-023), `BitOSType`, `BitOSMotion`, `BitOSRadius/Spacing/AvatarSize`, glow modifiers |
+| Compose | `apps/android/.../ui/theme/Theme.kt` | `BitOSPalette` (dark + light) via `LocalBitOSColors`, both Material schemes, `BitOSTheme(darkTheme)` |
+| Components | `apps/ios/BitOS/DesignSystem/App{Button,Chip,Skeleton}.swift` · `apps/android/.../ui/designsystem/*.kt` | button (primary/on-surface/ghost/danger + loading + pressed-scale), chip (default/active/brand/removable), card, shimmer skeletons, matched empty state |
+
+Rules of the chain:
+
+1. **Light mode is derived, not guessed.** The dark accent fails AA as
+   text/labels on light surfaces, so light mode ships per-mode *text*
+   roles (`textLink`, `errorText`, `successText`, `warningText`,
+   `infoText`, `accentText`) at 700-range values; light `textSecondary`
+   is `0x4B5563` and tertiary `0x717684` (spec's originals missed the
+   4.5:1 / 3:1 floors — enforced by `DesignTokensTest`). Social action
+   colors also darken in light so icons hold 3:1 (WCAG 1.4.11).
+2. **Existing call sites keep compiling**: `BitOSTheme.surface` /
+   `BitOSColors.background` resolve dynamically now; screens pick up
+   light mode without edits. Prefer the `*Text` roles for any text on
+   surfaces and `textPrimary`/`background` inverted buttons over raw
+   accent-as-text.
+3. **APP-023 wiring (live)**: the iOS settings adapter syncs
+   `BitOSTheme.modeOverride`/`accentOverride` from `ThemeModeSetting` +
+   accent hex on every reload (launch + live edits) while the shell and
+   every sheet drive `preferredColorScheme(BitOSTheme.preferredScheme)`;
+   Android passes `BitOSTheme(darkTheme = …, accentColorHex = …)` from
+   the same settings and resolves `BitOSColors` through
+   `LocalBitOSColors`. Neither belongs to views.
+4. Adding a token: bump `DesignTokens.SCHEMA_VERSION`, add the value in
+   both palettes, extend `DesignTokensTest`, then mirror in both theme
+   files. Bundling Inter/JetBrains Mono or swapping icon backing later
+   changes only the theme files, never call sites.
+
+---
+
 ## 1. Design Principles
 
 ### 1.1 Core Principles

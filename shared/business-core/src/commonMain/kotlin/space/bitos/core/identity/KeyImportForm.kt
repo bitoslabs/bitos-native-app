@@ -1,5 +1,8 @@
 package space.bitos.core.identity
 
+import space.bitos.core.crypto.SchnorrSigning
+import space.bitos.core.nostr.Sha256EventHasher
+
 /**
  * Shared nsec-import field rules (ID-004): one deterministic classifier so
  * the Compose and SwiftUI login fields render identical live feedback and
@@ -21,6 +24,10 @@ class KeyImportCheck(
     val message: String? = null,
     /** hex64 secret; non-null iff [verdict] is READY. */
     val secretHex: String? = null,
+    /** Derived x-only pubkey hex; non-null iff [verdict] is READY. */
+    val pubkeyHex: String? = null,
+    /** Derived npub of [pubkeyHex]; non-null iff [verdict] is READY. */
+    val npub: String? = null,
 )
 
 object KeyImportForm {
@@ -49,7 +56,7 @@ object KeyImportForm {
         }
         if (lowered.startsWith(NSEC_PREFIX)) {
             val secret = NostrKeyCodec.parseNsec(trimmed)
-            if (secret != null) return KeyImportCheck(KeyImportVerdict.READY, "Valid nsec key.", secret)
+            if (secret != null) return ready(secret, "Valid nsec key.")
             val tooShort = trimmed.length < NSEC_LENGTH
             val tooLong = trimmed.length > NSEC_LENGTH
             return KeyImportCheck(
@@ -66,12 +73,43 @@ object KeyImportForm {
             )
         }
         if (trimmed.length == HEX_SECRET_LENGTH && trimmed.all { it.isHexDigit() }) {
-            return KeyImportCheck(KeyImportVerdict.READY, "Valid hex secret key.", lowered)
+            return ready(lowered, "Valid hex secret key.")
         }
         return KeyImportCheck(
             KeyImportVerdict.BAD_PREFIX,
             "Secret keys start with nsec1 (or are $HEX_SECRET_LENGTH hex characters).",
         )
+    }
+
+    /**
+     * READY check with the derived identity attached so import surfaces can
+     * preview "the account this key controls" live, before submit (KF-6).
+     * Derivation is pure schnorr x-only; no state, no storage.
+     */
+    private fun ready(secretHex: String, message: String): KeyImportCheck {
+        val pubkey = SchnorrSigning.publicKey(hexBytes(secretHex), Sha256EventHasher)
+            ?: return KeyImportCheck(KeyImportVerdict.INVALID, "Key rejected by the signer.")
+        val pubkeyHex = bytesToHex(pubkey)
+        return KeyImportCheck(
+            KeyImportVerdict.READY,
+            message,
+            secretHex,
+            pubkeyHex,
+            NostrKeyCodec.npub(pubkeyHex),
+        )
+    }
+
+    private fun hexBytes(hex: String): ByteArray =
+        ByteArray(hex.length / 2) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val digits = "0123456789abcdef"
+        val out = StringBuilder(bytes.size * 2)
+        for (byte in bytes) {
+            val value = byte.toInt() and 0xff
+            out.append(digits[value shr 4]).append(digits[value and 0x0f])
+        }
+        return out.toString()
     }
 
     private fun Char.isHexDigit(): Boolean =

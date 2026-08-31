@@ -19,8 +19,12 @@ object NostrKinds {
     const val PROFILE_METADATA = 0
     const val SHORT_TEXT_NOTE = 1
     const val CONTACT_LIST = 3
+    /** NIP-09 event deletion. */
+    const val EVENT_DELETION = 5
     const val REPOST = 6
     const val GENERIC_REACTION = 7
+    /** NIP-18 generic repost (embedded JSON payload). */
+    const val GENERIC_REPOST = 16
     const val LONG_FORM = 30_023
     /** NIP-68 picture event (image reels). */
     const val PICTURE = 20
@@ -35,6 +39,8 @@ object NostrKinds {
     /** NIP-71 addressable (replaceable) short-form video event. */
     const val ADDRESSABLE_SHORT_VIDEO = 34_236
     const val VIDEO_COMMENT = 1_111
+    /** Poll response vote (web `votePoll` wire: `e` + `response` tags). */
+    const val POLL_RESPONSE = 1_018
 
     /** Kinds whose events project into the feed window (reads + projection). */
     val feedKinds: List<Int> = listOf(

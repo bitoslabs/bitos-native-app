@@ -48,7 +48,7 @@ class FeedRepositoryTest {
         transport = FakeRelayTransport(relay)
         pool = RelayPool(scope, listOf(relay)) { _, _ -> transport }
         cache = RecordingEventCache()
-        repository = FeedRepository(scope, pool, hasher, cache)
+        repository = FeedRepository(scope, pool, hasher, cache, bootstrapPollMs = 25)
     }
 
     @AfterTest
@@ -502,6 +502,87 @@ class FeedRepositoryTest {
         assertTrue(request.contains(""""limit":1"""), request)
         assertTrue(request.contains("2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"), request)
     }
+
+    /**
+     * Cold-start account bootstrap (shared `AccountBootstrap`): the one-shot
+     * account heads fired by setAccount are lost when no socket is open. A
+     * later connectivity episode must re-issue them; a resolved head stops
+     * being re-asked even as connectivity keeps changing.
+     */
+    @Test
+    fun coldStartReissuesLostAccountHeadsWhenRelayConnects(): Unit = runBlocking {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        repository.start()
+        repository.setAccount(account)
+        // Simulate the cold-start drop: everything the heads sent is gone.
+        transport.sent.clear()
+
+        // A relay reconnects later (connectivity grows 0 → 1).
+        transport.close()
+        transport.connect()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-contacts") }) kotlinx.coroutines.delay(10)
+        }
+        assertTrue(transport.sent.any { it.startsWith("""["REQ","bitos-profile-head-""") })
+        assertTrue(transport.sent.any { it.contains("bitos-bookmarks") && it.contains("30003") })
+        assertTrue(transport.sent.any { it.contains("bitos-blocks") && it.contains("10004") })
+
+        // The contact head resolves; later episodes stop re-asking for it.
+        transport.emit(VALID_CONTACT_LIST_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.followingResolved } }
+        val contactsSent = transport.sent.count { it.contains("bitos-contacts") }
+        transport.close()
+        transport.connect()
+        kotlinx.coroutines.delay(300)
+        assertEquals(contactsSent, transport.sent.count { it.contains("bitos-contacts") })
+    }
+
+    /**
+     * The re-issue budget is bounded per connectivity episode (a constant
+     * connected count never re-arms it) and a NEW relay connecting opens a
+     * fresh episode.
+     */
+    @Test
+    fun accountHeadRefetchIsBoundedPerEpisodeAndRearmsOnGrowth(): Unit = runBlocking {
+        val relayB = RelayUrl.parse("wss://relay-b.test")!!
+        val transportB = FakeRelayTransport(relayB)
+        val twoRelayPool = RelayPool(scope, listOf(relay, relayB)) { url, _ ->
+            if (url == relayB) transportB else transport
+        }
+        val bounded = FeedRepository(scope, twoRelayPool, hasher, cache, bootstrapPollMs = 25)
+        try {
+            val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+            bounded.start()
+            // Park at exactly ONE connected relay so the connected count is
+            // constant while the budget burns.
+            transport.simulate(RelayConnectionState.DISCONNECTED)
+            transportB.simulate(RelayConnectionState.DISCONNECTED)
+            transport.simulate(RelayConnectionState.CONNECTED)
+            kotlinx.coroutines.delay(100) // watcher settles at 1
+            bounded.setAccount(account)
+            transport.sent.clear()
+
+            withTimeout(20_000) {
+                while (transport.sent.count { it.startsWith("""["REQ","bitos-profile-head-""") } <
+                    space.bitos.core.identity.AccountBootstrap.MAX_ATTEMPTS) {
+                    kotlinx.coroutines.delay(10)
+                }
+            }
+            kotlinx.coroutines.delay(200)
+            val burned = transport.sent.count { it.startsWith("""["REQ","bitos-profile-head-""") }
+            assertEquals(space.bitos.core.identity.AccountBootstrap.MAX_ATTEMPTS, burned)
+
+            // A NEW relay connecting (count grows 1 → 2) opens a fresh episode.
+            transportB.simulate(RelayConnectionState.CONNECTED)
+            withTimeout(20_000) {
+                while (transport.sent.count { it.startsWith("""["REQ","bitos-profile-head-""") } <= burned) {
+                    kotlinx.coroutines.delay(10)
+                }
+            }
+        } finally {
+            bounded.stop()
+        }
+    }
 }
 
 /** Deterministic in-memory transport double. */
@@ -525,6 +606,11 @@ private val mutableFrames = MutableSharedFlow<RelayFrame>(replay = 8, extraBuffe
 
     override fun close(code: Int, reason: String) {
         mutableState.value = RelayConnectionState.DISCONNECTED
+    }
+
+    /** Test-only transition without the connect()/close() side effects. */
+    fun simulate(state: RelayConnectionState) {
+        mutableState.value = state
     }
 
     fun emit(message: String) {

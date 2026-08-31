@@ -164,6 +164,12 @@ private fun StatTile(label: String, value: String, emphasized: Boolean = false, 
     }
 }
 
+/** Shared zap-ledger row (wallet + profile Zaps tab parity). */
+@Composable
+fun ZapLedgerRow(entry: SentZapLedger.LedgerEntry, profile: space.bitos.core.model.ProfileMetadata?) {
+    ZapRow(entry, profile)
+}
+
 @Composable
 private fun ZapRow(entry: SentZapLedger.LedgerEntry, profile: space.bitos.core.model.ProfileMetadata?) {
     val received = entry.direction == SentZapLedger.Direction.RECEIVED

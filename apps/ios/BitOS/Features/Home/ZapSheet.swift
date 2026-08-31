@@ -106,7 +106,7 @@ struct ZapSheet: View {
                     ToolbarItem(placement: .cancellationAction) { SheetCloseButton(action: onClose) }
                 }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear {
             // Profile zaps have no note receipt stream to watch (LUD-21 only).
             if let note { environment.feedStore.loadZaps(targetEventId: note.id) }

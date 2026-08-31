@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import space.bitos.app.ui.theme.BitOSColors
 
 /**
  * Hex identity system (unified feature spec §2.5/§4, APP-022): the BitOS
@@ -149,6 +150,64 @@ fun HexAvatar(
                     .background(Brush.linearGradient(listOf(Color(0xFFFFB51B), Color(0xFFF7931A))))
                     .border(1.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
                     .padding(2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Outlined ring-hex avatar (mock 06 `.hex-avatar` parity): a 2 dp identity
+ * ring around a dark inner hex with the colored initial — the honeycomb
+ * variant used by aggregated inbox rows. `verified` adds the small orange
+ * NIP-05 bolt badge (mock `.hex-avatar.verified`).
+ */
+@Composable
+fun RingHexAvatar(
+    pubkey: String,
+    modifier: Modifier = Modifier,
+    size: Int = 40,
+    ring: Color? = null,
+    label: String? = null,
+    imageUrl: String? = null,
+    verified: Boolean = false,
+) {
+    val identity = ring ?: HexIdentity.identityColors(pubkey).start
+    val initials = avatarInitials(label ?: pubkey)
+    Box(
+        modifier = modifier
+            .size(size.dp)
+            .semantics { contentDescription = "Avatar $initials" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(size.dp).clip(HexShape()).background(identity))
+        Box(
+            Modifier
+                .size((size - 4).dp)
+                .clip(HexShape())
+                .background(BitOSColors.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            safeProfilePictureUrl(imageUrl)?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size((size - 4).dp).clip(HexShape()),
+                )
+            } ?: Text(initials, color = identity, fontSize = (size / 3).sp, fontWeight = FontWeight.W700)
+        }
+        if (verified) {
+            Icon(
+                Icons.Rounded.Bolt,
+                contentDescription = "NIP-05 verified",
+                tint = Color(0xFF1A0E00),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(15.dp)
+                    .background(Color.White, androidx.compose.foundation.shape.CircleShape)
+                    .padding(1.dp)
+                    .background(BitOSColors.primary, androidx.compose.foundation.shape.CircleShape)
+                    .padding(1.dp),
             )
         }
     }

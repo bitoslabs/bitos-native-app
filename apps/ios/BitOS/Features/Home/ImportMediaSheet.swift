@@ -54,7 +54,7 @@ struct ImportMediaSheet: View {
                     }
                 }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     @ViewBuilder

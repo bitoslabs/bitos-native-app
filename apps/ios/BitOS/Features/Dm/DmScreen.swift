@@ -42,7 +42,7 @@ struct DmScreen: View {
                 environment.dmStore.openConversation(pubkey)
             }
             .presentationDetents([.medium])
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
         }
     }
 }

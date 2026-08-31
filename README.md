@@ -47,3 +47,8 @@ The web client this platform keeps parity with lives in the sibling repo
 Run `make doctor` to see installed prerequisites and `make check` for every locally available validation. Common targets: `make android-apk`, `make android-test`, `make build-ios`, `make native-test`, `make service-test`.
 
 Current toolchain requirements are documented in [toolchains.md](docs/engineering/toolchains.md).
+
+
+## icon system
+
+[solar](https://icones.js.org/collection/solar)

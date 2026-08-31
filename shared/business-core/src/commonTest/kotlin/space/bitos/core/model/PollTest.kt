@@ -103,4 +103,31 @@ class PollTest {
         assertTrue(event.tags.any { it == listOf("t", "bitcoin") })
         assertTrue(event.tags.count { it.first() == PollContract.TAG } == 2)
     }
+
+    @Test
+    fun pollVoteWireMatchesWebAndLatestVoteWins() {
+        val author = "aa".repeat(32)
+        // Wire shape: kind 1018, `e` + `response` tags, empty content.
+        val composer = NoteComposer(Sha256EventHasher, { 1_700_000_000L })
+        val vote = composer.composePollVote("11".repeat(32), 2, author)!!
+        assertEquals(1_018, vote.kind)
+        assertEquals(listOf(listOf("e", "11".repeat(32)), listOf("response", "2")), vote.tags)
+        assertEquals("", vote.content)
+        // Bounds refuse invalid option indexes and bad ids.
+        assertNull(composer.composePollVote("11".repeat(32), 256, author))
+        assertNull(composer.composePollVote("zz", 1, author))
+
+        // Tally: latest vote per pubkey wins; changing a vote moves it.
+        val tallyRule = PollVotes()
+        val byPubkey = LinkedHashMap<String, PollVote>()
+        tallyRule.absorb(byPubkey, PollVote("bb".repeat(32), 0, at = 100))
+        tallyRule.absorb(byPubkey, PollVote("bb".repeat(32), 1, at = 200)) // newer — wins
+        tallyRule.absorb(byPubkey, PollVote("bb".repeat(32), 0, at = 150)) // older — ignored
+        tallyRule.absorb(byPubkey, PollVote(author, 1, at = 300))
+        val tally = tallyRule.tally(byPubkey, myPubkey = author)
+        assertEquals(2, tally.total)
+        assertEquals(mapOf(1 to 2), tally.counts)
+        assertEquals(1, tally.myVote)
+        assertEquals(null, tallyRule.tally(byPubkey, myPubkey = "cc".repeat(32)).myVote)
+    }
 }

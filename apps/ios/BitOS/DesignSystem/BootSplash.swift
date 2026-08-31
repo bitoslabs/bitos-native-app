@@ -155,11 +155,11 @@ struct BootSplashScreen: View {
     @State private var enterAmount = 0.0
     @State private var fadeAmount = 1.0
 
-    // APP-023: the shell is dark-only (RootView forces
-    // .preferredColorScheme(.dark)) until light tokens ship, so the splash
-    // must be dark in BOTH system modes — a light splash handing off into
-    // the near-black shell reads as a jarring "black screen". Re-wire to
-    // the persisted theme setting when APP-023 lands.
+    // APP-023: the splash art is dark-only (brand launch chain), so the
+    // component stays dark in BOTH system modes even though the shell now
+    // honors the persisted theme — a light splash handing off into a
+    // themed shell reads as a flash. Disabled at app entry (fast access
+    // decision); re-wire to light art if the splash is ever re-enabled.
     private let colorScheme: ColorScheme = .dark
 
     private var background: Color {

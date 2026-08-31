@@ -22,38 +22,63 @@ object NotificationExtractor {
 
     /**
      * Extracts a notification for [accountPubkey] from a verified event.
-     * Returns null when the event does not target the account.
+     * Returns null when the event does not target the account. Classification
+     * mirrors the web client: marker-tagged threads are replies (the reply
+     * marker wins over the root when they differ), a #p-tagged note without
+     * thread markers is a standalone mention whose target is the quoted
+     * note (first `e` tag), negative reactions (`-`) never notify, kind-16
+     * generic reposts repost, and zap receipts prefer the *second* `e` tag
+     * (the first is the zapped note's own reference in most receipts).
      */
     fun extract(event: NostrEvent, accountPubkey: String): NotificationItem? {
         if (event.pubkey.value == accountPubkey) return null // own events are not notifications
         val tagsTargetAccount = event.tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == accountPubkey }
         if (!tagsTargetAccount && event.kind != ZapReceipt.RECEIPT_KIND) return null
 
-        val targetEventId = event.tags.firstOrNull { it.firstOrNull() == "e" }?.getOrNull(1)
+        val eventTags = event.tags.filter { it.firstOrNull() == "e" && !it.getOrNull(1).isNullOrEmpty() }
         val summary = event.content.trim().let { if (it.length > 120) it.take(119) + "…" else it }
 
         return when (event.kind) {
-            NostrKinds.SHORT_TEXT_NOTE -> NotificationItem(
-                id = event.id.value,
-                authorPubkey = event.pubkey.value,
-                kind = if (targetEventId != null) NotificationKind.REPLY else NotificationKind.MENTION,
-                targetEventId = targetEventId,
-                summary = summary,
-                createdAt = event.createdAt,
-            )
-            NostrKinds.GENERIC_REACTION -> NotificationItem(
-                id = event.id.value,
-                authorPubkey = event.pubkey.value,
-                kind = NotificationKind.REACTION,
-                targetEventId = targetEventId,
-                summary = "+", // reaction content is conventionally "+"
-                createdAt = event.createdAt,
-            )
-            NostrKinds.REPOST -> NotificationItem(
+            NostrKinds.SHORT_TEXT_NOTE -> {
+                val target = replyTarget(eventTags)
+                if (target != null) {
+                    NotificationItem(
+                        id = event.id.value,
+                        authorPubkey = event.pubkey.value,
+                        kind = NotificationKind.REPLY,
+                        targetEventId = target,
+                        summary = summary,
+                        createdAt = event.createdAt,
+                    )
+                } else {
+                    // Standalone mention; a quoted note (plain `e` tag, no
+                    // thread marker) becomes the deep link.
+                    NotificationItem(
+                        id = event.id.value,
+                        authorPubkey = event.pubkey.value,
+                        kind = NotificationKind.MENTION,
+                        targetEventId = eventTags.firstOrNull()?.get(1),
+                        summary = summary,
+                        createdAt = event.createdAt,
+                    )
+                }
+            }
+            NostrKinds.GENERIC_REACTION -> {
+                if (event.content.trim() == "-") return null // negative reaction: never a like
+                NotificationItem(
+                    id = event.id.value,
+                    authorPubkey = event.pubkey.value,
+                    kind = NotificationKind.REACTION,
+                    targetEventId = replyTarget(eventTags) ?: eventTags.firstOrNull()?.get(1),
+                    summary = summary.ifEmpty { "+" },
+                    createdAt = event.createdAt,
+                )
+            }
+            NostrKinds.REPOST, NostrKinds.GENERIC_REPOST -> NotificationItem(
                 id = event.id.value,
                 authorPubkey = event.pubkey.value,
                 kind = NotificationKind.REPOST,
-                targetEventId = targetEventId,
+                targetEventId = repostTarget(eventTags, event.content),
                 summary = "",
                 createdAt = event.createdAt,
             )
@@ -82,7 +107,9 @@ object NotificationExtractor {
                     id = event.id.value,
                     authorPubkey = sender ?: "", // verified payer when the embedded 9734 checks out
                     kind = NotificationKind.ZAP,
-                    targetEventId = targetEventId,
+                    // Receipts commonly carry the request's own `e` first;
+                    // the zapped note is the second (web parity).
+                    targetEventId = eventTags.getOrNull(1)?.get(1) ?: eventTags.firstOrNull()?.get(1),
                     summary = amountText,
                     createdAt = event.createdAt,
                     amountMsat = amountMsat,
@@ -90,5 +117,25 @@ object NotificationExtractor {
             }
             else -> null
         }
+    }
+
+    /** Thread-targeted reply detection: `e` tags carrying root/reply markers. */
+    private fun replyTarget(eventTags: List<List<String>>): String? {
+        val root = eventTags.firstOrNull { it.getOrNull(3) == "root" }?.get(1)
+            ?: eventTags.firstOrNull()?.get(1)
+        val reply = eventTags.firstOrNull { it.getOrNull(3) == "reply" }?.get(1)
+        return if (reply != null && reply != root) reply else root?.takeIf { hasThreadMarker(eventTags) }
+    }
+
+    private fun hasThreadMarker(eventTags: List<List<String>>): Boolean =
+        eventTags.any { it.getOrNull(3) == "reply" || it.getOrNull(3) == "root" }
+
+    /** Generic reposts embed the target as JSON; fall back to the first `e`. */
+    private fun repostTarget(eventTags: List<List<String>>, content: String): String? {
+        if (eventTags.isNotEmpty()) return eventTags.first().get(1)
+        val embedded = content.trim().removePrefix("\"").removeSuffix("\"")
+        return embedded.substringAfter("\"id\":\"", missingDelimiterValue = "")
+            .substringBefore('"')
+            .takeIf { it.length == 64 }
     }
 }

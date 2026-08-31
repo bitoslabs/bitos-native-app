@@ -3,6 +3,7 @@ package space.bitos.core.identity
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Import-field rule vectors (ID-004). Keys are the public test fixtures from
@@ -21,6 +22,31 @@ class KeyImportFormTest {
         assertEquals(KeyImportVerdict.READY, check.verdict)
         assertEquals(secretHex, check.secretHex)
         assertEquals("Valid nsec key.", check.message)
+    }
+
+    @Test
+    fun readyChecksCarryTheDerivedIdentity() {
+        // KF-6: a READY check previews the account the key controls — the
+        // npub derives from the same secret, no storage involved.
+        listOf(nsec, secretHex, secretHex.uppercase(), "  $nsec\n").forEach { input ->
+            val check = KeyImportForm.check(input)
+            assertEquals(KeyImportVerdict.READY, check.verdict)
+            assertEquals(64, check.pubkeyHex?.length)
+            assertTrue(check.pubkeyHex!!.all { it in '0'..'f' })
+            assertTrue(check.npub!!.startsWith("npub1"))
+            assertEquals(check.pubkeyHex, NostrKeyCodec.parseNpub(check.npub!!))
+        }
+    }
+
+    @Test
+    fun nonReadyVerdictsNeverCarryIdentity() {
+        listOf("", npub, nsec.dropLast(4), nsec + "q", "note182…", nsec.dropLast(2) + " q").forEach { input ->
+            val check = KeyImportForm.check(input)
+            if (check.verdict != KeyImportVerdict.READY) {
+                assertNull(check.pubkeyHex)
+                assertNull(check.npub)
+            }
+        }
     }
 
     @Test

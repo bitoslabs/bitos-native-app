@@ -89,6 +89,25 @@ fun ProfileEditContent(
     val context = androidx.compose.ui.platform.LocalContext.current
     var banner by rememberSaveable { mutableStateOf(initialBanner) }
     var website by rememberSaveable { mutableStateOf(initialWebsite) }
+    // Cold-start race: the kind-0 head may land AFTER the editor opened
+    // (relays connect late), so untouched fields seed from it as soon as it
+    // arrives. Any keystroke claims the fields and stops further seeding.
+    var touched by rememberSaveable { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(
+        initialName, initialDisplayName, initialAbout, initialNip05,
+        initialLud16, initialPicture, initialBanner, initialWebsite,
+    ) {
+        if (!touched) {
+            name = initialName
+            displayName = initialDisplayName
+            about = initialAbout
+            nip05 = initialNip05
+            lud16 = initialLud16
+            picture = initialPicture
+            banner = initialBanner
+            website = initialWebsite
+        }
+    }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var uploadingTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     var uploadError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
@@ -216,7 +235,7 @@ fun ProfileEditContent(
             FieldLabel("Username")
             space.bitos.app.ui.components.BitosTextField(
                 value = name,
-                onValueChange = { if (it.length <= 64) name = it },
+                onValueChange = { if (it.length <= 64) { name = it; touched = true } },
                 placeholder = "username",
                 singleLine = true,
                 compact = true,
@@ -228,7 +247,7 @@ fun ProfileEditContent(
             FieldLabel("Display name")
             space.bitos.app.ui.components.BitosTextField(
                 value = displayName,
-                onValueChange = { if (it.length <= 64) displayName = it },
+                onValueChange = { if (it.length <= 64) { displayName = it; touched = true } },
                 placeholder = "Your name",
                 singleLine = true,
                 compact = true,
@@ -240,14 +259,14 @@ fun ProfileEditContent(
             FieldLabel("Bio")
             space.bitos.app.ui.components.BitosTextField(
                 value = about,
-                onValueChange = { if (it.length <= 300) about = it },
+                onValueChange = { if (it.length <= 300) { about = it; touched = true } },
                 placeholder = "Tell the world about yourself…",
                 singleLine = false,
                 minLines = 3,
                 compact = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("${'$'}{about.length} / 300 characters", fontSize = 11.sp, color = BitOSColors.textTertiary, modifier = Modifier.padding(top = 4.dp))
+            Text("${about.length} / 300 characters", fontSize = 11.sp, color = BitOSColors.textTertiary, modifier = Modifier.padding(top = 4.dp))
         }
         uploadError?.let { Text(it, fontSize = 12.sp, color = BitOSColors.error) }
 
@@ -255,7 +274,7 @@ fun ProfileEditContent(
             FieldLabel(if (uploadingTarget == "avatar") "Uploading… (avatar URL)" else "Avatar picture URL")
             space.bitos.app.ui.components.BitosTextField(
                 value = picture,
-                onValueChange = { if (it.length <= 256) picture = it },
+                onValueChange = { if (it.length <= 256) { picture = it; touched = true } },
                 placeholder = "https://…",
                 singleLine = true,
                 compact = true,
@@ -267,7 +286,7 @@ fun ProfileEditContent(
             FieldLabel(if (uploadingTarget == "banner") "Uploading… (banner URL)" else "Banner picture URL")
             space.bitos.app.ui.components.BitosTextField(
                 value = banner,
-                onValueChange = { if (it.length <= 256) banner = it },
+                onValueChange = { if (it.length <= 256) { banner = it; touched = true } },
                 placeholder = "https://…",
                 singleLine = true,
                 compact = true,
@@ -279,7 +298,7 @@ fun ProfileEditContent(
             FieldLabel("Website")
             space.bitos.app.ui.components.BitosTextField(
                 value = website,
-                onValueChange = { if (it.length <= 128) website = it },
+                onValueChange = { if (it.length <= 128) { website = it; touched = true } },
                 placeholder = "https://example.com",
                 singleLine = true,
                 compact = true,
@@ -291,7 +310,7 @@ fun ProfileEditContent(
             FieldLabel("NIP-05")
             space.bitos.app.ui.components.BitosTextField(
                 value = nip05,
-                onValueChange = { if (it.length <= 64) nip05 = it },
+                onValueChange = { if (it.length <= 64) { nip05 = it; touched = true } },
                 placeholder = "name@example.com",
                 singleLine = true,
                 compact = true,
@@ -303,7 +322,7 @@ fun ProfileEditContent(
             FieldLabel("Lightning address")
             space.bitos.app.ui.components.BitosTextField(
                 value = lud16,
-                onValueChange = { if (it.length <= 64) lud16 = it },
+                onValueChange = { if (it.length <= 64) { lud16 = it; touched = true } },
                 placeholder = "name@getalby.com",
                 singleLine = true,
                 compact = true,

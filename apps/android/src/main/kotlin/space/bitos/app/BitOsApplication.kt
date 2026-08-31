@@ -87,7 +87,11 @@ class BitOsApplication : Application() {
         space.bitos.app.data.dm.DmRepository(
             applicationScope,
             relayPool,
-        ) { keyStore.loadSecret() }
+            secretProvider = { keyStore.loadSecret() },
+            prefs = SharedPrefsDmPrefs(
+                getSharedPreferences("bitos_dms", MODE_PRIVATE),
+            ),
+        )
     }
 
     val sentZapsStore: space.bitos.app.data.zap.SentZapsStore by lazy {
@@ -124,6 +128,16 @@ class BitOsApplication : Application() {
         space.bitos.app.data.feed.MuteStore(this)
     }
 
+    /** Local ranking signals (hide + author/tag demotions). */
+    val interactionProfile: space.bitos.app.data.feed.InteractionProfileStore by lazy {
+        space.bitos.app.data.feed.InteractionProfileStore(this)
+    }
+
+    /** NIP-51 followed hashtags (kind 30015 d=interest). */
+    val hashtagFollows: space.bitos.app.data.feed.HashtagFollowsStore by lazy {
+        space.bitos.app.data.feed.HashtagFollowsStore(applicationScope, relayPool)
+    }
+
     override fun onCreate() {
         super.onCreate()
         debugProcess("created")
@@ -149,6 +163,40 @@ class BitOsApplication : Application() {
 
     private companion object {
         const val PROCESS_LOG_TAG = "BitOS.Process"
+    }
+}
+
+/** Read-cursor + acceptance persistence for the DM inbox (bounded by the repository). */
+private class SharedPrefsDmPrefs(
+    private val prefs: android.content.SharedPreferences,
+) : space.bitos.app.data.dm.DmPrefs {
+    override fun readCursors(): Map<String, Long> {
+        val raw = prefs.getStringSet("read_cursors", emptySet()) ?: emptySet()
+        val parsed = raw.mapNotNull { entry ->
+            val parts = entry.split('|', limit = 2)
+            if (parts.size == 2) {
+                parts[1].toLongOrNull()?.let { seconds -> parts[0] to seconds }
+            } else {
+                null
+            }
+        }
+        return parsed.toMap()
+    }
+
+    override fun saveReadCursors(cursors: Map<String, Long>) {
+        prefs.edit().putStringSet("read_cursors", cursors.map { "${it.key}|${it.value}" }.toSet()).apply()
+    }
+
+    override fun acceptedPeers(): Set<String> = prefs.getStringSet("accepted_peers", emptySet()) ?: emptySet()
+
+    override fun saveAcceptedPeers(peers: Set<String>) {
+        prefs.edit().putStringSet("accepted_peers", peers).apply()
+    }
+
+    override fun declinedPeers(): Set<String> = prefs.getStringSet("declined_peers", emptySet()) ?: emptySet()
+
+    override fun saveDeclinedPeers(peers: Set<String>) {
+        prefs.edit().putStringSet("declined_peers", peers).apply()
     }
 }
 

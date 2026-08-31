@@ -94,7 +94,7 @@ struct ProfileEditSheet: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(BitOSTheme.background)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .sheet(item: $sourceSheetTarget) { target in
             sourceSheet(target: target.id)
         }
@@ -122,14 +122,14 @@ struct ProfileEditSheet: View {
     }
 
     private func fill(from profile: ProfileMetadata) {
-        name = profile.name
-        displayName = profile.displayName
-        about = profile.about
-        nip05 = profile.nip05
-        lud16 = profile.lud16
-        picture = profile.picture
-        banner = profile.banner
-        website = profile.website
+        name = profile.name ?? ""
+        displayName = profile.displayName ?? ""
+        about = profile.about ?? ""
+        nip05 = profile.nip05 ?? ""
+        lud16 = profile.lud16 ?? ""
+        picture = profile.picture ?? ""
+        banner = profile.banner ?? ""
+        website = profile.website ?? ""
     }
 
     /// Legacy editor page chrome: back chevron + inline title.

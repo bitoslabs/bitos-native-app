@@ -120,10 +120,20 @@ enum SettingsBitzMode: String, CaseIterable, Identifiable {
 }
 
 import SwiftUI
+import UIKit
 
 /// Theme preference → SwiftUI color scheme (nil = follow system).
 extension SettingsThemeMode {
     var colorScheme: ColorScheme? {
+        switch self {
+        case .light: .light
+        case .dark: .dark
+        case .system: nil
+        }
+    }
+
+    /// Theme preference → UIKit override style (nil = follow system).
+    var userInterfaceStyle: UIUserInterfaceStyle? {
         switch self {
         case .light: .light
         case .dark: .dark
@@ -205,6 +215,19 @@ final class SettingsStore {
             bitzMode: SettingsBitzMode(rawValue: snapshot.bitzMode) ?? .forYou,
             videoMuted: snapshot.videoMuted
         )
+        syncAppearanceHooks()
+    }
+
+    /// APP-023 appearance adapter: keep the SwiftUI theme hooks in sync
+    /// with the persisted snapshot. Runs on every reload (launch + each
+    /// write) so the shell's `preferredColorScheme` and the design-system
+    /// overrides resolve the user's choice before the first draw and on
+    /// every live change. The snapshot hex is already validated
+    /// `#RRGGBB` by the shared rules; a nil parse falls back to the brand.
+    private func syncAppearanceHooks() {
+        let mode = SettingsThemeMode(rawValue: state.themeMode.rawValue) ?? .dark
+        BitOSTheme.modeOverride = mode.userInterfaceStyle
+        BitOSTheme.accentOverride = UInt32(state.accentColorHex.dropFirst(), radix: 16)
     }
 
     /// Persist one canonical wire value through shared validation; returns

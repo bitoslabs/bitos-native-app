@@ -227,10 +227,13 @@ private enum class Phase { RUNNING, DONE, FAILED }
  */
 @Composable
 private fun OrbitHexRing(angle: Float, failed: Boolean) {
+    // Palette reads stay outside the draw lambda (DrawScope is not a
+    // composable context) so the ring follows the active theme.
+    val amberBase = if (failed) BitOSColors.error else BitOSColors.primary
     Canvas(Modifier.size(128.dp)) {
         val stroke = 1.8.dp.toPx()
         val hex = hexPath(size.width - stroke, size.height - stroke, stroke / 2)
-        val amber = if (failed) BitOSColors.error else BitOSColors.primary
+        val amber = amberBase
         val bright = if (failed) Color(0xFFFF6B61) else Color(0xFFFFD83D)
         // Static faint outline (the shape never rotates).
         drawPath(path = hex, color = amber.copy(alpha = 0.12f), style = Stroke(stroke))

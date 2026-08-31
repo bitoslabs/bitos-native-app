@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import space.bitos.app.data.feed.FeedRepository
 import space.bitos.app.data.feed.FeedTimeline
@@ -25,6 +26,8 @@ class HomeViewModel(
     private val notifications: space.bitos.app.data.feed.NotificationRepository? = null,
     private val muteStore: space.bitos.app.data.feed.MuteStore? = null,
     private val sentZaps: space.bitos.app.data.zap.SentZapsStore? = null,
+    private val interactionProfile: space.bitos.app.data.feed.InteractionProfileStore? = null,
+    private val hashtagFollowsStore: space.bitos.app.data.feed.HashtagFollowsStore? = null,
 ) : ViewModel() {
 
     private val mutableLocalActions = MutableStateFlow(LocalActions())
@@ -48,11 +51,21 @@ class HomeViewModel(
             identityViewModel?.state?.collect { state ->
                 repository.setAccount(state.account?.pubkeyHex)
                 notifications?.setAccount(state.account?.pubkeyHex)
+                hashtagFollowsStore?.setAccount(state.account?.pubkeyHex)
             }
         }
         // Mutes filter all feed windows.
         viewModelScope.launch {
             muteStore?.muted?.collect { muted -> repository.setMuted(muted) }
+        }
+        // Local ranking signals (hide + demotions) drive the shared ranker.
+        viewModelScope.launch {
+            val profile = interactionProfile ?: return@launch
+            combine(profile.dismissedNotes, profile.demotedAuthors, profile.demotedTags) { dismissed, authors, tags ->
+                Triple(dismissed, authors, tags)
+            }.collect { (dismissed, authors, tags) ->
+                repository.setInteractionProfile(dismissed, authors, tags)
+            }
         }
     }
 
@@ -108,12 +121,20 @@ class HomeViewModel(
     fun toggleLike(note: space.bitos.core.feed.FeedNote) {        val turningOn = note.id !in mutableLocalActions.value.liked
         mutableLocalActions.value = mutableLocalActions.value.copy(liked = toggle(mutableLocalActions.value.liked, note.id))
         repository.setLikedIds(mutableLocalActions.value.liked)
-        // Signed accounts publish a real kind-7 reaction on like; unlikes
-        // stay local until reaction deletion (kind 5) lands with SOC-002.
-        if (turningOn && notePublisher != null && identityViewModel != null) {
+        if (notePublisher == null || identityViewModel == null) return
+        // Signed accounts publish a real kind-7 reaction on like; an unlike
+        // deletes my reaction event (kind-5, web `unlikeNote` parity).
+        if (turningOn) {
             notePublisher.publishReactionWith(
                 targetEventId = note.id,
                 targetPubkey = note.pubkey,
+                signerProvider = { identityViewModel.createSigner() },
+                writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+            )
+        } else {
+            val reactionId = repository.state.value.myReactionEventIds[note.id] ?: return
+            notePublisher.publishDeletion(
+                targetEventIds = listOf(reactionId),
                 signerProvider = { identityViewModel.createSigner() },
                 writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
             )
@@ -158,6 +179,36 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * NIP-22 comment (kind 1111) on a non-kind-1 event — web `feed.comment`
+     * parity: the composer switches automatically for media targets. [root]
+     * is the commented event; [parent] is the comment being answered (null
+     * for top-level).
+     */
+    fun comment(
+        text: String,
+        root: space.bitos.core.feed.FeedNote,
+        parent: space.bitos.core.feed.FeedNote?,
+        attachments: List<String> = emptyList(),
+    ) {
+        if (notePublisher == null || identityViewModel == null) return
+        if (root.kind == space.bitos.core.model.NostrKinds.SHORT_TEXT_NOTE) return
+        val content = space.bitos.core.publish.ComposerRules.composeContent(text, attachments)
+        if (content.isBlank()) return
+        val tags = space.bitos.core.publish.NoteComposer.commentTags(
+            targetEventId = root.id,
+            targetPubkey = root.pubkey,
+            targetKind = root.kind,
+            parentEventId = parent?.id?.takeIf { it != root.id },
+            parentPubkey = parent?.pubkey?.takeIf { parent.id != root.id },
+            content = content,
+        ) ?: return
+        notePublisher.publishCommentWith(
+            content, tags,
+            { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
     /** Follow/unfollow: optimistic local flip + kind-3 publish when signed in. */
     fun toggleFollow(author: String) {
         val following = repository.state.value.following
@@ -182,9 +233,25 @@ class HomeViewModel(
         )
     }
 
+    /** Kind-5 deletion of one of the account's own notes/comments (NIP-09). */
+    fun deleteNote(note: space.bitos.core.feed.FeedNote) {
+        val account = identityViewModel?.state?.value?.account ?: return
+        if (note.pubkey != account.pubkeyHex) return
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishDeletion(
+            targetEventIds = listOf(note.id),
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
     fun selectZapAmount(sats: Long) {
         mutableZap.value = mutableZap.value.copy(amountSats = sats)
     }
+
+    /** APP-014: snapshot of the local sent-zap ledger (inbox zap-out rows). */
+    fun sentZapRecords(): List<space.bitos.core.model.SentZapRecord> =
+        sentZaps?.load() ?: emptyList()
 
     /** APP-014: record a paid zap into the local sent ledger. */
     fun onZapPaid(note: space.bitos.core.feed.FeedNote, amountSats: Long, memo: String = "") {
@@ -350,6 +417,67 @@ class HomeViewModel(
 
     fun isMuted(author: String): Boolean = muteStore?.isMuted(author) ?: false
 
+    // ── Local ranking signals (web interaction-profile parity) ─────────
+
+    val interaction: space.bitos.app.data.feed.InteractionProfileStore? get() = interactionProfile
+
+    /** Not interested: hide the note AND demote its author + topics. */
+    fun notInterested(note: space.bitos.core.feed.FeedNote) {
+        val profile = interactionProfile ?: return
+        profile.dismissNote(note.id)
+        profile.demoteAuthor(note.pubkey)
+        note.hashtags.forEach(profile::demoteTag)
+    }
+
+    /** Hide this note only (no ranking demotions). */
+    fun hideNote(note: space.bitos.core.feed.FeedNote) {
+        interactionProfile?.dismissNote(note.id)
+    }
+
+    fun toggleShowLessFrom(author: String) {
+        interactionProfile?.toggleDemotedAuthor(author)
+    }
+
+    fun toggleShowLessAbout(tag: String) {
+        interactionProfile?.toggleDemotedTag(tag)
+    }
+
+    // ── NIP-51 followed hashtags (web hashtag-follows parity) ──────────
+
+    val hashtagFollows: space.bitos.app.data.feed.HashtagFollowsStore? get() = hashtagFollowsStore
+
+    fun isHashtagFollowed(tag: String): Boolean =
+        hashtagFollowsStore?.isFollowed(tag) == true
+
+    /** Optimistic flip + interest-set (kind 30015 d=interest) publish. */
+    fun toggleHashtagFollow(tag: String) {
+        val store = hashtagFollowsStore ?: return
+        val updated = store.toggle(tag)
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishInterestSet(
+            hashtags = updated.toList(),
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** APP-008 poll vote: optimistic local flip + kind-1018 publish. */
+    fun votePoll(note: space.bitos.core.feed.FeedNote, optionIndex: Int) {
+        repository.applyOptimisticPollVote(note.id, optionIndex)
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishPollVote(
+            targetEventId = note.id,
+            optionIndex = optionIndex,
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** One-shot REQ for a poll's votes (called when a poll card renders). */
+    fun loadPollVotes(noteId: String) {
+        repository.loadPollVotes(noteId)
+    }
+
     fun toggleBookmark(noteId: String) {
         // Signed accounts: optimistic relay-backed set + kind-30003 publish.
         // Signed out: local-only optimistic state.
@@ -381,11 +509,14 @@ class HomeViewModel(
             identityViewModel: space.bitos.app.identity.IdentityViewModel,
             notifications: space.bitos.app.data.feed.NotificationRepository,
             muteStore: space.bitos.app.data.feed.MuteStore,
+            interactionProfile: space.bitos.app.data.feed.InteractionProfileStore? = null,
+            hashtagFollowsStore: space.bitos.app.data.feed.HashtagFollowsStore? = null,
+            sentZaps: space.bitos.app.data.zap.SentZapsStore? = null,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    HomeViewModel(repository, notePublisher, identityViewModel, notifications, muteStore) as T
+                    HomeViewModel(repository, notePublisher, identityViewModel, notifications, muteStore, sentZaps, interactionProfile, hashtagFollowsStore) as T
             }
     }
 }

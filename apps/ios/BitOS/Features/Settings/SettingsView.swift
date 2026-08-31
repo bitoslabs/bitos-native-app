@@ -283,7 +283,7 @@ private struct AppearanceSection: View {
             } header: {
                 Text("Theme")
             } footer: {
-                Text("Light surfaces land with the theming wave (APP-023); the preference is already persisted.")
+                Text("Applies immediately — System follows your device's light/dark setting.")
             }
             Section {
                 Picker("Text Size", selection: Binding(
@@ -297,7 +297,7 @@ private struct AppearanceSection: View {
             } header: {
                 Text("Text Size")
             } footer: {
-                Text("Text scaling applies app-wide with the theming wave (APP-023).")
+                Text("Text scaling applies app-wide.")
             }
             Section("Layout") {
                 Toggle("Compact mode", isOn: Binding(
@@ -311,7 +311,7 @@ private struct AppearanceSection: View {
             } header: {
                 Text("Accent Color")
             } footer: {
-                Text("Accent applies app-wide with the theming wave (APP-023); the choice is already persisted.")
+                Text("Accent restyles brand actions app-wide immediately.")
             }
         }
         .tint(BitOSTheme.accent)

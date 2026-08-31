@@ -70,14 +70,24 @@ fun CommentContent(
     onZap: (FeedNote) -> Unit,
     /** UX-010: author avatar/name taps open the profile sheet. */
     onOpenAuthor: (String) -> Unit = {},
+    /** Own-note deletion (NIP-09 kind-5) — hosts gate to own notes. */
+    onDelete: (FeedNote) -> Unit = {},
+    /** NIP-22 comment publish for non-kind-1 roots (web `feed.comment`). */
+    onComment: (String, FeedNote, FeedNote?, List<String>) -> Unit = { _, _, _, _ -> },
     onClose: () -> Unit,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     var text by remember { mutableStateOf("") }
-    val comments = feedState.comments[note.id].orEmpty()
+    // NIP-22 mode (ADR-003): non-kind-1 roots publish kind-1111 comments
+    // instead of kind-1 replies; PoW rides only the kind-1 path.
+    val commentMode = note.kind != space.bitos.core.model.NostrKinds.SHORT_TEXT_NOTE
+    // Own-note deletion: rows hide locally once the kind-5 is dispatched.
+    val deletedIds = remember { mutableStateOf(setOf<String>()) }
+    var deleteConfirm by remember { mutableStateOf<FeedNote?>(null) }
+    val comments = feedState.comments[note.id].orEmpty().filter { it.id !in deletedIds.value }
     // APP-009 X-style threading (shared ThreadAssembly): top-level +
     // flattened descendants behind depth indents.
-    val thread = feedState.threads[note.id].orEmpty()
+    val thread = feedState.threads[note.id].orEmpty().filter { it.id !in deletedIds.value }
     val noteById = remember(comments) { comments.associateBy { it.id } }
     // APP-009 live deltas (shared NoteTally): reactions/reposts/zaps.
     val tally = feedState.tallies[note.id]
@@ -187,6 +197,8 @@ fun CommentContent(
                     onBookmark = { onBookmark(note.id) },
                     onZap = { onZap(note) },
                     onOpenAuthor = { onOpenAuthor(note.pubkey) },
+                    canDelete = note.pubkey == identity.account?.pubkeyHex,
+                    onDelete = { deleteConfirm = note },
                 )
             }
             items(thread, key = { it.id }) { item ->
@@ -201,6 +213,9 @@ fun CommentContent(
                         onLike = { onLike(reply) },
                         onZap = { onZap(reply) },
                         onOpenAuthor = { onOpenAuthor(reply.pubkey) },
+                        canDelete = reply.pubkey == identity.account?.pubkeyHex,
+                        onDelete = { deleteConfirm = reply },
+                        canReply = item.depth == 0,
                         onReplyTo = { replyTarget = reply },
                     )
                 }
@@ -242,6 +257,7 @@ fun CommentContent(
                 sending = sending,
                 powActive = powOutcome != null || powTarget > 0,
                 powLabel = (powOutcome?.targetDifficulty ?: powTarget).takeIf { it > 0 }?.let { "$it bits" },
+                powAvailable = !commentMode,
                 canAdd = attachments.size < space.bitos.core.publish.ComposerRules.MAX_IMAGES,
                 onClearTarget = { replyTarget = null },
                 onRemoveAttachment = { attachments.removeAt(it) },
@@ -252,7 +268,11 @@ fun CommentContent(
                 onSend = {
                     if (!sending && (text.isNotBlank() || attachments.isNotEmpty())) {
                         awaitingReply = true
-                        onReply(text, effectiveTarget, attachments.toList(), powOutcome)
+                        if (commentMode) {
+                            onComment(text, note, replyTarget, attachments.toList())
+                        } else {
+                            onReply(text, effectiveTarget, attachments.toList(), powOutcome)
+                        }
                     }
                 },
             )
@@ -322,6 +342,25 @@ fun CommentContent(
             },
         )
     }
+
+    // Own-note delete confirmation (kind-5, NIP-09).
+    deleteConfirm?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleteConfirm = null },
+            title = { Text("Delete this note?") },
+            text = { Text("The deletion publishes to your relays and cannot be undone.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    onDelete(target)
+                    if (target.id == note.id) onClose() else deletedIds.value = deletedIds.value + target.id
+                    deleteConfirm = null
+                }) { Text("Delete", color = BitOSColors.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { deleteConfirm = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 /**
@@ -340,6 +379,8 @@ private fun ReplyBar(
     sending: Boolean,
     powActive: Boolean,
     powLabel: String?,
+    /** NIP-22 comment mode: PoW rides only the kind-1 reply path. */
+    powAvailable: Boolean = true,
     canAdd: Boolean,
     onClearTarget: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -385,13 +426,15 @@ private fun ReplyBar(
             OptionButton(space.bitos.app.ui.theme.AppIcons.Photo, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
             OptionButton(space.bitos.app.ui.theme.AppIcons.Gif, "Add GIF", enabled = canAdd, onClick = onGif)
             OptionButton(space.bitos.app.ui.theme.AppIcons.Globe, "Add media URL", enabled = canAdd, onClick = onUrl)
-            OptionButton(
-                space.bitos.app.ui.theme.AppIcons.QrCode,
-                "Proof of work",
-                text = powLabel,
-                active = powActive,
-                onClick = onPow,
-            )
+            if (powAvailable) {
+                OptionButton(
+                    space.bitos.app.ui.theme.AppIcons.QrCode,
+                    "Proof of work",
+                    text = powLabel,
+                    active = powActive,
+                    onClick = onPow,
+                )
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Surface(
@@ -496,18 +539,54 @@ private fun RootCard(
     onBookmark: () -> Unit,
     onZap: () -> Unit,
     onOpenAuthor: () -> Unit = {},
+    /** Own notes only (NIP-09 kind-5 delete). */
+    canDelete: Boolean = false,
+    onDelete: () -> Unit = {},
 ) {
     var showRaw by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     if (showRaw) {
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val npub = remember(note.pubkey) {
+            space.bitos.core.identity.NostrKeyCodec.npub(note.pubkey)
+        }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showRaw = false },
             title = { Text("Raw note") },
             text = {
-                Text(
-                    "id: ${note.id}\nauthor: ${note.pubkey}\nkind: ${note.kind}\nat: ${note.createdAt}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                )
+                Column {
+                    Text(
+                        "id: ${note.id}\nauthor: ${note.pubkey}\nkind: ${note.kind}\nat: ${note.createdAt}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                    // Web PostCard menu parity: diagnostic copies.
+                    androidx.compose.material3.TextButton(
+                        onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.id)) },
+                    ) { Text("Copy note ID", color = BitOSColors.primary) }
+                    if (npub != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(npub)) },
+                        ) { Text("Copy author npub", color = BitOSColors.primary) }
+                    }
+                    androidx.compose.material3.TextButton(
+                        onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(note.content)) },
+                    ) { Text("Copy note text", color = BitOSColors.primary) }
+                    // APP-009 ⋯ parity (mockup app-10): share + web link.
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            val text = npub?.let { space.bitos.core.feed.NoteShare.text(note.content, it) } ?: note.content
+                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, text)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(send, null))
+                        },
+                    ) { Text("Share", color = BitOSColors.primary) }
+                    androidx.compose.material3.TextButton(
+                        onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString("https://njump.me/${note.id}")) },
+                    ) { Text("Copy link", color = BitOSColors.primary) }
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { showRaw = false }) { Text("Close") }
@@ -575,6 +654,16 @@ private fun RootCard(
                     onClick = onBookmark,
                 )
                 Spacer(Modifier.weight(1f))
+                if (canDelete) {
+                    androidx.compose.material3.TextButton(onClick = onDelete) {
+                        Icon(
+                            space.bitos.app.ui.theme.AppIcons.Delete,
+                            contentDescription = "Delete this note",
+                            tint = BitOSColors.error,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
                 androidx.compose.material3.TextButton(onClick = { showRaw = true }) {
                     Text("⋯", color = BitOSColors.textSecondary)
                 }
@@ -638,6 +727,11 @@ private fun ReplyRow(
     onLike: () -> Unit = {},
     onZap: () -> Unit = {},
     onOpenAuthor: () -> Unit = {},
+    /** Own notes only (NIP-09 kind-5 delete). */
+    canDelete: Boolean = false,
+    onDelete: () -> Unit = {},
+    /** Only root comments may receive one web-parity nested reply. */
+    canReply: Boolean = true,
     onReplyTo: () -> Unit = {},
 ) {
     Row(
@@ -711,12 +805,22 @@ private fun ReplyRow(
                     tint = BitOSColors.zap,
                     onClick = onZap,
                 )
-                CommentAction(
-                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Comment,
-                    label = "Reply",
-                    tint = BitOSColors.textSecondary,
-                    onClick = onReplyTo,
-                )
+                if (canReply) {
+                    CommentAction(
+                        icon = space.bitos.app.ui.theme.SolarFeedIcon.Comment,
+                        label = "Reply",
+                        tint = BitOSColors.textSecondary,
+                        onClick = onReplyTo,
+                    )
+                }
+                if (canDelete) {
+                    androidx.compose.material3.TextButton(
+                        onClick = onDelete,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    ) {
+                        Text("Delete", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.W700, color = BitOSColors.error)
+                    }
+                }
             }
         }
     }
@@ -762,6 +866,8 @@ fun CommentThreadSheet(
             zapTarget = reply
         },
         onOpenAuthor = onOpenAuthor,
+        onDelete = viewModel::deleteNote,
+        onComment = viewModel::comment,
         onClose = onDismiss,
     )
 

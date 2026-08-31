@@ -30,7 +30,7 @@ struct BookmarksView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         // Spec: live relay re-fetch every time the page opens.
         .task { environment.feedStore.loadBookmarked() }
         .sheet(item: $threadTarget) { target in

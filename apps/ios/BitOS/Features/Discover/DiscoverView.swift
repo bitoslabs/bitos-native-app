@@ -40,7 +40,7 @@ struct DiscoverView: View {
             .background(BitOSTheme.background)
             .navigationTitle("Discover")
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
     }
 
     private var resultsJson: String {

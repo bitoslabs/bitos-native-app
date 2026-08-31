@@ -297,7 +297,7 @@ Anatomy:
       multi-select on web / single-select mobile → keep single+All [F]
 - [ ] Search action → Discover tab; apps-grid action → More hub
 - [ ] Sticky mode tabs: ✨ For you · 👥 Following — underline indicator;
-      Following displays its live note count
+      no note-count label (user decision 2026-08-30)
 - [ ] [W] pinned followed-hashtag chips (NIP-51 interest set) after tabs
 - [ ] StoriesBar (§3.6) as list header scrolling WITH content (not pinned);
       GuestBanner when signed out ("browsing as guest" + sign-in CTA)
@@ -483,7 +483,7 @@ unless explicit `from` source.
       root+reply markers + participant p-tags
 - [ ] Live deltas: reactions/zaps/reposts for root AND replies (9735 bolt11
       msat parsing)
-- [ ] States: loading ("Loading note from relays…") · invalid id · not
+- [x] States: loading ("Loading note from relays…") · invalid id · not
       found ("Your relays did not return this event") · contextual back
 - [ ] [W] comment refresh control
 
@@ -510,26 +510,38 @@ unless explicit `from` source.
 ### 3.11 APP-011 — Messages / DMs (V1 DMs; calls + groups V1.x)
 
 **List** (Inbox → Messages):
-- [ ] App bar "Messages" (+ [W] subtitle: N unread · N encrypted · N groups)
+- [x] App bar "Messages" (+ [W] subtitle: N unread · N encrypted · N groups)
 - [ ] Search (name/content) + [W] pill tabs All / Unread (badge) / Groups
-- [ ] Conversation rows: hex avatar · name · last-message preview (media/
+- [x] Conversation rows: hex avatar · name · last-message preview (media/
       voice/call glyphs) · time-ago · unread badge · delivery ticks (mine)
-- [ ] New-chat dialog: paste npub/nprofile · picks from following ·
-      recents; deep links `?to=<npub>&answer=<callId>`
-- [ ] Empty state (chat icon 64 pt + CTA)
+      (preview generic per NIP-17 — `DmPresentation.previewLine`)
+- [x] New-chat dialog: paste npub/nprofile · picks from following ·
+      recents; deep links `?to=<npub>&answer=<callId>` (npub/hex paste;
+      following picks V1.x)
+- [x] Message requests section: "N waiting — accepting never reveals you
+      read them" (`DmPresentation.isAccepted`; decline-wins)
+- [x] Empty state (chat icon + CTA)
 
 **Chat**:
-- [ ] Header: peer avatar + name (→profile) · NIP-05 verified badge ·
-      voice-call · video-call actions · ⋯ menu (details)
-- [ ] Message list: sent/received bubbles · day dividers · [W] reactions ·
+- [x] Header: peer avatar + name (→profile) · NIP-05 verified badge ·
+      voice-call · video-call actions · ⋯ menu (details) (avatar+name→profile
+      · ⚡ zap chip; calls/menu V1.x)
+- [x] Message list: sent/received bubbles · day dividers · [W] reactions ·
       reply-quotes · media attachments (image/video/file detection, inline
       player, lightbox) · voice notes inline play · encrypted indicator ·
       delivery state (pending/sent/failed + retry) · [W] call-log entries
-      rendered inline
-- [ ] Input bar: text field (autogrow) · attach image · attach file · emoji ·
+      rendered inline (bubbles + encrypted indicator + delivery
+      pending→delivered via relay OK; media/reactions V1.x)
+- [x] Input bar: text field (autogrow) · attach image · attach file · emoji ·
       send; attachment previews with remove; upload progress rings
-- [ ] Encryption: NIP-17 gift-wrap (1059/13/14, NIP-44 v2) preferred,
+      (text + send; attachments V1.x)
+- [x] Encryption: NIP-17 gift-wrap (1059/13/14, NIP-44 v2) preferred,
       NIP-04 fallback; decrypt on-device; newest protocol wins per convo
+      (NIP-17 only; NIP-04 fallback not implemented)
+- [x] Read model: per-peer read cursors (bounded 512, persisted) · unread
+      counts + shell Chats badge (unread + requests, "9+" cap) ·
+      opening a conversation marks read (`DmPresentation.nextCursor`, never
+      rewinds)
 - [ ] [W] Details dialog: peer npub copy + QR · block/unblock · mute ·
       clear conversation (local)
 
@@ -686,7 +698,7 @@ choice tiles + permission rows):
 | Key | Contents |
 |:--|:--|
 | `account`/`profile` | kind-0 editor: display name, username, about, picture, banner (pickers + crop + Blossom upload), website, NIP-05, lud16 → publish — profile fields live in ProfileEdit (You tab); Account page here: identity + copy npub + settings cache size + clear cache |
-| `appearance` | theme mode (dark/light/system) · accent palette · font size · font family · compact mode · live preview — live: theme/font/compact persist through shared contract; light tokens + accent land with APP-023 |
+| `appearance` | theme mode (dark/light/system) · accent palette · font size · font family · compact mode · live preview — live: theme/accent/font/compact apply app-wide from the shared settings contract (APP-023); font family + live preview remain |
 | `security` | nsec reveal (confirm-gated) + copy · app-lock (biometric) · sign-out · danger zone |
 | `relays` | relay CRUD (add/edit/remove) · read/write toggles · live status dots + latency · recommended list · NIP-65 relay-list publish indicator · [W] event outbox viewer (pending ACKs) |
 | `algorithm` | per-surface enable (feed/bitz/discover) · presets Latest/Balanced/Trending/Trusted/Custom · freshness Live 1h/Balanced 6h/Relaxed 24h/Chill 3d · per-signal weight sliders (Recency/Engagement/Zaps/Affinity/Topics/WoT) + total readout · interaction-profile reset · [W] settings-sync backup/restore (kind 30078) — live: full ranking controls (shared `AlgorithmContract` + `FeedRanking.rank` drives the For-You window on both platforms; off = chronological, Following always chronological; Topics/WoT rows render but contribute 0 until their data feeds land) + timeline Latest/Trending · media previews · reactions · protocol notes · default zap amount |
@@ -925,6 +937,9 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 > with each other on nearly every surface (the shell, composer, feed,
 > inbox, settings catalog all match); the gaps below are almost all
 > "both platforms missing X", not platform drift.
+>
+> 2026-08 DM wave: APP-011 §3.11 moved ☐→◐ (NIP-17 DMs live on both
+> platforms; presentation rules shared via `DmPresentation` + bridge).
 
 ### 9.1 Route / destination status (spec §1.2 vs shipped code)
 
@@ -938,7 +953,7 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 | 6 | Composer §3.8 | ✅ both | poll voting render-only (decision pending); Meme Studio button awaits studio phase |
 | 7 | Thread §3.9 | ◐ both | Sheet-based; tree assembled by shared `ThreadAssembly` but **iOS renders the flat list**; root action row, live deltas, reply-bar options missing |
 | 8 | Discover §3.10 | ◐ both | NIP-50 search + chips + npub resolve live; results tabs (Posts/People/Hashtags), trending mosaic, fullscreen image viewer missing. Reached via Home search icon + hub only |
-| 9 | Messages/DMs §3.11 | ☐ both | Honest placeholder; no NIP-17/NIP-04 code |
+| 9 | Messages/DMs §3.11 | ◐ both | NIP-17 gift-wrap live both platforms: conversation list with generic previews + unread dots + message requests, secure chat (encryption banner, delivery ticks via relay OK), new-chat by npub, chat ⚡ zap chip, Chats shell badge. Missing: search/tabs, attachments, reactions, calls (V1.x), groups, NIP-04 fallback |
 | 10 | Notifications §3.12 | ✅ both | No push delivery (FCM/APNs) — later wave |
 | 11 | Profile §3.13 | ◐ both | Own page + author sheet live; stats/tabs derive from the **live feed window only** (no dedicated author REQ); no banner/picture editing, no follower counts/sheets, no completion card; Android avatars are identicons (no remote pictures) |
 | 12 | Zaps §3.14 | ◐ both | LNURL dialog complete (tiers/comment/QR/expiry/lightning:); ledger page + LUD-21 verify poll + 9734 relays-tag policy missing; NWC absent |
@@ -978,7 +993,7 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 | APP-020 | Static pages | ☐ | confirmed |
 | APP-021 | Sounds | ☐ | confirmed |
 | APP-022 | Components | ◐ | AppMenu/PowCard/hex/QR live; several components exist inline (MediaRow/Lightbox) but aren't factored as the shared library |
-| APP-023 | Theming | ◐ | app hard-coded dark; theme/accent/font/compact **persisted but not applied** |
+| APP-023 | Theming | ✅ | theme (light/dark/system), accent, font scale and compact apply app-wide live from the persisted settings; launch chain stays dark-branded; reduced-motion/high-contrast remain |
 | APP-024 | i18n | ☐ | en hard-coded; lo picker exists but no strings |
 
 ### 9.3 Settings field-level audit (legacy union vs native)
@@ -995,7 +1010,7 @@ Native has all 12 hub sections; the gaps are fields and *application*
 | 5 | Default zap presets 1/5/21/100/500/1000 | F | ✅ Android chips; iOS stepper only | cosmetic: iOS preset chips |
 | 6 | Zap prefs: non-zap reactions, anonymous-by-default, auto-zap-on-follow + amount | W | missing | APP-014 wave |
 | 7 | Wallet connect (NWC NIP-47: balance, deposit/withdraw invoices) | W | none (WebLN rejected natively per parity audit) | APP-014 W4 |
-| 8 | Theme / accent / font size / compact applied | F+W | persisted, app forced dark | APP-023 |
+| 8 | Theme / accent / font size / compact applied | F+W | live on both platforms (light/dark/system + accent palette + font scale + compact) | APP-023 |
 | 9 | Reduced-motion + high-contrast toggles | W | missing (only OS-level respect targeted) | with APP-023 (§2.6) |
 | 10 | Algorithm: relay-discovery toggles ×3, smooth ranking, clear learned interests, WoT refresh | F+W | missing (presets/freshness/signals/diversity/reset ✅) | W2 queue |
 | 11 | Interaction-profile reset | F | missing | W2 queue |
@@ -1124,12 +1139,14 @@ relays/DB/signers directly.
       `nostr:` npub/note/nevent/naddr → profile/thread/discover,
       `lightning:` → zap invoice sheet.
 
-**Tier P2 — Wave 2 (specced, next major):** APP-011 DMs (NIP-17 gift-wrap
-+ NIP-44 + NIP-04 fallback, delivery states, reactions) · APP-023 theming
+**Tier P2 — Wave 2 (specced, next major):** APP-011 DM remainder
+(attachments, reactions, calls, groups; NIP-04 fallback decision) · APP-023 theming
 application (light mode, accent runtime swap, font scale, reduced-motion +
 high-contrast) · algorithm extras (relay discovery, smooth ranking, clear
 interests, interaction reset) · settings sync (kind 30078) · APP-024 i18n
 (lo applied for real) · video-quality consumer · push service (FCM/APNs).
+APP-011 V1 (NIP-17 gift-wrap, delivery states, requests, read cursors,
+Chats badge) shipped 2026-08.
 
 **Tier P3 — Waves 3–4:** APP-006 stories · APP-011 calls (post SOC-010
 threat review) · APP-016 communities (web is the only working NIP-29 wire

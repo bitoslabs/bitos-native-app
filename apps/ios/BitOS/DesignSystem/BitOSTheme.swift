@@ -14,9 +14,30 @@ import UIKit
  */
 enum BitOSTheme {
     /// App-level appearance override: nil = follow the system. The
-    /// settings adapter sets this at launch from `ThemeModeSetting`
-    /// (product default: dark). Views never mutate it.
-    static var modeOverride: UIUserInterfaceStyle? = .dark
+    /// settings adapter sets this at launch and on every theme change from
+    /// `ThemeModeSetting` (product default: dark). Views never mutate it.
+    /// Written on the main actor before colors resolve; `nonisolated(unsafe)`
+    /// mirrors the set-once launch pattern with live re-sync from the
+    /// settings store.
+    nonisolated(unsafe) static var modeOverride: UIUserInterfaceStyle? = .dark
+
+    /// App-level accent override: nil = brand bitcoin orange. The settings
+    /// adapter keeps this in sync with the persisted `#RRGGBB` choice
+    /// (APP-023). Views never mutate it.
+    nonisolated(unsafe) static var accentOverride: UInt32? = nil
+
+    /// SwiftUI scheme matching [modeOverride]; nil = follow the system.
+    /// Sheets/presentations re-apply this per surface so the whole
+    /// presentation honors the persisted theme.
+    static var preferredScheme: ColorScheme? {
+        switch modeOverride {
+        case .dark: .dark
+        case .light: .light
+        case .unspecified: nil
+        case nil: nil
+        @unknown default: nil
+        }
+    }
 
     /// Dynamic brand color from the contract's two palettes (light, dark).
     private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
@@ -27,44 +48,46 @@ enum BitOSTheme {
     }
 
     // Surfaces
-    static var background = dynamic(0xFAFAFC, 0x0A0A0F)
-    static var surface = dynamic(0xFFFFFF, 0x12121A)
-    static var surfaceElevated = dynamic(0xF5F5F7, 0x1A1A26)
-    static var surfaceOverlay = dynamic(0xEEEEF0, 0x22222E)
+    static let background = dynamic(0xFAFAFC, 0x0A0A0F)
+    static let surface = dynamic(0xFFFFFF, 0x12121A)
+    static let surfaceElevated = dynamic(0xF5F5F7, 0x1A1A26)
+    static let surfaceOverlay = dynamic(0xEEEEF0, 0x22222E)
 
-    // Brand
-    static var accent = dynamic(0xF7931A, 0xF7931A)
-    static var accentContainer = accent.opacity(0.2)
-    static var accentLight = Color(hex: 0xF9A84B)
-    static var accentDark = Color(hex: 0xD4790F)
-    static var cyan = dynamic(0x0E7490, 0x06B6D4)
+    // Brand — the accent palette choice (Settings → Appearance) overrides
+    // the bitcoin orange at every read site.
+    private static let brandAccent = dynamic(0xF7931A, 0xF7931A)
+    static var accent: Color { accentOverride.map(Color.init(hex:)) ?? brandAccent }
+    static var accentContainer: Color { accent.opacity(0.2) }
+    static let accentLight = Color(hex: 0xF9A84B)
+    static let accentDark = Color(hex: 0xD4790F)
+    static let cyan = dynamic(0x0E7490, 0x06B6D4)
 
     // Text (light-mode roles are the AA-tuned variants from the contract)
-    static var textPrimary = dynamic(0x111827, 0xF8F8FF)
-    static var textSecondary = dynamic(0x4B5563, 0x9CA3AF)
-    static var textTertiary = dynamic(0x717684, 0x6B7280)
-    static var textLink = dynamic(0xB45309, 0xF7931A)
+    static let textPrimary = dynamic(0x111827, 0xF8F8FF)
+    static let textSecondary = dynamic(0x4B5563, 0x9CA3AF)
+    static let textTertiary = dynamic(0x717684, 0x6B7280)
+    static let textLink = dynamic(0xB45309, 0xF7931A)
 
     // Semantic (fills) + their readable-as-text variants
-    static var success = dynamic(0x10B981, 0x10B981)
-    static var successText = dynamic(0x047857, 0x10B981)
-    static var warning = dynamic(0xF59E0B, 0xF59E0B)
-    static var warningText = dynamic(0xB45309, 0xF59E0B)
-    static var error = dynamic(0xEF4444, 0xEF4444)
-    static var errorText = dynamic(0xB91C1C, 0xEF4444)
-    static var info = dynamic(0x3B82F6, 0x3B82F6)
-    static var infoText = dynamic(0x1D4ED8, 0x3B82F6)
+    static let success = dynamic(0x10B981, 0x10B981)
+    static let successText = dynamic(0x047857, 0x10B981)
+    static let warning = dynamic(0xF59E0B, 0xF59E0B)
+    static let warningText = dynamic(0xB45309, 0xF59E0B)
+    static let error = dynamic(0xEF4444, 0xEF4444)
+    static let errorText = dynamic(0xB91C1C, 0xEF4444)
+    static let info = dynamic(0x3B82F6, 0x3B82F6)
+    static let infoText = dynamic(0x1D4ED8, 0x3B82F6)
 
     // Social actions
-    static var like = dynamic(0xBE185D, 0xEC4899)
-    static var repost = dynamic(0x047857, 0x10B981)
-    static var zap = dynamic(0xB45309, 0xF59E0B)
-    static var reply = dynamic(0x1D4ED8, 0x3B82F6)
-    static var bookmark = dynamic(0xB45309, 0xF7931A)
+    static let like = dynamic(0xBE185D, 0xEC4899)
+    static let repost = dynamic(0x047857, 0x10B981)
+    static let zap = dynamic(0xB45309, 0xF59E0B)
+    static let reply = dynamic(0x1D4ED8, 0x3B82F6)
+    static let bookmark = dynamic(0xB45309, 0xF7931A)
 
     // Lines
-    static var border = dynamic(0xE5E7EB, 0x2A2A3A)
-    static var divider = dynamic(0xF3F4F6, 0x1F1F2E)
+    static let border = dynamic(0xE5E7EB, 0x2A2A3A)
+    static let divider = dynamic(0xF3F4F6, 0x1F1F2E)
 
     // Spacing (app_spacing.dart / DesignTokens.Spacing)
     enum Spacing {

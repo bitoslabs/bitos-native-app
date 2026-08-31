@@ -12,7 +12,9 @@ import space.bitos.core.model.NotificationExtractor
 import space.bitos.core.model.NotificationFilters
 import space.bitos.core.model.NotificationItem
 import space.bitos.core.model.NotificationKind
+import space.bitos.core.model.OriginNote
 import space.bitos.core.model.OriginNotes
+import space.bitos.core.model.RelayUrl
 import space.bitos.core.nostr.EventHasher
 import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
@@ -40,12 +42,21 @@ data class NotificationUiState(
     /** True once the account's notification REQ resolved (even empty). */
     val loaded: Boolean = false,
     val hasAccount: Boolean = false,
+    /** True after the head subscription's EOSE (web `connected` parity). */
+    val connected: Boolean = false,
+    /** True when the head EOSE deadline expired without a relay answer. */
+    val offline: Boolean = false,
+    /** Older-history paging (web `loadMore` parity). */
+    val loadingMore: Boolean = false,
+    val hasMore: Boolean = true,
     /** Item ids already read (unread stripe/dot + Unread tab). */
     val readIds: Set<String> = emptySet(),
     /** Raw relay frame per notification id (raw-JSON row action), bounded. */
     val rawEvents: Map<String, String> = emptyMap(),
     /** Origin-note preview per target event id. */
     val origins: Map<String, OriginNoteState> = emptyMap(),
+    /** Self-preview per mention/reply id (clean excerpt + media strip). */
+    val previews: Map<String, OriginNote> = emptyMap(),
     /** Per-type mutes (kind names); muted kinds never reach items or counts. */
     val mutedKinds: Set<NotificationKind> = emptySet(),
     /** Blocked authors' pubkeys (kind-10004 head) — rows evicted, badge-safe. */
@@ -53,11 +64,12 @@ data class NotificationUiState(
 )
 
 /**
- * Notification inbox repository (SOC-005 + APP-012): subscribes events
- * targeting the account (`#p` tagged filter over kinds 1/7/6/9735/3),
- * extracts bounded notifications from verified events, dedupes by event
- * id (republished follows collapse per author), keeps read state and raw
- * frames, and fetches bounded origin-note previews by event id.
+ * Notification inbox repository (SOC-005 + APP-012, web `notifications.svelte`
+ * parity): subscribes events targeting the account (`#p` tagged filters over
+ * kinds 1/7/6/16/9735/3, zaps in their own filter), extracts bounded
+ * notifications from verified events, dedupes by event id (republished
+ * follows collapse per author), keeps read state and raw frames, pages
+ * older history with `until` REQs and fetches bounded origin-note previews.
  */
 class NotificationRepository(
     private val scope: CoroutineScope,
@@ -69,6 +81,7 @@ class NotificationRepository(
     private val items = LinkedHashMap<String, NotificationItem>()
     private val rawEvents = LinkedHashMap<String, String>()
     private val origins = LinkedHashMap<String, OriginNoteState>()
+    private val previews = LinkedHashMap<String, OriginNote>()
     private val readIds = LinkedHashSet<String>()
     private var mutedKinds = LinkedHashSet<NotificationKind>()
     private val blocked = LinkedHashSet<String>()
@@ -78,6 +91,23 @@ class NotificationRepository(
     private var collectJob: Job? = null
     private var requested = false
     private var originBatch = 0
+    private var connected = false
+    private var offline = false
+    private var offlineDeadline: Job? = null
+    private var loadingMore = false
+    private var hasMore = true
+    private var pageCounter = 0
+    private var activePage: PageBatch? = null
+
+    /** One `until`-bounded REQ → EOSE/timeout page (web `loadMore`). */
+    private class PageBatch(
+        val subId: String,
+        val startedCount: Int,
+        val expectedRelays: Set<RelayUrl>,
+        val timeoutJob: Job,
+    ) {
+        val eoseRelays = mutableSetOf<RelayUrl>()
+    }
 
     private val mutableState = MutableStateFlow(NotificationUiState())
     val state: StateFlow<NotificationUiState> = mutableState.asStateFlow()
@@ -94,11 +124,18 @@ class NotificationRepository(
         items.clear()
         rawEvents.clear()
         origins.clear()
+        previews.clear()
         readIds.clear()
         readIds.addAll(prefs.readIds())
         blocked.clear()
         blockHeadAt = null
         cursorSeconds = prefs.cursorSeconds()
+        connected = false
+        offline = false
+        hasMore = true
+        loadingMore = false
+        activePage?.timeoutJob?.cancel()
+        activePage = null
         mutedKinds.clear()
         mutedKinds.addAll(prefs.mutedKinds().mapNotNull { kindName ->
             NotificationKind.entries.firstOrNull { it.name == kindName }
@@ -143,6 +180,46 @@ class NotificationRepository(
     fun markAllRead() {
         advanceCursor(items.values.maxOfOrNull { it.createdAt })
         markRead(items.keys.toList())
+    }
+
+    /** Web `loadMore`: page older history with an `until` REQ (exact batch:
+     * close on all-relay EOSE or the hard timeout). */
+    fun loadMore() {
+        val account = accountPubkey ?: return
+        if (loadingMore || !hasMore || activePage != null) return
+        val oldest = items.values.minOfOrNull { it.createdAt } ?: return
+        pageCounter += 1
+        val subId = "$HEAD_SUB_ID-p$pageCounter"
+        val timeout = scope.launch {
+            delay(PAGE_TIMEOUT_MILLIS)
+            completePage(subId)
+        }
+        activePage = PageBatch(subId, items.size, pool.connectedRelays(), timeout)
+        loadingMore = true
+        publishState()
+        pool.broadcast(pageRequest(subId, account, oldest - 1))
+    }
+
+    /** Web reconnect: re-open the head subscription (fresh snapshot). */
+    fun reconnect() {
+        if (accountPubkey == null) return
+        requested = false
+        connected = false
+        offline = false
+        hasMore = true
+        subscribe()
+        publishState()
+    }
+
+    private fun completePage(subId: String) {
+        val batch = activePage?.takeIf { it.subId == subId } ?: return
+        activePage = null
+        batch.timeoutJob.cancel()
+        pool.broadcast(NostrEventCodec.encodeClose(subId))
+        val added = items.size - batch.startedCount
+        hasMore = added > 0 && items.size < MAX_ITEMS
+        loadingMore = false
+        publishState()
     }
 
     private fun advanceCursor(newestMarkedAt: Long?) {
@@ -190,6 +267,7 @@ class NotificationRepository(
         pool.start()
         collectJob = scope.launch {
             pool.frames.collect { frame ->
+                absorbEose(frame)
                 val event = runCatching {
                     NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
                 }.getOrNull() ?: return@collect
@@ -197,6 +275,26 @@ class NotificationRepository(
                 absorbBlockList(event)
                 absorbOrigin(event, frame.message)
                 absorbNotification(event, frame.message)
+            }
+        }
+    }
+
+    /** Head EOSE → connected; page EOSE → close the batch when all relays answered. */
+    private fun absorbEose(frame: space.bitos.app.data.relay.RelayFrame) {
+        val subId = NostrEventCodec.relayEoseSubscriptionId(frame.message) ?: return
+        val batch = activePage
+        when {
+            subId == batch?.subId -> {
+                batch.eoseRelays += frame.relay
+                if (batch.expectedRelays.isNotEmpty() && batch.eoseRelays.containsAll(batch.expectedRelays)) {
+                    completePage(subId)
+                }
+            }
+            subId == HEAD_SUB_ID -> {
+                connected = true
+                offline = false
+                offlineDeadline?.cancel()
+                publishState()
             }
         }
     }
@@ -235,6 +333,12 @@ class NotificationRepository(
         if (items.size > MAX_ITEMS) items.remove(items.keys.first())
         rawEvents[notification.id] = rawMessage
         if (rawEvents.size > MAX_ITEMS) rawEvents.remove(rawEvents.keys.first())
+        // Mention/reply rows render the note itself: cleaned excerpt + a
+        // media strip behind the NIP-36 cover (web preview parity).
+        if (notification.kind == NotificationKind.MENTION || notification.kind == NotificationKind.REPLY) {
+            previews[notification.id] = OriginNotes.project(event)
+            if (previews.size > MAX_ITEMS) previews.remove(previews.keys.first())
+        }
         publishState()
     }
 
@@ -242,13 +346,32 @@ class NotificationRepository(
         if (requested) return
         requested = true
         val account = accountPubkey ?: return
-        val filter = """{"kinds":[1,7,6,9735,3],"#p":["$account"],"limit":50}"""
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-notifications", filter))
+        offlineDeadline?.cancel()
+        offlineDeadline = scope.launch {
+            delay(OFFLINE_DEADLINE_MILLIS)
+            if (!connected) {
+                offline = true
+                publishState()
+            }
+        }
+        pool.broadcast(pageRequest(HEAD_SUB_ID, account, 0))
         // Blocked-author set (kind-10004 head) rides the same subscription round.
         pool.broadcast(
             NostrEventCodec.encodeRequest(
                 "bitos-blocks",
                 """{"kinds":[${space.bitos.core.model.BlockList.KIND}],"authors":["$account"],"limit":1}""",
+            ),
+        )
+    }
+
+    /** Web filter parity: zaps keep their own filter; [untilSeconds] pages history. */
+    private fun pageRequest(subscriptionId: String, account: String, untilSeconds: Long): String {
+        val timeBound = if (untilSeconds > 0) ",\"until\":$untilSeconds" else ""
+        return NostrEventCodec.encodeRequest(
+            subscriptionId,
+            listOf(
+                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},3],"#p":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
+                """{"kinds":[${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#p":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
             ),
         )
     }
@@ -269,16 +392,25 @@ class NotificationRepository(
             items = items.values.sortedByDescending { it.createdAt },
             loaded = items.isNotEmpty() || requested,
             hasAccount = accountPubkey != null,
+            connected = connected,
+            offline = offline,
+            loadingMore = loadingMore,
+            hasMore = hasMore,
             readIds = effectiveReadIds(),
             rawEvents = rawEvents.toMap(),
             origins = origins.toMap(),
+            previews = previews.toMap(),
             mutedKinds = mutedKinds.toSet(),
             blockedPubkeys = blocked.toSet(),
         )
     }
 
     private companion object {
-        const val MAX_ITEMS = 100
+        const val MAX_ITEMS = 200
         const val ORIGIN_BATCH = 100
+        const val PAGE_LIMIT = 60
+        const val HEAD_SUB_ID = "bitos-notifications"
+        const val PAGE_TIMEOUT_MILLIS = 10_000L
+        const val OFFLINE_DEADLINE_MILLIS = 10_000L
     }
 }

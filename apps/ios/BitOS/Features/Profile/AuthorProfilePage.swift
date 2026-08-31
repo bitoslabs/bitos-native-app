@@ -93,7 +93,7 @@ struct AuthorProfilePage: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(BitOSTheme.preferredScheme)
         .appMenuHost($moreMenu)
         .task {
             // Private store: cover/sheet lifecycles cannot clear this page's data.
@@ -144,7 +144,7 @@ struct AuthorProfilePage: View {
             .environment(environment)
             .environment(identity)
             .environment(settings)
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
         }
         // Note zap from a profile card.
         .sheet(item: $noteZapTarget) { target in

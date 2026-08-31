@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
 
         val identity: IdentityViewModel by viewModels(factoryProducer = { IdentityViewModel.factory(application, publisher) })
         val viewModel: HomeViewModel by viewModels(factoryProducer = {
-            HomeViewModel.factory(repository, publisher, identity, notificationRepository, muteStore)
+            HomeViewModel.factory(repository, publisher, identity, notificationRepository, muteStore, application.interactionProfile, application.hashtagFollows)
         })
         val mediaPublish: space.bitos.app.ui.feed.MediaPublishViewModel by viewModels(factoryProducer = {
             space.bitos.app.ui.feed.MediaPublishViewModel.factory(application, publisher, identity)

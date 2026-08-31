@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
@@ -87,15 +88,48 @@ fun BitOSApp(
     // Fast access (user decision 2026-08-28): the native system splash hands
     // off straight into the six-tab shell — the branded BootSplashScreen is
     // disabled at app entry (component retained in the library, APP-022).
-    // APP-002: first launch gates on the onboarding carousel.
+    // Spec §4: first launch gates on the identity onboarding flow (welcome →
+    // add identity → import/backup → npub confirmation); Browse now exits
+    // into the feed as guest.
     val context = androidx.compose.ui.platform.LocalContext.current
     var showOnboarding by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(!space.bitos.app.ui.onboarding.OnboardingPrefs.hasOnboarded(context))
     }
 
-    BitOSTheme {
+    // APP-018/APP-023 functional settings: theme (light/dark/system),
+    // accent and font size apply app-wide; the snapshot is collected above
+    // the theme so a change recomposes the whole shell.
+    val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
+    val darkTheme = when (settingsSnapshot.themeMode) {
+        space.bitos.core.settings.ThemeModeSetting.LIGHT -> false
+        space.bitos.core.settings.ThemeModeSetting.SYSTEM ->
+            androidx.compose.foundation.isSystemInDarkTheme()
+        space.bitos.core.settings.ThemeModeSetting.DARK -> true
+    }
+
+    BitOSTheme(
+        darkTheme = darkTheme,
+        accentColorHex = settingsSnapshot.accentColorHex,
+    ) {
+        // System chrome follows the active theme: light mode gets dark
+        // icons on light bars, dark mode keeps the OLED bars (APP-023).
+        val themedView = androidx.compose.ui.platform.LocalView.current
+        val themedColors = space.bitos.app.ui.theme.BitOSColors
+        if (!themedView.isInEditMode) {
+            androidx.compose.runtime.SideEffect {
+                val window = (themedView.context as? android.app.Activity)?.window ?: return@SideEffect
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, themedView)
+                controller.isAppearanceLightStatusBars = !darkTheme
+                controller.isAppearanceLightNavigationBars = !darkTheme
+                @Suppress("DEPRECATION")
+                window.statusBarColor = themedColors.background.toArgb()
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = themedColors.background.toArgb()
+            }
+        }
         if (showOnboarding) {
             space.bitos.app.ui.onboarding.OnboardingScreen(
+                identityViewModel = identityViewModel,
                 onDone = {
                     space.bitos.app.ui.onboarding.OnboardingPrefs.markOnboarded(context)
                     showOnboarding = false
@@ -113,8 +147,8 @@ fun BitOSApp(
         // APP-003/APP-004: re-tap on the active Home/Bitz tab scrolls the
         // feed to top; a re-tap while already at top refreshes it.
         var feedRetapTick by remember { mutableStateOf(0) }
-        // APP-018 privacy: sensitive-media default gates every cover.
-        val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
+        // APP-018 privacy: sensitive-media default gates every cover
+        // (settingsSnapshot is collected above the theme).
         val sensitiveShowByDefault =
             settingsSnapshot.sensitiveMedia == space.bitos.core.settings.SensitiveMediaSetting.SHOW
         // APP-008: the composer is a full page (legacy CreateView parity).
@@ -139,6 +173,18 @@ fun BitOSApp(
         // UX-010: in-app full profile page target. Every "View full
         // profile" affordance routes here — never an external link.
         var authorPageTarget by remember { mutableStateOf<String?>(null) }
+        // Web `/bitz?author=<npub>#bitz=<id>` parity: profile Bitz-grid
+        // tiles open the shared reels player scoped to that author.
+        var authorBitzTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+        // APP-011: chat-header ⚡ chip target (author zap pipeline).
+        var chatZapTarget by remember { mutableStateOf<String?>(null) }
+        // Shared-card callbacks hosted here: external-link confirm and
+        // in-place note-ref open (same flow as the home feed).
+        var externalLinkTarget by remember { mutableStateOf<String?>(null) }
+        var noteRefTarget by remember { mutableStateOf<String?>(null) }
+        var authorThreadTarget by remember {
+            mutableStateOf<space.bitos.core.feed.FeedNote?>(null)
+        }
         val authorState by authorRepository.state.collectAsStateWithLifecycle()
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         LaunchedEffect(pendingDeepLink) {
@@ -165,12 +211,17 @@ fun BitOSApp(
         }
         val identity by identityViewModel.state.collectAsStateWithLifecycle()
         val notificationsState by notifications.state.collectAsStateWithLifecycle()
+        val dmState by dmRepository.state.collectAsStateWithLifecycle()
+        val feedStateForChats by homeViewModel.state.collectAsStateWithLifecycle()
         // Shell-level account wiring: the Activity badge needs the inbox
         // subscription alive from app start, not only while the tab is open.
         androidx.compose.runtime.LaunchedEffect(identity.account?.pubkeyHex) {
             notifications.setAccount(identity.account?.pubkeyHex)
+            dmRepository.setAccount(identity.account?.pubkeyHex)
         }
         val unreadCount = notificationsState.items.count { it.id !in notificationsState.readIds }
+        // APP-011: Chats badge = DM unread + pending requests (mock parity).
+        val dmUnreadCount = dmState.unreadCount + dmState.requestCount
         // APP-018 functional setting: font size applies app-wide as a text
         // scale multiplier over the system font scale.
         val fontMultiplier = when (settingsSnapshot.fontSize) {
@@ -187,12 +238,17 @@ fun BitOSApp(
         Scaffold(
             containerColor = BitOSColors.background,
             bottomBar = {
+                // APP-008: the composer is a full page (legacy CreateView
+                // parity) — the tab bar never renders under it.
+                if (!showCreateNote) {
                 NavigationBar(containerColor = BitOSColors.surface) {
                     TopLevelDestination.entries.filterNot { it == TopLevelDestination.DISCOVER }.forEach { item ->
-                        val badge = if (item == TopLevelDestination.ACTIVITY && unreadCount > 0) {
-                            if (unreadCount > 9) "9+" else unreadCount.toString()
-                        } else {
-                            null
+                        val badge = when {
+                            item == TopLevelDestination.ACTIVITY && unreadCount > 0 ->
+                                if (unreadCount > 9) "9+" else unreadCount.toString()
+                            item == TopLevelDestination.CHATS && dmUnreadCount > 0 ->
+                                if (dmUnreadCount > 9) "9+" else dmUnreadCount.toString()
+                            else -> null
                         }
                         NavigationBarItem(
                             selected = destination == item,
@@ -238,6 +294,7 @@ fun BitOSApp(
                             ),
                         )
                     }
+                }
                 }
             },
         ) { padding ->
@@ -297,6 +354,7 @@ fun BitOSApp(
                         onOpenStaticTerms = { showStatic = "terms" },
                         onOpenLightning = { showMore = false; hubSettingsSection = "lightning" },
                         onOpenSaved = { showMore = false; showBookmarks = true },
+                        onOpenZaps = { showMore = false; showZaps = true },
                         onClose = { showMore = false },
                     )
                 } else if (hubSettingsSection != null) {
@@ -314,6 +372,28 @@ fun BitOSApp(
                         initialSection = hubSettingsSection,
                         onBack = { hubSettingsSection = null; showMore = true },
                     )
+                } else if (authorBitzTarget != null) {
+                    // Web `/bitz?author=<npub>#bitz=<id>` parity: the shared
+                    // reels player scoped to one author — the same surface as
+                    // the Bitz tab, data scoped to the profile's grid.
+                    val (bitzAuthor, bitzNote) = authorBitzTarget!!
+                    androidx.activity.compose.BackHandler { authorBitzTarget = null }
+                    space.bitos.app.ui.bitz.BitzScreen(
+                        viewModel = homeViewModel,
+                        identityViewModel = identityViewModel,
+                        notePublisher = notePublisher,
+                        authorRepository = authorRepository,
+                        settingsStore = settingsStore,
+                        searchRepository = searchRepository,
+                        sensitiveShowByDefault = sensitiveShowByDefault,
+                        authorPubkey = bitzAuthor,
+                        initialNoteId = bitzNote,
+                        onExitAuthorMode = { authorBitzTarget = null },
+                        onOpenComposer = { showCreateNote = true },
+                        onOpenCreate = { showCreateHub = true },
+                        onOpenRemixComposer = { openSeededComposer(it) },
+                        onOpenAuthorProfile = { authorPageTarget = it },
+                    )
                 } else if (authorPageTarget != null) {
                     // UX-010: full-page author profile ("You"-page parity).
                     space.bitos.app.ui.profile.AuthorProfileScreen(
@@ -323,15 +403,18 @@ fun BitOSApp(
                         identityViewModel = identityViewModel,
                         notePublisher = notePublisher,
                         onClose = { authorRepository.close(); authorPageTarget = null },
+                        onOpenAuthor = { authorPageTarget = it; authorRepository.open(it) },
+                        onOpenExternalLink = { externalLinkTarget = it },
+                        onOpenNoteRef = { noteRefTarget = it },
+                        onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note },
                     )
-                }
-                else {
+                } else {
                     // Overlay destinations are mutually exclusive with the
                     // tab content. Rendering both was the source of the
                     // More/Settings stacked-layout bug.
                     tabStateHolder.SaveableStateProvider(destination.name) {
                         when (destination) {
-                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, onOpenAuthorProfile = { authorPageTarget = it }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
+                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, relayManager = relayManager, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, onOpenAuthorProfile = { authorPageTarget = it }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
                             TopLevelDestination.BITZ -> space.bitos.app.ui.bitz.BitzScreen(
                                 viewModel = homeViewModel,
                                 identityViewModel = identityViewModel,
@@ -354,7 +437,23 @@ fun BitOSApp(
                                 authorRepository = authorRepository,
                                 onOpenAuthorProfile = { authorPageTarget = it },
                             )
-                            TopLevelDestination.CHATS -> space.bitos.app.ui.dm.DmScreen(identityViewModel, dmRepository)
+                            // APP-011: profiles feed names/avatars; the zap
+                            // chip routes to the author zap pipeline.
+                            TopLevelDestination.CHATS -> {
+                                val chatProfiles = feedStateForChats.profiles.entries.associate { (pubkey, profile) ->
+                                    pubkey to (profile.bestDisplayName to profile.picture)
+                                }
+                                space.bitos.app.ui.dm.DmScreen(
+                                    identityViewModel = identityViewModel,
+                                    dmRepository = dmRepository,
+                                    onZapPeer = { peer ->
+                                        homeViewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                                        chatZapTarget = peer
+                                    },
+                                    onOpenProfile = { peer -> authorPageTarget = peer },
+                                    profiles = chatProfiles,
+                                )
+                            }
                             TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
                                 identityViewModel,
                                 notifications,
@@ -364,13 +463,103 @@ fun BitOSApp(
                                 sensitiveShowByDefault = sensitiveShowByDefault,
                                 onOpenAuthorProfile = { authorPageTarget = it },
                             )
-                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true })
+                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note })
                         }
                     }
                 }
             }
         }
     }
+
+        // External-link confirm for shared cards on non-feed surfaces: the
+        // browser only opens on an explicit Open.
+        externalLinkTarget?.let { url ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { externalLinkTarget = null },
+                title = { androidx.compose.material3.Text("Open external link?") },
+                text = {
+                    androidx.compose.material3.Text(
+                        url,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(url),
+                                ),
+                            )
+                        }
+                        externalLinkTarget = null
+                    }) { androidx.compose.material3.Text("Open") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { externalLinkTarget = null }) {
+                        androidx.compose.material3.Text("Cancel")
+                    }
+                },
+            )
+        }
+
+        // In-place note-ref open: fetch the head note, then hand it to the
+        // shared thread sheet.
+        noteRefTarget?.let { raw ->
+            androidx.compose.runtime.LaunchedEffect(raw) {
+                var fetched: space.bitos.core.feed.FeedNote? = null
+                var attempts = 0
+                while (fetched == null && attempts < 20) {
+                    fetched = homeViewModel.refNote(raw)
+                    if (fetched == null) kotlinx.coroutines.delay(150)
+                    attempts++
+                }
+                if (fetched != null) authorThreadTarget = fetched else noteRefTarget = null
+            }
+            authorThreadTarget?.let { target ->
+                androidx.compose.material3.ModalBottomSheet(
+                    onDismissRequest = { authorThreadTarget = null; noteRefTarget = null },
+                ) {
+                    space.bitos.app.ui.feed.CommentThreadSheet(
+                        note = target,
+                        viewModel = homeViewModel,
+                        identityViewModel = identityViewModel,
+                        publisherState = notePublisher.state.collectAsStateWithLifecycle().value,
+                        onDismiss = { authorThreadTarget = null; noteRefTarget = null },
+                    )
+                }
+            }
+        }
+
+        // ── APP-011 chat zap chip (author zap pipeline, mock parity) ────
+        val zapPeer = chatZapTarget
+        if (zapPeer != null) {
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = {
+                homeViewModel.dismissZap()
+                chatZapTarget = null
+            }) {
+                space.bitos.app.ui.feed.ZapContent(
+                    note = null,
+                    recipientPubkey = zapPeer,
+                    state = homeViewModel.zapState.collectAsStateWithLifecycle().value,
+                    lud16 = feedStateForChats.profiles[zapPeer]?.lud16,
+                    profileName = feedStateForChats.profiles[zapPeer]?.bestDisplayName,
+                    hasIdentity = identity.account != null,
+                    onPaid = { sats, memo -> homeViewModel.onAuthorZapPaid(zapPeer, sats, memo) },
+                    onAmountSelected = homeViewModel::selectZapAmount,
+                    onZap = { sats, comment, anonymous ->
+                        homeViewModel.selectZapAmount(sats)
+                        homeViewModel.zapAuthor(zapPeer, feedStateForChats.profiles[zapPeer]?.lud16, comment, anonymous)
+                    },
+                    onClose = {
+                        homeViewModel.dismissZap()
+                        chatZapTarget = null
+                    },
+                )
+            }
+        }
 
         // ── T16 deep-link surfaces (overlay everything) ────────────────
         deepLinkAuthor?.let { authorPubkey ->

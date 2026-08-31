@@ -2,6 +2,7 @@ package space.bitos.app.ui.theme
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Gif
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
@@ -78,6 +80,8 @@ object AppIcons {
     val Copy = Icons.Rounded.ContentCopy        // Solar: copy
     val Delete = Icons.Rounded.Delete           // Solar: trashBinMinimalistic
     val Send = Icons.AutoMirrored.Rounded.Send  // Solar: plain
+    val Back = Icons.AutoMirrored.Rounded.ArrowBack // chat / subpage back
+    val Lock = Icons.Rounded.Lock              // NIP-17 encryption indicator
     val Pen = Icons.Rounded.Edit                 // compose / new note (Solar: pen)
     val Refresh = Icons.Rounded.Refresh         // Solar: refresh
     val ArrowUp = Icons.Rounded.ArrowUpward      // new-notes reveal (X parity)

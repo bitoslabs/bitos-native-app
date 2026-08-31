@@ -109,6 +109,31 @@ class NotePublisher(
     }
 
     /**
+     * NIP-22 kind-1111 comment on a non-kind-1 event (web `feed.comment`
+     * parity): tags come from `NoteComposer.commentTags`.
+     */
+    fun publishCommentWith(
+        content: String,
+        tags: List<List<String>>,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val comment = composer.composeCommentWithTags(signer.publicKeyHex(), content, tags)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(comment, signer, writeRelays)
+        }
+    }
+
+    /**
      * APP-008 composer page PoW path: pre-mined nonce + derived tags (the
      * mining template included the same tags — PowCard `baseTags`).
      */
@@ -414,6 +439,71 @@ class NotePublisher(
         }
     }
 
+    /** Kind-1018 poll vote publish (web `votePoll` wire parity). */
+    fun publishPollVote(
+        targetEventId: String,
+        optionIndex: Int,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val vote = composer.composePollVote(targetEventId, optionIndex, signer.publicKeyHex())
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(vote, signer, writeRelays)
+        }
+    }
+
+    /** Kind-5 deletion publish (NIP-09, web `feed.deleteNote` parity). */
+    fun publishDeletion(
+        targetEventIds: List<String>,
+        reason: String = "Deleted from BitOS",
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val deletion = composer.composeDeletion(targetEventIds, signer.publicKeyHex(), reason)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(deletion, signer, writeRelays)
+        }
+    }
+
+    /** NIP-51 interest set publish (kind 30015 d=interest — followed hashtags). */
+    fun publishInterestSet(
+        hashtags: List<String>,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val list = composer.composeInterestSet(signer.publicKeyHex(), hashtags)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(list, signer, writeRelays)
+        }
+    }
+
     private suspend fun publishUnsigned(note: space.bitos.core.publish.UnsignedNote, signer: IdentitySigner, writeRelays: List<RelayUrl>) {
         val signature = signer.sign(note.messageBytes())
             ?: run {
@@ -452,6 +542,18 @@ class NotePublisher(
                 completed == true -> final.copy(result = PublishResult.PUBLISHED)
                 receipts.values.isNotEmpty() -> final.copy(result = PublishResult.REJECTED)
                 else -> final.copy(result = PublishResult.TIMEOUT)
+            }
+            // Card actions share this publisher with the full composer. A
+            // terminal receipt is useful feedback, but it must not leave the
+            // action rail permanently unable to publish its next mutation.
+            // Keep it long enough for UI observers, then return to idle.
+            val terminalResult = mutableState.value.result
+            scope.launch {
+                delay(1_500)
+                val current = mutableState.value
+                if (current.inFlightId == null && current.result == terminalResult) {
+                    mutableState.value = PublishUiState()
+                }
             }
             // Keep the receipt collector alive briefly for late ACKs.
             scope.launch {

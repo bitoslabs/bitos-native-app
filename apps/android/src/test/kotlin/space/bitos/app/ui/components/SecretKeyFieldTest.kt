@@ -1,7 +1,9 @@
 package space.bitos.app.ui.components
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -27,5 +29,15 @@ class SecretKeyFieldTest {
         assertFalse(secretKeyReady(npub))
         assertFalse(secretKeyReady(nsec.dropLast(4)))
         assertFalse(secretKeyReady(nsec + "q"))
+    }
+
+    /** KF-6: a READY check carries the derived identity the preview card renders. */
+    @Test
+    fun readyCheckCarriesDerivedIdentity() {
+        val check = space.bitos.core.identity.KeyImportForm.check(nsec)
+        assertEquals(64, check.pubkeyHex?.length)
+        assertTrue(check.npub!!.startsWith("npub1"))
+        assertNull(space.bitos.core.identity.KeyImportForm.check(npub).npub)
+        assertNull(space.bitos.core.identity.KeyImportForm.check("").pubkeyHex)
     }
 }

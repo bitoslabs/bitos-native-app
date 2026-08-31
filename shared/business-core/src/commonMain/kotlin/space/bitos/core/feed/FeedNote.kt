@@ -62,7 +62,10 @@ data class FeedNote(
                 )
             }
             val replyTag = event.tags.firstOrNull { it.firstOrNull() == "e" && it.size >= 4 && it[3] == "reply" }
+            // NIP-22 comments: lowercase `e` parent, UPPERCASE `E` root
+            // fallback (web toFeedNote parity).
             val nip22Parent = event.tags.firstOrNull { it.firstOrNull() == "e" }?.getOrNull(1)
+                ?: event.tags.firstOrNull { it.firstOrNull() == "E" }?.getOrNull(1)
                 ?: event.tags.firstOrNull { it.firstOrNull() == "E" }?.getOrNull(1)
             // APP-009: marker-aware thread anchors (root/parent per NIP-10).
         val (threadRootId, threadParentId) = ThreadAssembly.rootAndParent(event.tags)

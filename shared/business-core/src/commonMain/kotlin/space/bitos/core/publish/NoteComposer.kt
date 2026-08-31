@@ -82,6 +82,31 @@ class NoteComposer(
     }
 
     /**
+     * Builds the unsigned kind-5 deletion (NIP-09): one `e` tag per target
+     * event, bounded, authored by the original event's key only. Web
+     * `feed.deleteNote` parity (content "Deleted from BitOS").
+     */
+    fun composeDeletion(
+        targetEventIds: List<String>,
+        authorPubkey: String,
+        reason: String = "Deleted from BitOS",
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val bounded = targetEventIds
+            .filter { it.matches(Regex("^[0-9a-f]{64}$")) }
+            .distinct()
+            .take(MAX_DELETION_TARGETS)
+        if (bounded.isEmpty()) return null
+        val boundedReason = reason.take(140)
+        return compose(
+            authorPubkey,
+            NostrKinds.EVENT_DELETION,
+            bounded.map { listOf("e", it) },
+            boundedReason,
+        )
+    }
+
+    /**
      * Builds the unsigned kind-1 reply (NIP-10): `e` tag with the "reply"
      * marker and optional relay hint, `p` tag naming the parent author.
      */
@@ -124,6 +149,23 @@ class NoteComposer(
             authorPubkey,
             NostrKinds.CONTACT_LIST,
             bounded.map { listOf("p", it) },
+            "",
+        )
+    }
+
+    /** NIP-51 interest set (kind 30015, d=interest) — followed hashtags. */
+    fun composeInterestSet(authorPubkey: String, hashtags: List<String>): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val bounded = hashtags
+            .map(space.bitos.core.model.InterestSet::normalize)
+            .filter(space.bitos.core.model.InterestSet::isValid)
+            .distinct()
+            .take(space.bitos.core.model.InterestSet.MAX_TAGS)
+        return compose(
+            authorPubkey,
+            space.bitos.core.model.InterestSet.KIND,
+            listOf(listOf("d", space.bitos.core.model.InterestSet.D_TAG)) +
+                bounded.map { listOf("t", it) },
             "",
         )
     }
@@ -261,16 +303,22 @@ class NoteComposer(
         if (!fileHashHex.matches(Regex("^[0-9a-f]{64}$"))) return null
         if (sizeBytes !in 1..space.bitos.core.model.Blossom.MAX_FILE_BYTES) return null
         if (expirationSeconds <= nowSeconds || expirationSeconds > nowSeconds + 3600) return null
+        // BUD-11: content MUST be human-readable; a `server` tag scopes the
+        // token to the target host (servers verify it when present).
+        val host = serverUrl.removePrefix("https://").removePrefix("http://")
+            .substringBefore('/').take(255).takeIf { it.isNotEmpty() }
+        val tags = buildList {
+            add(listOf("t", "upload"))
+            add(listOf("expiration", expirationSeconds.toString()))
+            add(listOf("x", fileHashHex))
+            add(listOf("size", sizeBytes.toString()))
+            if (host != null) add(listOf("server", host))
+        }
         return compose(
             authorPubkey,
             space.bitos.core.model.Blossom.AUTH_KIND,
-            listOf(
-                listOf("t", "upload"),
-                listOf("expiration", expirationSeconds.toString()),
-                listOf("x", fileHashHex),
-                listOf("size", sizeBytes.toString()),
-            ),
-            "",
+            tags,
+            "Upload Blob",
         )
     }
 
@@ -335,6 +383,30 @@ class NoteComposer(
             append('}')
         }
         return compose(authorPubkey, NostrKinds.PROFILE_METADATA, emptyList(), json)
+    }
+
+    /** NIP-22 kind-1111 comment compose (web `feed.comment` parity). */
+    fun composeCommentWithTags(pubkeyHex: String, content: String, tags: List<List<String>>): UnsignedNote? {
+        if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val trimmed = content.trim()
+        if (trimmed.isEmpty() || trimmed.length > MAX_NOTE_LENGTH) return null
+        return compose(pubkeyHex, NostrKinds.VIDEO_COMMENT, tags, trimmed)
+    }
+
+    /**
+     * Kind-1018 poll vote (web `votePoll` wire parity): empty content,
+     * `["e", poll]` + `["response", optionIndex]` tags.
+     */
+    fun composePollVote(targetEventId: String, optionIndex: Int, authorPubkey: String): UnsignedNote? {
+        if (!targetEventId.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (optionIndex !in 0..255) return null
+        return compose(
+            authorPubkey,
+            NostrKinds.POLL_RESPONSE,
+            listOf(listOf("e", targetEventId), listOf("response", optionIndex.toString())),
+            "",
+        )
     }
 
     /** Builds the unsigned NIP-56 report event (kind 1984). */
@@ -433,6 +505,9 @@ class NoteComposer(
         /** APP-009 participant p-tag bound (hostile targets stay bounded). */
         const val MAX_REPLY_PARTICIPANTS: Int = 16
 
+        /** NIP-09 one-deletion target bound (batch deletes stay bounded). */
+        const val MAX_DELETION_TARGETS: Int = 50
+
         private val hex64 = Regex("^[0-9a-f]{64}$")
 
         /**
@@ -468,6 +543,51 @@ class NoteComposer(
             // the id on purpose); everything after merges per kind+value.
             val seen = mutableSetOf<Pair<String, String>>()
             markers.forEach { seen += "e" to it[1] }
+            participants.forEach { seen += "p" to it[1] }
+            val contentTags = ComposerRules.deriveTags(content)
+                .filter { tag ->
+                    val key = tag.firstOrNull().orEmpty() to tag.getOrNull(1).orEmpty()
+                    key.second.isEmpty() || seen.add(key)
+                }
+            return markers + participants + contentTags
+        }
+
+        /**
+         * NIP-22 comment tags (web `feed.comment` parity, ADR-003):
+         * uppercase E/K/P root tags anchor the commented event; lowercase
+         * e/k parent tags point at the comment being answered (the target
+         * itself for top-level comments). Relay hints are omitted (legal,
+         * keeps tags small). Kind-1 targets must use NIP-10 [replyTags].
+         */
+        fun commentTags(
+            targetEventId: String,
+            targetPubkey: String,
+            targetKind: Int,
+            parentEventId: String?,
+            parentPubkey: String?,
+            content: String,
+        ): List<List<String>>? {
+            if (!targetEventId.matches(hex64)) return null
+            if (!targetPubkey.matches(hex64)) return null
+            if (targetKind == NostrKinds.SHORT_TEXT_NOTE) return null
+            val parent = parentEventId ?: targetEventId
+            if (!parent.matches(hex64)) return null
+            if (parentPubkey != null && !parentPubkey.matches(hex64)) return null
+            val markers = listOf(
+                listOf("E", targetEventId),
+                listOf("K", targetKind.toString()),
+                listOf("P", targetPubkey),
+                listOf("e", parent),
+                listOf("k", (if (parentEventId != null) NostrKinds.VIDEO_COMMENT else targetKind).toString()),
+            )
+            val participants = listOfNotNull(targetPubkey, parentPubkey)
+                .distinct()
+                .take(MAX_REPLY_PARTICIPANTS)
+                .map { listOf("p", it) }
+            // NIP-22 markers are exempt from dedupe (top-level repeats the
+            // target id on purpose); derived entities merge per kind+value.
+            val seen = mutableSetOf<Pair<String, String>>()
+            markers.forEach { seen += it[0] to it[1] }
             participants.forEach { seen += "p" to it[1] }
             val contentTags = ComposerRules.deriveTags(content)
                 .filter { tag ->

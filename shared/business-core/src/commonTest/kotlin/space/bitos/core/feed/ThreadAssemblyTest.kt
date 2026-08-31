@@ -76,7 +76,7 @@ class ThreadAssemblyTest {
             listOf("a", "a1", "a1a", "b", "b1"),
             items.map { it.id },
         )
-        assertEquals(listOf(0, 1, 2, 0, 1), items.map { it.depth })
+        assertEquals(listOf(0, 1, 1, 0, 1), items.map { it.depth })
         assertEquals("root", items.first().parentId)
         assertTrue(items.none { it.orphan })
     }

@@ -135,6 +135,25 @@ Rules:
 - Ignore stale effect results using job/project revision tokens.
 - UI derives buttons/progress from state; it does not infer the state machine.
 
+### 6.1 Relay request lifecycle
+
+One-shot REQs (account heads, thread fetches) sent while no relay socket is
+open are dropped by the transport and never re-delivered. Two shared,
+pure policies in BusinessCore own recovery and both native stores must
+schedule identical behavior:
+
+- `EmptyFeedRetry`: the feed window re-subscribes on a capped exponential
+  backoff while empty and a relay is connected.
+- `AccountBootstrap`: the account-scoped heads (own kind-0 profile, kind-3
+  contact list, NIP-51 bookmark/block lists) re-issue while unresolved,
+  bounded per connectivity episode; growing relay connectivity opens a new
+  episode, and a resolved head is never re-asked.
+
+The cold-start race they cover: an account becomes active (identity loads
+from secure storage) before any websocket finishes connecting, so the
+first account heads are silently lost and the You surface would stay
+anonymous with an empty follow set.
+
 ## 7. Composition roots
 
 Construct dependencies once at the app/service boundary:
