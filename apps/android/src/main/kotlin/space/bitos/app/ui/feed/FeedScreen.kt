@@ -146,6 +146,7 @@ fun FeedScreen(
     onOpenAuthorProfile: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val feedContent by viewModel.feedContentState.collectAsStateWithLifecycle()
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
     val publishState by notePublisher.state.collectAsStateWithLifecycle()
     var showComposer by rememberSaveable { mutableStateOf(false) }
@@ -196,8 +197,8 @@ fun FeedScreen(
     }
     val playerBindings by pool.playerBindings.collectAsStateWithLifecycle()
     // Shell split (user decision): Home tab = text notes; Bitz tab = reels.
-    val feedNotes = remember(state.notes, videoOnly) {
-        if (videoOnly) state.notes.filter { it.video != null } else state.notes.filter { it.video == null }
+    val feedNotes = remember(feedContent.notes, videoOnly) {
+        if (videoOnly) feedContent.notes.filter { it.video != null } else feedContent.notes.filter { it.video == null }
     }
     val pagerState = rememberPagerState(pageCount = { feedNotes.size })
     val listState = rememberLazyListState()
@@ -262,10 +263,19 @@ fun FeedScreen(
     LaunchedEffect(listNearEnd, state.isLoadingOlder, state.noMoreOlder) {
         if (!videoOnly && listNearEnd && !state.noMoreOlder && !state.isLoadingOlder) viewModel.loadOlder()
     }
-    // APP-003/APP-004: re-tap on the active shell tab scrolls to top; a
-    // re-tap while already at top refreshes (X/Instagram pattern).
+    // APP-003/APP-004: re-tapping Home reveals held arrivals before the
+    // usual scroll-to-top/refresh behavior. It gives the Home tab a useful
+    // one-tap path to the exact "N new notes" state without shifting cards
+    // during ordinary reading.
     LaunchedEffect(retapTick) {
         if (retapTick == 0) return@LaunchedEffect
+        if (!videoOnly && state.pendingNotes.isNotEmpty()) {
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                listState.animateScrollToItem(0)
+            }
+            viewModel.revealPendingNotes()
+            return@LaunchedEffect
+        }
         if (videoOnly) {
             if (pagerState.currentPage != 0) {
                 scope.launch { pagerState.animateScrollToPage(0) }
@@ -330,7 +340,7 @@ fun FeedScreen(
                                 onOpenAttachment = { externalLink = it },
                             )
                         } else NotesList(
-                            notes = feedNotes, state = state, actions = actions, viewModel = viewModel,
+                            notes = feedNotes, content = feedContent, actions = actions, viewModel = viewModel,
                             compact = settingsSnapshot.compactMode,
                             listState = listState, onComment = { showCommentsFor = it }, onZap = { viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
                             onAuthor = { authorTarget = it }, onLike = { note ->
@@ -340,7 +350,7 @@ fun FeedScreen(
                                 viewModel.toggleLike(note)
                             },
                             onBookmark = viewModel::toggleBookmark, onRepost = viewModel::repost,
-                            pollTallies = state.pollTallies,
+                            pollTallies = feedContent.pollTallies,
                             canVotePoll = identityState.account != null,
                             onVotePoll = { note, optionIndex -> viewModel.votePoll(note, optionIndex) },
                             onOpenAttachment = { externalLink = it },
@@ -1246,7 +1256,7 @@ fun PosterImage(
 @Composable
 private fun NotesList(
     notes: List<FeedNote>,
-    state: FeedUiState,
+    content: HomeFeedContentState,
     compact: Boolean = false,
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
@@ -1277,10 +1287,10 @@ private fun NotesList(
         ) { index, note ->
             space.bitos.app.ui.components.FeedNoteCard(
                 note = note,
-                profile = state.profiles[note.pubkey],
-                bookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked,
+                profile = content.profiles[note.pubkey],
+                bookmarked = note.id in content.bookmarkedIds || note.id in actions.bookmarked,
                 liked = note.id in actions.liked,
-                resolveMentionName = { hex -> state.profiles[hex]?.bestDisplayName },
+                resolveMentionName = { hex -> content.profiles[hex]?.bestDisplayName },
                 onLike = { onLike(note) },
                 onBookmark = { onBookmark(note.id) },
                 onComment = { onComment(note) },
@@ -1293,7 +1303,7 @@ private fun NotesList(
                 // Local ranking signals (web interaction-profile parity).
                 authorDemoted = viewModel.interaction?.isAuthorDemoted(note.pubkey) == true,
                 tagDemoted = note.hashtags.firstOrNull()?.let { viewModel.interaction?.isTagDemoted(it) == true } == true,
-                interactionAuthorName = state.profiles[note.pubkey]?.bestDisplayName,
+                interactionAuthorName = content.profiles[note.pubkey]?.bestDisplayName,
                 onNotInterested = { viewModel.notInterested(note) },
                 onHideNote = { viewModel.hideNote(note) },
                 onToggleAuthorDemotion = { viewModel.toggleShowLessFrom(note.pubkey) },
@@ -1323,7 +1333,7 @@ private fun NotesList(
             }
         }
         // APP-004 pagination: footer spinner while an older page loads.
-        if (state.isLoadingOlder) {
+        if (content.isLoadingOlder) {
             item(key = "older-footer", contentType = { "footer" }) {
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = BitOSColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
@@ -1332,7 +1342,7 @@ private fun NotesList(
         }
         // UX U7: the walk is exhausted for this lane — an explicit boundary
         // instead of a silent dead-end (parity with the iOS footer).
-        if (state.noMoreOlder && notes.isNotEmpty()) {
+        if (content.noMoreOlder && notes.isNotEmpty()) {
             item(key = "caught-up-footer", contentType = { "footer" }) {
                 Text(
                     "You're all caught up",

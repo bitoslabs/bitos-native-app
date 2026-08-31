@@ -56,6 +56,10 @@ final class FeedStore {
      *  publication — Bitz surfaces must not re-filter the 200-note window
      *  on every body evaluation (audit §4). */
     private(set) var videoNotes: [FeedNote] = []
+    /** Text-note projection for Home. Like [videoNotes], this is derived
+     *  once per coalesced publication so a pending-pill animation never
+     *  filters the full feed window from a SwiftUI body. */
+    private(set) var textNotes: [FeedNote] = []
     private(set) var pendingNotes: [FeedNote] = []
     /// APP-004 live tab counts: ALL-window size per timeline (mutes +
     /// protocol payload hidden) — what each tab shows under the All filter.
@@ -321,7 +325,10 @@ final class FeedStore {
         guard let source = olderSourceWindow(for: timeline) else { return }
         let snapshot = source.snapshot()
         guard !snapshot.isEmpty else { return }
-        if (window?.snapshot().count ?? 0) + (followingWindow?.snapshot().count ?? 0) >= Self.olderWindowMax {
+        // For You and Following overlap for followed authors, so their sum
+        // can look full while the active lane still has room for history.
+        // Bound only the source window that will receive this older page.
+        if snapshot.count >= Self.olderWindowMax {
             lane.exhausted = true
             olderLanes[timeline] = lane
             syncPaginationState()
@@ -1392,6 +1399,7 @@ final class FeedStore {
             client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked, showProtocolNotes: protocolNotesVisible)
         }
         videoNotes = notes.filter { $0.video != nil }
+        textNotes = notes.filter { $0.video == nil }
         pendingNotes = timeline == .following ? pendingFollowing : pendingForYou
         comments = commentThreads
         var assembled: [String: [ThreadDisplayItem]] = [:]

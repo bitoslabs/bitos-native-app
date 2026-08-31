@@ -121,8 +121,9 @@ struct HomeView: View {
 
     private var notes: [FeedNote] {
         // Shell split (user decision): Home tab = text notes; Bitz tab =
-        // video reels. One verified store feeds both surfaces.
-        videoOnly ? store.notes.filter { $0.video != nil } : store.notes.filter { $0.video == nil }
+        // video reels. These projections are built in FeedStore's coalesced
+        // publisher, not during a SwiftUI body evaluation.
+        videoOnly ? store.videoNotes : store.textNotes
     }
 
     /// Settled page ± 1 note ids — the only indices that matter for pool
@@ -412,8 +413,8 @@ struct HomeView: View {
                 stopPathMonitor()
                 pool.releaseAll()
             }
-            // APP-003/APP-004: re-tap on the active shell tab scrolls to
-            // top; a re-tap while already at top refreshes (X pattern).
+            // APP-003/APP-004: re-tapping Home reveals held arrivals before
+            // the usual scroll-to-top/refresh behavior.
             .onChange(of: retapTick) { _, tick in
                 guard tick > 0 else { return }
                 handleRetap()
@@ -421,6 +422,10 @@ struct HomeView: View {
     }
 
     private func handleRetap() {
+        if !videoOnly, !store.pendingNotes.isEmpty {
+            revealPendingAtTop()
+            return
+        }
         if videoOnly {
             if topId != notes.first?.id, let first = notes.first {
                 topId = first.id

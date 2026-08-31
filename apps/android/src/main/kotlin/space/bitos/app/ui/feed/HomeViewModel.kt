@@ -3,16 +3,38 @@ package space.bitos.app.ui.feed
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import space.bitos.app.data.feed.FeedRepository
 import space.bitos.app.data.feed.FeedTimeline
 import space.bitos.app.data.feed.FeedUiState
+
+/**
+ * The immutable inputs that can change a rendered home-feed card or footer.
+ *
+ * Feed chrome (the pending-notes pill, relay status, timeline tabs) changes
+ * more often than cards do. Keeping this projection separate lets Compose
+ * skip the lazy list on chrome-only StateFlow emissions.
+ */
+@Immutable
+data class HomeFeedContentState(
+    val notes: List<space.bitos.core.feed.FeedNote> = emptyList(),
+    val profiles: Map<String, space.bitos.core.model.ProfileMetadata> = emptyMap(),
+    val bookmarkedIds: Set<String> = emptySet(),
+    val pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
+    val isLoadingOlder: Boolean = false,
+    val noMoreOlder: Boolean = false,
+)
 
 /**
  * Native feature store for the Home surface. Owns UI-only state (local
@@ -43,6 +65,36 @@ class HomeViewModel(
     private var chainJob: kotlinx.coroutines.Job? = null
 
     val state: StateFlow<FeedUiState> = repository.state
+
+    /**
+     * Card-list projection. `distinctUntilChanged` retains the last emitted
+     * instance during pending-pill/relay-health updates, so the keyed
+     * LazyColumn receives stable inputs and can skip its rows.
+     */
+    val feedContentState: StateFlow<HomeFeedContentState> = repository.state
+        .map { state ->
+            HomeFeedContentState(
+                notes = state.notes,
+                profiles = state.profiles,
+                bookmarkedIds = state.bookmarkedIds,
+                pollTallies = state.pollTallies,
+                isLoadingOlder = state.isLoadingOlder,
+                noMoreOlder = state.noMoreOlder,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
+            initialValue = HomeFeedContentState(
+                notes = repository.state.value.notes,
+                profiles = repository.state.value.profiles,
+                bookmarkedIds = repository.state.value.bookmarkedIds,
+                pollTallies = repository.state.value.pollTallies,
+                isLoadingOlder = repository.state.value.isLoadingOlder,
+                noMoreOlder = repository.state.value.noMoreOlder,
+            ),
+        )
 
     init {
         repository.start()
@@ -521,7 +573,9 @@ class HomeViewModel(
     }
 }
 
-/** Optimistic local interaction state, keyed by verified event id. */
+/** Optimistic local interaction state, keyed by verified event id. Values are
+ * replaced, never mutated, before publishing to Compose. */
+@Immutable
 data class LocalActions(
     val liked: Set<String> = emptySet(),
     val bookmarked: Set<String> = emptySet(),

@@ -460,7 +460,10 @@ class FeedRepository(
         if (lane.exhausted) return
         val snapshot = windowFor(timeline).snapshot()
         if (snapshot.isEmpty()) return
-        if (aggregator.snapshot().size + followingWindow.snapshot().size >= OLDER_WINDOW_MAX) {
+        // The windows overlap: a followed note exists in both For You and
+        // Following. Only the active lane's bounded window determines
+        // whether it can retain another older page.
+        if (snapshot.size >= OLDER_WINDOW_MAX) {
             lane.exhausted = true
             publishState()
             return

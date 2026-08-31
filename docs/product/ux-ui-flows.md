@@ -228,6 +228,7 @@ Home -> poster/first frame -> autoplay visible Bitz
      -> cached notes render immediately; relay head fills one bounded snapshot
      -> after EOSE (or a short deadline), live notes increment “New posts” only
      -> tap “New posts” to reveal them at the top; the current reading position never jumps
+     -> reselect active Home: reveal held posts first; otherwise scroll to top, then refresh
      -> vertical swipe changes active player lease
      -> ten buffered Bitz remaining starts that mode's older-video query
      -> parallel relays merge by event id until EOSE; oldest time becomes next cursor
