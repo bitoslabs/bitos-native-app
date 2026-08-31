@@ -19,6 +19,13 @@ struct RootView: View {
     var onDeepLinkConsumed: () -> Void = {}
 
     @State private var destination: AppDestination = .home
+    // R10 (performance-audit): tabs compose on FIRST selection, then stay
+    // alive. Cold launch pays only the initial tab's body cost — the other
+    // four heavy surfaces (Bitz pager, chats, activity, you) render
+    // `Color.clear` until visited. State preservation is exact: a visited
+    // tab is never disposed, and expensive hidden resources are already
+    // released by each surface's disappear handlers (players, monitors).
+    @State private var visitedDestinations: Set<AppDestination> = [.home]
     // APP-002: first launch gates on the onboarding carousel.
     @State private var showOnboarding = !OnboardingPrefs.hasOnboarded
     @State private var showDiscover = false
@@ -64,36 +71,50 @@ struct RootView: View {
 
     private var appTabs: some View {
         TabView(selection: tabSelection) {
-            HomeView(store: environment.feedStore,
-                     onOpenDiscover: { showDiscover = true },
-                     onOpenProfile: { destination = .you },
-                     onOpenHub: { showMore = true },
-                     retapTick: feedRetapTick)
-                .tag(AppDestination.home)
-                .tabItem { Label { Text("Home") } icon: { AppIcons.image(for: AppIcons.home) } }
+            deferred(.home) {
+                HomeView(store: environment.feedStore,
+                         onOpenDiscover: { showDiscover = true },
+                         onOpenProfile: { destination = .you },
+                         onOpenHub: { showMore = true },
+                         retapTick: feedRetapTick)
+            }
+            .tag(AppDestination.home)
+            .tabItem { Label { Text("Home") } icon: { AppIcons.image(for: AppIcons.home) } }
 
-            BitzView(retapTick: feedRetapTick)
-                .tag(AppDestination.bitz)
-                .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
+            deferred(.bitz) {
+                BitzView(retapTick: feedRetapTick)
+            }
+            .tag(AppDestination.bitz)
+            .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
 
-            DmScreen(
-                onZapPeer: { chatZapPeer = $0 },
-                onOpenProfile: { chatProfilePeer = $0 }
-            )
+            deferred(.chats) {
+                DmScreen(
+                    onZapPeer: { chatZapPeer = $0 },
+                    onOpenProfile: { chatProfilePeer = $0 }
+                )
+            }
             .tag(AppDestination.chats)
             .tabItem { Label { Text("Chats") } icon: { AppIcons.image(for: AppIcons.chat) } }
             .badge(chatsBadge)
 
-            InboxView(store: environment.inboxStore)
-                .tag(AppDestination.activity)
-                .tabItem { Label { Text("Activity") } icon: { AppIcons.image(for: AppIcons.inbox) } }
-                .badge(activityBadge)
+            deferred(.activity) {
+                InboxView(store: environment.inboxStore)
+            }
+            .tag(AppDestination.activity)
+            .tabItem { Label { Text("Activity") } icon: { AppIcons.image(for: AppIcons.inbox) } }
+            .badge(activityBadge)
 
-            ProfileView(store: environment.identityStore)
-                .tag(AppDestination.you)
-                .tabItem { Label { Text("You") } icon: { AppIcons.image(for: AppIcons.userProfile) } }
+            deferred(.you) {
+                ProfileView(store: environment.identityStore)
+            }
+            .tag(AppDestination.you)
+            .tabItem { Label { Text("You") } icon: { AppIcons.image(for: AppIcons.userProfile) } }
         }
         .tint(BitOSTheme.accent)
+        // R10: mark the selected destination as visited (first composition).
+        .onChange(of: destination, initial: true) { _, selected in
+            visitedDestinations.insert(selected)
+        }
         // APP-018 functional setting: font size applies app-wide.
         .environment(\.dynamicTypeSize, fontTypeSize)
         // Web feedPreferences parity: the persisted protocol-notes opt-in
@@ -240,5 +261,16 @@ struct RootView: View {
                 destination = next
             }
         )
+    }
+
+    /// R10 deferred composition: unvisited tabs render nothing until first
+    /// selected; visited tabs stay composed (state preservation).
+    @ViewBuilder
+    private func deferred(_ dest: AppDestination, @ViewBuilder content: () -> some View) -> some View {
+        if dest == destination || visitedDestinations.contains(dest) {
+            content()
+        } else {
+            Color.clear
+        }
     }
 }

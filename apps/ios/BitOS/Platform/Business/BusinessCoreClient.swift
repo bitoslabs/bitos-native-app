@@ -366,7 +366,13 @@ private final class SharedFeedWindow: FeedWindowing {
                         renditionSpecs: note.renditionSpecs.map { $0 as String }
                     )
                 },
-                contentWarning: note.contentWarning
+                contentWarning: note.contentWarning,
+                threadRootId: note.threadRootId,
+                threadParentId: note.threadParentId,
+                pollOptions: note.pollOptions.map { $0 as String },
+                remixOfEventId: note.remixOfEventId,
+                remixOfPubkey: note.remixOfPubkey,
+                license: note.license
             )
         }
     }

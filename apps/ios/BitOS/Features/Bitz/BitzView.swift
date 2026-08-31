@@ -150,7 +150,9 @@ struct BitzView: View {
         if authorMode {
             return authorStore?.notes.filter { $0.video != nil } ?? []
         }
-        return environment.feedStore.notes.filter { $0.video != nil }
+        // Store-derived projection (audit §4): the video window is filtered
+        // once per coalesced publication, never per body evaluation.
+        return environment.feedStore.videoNotes
     }
 
     private var playerNotes: [FeedNote] {
@@ -185,6 +187,9 @@ struct BitzView: View {
             reconcilePool(visibleId: topId)
         }
         .onChange(of: settings.state.videoMuted) { _, _ in reconcilePool(visibleId: topId) }
+        // UX U9: quality change re-prepares the bounded slots at the new
+        // rung immediately (pool rebuilds on preference change).
+        .onChange(of: settings.state.videoQuality) { _, _ in reconcilePool(visibleId: topId) }
         .onChange(of: retapTick) { _, tick in
             guard tick > 0 else { return }
             if mode == .explore {
@@ -688,9 +693,17 @@ struct BitzView: View {
         // Flutter `_BitsEmptyState` when the window is empty — both keep
         // pull-to-refresh alive.
         if videos.isEmpty && environment.feedStore.isLoading {
-            Color.clear
-                .overlay { ProgressView().tint(BitOSTheme.textTertiary) }
-                .refreshable { refreshWindow() }
+            // UX U2: skeleton tiles in the grid shape while the first relay
+            // page loads (§2.5 parity with the Android skeleton grid).
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 4) {
+                    ForEach(0..<9, id: \.self) { _ in
+                        AppSkeleton(height: 220, cornerRadius: BitOSTheme.Radius.md)
+                    }
+                }
+                .padding(EdgeInsets(top: 76, leading: 10, bottom: 16, trailing: 10))
+            }
+            .refreshable { refreshWindow() }
         } else if videos.isEmpty {
             exploreEmptyState
         } else {
@@ -728,6 +741,15 @@ struct BitzView: View {
                     }
                 }
                 .padding(EdgeInsets(top: 76, leading: 10, bottom: 16, trailing: 10))
+                // UX U7: exhausted walk — an explicit boundary instead of a
+                // silent dead-end at the grid's last tile.
+                if environment.feedStore.noMoreOlder && !videos.isEmpty {
+                    Text("You're all caught up")
+                        .font(.footnote)
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 16)
+                }
             }
             .simultaneousGesture(
                 // Grid parity with the player: horizontal swipes cycle modes.
@@ -795,7 +817,8 @@ struct BitzView: View {
             notes: playerNotes,
             autoplayAllowed: autoplayAllowed(),
             rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1),
-            muted: settings.state.videoMuted
+            muted: settings.state.videoMuted,
+            videoQuality: settings.state.videoQuality.rawValue
         )
     }
 
@@ -1169,6 +1192,19 @@ private struct BitzTile: View {
                     Spacer()
                     exploreFooter
                 }
+            }
+            // UX U8: duration affordance on the tile (shared formatter;
+            // top-trailing so it never collides with the footer's like
+            // count). Hidden while duration is unknown.
+            if let duration = note.video?.durationSeconds, duration > 0 {
+                Text(rules.formatDuration(duration))
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1871,6 +1907,9 @@ private struct BitzPosterImage: View {
     var purpose: BitzPosterPurpose = .screen
     @Environment(AppEnvironment.self) private var environment
     @State private var image: UIImage?
+    /** URL currently displayed in [image] — a page rebind keeps the last
+     * poster visible until the next one decodes (no flash-to-black). */
+    @State private var loadedUrl: String?
 
     var body: some View {
         ZStack {
@@ -1893,11 +1932,22 @@ private struct BitzPosterImage: View {
         }
         .clipped()
         .task(id: url) {
-            image = nil
-            guard let url else { return }
+            guard let url else {
+                image = nil
+                loadedUrl = nil
+                return
+            }
+            // Cache-hit or not, the previous poster stays up while the new
+            // one loads (audit U3): only a real URL change swaps content.
             let loaded = await environment.posterImages.image(urlString: url, maxPixelSize: purpose.maxPixelSize)
             guard url == self.url else { return }
-            image = loaded
+            if let loaded {
+                image = loaded
+                loadedUrl = url
+            } else if loadedUrl != url {
+                image = nil
+                loadedUrl = nil
+            }
         }
     }
 }

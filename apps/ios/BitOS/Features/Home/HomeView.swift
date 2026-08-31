@@ -810,6 +810,15 @@ struct HomeView: View {
                             ProgressView().tint(BitOSTheme.accent)
                         }
                         .padding(BitOSTheme.Spacing.base)
+                    } else if store.noMoreOlder && !notes.isEmpty {
+                        // UX U7: the walk is exhausted for this lane — replace
+                        // the silent dead-end with an explicit boundary.
+                        Text("You're all caught up")
+                            .font(.footnote)
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(BitOSTheme.Spacing.base)
+                            .accessibilityLabel("End of timeline")
                     }
                 }
             }
@@ -850,7 +859,8 @@ struct HomeView: View {
             pool.update(
                 visibleId: newValue, notes: notes,
                 autoplayAllowed: autoplayAllowed(),
-                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1)
+                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1),
+                videoQuality: settings.state.videoQuality.rawValue
             )
         }
         // Re-reconcile only when the settled page's neighbors change; live
@@ -859,7 +869,18 @@ struct HomeView: View {
             pool.update(
                 visibleId: topId, notes: notes,
                 autoplayAllowed: autoplayAllowed(),
-                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1)
+                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1),
+                videoQuality: settings.state.videoQuality.rawValue
+            )
+        }
+        // UX U9: a video-quality change re-prepares the bounded slots at
+        // the new rung immediately (pool rebuilds on preference change).
+        .onChange(of: settings.state.videoQuality) { _, _ in
+            pool.update(
+                visibleId: topId, notes: notes,
+                autoplayAllowed: autoplayAllowed(),
+                rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1),
+                videoQuality: settings.state.videoQuality.rawValue
             )
         }
         .refreshable { store.refresh() }
@@ -1735,15 +1756,24 @@ private struct PosterImage: View {
                     Color.black
                 }
             }
-        }
-        .task(id: url) {
-            image = nil
-            guard let url else { return }
-            let bounds = UIScreen.main.bounds
-            let maxPixels = max(bounds.width, bounds.height) * UIScreen.main.scale
-            let loaded = await environment.posterImages.image(urlString: url, maxPixelSize: maxPixels)
-            if !Task.isCancelled, url == self.url {
-                image = loaded
+            .task(id: url) {
+                // Decode at the ROW's rendered size (audit R8): a feed-card
+                // poster needs its laid-out pixel bucket, not a full-screen
+                // multi-megapixel decode. The previous poster stays visible
+                // until the new one is ready (no flash-to-black on scroll).
+                guard let url else {
+                    image = nil
+                    return
+                }
+                // Pre-layout geometry is zero: fall back to the viewport's
+                // short edge rather than a full-screen decode.
+                let rendered = max(geo.size.width, geo.size.height)
+                let fallback = min(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+                let maxPixels = max(rendered, fallback) * UIScreen.main.scale
+                let loaded = await environment.posterImages.image(urlString: url, maxPixelSize: maxPixels)
+                if !Task.isCancelled, url == self.url {
+                    image = loaded
+                }
             }
         }
         .accessibilityHidden(true)
@@ -1754,9 +1784,18 @@ private struct PosterImage: View {
 
 private struct FeedLoadingView: View {
     var body: some View {
-        ProgressView()
-            .tint(BitOSTheme.accent)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // UX U2 (§2.5 skeletons): matched skeleton rows instead of a bare
+        // spinner — the shape of the incoming content, shimmer honoring
+        // reduce-motion inside AppSkeleton.
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<6, id: \.self) { _ in
+                    AppSkeletonRow()
+                }
+            }
+            .padding(.top, BitOSTheme.Spacing.base)
+        }
+        .accessibilityLabel("Loading feed")
     }
 }
 

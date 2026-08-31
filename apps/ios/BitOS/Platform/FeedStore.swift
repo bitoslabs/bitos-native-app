@@ -52,6 +52,10 @@ final class FeedStore {
     private(set) var timeline: FeedTimeline = .forYou
     private(set) var filterOrdinal: Int = 0
     private(set) var notes: [FeedNote] = []
+    /** Video-bearing projection of [notes], derived ONCE per coalesced
+     *  publication — Bitz surfaces must not re-filter the 200-note window
+     *  on every body evaluation (audit §4). */
+    private(set) var videoNotes: [FeedNote] = []
     private(set) var pendingNotes: [FeedNote] = []
     /// APP-004 live tab counts: ALL-window size per timeline (mutes +
     /// protocol payload hidden) — what each tab shows under the All filter.
@@ -156,9 +160,15 @@ final class FeedStore {
         await pool.start()
         subscribe()
         let stream = await pool.frames()
-        collectTask = Task { [weak self] in
+        // Ingest stage (audit R1/R2): protocol decode + ID/signature
+        // verification run OFF the main actor — the Schnorr pair is the
+        // burst hot path. The verified value then hops to main-actor
+        // absorption; one sequential task preserves frame order, and the
+        // shared verify-once cache dedupes the other frame collectors.
+        collectTask = Task.detached(priority: .userInitiated) { [weak self, client] in
             for await frame in stream {
-                self?.absorb(frame)
+                guard let self else { return }
+                await self.absorb(Self.ingest(frame, client: client), frame: frame)
             }
         }
         healthTask = Task { [weak self] in
@@ -202,6 +212,8 @@ final class FeedStore {
         headSnapshotDeadline = nil
         collectTask?.cancel()
         collectTask = nil
+        publishTask?.cancel()
+        publishTask = nil
         profileDrainTask?.cancel()
         profileDrainTask = nil
         profileFallbackTasks.forEach { $0.cancel() }
@@ -211,6 +223,10 @@ final class FeedStore {
         retryTask?.cancel()
         retryTask = nil
         Task { await pool.broadcast(self.client.close(subscriptionId: self.currentSubscriptionId)) }
+        // Flush any coalesced publication + persistence so stopped state is
+        // final (a pending tick would otherwise be cancelled mid-flight).
+        publishState()
+        flushPendingPersist()
     }
 
     func selectTimeline(_ timeline: FeedTimeline) {
@@ -501,19 +517,50 @@ final class FeedStore {
 
     // MARK: - Absorption
     //
-    // Runs on the main actor (Task in a @MainActor context inherits the
-    // isolation). Decode cost per frame is bounded by NostrLimits; if this
-    // ever shows in instruments, decoding moves into the pool stream before
-    // the main-actor hop.
+    // Ingest runs off the main actor (see start()); absorption below runs
+    // on the main actor with the already-verified event. Relay bursts are
+    // coalesced: absorption mutates state per frame, the UI projection
+    // (window snapshot, filter, ranking, thread assembly) publishes once
+    // per [publishCoalesceMs] window (audit R3). User-intent paths still
+    // publish synchronously through publishState().
 
-    private func absorb(_ frame: RelayFrame) {
+    /// One relay frame after the protocol trust gate, decoded off-main.
+    private enum IngestedFrame {
+        case eose(subscriptionId: String)
+        case event(VerifiedEvent)
+        case ignored
+    }
+
+    /// Protocol gate for one frame: EOSE ids pass through; EVENT frames
+    /// must decode and pass ID + BIP-340 verification (shared core, whose
+    /// outcome cache dedupes verification across every store).
+    private nonisolated static func ingest(_ frame: RelayFrame, client: any BusinessCoreClient) -> IngestedFrame {
         if let subId = client.relayEoseSubscriptionId(message: frame.message) {
+            return .eose(subscriptionId: subId)
+        }
+        // Phase 0 signpost: the frame trust gate (JSON + SHA-256 ID +
+        // BIP-340) off the main actor. Counters only — never content.
+        let signpost = Perf.signposter.beginInterval(Perf.Interval.relayDecode)
+        let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue)
+        Perf.signposter.endInterval(Perf.Interval.relayDecode, signpost)
+        if let event { return .event(event) }
+        return .ignored
+    }
+
+    private func absorb(_ ingested: IngestedFrame, frame: RelayFrame) {
+        switch ingested {
+        case .eose(let subId):
             recordOlderEose(subscriptionId: subId, relay: frame.relay)
             recordHeadEose(subscriptionId: subId, relay: frame.relay)
             return
+        case .ignored:
+            return
+        case .event(let event):
+            absorbVerified(event, frame: frame)
         }
-        guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue) else { return }
+    }
 
+    private func absorbVerified(_ event: VerifiedEvent, frame: RelayFrame) {
         if event.kind == 7 || event.kind == 6 {
             // APP-009: live tallies per thread note (root or reply).
             let eTagged = event.tags.filter { $0.first == "e" }.compactMap { $0.dropFirst().first }
@@ -529,7 +576,7 @@ final class FeedStore {
                 myReactionEventIds[target] = event.id
             }
         } else if event.kind == 3 {
-            absorbContactList(frame)
+            absorbContactList(frame, event: event)
         } else if event.kind == 9735 {
             let target = event.tags.first { $0.first == "e" }?.dropFirst().first
             if let target {
@@ -557,7 +604,7 @@ final class FeedStore {
                 }
             }
         } else if event.kind == 30003 {
-            absorbBookmarkList(frame)
+            absorbBookmarkList(frame, event: event)
         } else if event.kind == 10004 {
             absorbBlockList(frame, event: event)
         } else if client.isProfileKind(event.kind) {
@@ -591,7 +638,7 @@ final class FeedStore {
             absorbNote(event, fromOlderPage: fromOlderPage)
             persist(event)
         }
-        publishState()
+        schedulePublish()
     }
 
     private func absorbNote(_ event: VerifiedEvent, fromOlderPage: Bool = false) {
@@ -871,17 +918,15 @@ final class FeedStore {
         return bookmarked
     }
 
-    private func absorbBookmarkList(_ frame: RelayFrame) {
-        guard let account = accountPubkey else { return }
-        guard let decoded = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
-              decoded.pubkey == account else { return }
+    private func absorbBookmarkList(_ frame: RelayFrame, event: VerifiedEvent) {
+        guard let account = accountPubkey, event.pubkey == account else { return }
         // The account's bookmark head resolved — the bootstrap stops re-asking.
         bookmarkHeadReceived = true
         let ids = (bridgeFacade().bookmarkIds(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) ?? []
         // Newer verified heads replace the local set (bounded by composer).
-        if decoded.createdAt >= (bookmarkHeadAt ?? Int64.min) {
+        if event.createdAt >= (bookmarkHeadAt ?? Int64.min) {
             bookmarked = ids
-            bookmarkHeadAt = decoded.createdAt
+            bookmarkHeadAt = event.createdAt
         }
         publishState()
     }
@@ -1096,12 +1141,12 @@ final class FeedStore {
         }
     }
 
-    private func absorbContactList(_ frame: RelayFrame) {
+    private func absorbContactList(_ frame: RelayFrame, event: VerifiedEvent) {
         guard let account = accountPubkey else { return }
-        guard let authors = (bridgeFacade().contactListAuthors(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) else { return }
         // Only the account's own contact list drives the timeline.
-        // (The bridge verified the frame; the author check filters.)
-        guard let decoded = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue), decoded.pubkey == account else { return }
+        // (Ingest verified the frame; the author check filters.)
+        guard event.pubkey == account,
+              let authors = (bridgeFacade().contactListAuthors(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) else { return }
         followingAuthors = Set(authors)
         followingAuthors.forEach { enqueueProfile($0) }
         followingSubscribed = false
@@ -1324,6 +1369,10 @@ final class FeedStore {
     }
 
     private func publishState() {
+        // Phase 0 signpost: one coalesced UI projection (window snapshot →
+        // filter → rank → thread assembly).
+        let signpost = Perf.signposter.beginInterval(Perf.Interval.feedPublish)
+        defer { Perf.signposter.endInterval(Perf.Interval.feedPublish, signpost) }
         let hiddenSet = muted.union(blocked)
         let filterOrdinal = filterOrdinal
         let ownPubkey = accountPubkey
@@ -1342,6 +1391,7 @@ final class FeedStore {
         notes = (timeline == .following ? followingBase : rankedForYou(forYouBase)).filter {
             client.feedFilterMatches(note: $0, filterOrdinal: filterOrdinal, ownPubkeyHex: ownPubkey, likedIds: liked, showProtocolNotes: protocolNotesVisible)
         }
+        videoNotes = notes.filter { $0.video != nil }
         pendingNotes = timeline == .following ? pendingFollowing : pendingForYou
         comments = commentThreads
         var assembled: [String: [ThreadDisplayItem]] = [:]
@@ -1424,17 +1474,53 @@ final class FeedStore {
         )
     }
 
-    /// Fire-and-forget persistence of verified events off the main actor.
+    /// Buffered persistence: verified events accumulate here and flush as
+    /// ONE transaction per coalesced publish tick (or [persistBatchMax]),
+    /// keeping relay bursts off the per-event fsync path (audit R6).
+    private var pendingPersist: [StoredEvent] = []
+
     private func persist(_ event: VerifiedEvent) {
-        guard let store = eventStore else { return }
+        guard eventStore != nil else { return }
         let tagsJson = client.tagsToJson(event.tags)
         let stored = StoredEvent(
             id: event.id, pubkey: event.pubkey, createdAt: event.createdAt,
             kind: event.kind, tagsJson: tagsJson, content: event.content,
             signature: event.signature, relayUrl: event.relayUrl, firstSeenAt: Int64(Date.now.timeIntervalSince1970)
         )
-        Task.detached { [store] in
-            _ = try? store.insert(stored)
+        pendingPersist.append(stored)
+        if pendingPersist.count >= Self.persistBatchMax {
+            flushPendingPersist()
+        }
+    }
+
+    /// Swaps the buffer and hands the batch to a utility task; cache
+    /// failures never break display.
+    private func flushPendingPersist() {
+        guard let store = eventStore, !pendingPersist.isEmpty else { return }
+        let batch = pendingPersist
+        pendingPersist.removeAll()
+        Task.detached(priority: .utility) { [store] in
+            _ = try? store.insertBatch(batch)
+        }
+    }
+
+    // MARK: - Coalesced UI publication (audit R3)
+
+    private var publishTask: Task<Void, Never>?
+
+    /// Absorption-heavy paths schedule one publication per
+    /// [publishCoalesceMs]; a burst of N events pays one projection instead
+    /// of N. Intent-driven paths call publishState() directly for immediate
+    /// feedback.
+    private func schedulePublish() {
+        guard publishTask == nil else { return }
+        publishTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.publishCoalesceMs))
+            guard let self else { return }
+            self.publishTask = nil
+            guard !Task.isCancelled else { return }
+            self.publishState()
+            self.flushPendingPersist()
         }
     }
 
@@ -1443,6 +1529,10 @@ final class FeedStore {
     private static let pendingMax = 50
     private static let headSnapshotMaxWaitMs = 2_500
     private static let olderWindowMax = 200
+    /// Relay-burst publication coalescing window (audit R3).
+    private static let publishCoalesceMs = 150
+    /// Verified events per one transactional cache flush (audit R6).
+    private static let persistBatchMax = 64
 
     /// FED-004 walk bounds (shared `BitzTimelinePolicy` via the bridge):
     /// ≤ 6 batches per load-more, 4 s hard deadline per batch.

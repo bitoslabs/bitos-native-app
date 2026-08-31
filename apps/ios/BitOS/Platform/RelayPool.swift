@@ -31,6 +31,7 @@ actor RelayPool {
         let url: RelayURL
         var socket: URLSessionWebSocketTask?
         var receiveTask: Task<Void, Never>?
+        var pingTask: Task<Void, Never>?
         var state: RelayConnectionState = .disconnected
         var attempts = 0
 
@@ -90,6 +91,7 @@ actor RelayPool {
         guard let connection = connections.removeValue(forKey: url) else { return }
         relayOrder.removeAll { $0 == url }
         connection.receiveTask?.cancel()
+        connection.pingTask?.cancel()
         connection.socket?.cancel(with: .normalClosure, reason: nil)
         connection.state = .disconnected
     }
@@ -103,6 +105,7 @@ actor RelayPool {
         running = false
         for connection in connections.values {
             connection.receiveTask?.cancel()
+            connection.pingTask?.cancel()
             connection.socket?.cancel(with: .normalClosure, reason: nil)
             connection.state = .disconnected
         }
@@ -163,7 +166,46 @@ actor RelayPool {
         connection.receiveTask = Task {
             await receiveLoop(on: socket, url: url)
         }
+        startKeepAlive(for: url)
     }
+
+    // MARK: - Keepalive (performance-audit R9)
+
+    /// Client-initiated WebSocket pings. URLSession ANSWERS relay pings but
+    /// never sends its own, so an idle socket is dropped silently by relays
+    /// and the feed waits on reconnect backoff — the classic "slow feed
+    /// after backgrounding". A 25 s cadence matches the Android OkHttp
+    /// transport; a failed ping forces the socket through the normal
+    /// disconnect path (capped backoff + reconnect), never a zombie socket.
+    private func startKeepAlive(for url: RelayURL) {
+        guard let connection = connections[url] else { return }
+        connection.pingTask?.cancel()
+        connection.pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.keepAliveInterval)
+                guard !Task.isCancelled else { return }
+                await self?.sendKeepAlivePing(to: url)
+            }
+        }
+    }
+
+    private func sendKeepAlivePing(to url: RelayURL) {
+        connections[url]?.socket?.sendPing { [weak self] error in
+            guard let error else { return }
+            // Dead socket: cancel it so the blocked receive completes with
+            // an error and the receive loop runs the reconnect policy.
+            Task { await self?.forceDisconnect(url, cause: error) }
+        }
+    }
+
+    private func forceDisconnect(_ url: RelayURL, cause _: Error) {
+        guard let connection = connections[url],
+              connection.state == .connected || connection.state == .connecting else { return }
+        connection.socket?.cancel(with: .goingAway, reason: nil)
+    }
+
+    /// Client keepalive cadence (matches OkHttp's 25 s ping interval).
+    nonisolated static let keepAliveInterval: Duration = .seconds(25)
 
     private func send(_ message: String, to url: RelayURL) {
         connections[url]?.socket?.send(.string(message)) { [weak self] _ in
@@ -194,6 +236,8 @@ actor RelayPool {
         connection.socket = nil
         connection.receiveTask?.cancel()
         connection.receiveTask = nil
+        connection.pingTask?.cancel()
+        connection.pingTask = nil
 
         guard running else { return }
         connection.attempts += 1

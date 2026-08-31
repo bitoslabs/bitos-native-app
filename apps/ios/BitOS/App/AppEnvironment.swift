@@ -34,10 +34,12 @@ final class AppEnvironment {
         eventStore: EventStore? = nil
     ) {
         // Default arguments evaluate nonisolated (Swift 6); resolve the
-        // defaults inside the MainActor body instead.
+        // defaults inside the MainActor body instead. ONE framework client
+        // serves the store AND the event-store bootstrap (audit R10): a
+        // second instance would re-initialize the KMP runtime for nothing.
         let relayPool = relayPool ?? Self.bootRelayPool()
         let businessCore = businessCore ?? FrameworkBusinessCoreClient()
-        let eventStore = eventStore ?? Self.defaultEventStore(client: FrameworkBusinessCoreClient())
+        let eventStore = eventStore ?? Self.defaultEventStore(client: businessCore)
         let interaction = InteractionProfileStore()
         self.relayPool = relayPool
         self.businessCore = businessCore

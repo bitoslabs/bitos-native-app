@@ -25,6 +25,11 @@ struct BitOSApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     DebugActivityLog.scenePhaseChanged(to: phase)
                 }
+                .onAppear {
+                    // Field diagnostics (performance-audit Phase 0): daily
+                    // MetricKit payloads — redacted counts only.
+                    MetricKitObserver.start()
+                }
                 .onOpenURL { url in
                     // Only classify: the shared rule runs in RootView so
                     // routing stays with the navigation owner.

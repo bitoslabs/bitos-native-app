@@ -43,19 +43,44 @@ final class PlayerPool {
     /// Last persisted playback rate from settings (restore target for boosts).
     private var currentRate: Float = 1
 
+    /// APP-018 `bitos_video_quality` wire (UX U9): "auto" | "high" | "low".
+    /// A change releases the bounded slots so the next reconciliation
+    /// re-prepares at the new rung (at most three players rebuilt).
+    private var currentQuality: String = "auto"
+
     /// Reconcile slots with the note at [visibleId] ± 1.
-    func update(visibleId: String?, notes: [FeedNote], autoplayAllowed: Bool = true, rate: Float = 1, muted: Bool = false) {
+    func update(visibleId: String?, notes: [FeedNote], autoplayAllowed: Bool = true, rate: Float = 1, muted: Bool = false, videoQuality: String = "auto") {
         currentRate = rate
-        guard let visibleId,
-              let visibleIndex = notes.firstIndex(where: { $0.id == visibleId }) else {
+        if videoQuality != currentQuality {
+            currentQuality = videoQuality
+            slots.values.forEach { $0.player.pause() }
+            slots.removeAll()
+            mediaChains.removeAll()
+            chainIndexes.removeAll()
+            failureObservers.values.forEach(NotificationCenter.default.removeObserver)
+            failureObservers.removeAll()
+            // Publish the cleared bindings even when nothing is recreated
+            // this pass (visible page nil) — surfaces must drop stale players.
+            bindingRevision &+= 1
+        }
+        guard let visibleId else {
+            slots.values.forEach { $0.player.pause() }
+            return
+        }
+        // One pass builds the id → index map (audit §4): the old path
+        // re-scanned the window per lookup (firstIndex + first per keep
+        // slot) — O(n × slots) per reconciliation on every page turn.
+        var indexById: [String: Int] = [:]
+        indexById.reserveCapacity(notes.count)
+        for (index, note) in notes.enumerated() { indexById[note.id] = index }
+        guard let visibleIndex = indexById[visibleId] else {
             slots.values.forEach { $0.player.pause() }
             return
         }
 
         let keepIds: [String] = ((visibleIndex - 1)...(visibleIndex + 1))
             .filter { notes.indices.contains($0) }
-            .map { notes[$0].id }
-            .filter { id in notes.first(where: { $0.id == id })?.video != nil }
+            .compactMap { index in notes[index].video != nil ? notes[index].id : nil }
 
         // Release slots outside the window.
         var bindingsChanged = false
@@ -70,12 +95,14 @@ final class PlayerPool {
         }
         // Create missing slots (bounded to keepIds.count <= 3).
         for id in keepIds where slots[id] == nil {
-            guard let note = notes.first(where: { $0.id == id }),
-                  let video = note.video else { continue }
-            // FED-004: static rendition pick (tallest fitting the display
-            // long edge with ±25% headroom, shared rule) — no ABR in V1.
+            guard let index = indexById[id],
+                  notes.indices.contains(index),
+                  let video = notes[index].video else { continue }
+            // FED-004: static rendition pick (shared rule; quality
+            // preference applies — UX U9 data saver picks the shortest
+            // rung ≥360p) — no ABR in V1.
             let screenHeight = awaitScreenHeight()
-            let chain = mediaChain(for: video, targetHeight: screenHeight)
+            let chain = mediaChain(for: video, targetHeight: screenHeight, quality: currentQuality)
             guard let first = chain.first, let videoURL = URL(string: first) else { continue }
             mediaChains[id] = chain
             chainIndexes[id] = 0
@@ -125,13 +152,15 @@ final class PlayerPool {
         return height
     }
 
-    /// Candidate chain: shared rendition pick, then mirrors, then the
-    /// remaining renditions (tall→short). Pure ordering over shared data.
-    private func mediaChain(for video: MediaMetadata, targetHeight: Int) -> [String] {
+    /// Candidate chain: shared quality-aware rendition pick, then mirrors,
+    /// then the remaining renditions (tall→short). Pure ordering over shared
+    /// data.
+    private func mediaChain(for video: MediaMetadata, targetHeight: Int, quality: String) -> [String] {
         let pick = bridge.mediaPickRenditionUrl(
             renditionSpecs: video.renditionSpecs,
             primaryUrl: video.url,
-            targetHeight: Int32(targetHeight)
+            targetHeight: Int32(targetHeight),
+            qualityWire: quality
         )
         var chain = [pick]
         chain.append(contentsOf: video.fallbackUrls)

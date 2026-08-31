@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import Observation
 import UIKit
 
@@ -33,15 +34,35 @@ final class PosterImagePipeline {
         if let cached = cache.object(forKey: key as NSString) { return cached }
         if let existing = inFlight[key] { return await existing.value }
 
-        let task = Task { [session] () -> UIImage? in
+        // Download + decode run OFF the main actor (audit R8) via ImageIO
+        // thumbnailing — decode-to-target-size in one pass, no full-size
+        // intermediate and no UIKit main-actor isolation.
+        let session = self.session
+        let maxSourceBytes = Self.maxSourceBytes
+        let task = Task.detached(priority: .utility) { () -> UIImage? in
+            // Phase 0 signpost: one poster download+decode at rendered size.
+            let signpost = Perf.signposter.beginInterval(Perf.Interval.posterDecode)
+            defer { Perf.signposter.endInterval(Perf.Interval.posterDecode, signpost) }
             do {
                 let (data, response) = try await session.data(from: url)
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     return nil
                 }
-                guard data.count <= Self.maxSourceBytes, let source = UIImage(data: data) else { return nil }
-                let side = CGFloat(pixelBucket) / max(source.scale, 1)
-                return await source.byPreparingThumbnail(ofSize: CGSize(width: side, height: side)) ?? source
+                guard data.count <= maxSourceBytes else { return nil }
+                let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+                guard let imageSource = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+                    return nil
+                }
+                let thumbnailOptions: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceThumbnailMaxPixelSize: pixelBucket,
+                ]
+                guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, thumbnailOptions as CFDictionary) else {
+                    return nil
+                }
+                return UIImage(cgImage: thumbnail)
             } catch {
                 return nil
             }

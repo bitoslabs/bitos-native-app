@@ -57,6 +57,13 @@ final class EventStore {
         }
         db = handle
 
+        // Write-ahead logging + relaxed sync: the event cache is a
+        // rebuildable projection (DAT-003), so durability trades down for
+        // burst-write throughput (performance-audit-and-plan.md Phase 3).
+        var pragmaMessage: UnsafeMutablePointer<CChar>?
+        _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nil, nil, &pragmaMessage)
+        if let pragmaMessage { sqlite3_free(pragmaMessage) }
+
         for statement in ddl {
             var errorMessage: UnsafeMutablePointer<CChar>?
             guard sqlite3_exec(db, statement, nil, nil, &errorMessage) == SQLITE_OK else {
@@ -111,8 +118,10 @@ final class EventStore {
 
     // MARK: - Operations
 
-    func insert(_ event: StoredEvent) throws {
-        guard let statement = insertStatement else { throw EventStoreError.prepare("insert") }
+    /// Binds one event to the prepared insert statement and steps it.
+    /// Burst callers use [insertBatch]; single [insert] remains for tests
+    /// and one-off writes.
+    private func bindAndStep(_ statement: OpaquePointer?, _ event: StoredEvent) throws {
         sqlite3_reset(statement)
         sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(statement, 2, event.pubkey, -1, SQLITE_TRANSIENT)
@@ -130,6 +139,42 @@ final class EventStore {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw EventStoreError.step(String(cString: sqlite3_errmsg(db)))
         }
+    }
+
+    /**
+     * Inserts a burst of verified events in ONE transaction — one fsync per
+     * batch instead of one per event keeps relay EOSE bursts off the disk
+     * critical path (performance-audit-and-plan.md Phase 3). A failed batch
+     * rolls back atomically.
+     */
+    func insertBatch(_ events: [StoredEvent]) throws {
+        guard let statement = insertStatement, !events.isEmpty else { return }
+        var beginError: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, &beginError) == SQLITE_OK else {
+            let reason = beginError.map { String(cString: $0) } ?? "unknown"
+            sqlite3_free(beginError)
+            throw EventStoreError.step("begin: \(reason)")
+        }
+        do {
+            for event in events {
+                try bindAndStep(statement, event)
+            }
+            var commitError: UnsafeMutablePointer<CChar>?
+            if sqlite3_exec(db, "COMMIT", nil, nil, &commitError) != SQLITE_OK {
+                let reason = commitError.map { String(cString: $0) } ?? "unknown"
+                sqlite3_free(commitError)
+                sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+                throw EventStoreError.step("commit: \(reason)")
+            }
+        } catch {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
+    func insert(_ event: StoredEvent) throws {
+        guard let statement = insertStatement else { throw EventStoreError.prepare("insert") }
+        try bindAndStep(statement, event)
     }
 
     func recentEvents(limit: Int) throws -> [StoredEvent] {
