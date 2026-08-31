@@ -107,16 +107,54 @@ object NostrEventCodec {
      * The second display-trust stage after [verifyId]: unsigned events and
      * events whose signature does not verify return false and must not reach
      * projection surfaces (non-negotiable principle 2).
+     *
+     * Performance (docs/engineering/performance-audit-and-plan.md §2.1):
+     * many stores in one process each verify the same relay frame, and four
+     * relays deliver the same event up to four times — the field math must
+     * still run **once per (id, pubkey, signature)**. A bounded direct-mapped
+     * cache of recent outcomes short-circuits the repeat work. The key
+     * commits every verification input (id is the hashed message, plus
+     * pubkey and signature), so a cached result is exactly what
+     * recomputation would return; hostile floods only churn bounded slots.
+     * Results are deterministic, so negative outcomes cache too.
      */
     fun verifySignature(hasher: EventHasher, event: NostrEvent): Boolean {
         val signature = event.signature ?: return false
         val pubkeyBytes = parseHexBytes(event.pubkey.value, 32) ?: return false
         val idBytes = parseHexBytes(event.id.value, 32) ?: return false
         val signatureBytes = parseHexBytes(signature, 64) ?: return false
-        return space.bitos.core.crypto.SchnorrVerification.verify(
+        val cacheKey = event.id.value + "|" + event.pubkey.value + "|" + signature
+        val current = outcomeSlots
+        val index = (cacheKey.hashCode() and SLOT_MASK)
+        current[index]?.takeIf { it.key == cacheKey }?.let { return it.verified }
+        val verified = space.bitos.core.crypto.SchnorrVerification.verify(
             hasher, pubkeyBytes, idBytes, signatureBytes,
         )
+        // Copy-on-write publication: the slot array is never mutated in
+        // place; a writer clones, fills its slot and republishes. Readers
+        // see either the old or the new array — both internally consistent.
+        // Concurrent writers race last-writer-wins; a lost entry only costs
+        // one recomputation, never a wrong outcome (the key commits all
+        // three verification inputs).
+        val updated = current.copyOf()
+        updated[index] = VerifiedOutcome(cacheKey, verified)
+        outcomeSlots = updated
+        return verified
     }
+
+    /** One cached verification result — immutable once published. */
+    private class VerifiedOutcome(val key: String, val verified: Boolean)
+
+    /**
+     * Direct-mapped outcome slots: power-of-two capacity, last-writer-wins
+     * eviction on hash collision. Bounded memory (~2 MiB worst case);
+     * safe under concurrent verifiers on JVM and Kotlin/Native because
+     * published arrays are immutable after assignment.
+     */
+    private const val SLOT_COUNT = 8_192 // power of two
+    private const val SLOT_MASK = SLOT_COUNT - 1
+    private var outcomeSlots = arrayOfNulls<VerifiedOutcome>(SLOT_COUNT)
+
 
     private fun parseHexBytes(hex: String, expectBytes: Int): ByteArray? {
         if (hex.length != expectBytes * 2) return null

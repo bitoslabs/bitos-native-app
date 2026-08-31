@@ -54,9 +54,36 @@ data class MediaMetadata(
         }
         return (best ?: smallest ?: renditions.first()).url
     }
+
+    /**
+     * APP-018 `bitos_video_quality` = high: always the tallest rung —
+     * display quality over bandwidth. Deterministic on height ties (the
+     * ladder is tall→short, `maxByOrNull` keeps the first = tallest).
+     */
+    fun selectTallestRendition(): String {
+        if (renditions.isEmpty()) return url
+        return renditions.maxByOrNull { it.height.toLong() }?.url ?: url
+    }
+
+    /**
+     * APP-018 `bitos_video_quality` = low (data saver, UX U9): the shortest
+     * rung at or above [DATA_SAVER_MIN_HEIGHT] pixels — least data that
+     * stays watchable. When every rung is shorter, the shortest available
+     * (the preference never returns the primary when a rung exists).
+     */
+    fun selectDataSaverRendition(): String {
+        if (renditions.isEmpty()) return url
+        val watchable = renditions.filter { it.height >= DATA_SAVER_MIN_HEIGHT }
+        val candidates = watchable.ifEmpty { renditions }
+        return candidates.minByOrNull { it.height.toLong() }?.url ?: url
+    }
+
     companion object {
         private const val MAX_URL_LENGTH = 2048
         private const val MAX_DIMENSION = 100_000
+
+        /** Data-saver floor: shortest rung at/above this stays watchable. */
+        const val DATA_SAVER_MIN_HEIGHT = 360
 
         /** Hostile-input bound: mirrors beyond 8 are dropped. */
         const val MAX_FALLBACK_URLS = 8

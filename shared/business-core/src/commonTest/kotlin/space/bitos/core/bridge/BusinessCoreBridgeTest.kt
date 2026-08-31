@@ -215,6 +215,78 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun mediaPickHonorsVideoQualityPreference() {
+        // APP-018 `bitos_video_quality` (UX U9): AUTO = tallest fitting the
+        // display; HIGH = tallest rung; LOW = data saver (shortest ≥360p).
+        val specs = listOf(
+            "https://cdn.example/v-2160.mp4|2160|8000000",
+            "https://cdn.example/v-1080.mp4|1080|4000000",
+            "https://cdn.example/v-480.mp4|480|1500000",
+        )
+        val primary = "https://cdn.example/v.mp4"
+        assertEquals("https://cdn.example/v-2160.mp4", bridge.mediaPickRenditionUrl(specs, primary, 1080, "high"))
+        assertEquals("https://cdn.example/v-480.mp4", bridge.mediaPickRenditionUrl(specs, primary, 1080, "low"))
+        assertEquals("https://cdn.example/v-1080.mp4", bridge.mediaPickRenditionUrl(specs, primary, 1080, "auto"))
+        // No ladder → primary regardless of preference.
+        assertEquals(primary, bridge.mediaPickRenditionUrl(emptyList(), primary, 1080, "low"))
+    }
+
+    @Test
+    fun windowRoundTripsAllPresentationFields() {
+        // The iOS feed store projects notes through insert → snapshot. Every
+        // presentation field — thread anchors, poll, remix, license, warning
+        // and the FED-004 media ladder — must survive that round trip
+        // (performance-audit R11 regression lock).
+        val window = bridge.makeWindow(4)
+        val full = BusinessCoreBridge.Note(
+            id = "full1",
+            pubkey = "aa".repeat(32),
+            content = "poll + remix + video",
+            createdAt = 1_710_005_000L,
+            kind = 1,
+            replyTo = "bb".repeat(32),
+            hashtags = listOf("bitcoin"),
+            mentions = listOf("satoshi"),
+            mediaUrls = listOf("https://cdn.io/a.png"),
+            protocolPayload = false,
+            repostedBy = "cc".repeat(32),
+            videoUrl = "https://cdn.io/a.mp4",
+            videoMime = "video/mp4",
+            posterUrl = "https://cdn.io/a.jpg",
+            videoWidth = 1080,
+            videoHeight = 1920,
+            durationSeconds = 42L,
+            contentWarning = true,
+            threadRootId = "dd".repeat(32),
+            threadParentId = "ee".repeat(32),
+            pollOptions = listOf("yes", "no"),
+            remixOfEventId = "ff".repeat(32),
+            remixOfPubkey = "ab".repeat(32),
+            license = "CC-BY-4.0",
+            fallbackUrls = listOf("https://mirror.io/a.mp4"),
+            renditionSpecs = listOf("https://cdn.io/a-720.mp4|720|2500000"),
+        )
+        assertTrue(window.insert(full))
+        val roundTripped = window.snapshot().single()
+
+        assertEquals(full.id, roundTripped.id)
+        assertEquals(full.replyTo, roundTripped.replyTo)
+        assertEquals(full.threadRootId, roundTripped.threadRootId)
+        assertEquals(full.threadParentId, roundTripped.threadParentId)
+        assertEquals(full.contentWarning, roundTripped.contentWarning)
+        assertEquals(full.pollOptions, roundTripped.pollOptions)
+        assertEquals(full.remixOfEventId, roundTripped.remixOfEventId)
+        assertEquals(full.remixOfPubkey, roundTripped.remixOfPubkey)
+        assertEquals(full.license, roundTripped.license)
+        assertEquals(full.repostedBy, roundTripped.repostedBy)
+        assertEquals(full.durationSeconds, roundTripped.durationSeconds)
+        assertEquals(full.fallbackUrls, roundTripped.fallbackUrls)
+        assertEquals(full.renditionSpecs, roundTripped.renditionSpecs)
+        assertEquals(full.videoUrl, roundTripped.videoUrl)
+        assertEquals(full.posterUrl, roundTripped.posterUrl)
+    }
+
+    @Test
     fun rejectsSignatureUnverifiedEvents() {
         // SBC-006: a well-formed event whose ID was recomputed for tampered
         // content, carrying another event's signature, must NOT reach the

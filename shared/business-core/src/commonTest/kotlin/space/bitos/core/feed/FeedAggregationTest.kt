@@ -186,4 +186,30 @@ class FeedAggregatorTest {
         // Visible ids keep their relative order, fresh ids land below them.
         assertEquals(listOf("old2", "old1", "new1", "new2"), result.map { it.id })
     }
+
+    @Test
+    fun snapshotStaysCanonicalAcrossInterleavedInserts() {
+        // Incremental ordering (no per-event re-sort): arbitrary arrival
+        // order still yields the canonical snapshot, and the cached
+        // snapshot agrees with a fresh rebuild after every mutation.
+        val aggregator = FeedAggregator(maxItems = 8)
+        val stamps = listOf(500L, 100L, 300L, 200L, 600L, 400L)
+        stamps.forEachIndexed { index, at -> aggregator.insert(note("n$index", at)) }
+        val expected = listOf("n4", "n0", "n5", "n2", "n3", "n1")
+        assertEquals(expected, aggregator.snapshot().map { it.id })
+        // Snapshot is stable across repeated reads (cache path).
+        assertEquals(expected, aggregator.snapshot().map { it.id })
+        // A late arrival slots into the maintained order without a re-sort.
+        aggregator.insert(note("late", 350L))
+        assertEquals(listOf("n4", "n0", "n5", "late", "n2", "n3", "n1"), aggregator.snapshot().map { it.id })
+    }
+
+    @Test
+    fun equalTimestampsBreakTiesByIdAscending() {
+        val aggregator = FeedAggregator()
+        aggregator.insert(note("c", 100))
+        aggregator.insert(note("a", 100))
+        aggregator.insert(note("b", 100))
+        assertEquals(listOf("a", "b", "c"), aggregator.snapshot().map { it.id })
+    }
 }

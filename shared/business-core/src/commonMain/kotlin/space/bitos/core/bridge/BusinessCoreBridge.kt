@@ -351,10 +351,10 @@ class BusinessCoreBridge {
      * the note as `url|height|bitrate` rows; the pick is tallest fitting
      * `targetHeight × 1.25`, smallest-on-overshoot, primary when no ladder.
      */
-    fun mediaPickRenditionUrl(renditionSpecs: List<String>, primaryUrl: String, targetHeight: Int): String {
+    fun mediaPickRenditionUrl(renditionSpecs: List<String>, primaryUrl: String, targetHeight: Int, qualityWire: String): String {
         val renditions = renditionSpecs.mapNotNull(::parseRenditionSpec)
         if (renditions.isEmpty()) return primaryUrl
-        return MediaMetadata(
+        val media = MediaMetadata(
             url = primaryUrl,
             mimeType = null,
             posterUrl = null,
@@ -363,7 +363,15 @@ class BusinessCoreBridge {
             durationSeconds = null,
             fallbackUrls = emptyList(),
             renditions = renditions,
-        ).selectRendition(targetHeight)
+        )
+        // APP-018 `bitos_video_quality` pick (UX U9): AUTO keeps the
+        // display-fitting pick; HIGH forces the tallest rung; LOW is the
+        // data saver (shortest rung ≥360p, else shortest).
+        return when (space.bitos.core.settings.VideoQualitySetting.parse(qualityWire)) {
+            space.bitos.core.settings.VideoQualitySetting.HIGH -> media.selectTallestRendition()
+            space.bitos.core.settings.VideoQualitySetting.LOW -> media.selectDataSaverRendition()
+            space.bitos.core.settings.VideoQualitySetting.AUTO -> media.selectRendition(targetHeight)
+        }
     }
 
     private fun parseBitzEntries(json: String): List<space.bitos.core.feed.BitzSearch.Entry>? = try {
@@ -2942,12 +2950,37 @@ class FeedWindow(maxItems: Int) {
         createdAt = createdAt,
         kind = kind,
         replyTo = replyTo,
+        threadRootId = threadRootId,
+        threadParentId = threadParentId,
         hashtags = hashtags,
         mentions = mentions,
         mediaUrls = mediaUrls,
         isProtocolPayload = protocolPayload,
         repostedBy = repostedBy,
-        video = videoUrl?.let { MediaMetadata(it, videoMime, posterUrl, videoWidth, videoHeight) },
+        video = videoUrl?.let {
+            MediaMetadata(
+                url = it,
+                mimeType = videoMime,
+                posterUrl = posterUrl,
+                width = videoWidth,
+                height = videoHeight,
+                durationSeconds = durationSeconds,
+                fallbackUrls = fallbackUrls,
+                renditions = renditionSpecs.mapNotNull(::parseRenditionSpec),
+            )
+        },
+        contentWarning = contentWarning,
+        poll = pollOptions.takeIf { it.isNotEmpty() }?.let { options ->
+            space.bitos.core.model.Poll(
+                question = content,
+                options = options.mapIndexed { index, label ->
+                    space.bitos.core.model.PollOption(index, label)
+                },
+            )
+        },
+        remixOfEventId = remixOfEventId,
+        remixOfPubkey = remixOfPubkey,
+        license = license,
     )
 
     private fun FeedNote.toBridge() = BusinessCoreBridge.Note(
@@ -2957,6 +2990,8 @@ class FeedWindow(maxItems: Int) {
         createdAt = createdAt,
         kind = kind,
         replyTo = replyTo,
+        threadRootId = threadRootId,
+        threadParentId = threadParentId,
         hashtags = hashtags,
         mentions = mentions,
         mediaUrls = mediaUrls,
@@ -2967,6 +3002,12 @@ class FeedWindow(maxItems: Int) {
         posterUrl = video?.posterUrl,
         videoWidth = video?.width,
         videoHeight = video?.height,
+        durationSeconds = video?.durationSeconds,
+        contentWarning = contentWarning,
+        pollOptions = poll?.options?.map { it.label } ?: emptyList(),
+        remixOfEventId = remixOfEventId,
+        remixOfPubkey = remixOfPubkey,
+        license = license,
         fallbackUrls = video?.fallbackUrls ?: emptyList(),
         renditionSpecs = video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
     )

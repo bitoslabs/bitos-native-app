@@ -176,6 +176,51 @@ class NostrEventCodecTest {
         assertNull(NostrEventCodec.relayEoseSubscriptionId("""["EOSE",7]"""))
         assertNull(NostrEventCodec.relayEoseSubscriptionId("""["EOSE","${"x".repeat(129)}"]"""))
     }
+
+    @Test
+    fun signatureOutcomeCacheIsDeterministicForRepeats() {
+        // The same verified frame twice: the repeat hits the outcome cache
+        // and must return exactly what recomputation returned.
+        val relay = RelayUrl.parse("wss://relay.damus.io")!!
+        val event = NostrEventCodec.decodeRelayEvent(hasher, VALID_SIGNED_FRAME, relay)
+        assertTrue(NostrEventCodec.verifySignature(hasher, event))
+        assertTrue(NostrEventCodec.verifySignature(hasher, event))
+
+        // Negative outcomes cache too — an unrelated garbage signature is
+        // false on first sight and on the cached repeat.
+        val id = NostrEventCodec.computeId(hasher, pubkey, 1_710_000_000, 1, listOf(listOf("t", "bitcoin")), "gm")
+        val unsignedShape = NostrEventCodec.decodeEventObject(hasher, eventJson(id, sig = "11".repeat(64)), null)
+        assertFalse(NostrEventCodec.verifySignature(hasher, unsignedShape))
+        assertFalse(NostrEventCodec.verifySignature(hasher, unsignedShape))
+    }
+
+    @Test
+    fun signatureOutcomeCacheKeysOnIdPubkeyAndSignature() {
+        // Cache-safety: a forged event reusing a VERIFIED event's id and
+        // signature under a different pubkey must NOT inherit the cached
+        // true outcome. The cache key commits all three verification inputs.
+        val relay = RelayUrl.parse("wss://relay.damus.io")!!
+        val verified = NostrEventCodec.decodeRelayEvent(hasher, VALID_SIGNED_FRAME, relay)
+        assertTrue(NostrEventCodec.verifySignature(hasher, verified))
+
+        val forged = space.bitos.core.model.NostrEvent(
+            id = verified.id,
+            pubkey = Pubkey.parse(pubkey)!!,
+            createdAt = verified.createdAt,
+            kind = verified.kind,
+            tags = verified.tags,
+            content = verified.content,
+            signature = verified.signature,
+            receivedFromRelay = null,
+        )
+        assertFalse(NostrEventCodec.verifySignature(hasher, forged))
+    }
+
+    private companion object {
+        // Verbatim signed relay frame from the verification-vector fixtures.
+        const val VALID_SIGNED_FRAME =
+            """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"gm from BitOS","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
+    }
 }
 
 class RelayUrlTest {

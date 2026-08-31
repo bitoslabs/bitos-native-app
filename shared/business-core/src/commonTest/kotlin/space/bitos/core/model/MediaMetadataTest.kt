@@ -214,6 +214,52 @@ class MediaMetadataTest {
     }
 
     @Test
+    fun highQualityAlwaysPicksTheTallestRung() {
+        fun media(vararg heights: Int): MediaMetadata = MediaMetadata(
+            url = "https://x/primary.mp4",
+            mimeType = "video/mp4",
+            posterUrl = null,
+            width = null,
+            height = null,
+            durationSeconds = null,
+            fallbackUrls = emptyList(),
+            renditions = heights.map { MediaRendition("https://x/$it.mp4", it, 0L) },
+        )
+
+        // Tallest wins even when it grossly overshoots the display.
+        assertEquals("https://x/2160.mp4", media(2160, 1080, 720).selectTallestRendition())
+        // Height ties resolve deterministically (first of the tall→short ladder).
+        assertEquals("https://x/1080.mp4", media(1080, 1080, 720).selectTallestRendition())
+        // No ladder → primary.
+        assertEquals("https://x/primary.mp4", media().selectTallestRendition())
+    }
+
+    @Test
+    fun dataSaverPicksShortestWatchableRung() {
+        fun media(vararg heights: Int): MediaMetadata = MediaMetadata(
+            url = "https://x/primary.mp4",
+            mimeType = "video/mp4",
+            posterUrl = null,
+            width = null,
+            height = null,
+            durationSeconds = null,
+            fallbackUrls = emptyList(),
+            renditions = heights.map { MediaRendition("https://x/$it.mp4", it, 0L) },
+        )
+
+        // Shortest rung at/above the 360p floor (UX U9 / APP-018 `low`).
+        assertEquals("https://x/480.mp4", media(2160, 1080, 480).selectDataSaverRendition())
+        // Exactly at the floor counts.
+        assertEquals("https://x/360.mp4", media(2160, 360, 240).selectDataSaverRendition())
+        // Every rung below the floor → shortest available anyway.
+        assertEquals("https://x/144.mp4", media(240, 144).selectDataSaverRendition())
+        // No ladder → primary.
+        assertEquals("https://x/primary.mp4", media().selectDataSaverRendition())
+        // The floor is the documented constant.
+        assertEquals(360, MediaMetadata.DATA_SAVER_MIN_HEIGHT)
+    }
+
+    @Test
     fun hostileRenditionFieldsAreDropped() {
         // Bad scheme, missing dim, absurd bitrate → nothing enters the ladder.
         val media = MediaMetadata.fromEvent(
