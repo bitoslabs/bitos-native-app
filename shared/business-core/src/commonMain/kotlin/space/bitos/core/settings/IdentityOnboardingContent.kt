@@ -28,7 +28,8 @@ data class IdentityMethodOption(
 
 object IdentityOnboardingContent {
 
-    const val SCHEMA_VERSION = 1
+    // v2: More-hub add-account sheet copy + nsec help items joined the contract.
+    const val SCHEMA_VERSION = 2
 
     // ── Welcome / value proposition ────────────────────────────────────
     const val APP_NAME = "BitOS"
@@ -106,6 +107,22 @@ object IdentityOnboardingContent {
     const val IMPORT_REVIEW_NOTE =
         "Enabled only when the input resolves to a usable secret (nsec or 64-hex)."
     const val DERIVED_IDENTITY_LABEL = "Derived identity"
+
+    // ── More-hub add-account sheet (ID-004 surface; rendered by the
+    // SwiftUI sheet and the Compose bottom sheet with verbatim parity) ──
+    const val ADD_ACCOUNT_TITLE = "Add account"
+    const val ADD_ACCOUNT_SUBTITLE =
+        "Log in with an nsec or create a fresh key. Every account already on this device stays sealed."
+    const val ADD_ACCOUNT_REVIEW_LABEL = "Review key"
+    const val ADD_ACCOUNT_CREATE_LABEL = "Create new key"
+    const val ADD_ACCOUNT_CANCEL_LABEL = "Cancel"
+    const val NSEC_HELP_TITLE = "What's an nsec?"
+    val NSEC_HELP_ITEMS = listOf(
+        "Your secret key — it starts with nsec1. Whoever holds it can post and spend as you, so never share it.",
+        "Export it from your current Nostr app (usually Settings → Back up or Export private key), then paste it above.",
+        "npub1… is your public ID — safe to share, but it can't log you in.",
+        "BitOS seals the key in device storage and never uploads it. Only paste an nsec into apps you trust.",
+    )
 
     // ── Backup gate (freshly generated key) ────────────────────────────
     const val BACKUP_WARNING =

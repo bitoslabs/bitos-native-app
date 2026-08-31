@@ -48,6 +48,13 @@ struct IdentityOnboardingMirror {
     let methods: [Method]
     let importFieldLabel: String
     let importReviewNote: String
+    let addAccountTitle: String
+    let addAccountSubtitle: String
+    let addAccountReviewLabel: String
+    let addAccountCreateLabel: String
+    let addAccountCancelLabel: String
+    let nsecHelpTitle: String
+    let nsecHelpItems: [String]
     let backupWarning: String
     let backupFieldLabel: String
     let backupRevealPrompt: String
@@ -78,6 +85,13 @@ struct IdentityOnboardingMirror {
         nip46ComingSoon = str("nip46ComingSoon")
         importFieldLabel = str("importFieldLabel")
         importReviewNote = str("importReviewNote")
+        addAccountTitle = str("addAccountTitle")
+        addAccountSubtitle = str("addAccountSubtitle")
+        addAccountReviewLabel = str("addAccountReviewLabel")
+        addAccountCreateLabel = str("addAccountCreateLabel")
+        addAccountCancelLabel = str("addAccountCancelLabel")
+        nsecHelpTitle = str("nsecHelpTitle")
+        nsecHelpItems = raw["nsecHelpItems"] as? [String] ?? []
         backupWarning = str("backupWarning")
         backupFieldLabel = str("backupFieldLabel")
         backupRevealPrompt = str("backupRevealPrompt")

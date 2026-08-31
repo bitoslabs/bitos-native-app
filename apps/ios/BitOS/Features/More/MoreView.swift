@@ -222,7 +222,9 @@ struct MoreView: View {
                     importText: $importText
                 )
                 .environment(environment)
-                .presentationDetents([.medium])
+                // Medium fits the collapsed import path; large absorbs the
+                // derived card + expanded nsec help on small devices.
+                .presentationDetents([.medium, .large])
             }
             .task {
                 // Live relay tiles while the hub is visible.
@@ -349,50 +351,71 @@ private struct AccountSwitcherSheet: View {
     }
 }
 
-/// Add-account sheet: import nsec or create a fresh key (legacy parity).
+/// Add-account sheet (ID-004 surface, v2 shared copy): import an nsec with
+/// the live derived-identity preview (KF-6) and collapsible nsec help, or
+/// create a fresh key. One primary action gated by the shared READY rule;
+/// creating stays the outlined alternative and cancel is a quiet escape —
+/// the legacy three-flat-buttons row gave all three equal weight.
 private struct AddAccountSheet: View {
     let identity: IdentityStore
     @Binding var importText: String
     @Environment(\.dismiss) private var dismiss
 
+    @State private var nsecHelpOpen = false
+    private let copy = IdentityOnboardingMirror.shared
+
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            Text("Add account")
-                .font(.system(size: 20, weight: .bold))
-            Text("Log in with an nsec or create a fresh key. Every account already on this device stays sealed.")
-                .font(.system(size: 12))
-                .foregroundStyle(BitOSTheme.textSecondary)
-            SecretKeyField(
-                text: $importText,
-                error: identity.importError,
-                onSubmit: { identity.importKeyPreview(importText) }
-            )
-            .onChange(of: importText) { _, _ in identity.clearImportError() }
-            if secretKeyReady(importText) {
-                DerivedIdentityCard(
-                    check: BusinessCoreBridge().keyImportCheck(raw: importText)
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                Text(copy.addAccountTitle)
+                    .font(.system(size: 20, weight: .bold))
+                Text(copy.addAccountSubtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                SecretKeyField(
+                    text: $importText,
+                    error: identity.importError,
+                    onSubmit: { identity.importKeyPreview(importText) }
                 )
-            }
-            HStack {
+                .onChange(of: importText) { _, _ in identity.clearImportError() }
+                if secretKeyReady(importText) {
+                    DerivedIdentityCard(
+                        check: BusinessCoreBridge().keyImportCheck(raw: importText)
+                    )
+                }
+                NsecHelpSection(
+                    title: copy.nsecHelpTitle,
+                    items: copy.nsecHelpItems,
+                    open: $nsecHelpOpen
+                )
                 Button {
                     identity.importKeyPreview(importText)
                 } label: {
-                    Text("Review key")
+                    Text(copy.addAccountReviewLabel)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(BitOSTheme.accent)
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(BitOSTheme.accent)
                 .disabled(!secretKeyReady(importText))
-                Button("Create new key") {
+                Button {
                     identity.createKeyPreview()
+                } label: {
+                    Text(copy.addAccountCreateLabel)
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
                 }
-                .foregroundStyle(BitOSTheme.accent)
-                Spacer()
-                Button("Cancel") { dismiss() }
+                .buttonStyle(.bordered)
+                .tint(BitOSTheme.accent)
+                Button(copy.addAccountCancelLabel) { dismiss() }
+                    .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, BitOSTheme.Spacing.xs)
             }
-            Spacer(minLength: 8)
+            .padding(BitOSTheme.Spacing.base)
         }
-        .padding(BitOSTheme.Spacing.base)
+        .scrollBounceBehavior(.basedOnSize)
         .background(BitOSTheme.background)
         .sheet(item: Binding(
             get: { identity.preview },
@@ -406,6 +429,62 @@ private struct AddAccountSheet: View {
                 onCancel: { identity.cancelPreview(); dismiss() }
             )
             .presentationDetents([.medium])
+        }
+    }
+}
+
+/// Collapsible nsec help (shared v2 copy): what the key is, where to export
+/// it from an existing Nostr app, npub-vs-nsec, and the sealed-on-device
+/// promise. Collapsed by default so the import path stays one glance wide.
+private struct NsecHelpSection: View {
+    let title: String
+    let items: [String]
+    @Binding var open: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { open.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.accent)
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(open ? "Expanded" : "Collapsed")
+            .accessibilityAddTraits(open ? [.isSelected] : [])
+            if open {
+                VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("•")
+                                .font(.system(size: 12))
+                                .foregroundStyle(BitOSTheme.accent)
+                            Text(item)
+                                .font(.system(size: 12))
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(BitOSTheme.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(BitOSTheme.surfaceElevated)
+                )
+            }
         }
     }
 }

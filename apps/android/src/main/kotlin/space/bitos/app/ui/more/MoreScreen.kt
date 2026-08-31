@@ -354,40 +354,19 @@ fun MoreScreen(
         }
     }
 
-    // ── Add account (import nsec / create) ────────────────────────────
+    // ── Add account (import nsec / create): bottom sheet, shared v2 copy,
+    // live derived-identity preview + collapsible nsec help (KF-6/7) ────
     if (showAddAccount) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { showAddAccount = false; importInput = "" },
-            title = { Text("Add account") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Log in with an nsec or create a fresh key. Every account already on this device stays sealed.",
-                        fontSize = 12.sp, color = BitOSColors.textSecondary,
-                    )
-                    space.bitos.app.ui.components.SecretKeyField(
-                        value = importInput,
-                        onValueChange = {
-                            importInput = it
-                            identityViewModel.clearImportError()
-                        },
-                        error = identity.importError,
-                        onSubmit = { identityViewModel.importNsecPreview(importInput) },
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            onClick = { identityViewModel.importNsecPreview(importInput) },
-                            enabled = space.bitos.app.ui.components.secretKeyReady(importInput),
-                        ) { Text("Review key", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
-                        TextButton(onClick = { identityViewModel.createKeyPreview() }) {
-                            Text("Create new key", color = BitOSColors.primary)
-                        }
-                    }
-                }
+        space.bitos.app.ui.components.AddAccountSheet(
+            importInput = importInput,
+            onImportChange = {
+                importInput = it
+                identityViewModel.clearImportError()
             },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { showAddAccount = false }) { Text("Cancel") } },
+            error = identity.importError,
+            onReview = { identityViewModel.importNsecPreview(importInput) },
+            onCreateKey = { identityViewModel.createKeyPreview() },
+            onDismiss = { showAddAccount = false; importInput = "" },
         )
     }
 

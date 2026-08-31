@@ -86,6 +86,8 @@ keys are accepted alongside `nsec`.
 | KF-4 | The review/submit action is the primary action of its surface and is enabled only when the input resolves to a usable secret (nsec or 64-hex). |
 | KF-5 | Every control (field, paste, reveal, copy) carries an accessibility label; state is never communicated by color alone (icon + text). |
 | KF-6 | A READY input previews the derived identity live before submit: the shared rule returns the derived x-only pubkey and npub, and the surface renders a hex avatar + monospace npub + copy chip (onboarding import step, You-tab import panel, More-hub add-account sheet). |
+| KF-7 | The More-hub add-account surface is a bottom sheet on both platforms (never a centered dialog: it hosts a keyboard form opened from the switcher sheet), renders the shared v2 copy verbatim (`IdentityOnboardingContent` add-account + nsec-help vectors), previews the derived identity (KF-6), and carries a collapsible "What's an nsec?" help — what the key is, where to export it, npub-vs-nsec, sealed-on-device — collapsed by default. |
+| KF-8 | Add-account action hierarchy: one filled primary "Review key" gated on the shared READY rule, an outlined "Create new key" alternative, and a quiet Cancel — no two actions of equal weight. |
 
 ### 4.2 Creation confirmation + one-time backup gate
 

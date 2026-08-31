@@ -1600,6 +1600,26 @@ fixed, what's next.
   Verified: shared 267/267 ×2 ✅, Android 55/55 (isolated re-run) ✅,
   iOS typecheck 0 errors ✅, pbxproj lint ✅, structure ✅.
 
+- 2026-08-31 — Add-account nsec UX unified (dialog-vs-sheet audit). The
+  More-hub add-account surface was an AlertDialog on Android vs a bottom
+  sheet on iOS, with three same-weight text buttons on iOS, an empty
+  `confirmButton = {}` slot on Android, and — worst — the KF-6 derived-
+  identity preview missing on Android (users committed without seeing
+  which account the key controls). Best-version converged on both
+  platforms: bottom sheet everywhere (opened from the switcher sheet;
+  hosts a keyboard form like every other Compose sheet), new shared v2
+  copy vectors in `IdentityOnboardingContent` (SCHEMA_VERSION 2:
+  add-account title/subtitle/labels + 4-item collapsible "What's an
+  nsec?" help — what it is, where to export it, npub≠nsec,
+  sealed-on-device) bridged through `identityOnboardingContent()` and the
+  iOS `IdentityOnboardingMirror`, derived-identity card on both, and one
+  filled "Review key" gated on READY + outlined "Create new key" + quiet
+  Cancel (KF-7/KF-8 in ux-ui-flows). Android extracted to
+  `ui/components/AddAccountSheet.kt`; iOS sheet gained ScrollView +
+  medium/large detents. Verified: shared androidHost tests ✅ (incl. new
+  `addAccountSheetAndNsecHelpCopy`), Android 55+ tests ✅, iOS full-app
+  build 0 errors ✅.
+
 - 2026-08-28 — Identity QR shipped (user-named "show QR" gap). Shared
   core: pure `QrCode` encoder (APP-022) — byte mode, ECC level M, versions
   1–6 (identity payloads: npub/nostr: links), GF(256) Reed–Solomon with the

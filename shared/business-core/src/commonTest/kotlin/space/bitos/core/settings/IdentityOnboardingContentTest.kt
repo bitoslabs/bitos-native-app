@@ -63,4 +63,24 @@ class IdentityOnboardingContentTest {
         assertTrue(content.PRIVACY_FOOTNOTE.contains("Nothing leaves this device"))
         assertTrue(content.GUEST_TOAST.contains("Browsing as guest"))
     }
+
+    /**
+     * More-hub add-account sheet contract (v2): both platforms render these
+     * verbatim — title/subtitle/action labels plus the collapsible nsec help
+     * (what it is, where to export it, npub≠nsec, sealed-on-device safety).
+     */
+    @Test
+    fun addAccountSheetAndNsecHelpCopy() {
+        val content = IdentityOnboardingContent
+        assertEquals("Add account", content.ADD_ACCOUNT_TITLE)
+        assertTrue(content.ADD_ACCOUNT_SUBTITLE.contains("stays sealed"))
+        assertTrue(content.ADD_ACCOUNT_REVIEW_LABEL.isNotBlank())
+        assertTrue(content.ADD_ACCOUNT_CREATE_LABEL.isNotBlank())
+        assertTrue(content.ADD_ACCOUNT_CANCEL_LABEL.isNotBlank())
+        assertEquals(4, content.NSEC_HELP_ITEMS.size)
+        content.NSEC_HELP_ITEMS.forEach { assertTrue(it.isNotBlank()) }
+        assertTrue(content.NSEC_HELP_ITEMS.any { it.contains("nsec1") })
+        assertTrue(content.NSEC_HELP_ITEMS.any { it.contains("npub1") && it.contains("can't log you in") })
+        assertTrue(content.NSEC_HELP_ITEMS.any { it.contains("never uploads") })
+    }
 }
