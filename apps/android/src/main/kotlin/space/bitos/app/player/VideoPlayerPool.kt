@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import space.bitos.core.feed.FeedNote
+import kotlin.math.roundToInt
 
 /**
  * Three-slot playback coordinator (FED-002).
@@ -74,6 +75,16 @@ class VideoPlayerPool(
 
     private var failoverSlot: String? = null
 
+    /**
+     * AUTO quality follows the laid-out display height (dp), matching iOS
+     * points. Using a fixed 1920 bucket made high-density 720p-class phones
+     * prepare 1440p/2160p rungs they could not visibly benefit from.
+     */
+    private val displayTargetHeight: Int
+        get() = context.resources.displayMetrics.let { metrics ->
+            logicalDisplayHeight(metrics.heightPixels, metrics.density)
+        }
+
     /** Reconcile slots with [visibleIndex] ± 1 in [notes] (the paged list). */
     fun update(visibleIndex: Int, notes: List<FeedNote>) {
         val quality = qualityProvider()
@@ -111,7 +122,7 @@ class VideoPlayerPool(
         val muted = mutedProvider()
         keep.forEach { note ->
             if (note.id !in players) {
-                val sources = MediaSources.forNote(note, currentQuality)
+                val sources = MediaSources.forNote(note, currentQuality, displayTargetHeight)
                 mediaSources[note.id] = sources
                 players[note.id] = ExoPlayer.Builder(context).build().apply {
                     setMediaItem(MediaItem.fromUri(sources.current()))
@@ -233,12 +244,10 @@ internal class MediaSources private constructor(private val candidates: List<Str
     }
 
     companion object {
-        /** Display long edge for the rendition pick (hdpi range). */
-        private const val TARGET_HEIGHT = 1920
-
         fun forNote(
             note: FeedNote,
             quality: space.bitos.core.settings.VideoQualitySetting,
+            targetHeight: Int,
         ): MediaSources {
             val video = note.video ?: return MediaSources(listOf(""))
             // Shared pick rule (UX U9): AUTO = tallest fitting the display,
@@ -247,7 +256,7 @@ internal class MediaSources private constructor(private val candidates: List<Str
             val pick = when (quality) {
                 space.bitos.core.settings.VideoQualitySetting.HIGH -> video.selectTallestRendition()
                 space.bitos.core.settings.VideoQualitySetting.LOW -> video.selectDataSaverRendition()
-                space.bitos.core.settings.VideoQualitySetting.AUTO -> video.selectRendition(TARGET_HEIGHT)
+                space.bitos.core.settings.VideoQualitySetting.AUTO -> video.selectRendition(targetHeight)
             }
             val ordered = buildList {
                 add(pick)
@@ -260,4 +269,11 @@ internal class MediaSources private constructor(private val candidates: List<Str
             return MediaSources(chain)
         }
     }
+}
+
+/** Logical display height used by the shared rendition rule. */
+internal fun logicalDisplayHeight(heightPixels: Int, density: Float): Int {
+    val safeDensity = density.takeIf { it.isFinite() && it > 0f } ?: 1f
+    // Match the Bitz rendition study's 640 logical-pixel quality floor.
+    return (heightPixels / safeDensity).roundToInt().coerceAtLeast(640)
 }

@@ -2,11 +2,14 @@ package space.bitos.app.ui.bitz
 
 import org.junit.Test
 import space.bitos.core.feed.BitzTimelinePolicy
+import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.MediaMetadata
 import space.bitos.core.model.MediaRendition
 import space.bitos.core.settings.BitzModeSetting
+import space.bitos.app.player.logicalDisplayHeight
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -68,9 +71,8 @@ class BitzTabsContractTest {
                 MediaRendition("https://x/720.mp4", 720, 2_500_000L),
             ),
         )
-        // Screen-height bucket parity with VideoPlayerPool.TARGET_HEIGHT
-        // semantics: tallest fitting under ×1.25 headroom; overshoot →
-        // smallest; no ladder → primary.
+        // Logical screen-height semantics: tallest fitting under ×1.25
+        // headroom; overshoot → smallest; no ladder → primary.
         assertEquals("https://x/1080.mp4", media.selectRendition(1080))
         assertEquals("https://x/720.mp4", media.selectRendition(480))
         assertEquals(
@@ -78,4 +80,41 @@ class BitzTabsContractTest {
             MediaMetadata("https://x/primary.mp4", "video/mp4", null, null, null, null).selectRendition(1080),
         )
     }
+
+    @Test
+    fun logicalDisplayHeightAvoidsOverDecodingOnDenseScreens() {
+        assertEquals(800, logicalDisplayHeight(heightPixels = 2400, density = 3f))
+        assertEquals(1600, logicalDisplayHeight(heightPixels = 1600, density = 0f))
+        assertEquals(640, logicalDisplayHeight(heightPixels = 480, density = 1f))
+    }
+
+    @Test
+    fun playerProjectionTracksAuthorWindowAndAvoidsSteadyStateCopies() {
+        val feed = listOf(note("feed"))
+        val author = listOf(note("author"))
+
+        assertSame(feed, projectBitzPlayerNotes(authorMode = false, videos = feed, spliced = emptyList()))
+        assertSame(author, projectBitzPlayerNotes(authorMode = true, videos = author, spliced = feed))
+
+        val merged = projectBitzPlayerNotes(
+            authorMode = false,
+            videos = feed,
+            spliced = listOf(note("search"), note("feed")),
+        )
+        assertEquals(listOf("search", "feed"), merged.map(FeedNote::id))
+    }
+
+    private fun note(id: String) = FeedNote(
+        id = id,
+        pubkey = "pubkey-$id",
+        content = "",
+        createdAt = 1,
+        kind = 22,
+        replyTo = null,
+        hashtags = emptyList(),
+        mentions = emptyList(),
+        mediaUrls = emptyList(),
+        isProtocolPayload = false,
+        video = MediaMetadata("https://x/$id.mp4", "video/mp4", null, 720, 1280),
+    )
 }

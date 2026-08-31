@@ -162,6 +162,10 @@ struct BitzView: View {
         // window in loaded order (no splice — playback scope must match
         // the profile grid).
         if authorMode { return videos }
+        // Search splices are exceptional. Preserve the store's existing
+        // immutable projection in steady state instead of rebuilding a set
+        // and copying up to 200 notes on every SwiftUI body access.
+        guard !spliced.isEmpty else { return videos }
         let windowIds = Set(videos.map(\.id))
         return spliced.filter { !windowIds.contains($0.id) } + videos
     }

@@ -159,7 +159,7 @@ synchronously → grid paints **before** network) → background `loadReels()` �
 ### 2.6 Rendition & failover policy
 
 ```ts
-targetHeight = max(screen.height, innerHeight, 640)
+targetHeight = max(logical layout height, 640)       // CSS px / iOS pt / Android dp
 selectRendition(media, targetHeight):
     cap = targetHeight × 1.25                    // DPR headroom
     fitting = renditions.filter(r => r.height > 0 && r.height <= cap)

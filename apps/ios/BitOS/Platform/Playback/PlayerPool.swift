@@ -67,20 +67,18 @@ final class PlayerPool {
             slots.values.forEach { $0.player.pause() }
             return
         }
-        // One pass builds the id → index map (audit §4): the old path
-        // re-scanned the window per lookup (firstIndex + first per keep
-        // slot) — O(n × slots) per reconciliation on every page turn.
-        var indexById: [String: Int] = [:]
-        indexById.reserveCapacity(notes.count)
-        for (index, note) in notes.enumerated() { indexById[note.id] = index }
-        guard let visibleIndex = indexById[visibleId] else {
+        // Find the settled page once, then address its adjacent notes by
+        // index. This keeps stable id semantics without allocating a full
+        // 200-entry id dictionary on every page reconciliation.
+        guard let visibleIndex = notes.firstIndex(where: { $0.id == visibleId }) else {
             slots.values.forEach { $0.player.pause() }
             return
         }
 
-        let keepIds: [String] = ((visibleIndex - 1)...(visibleIndex + 1))
+        let keepIndices = ((visibleIndex - 1)...(visibleIndex + 1))
             .filter { notes.indices.contains($0) }
-            .compactMap { index in notes[index].video != nil ? notes[index].id : nil }
+            .filter { notes[$0].video != nil }
+        let keepIds = Set(keepIndices.map { notes[$0].id })
 
         // Release slots outside the window.
         var bindingsChanged = false
@@ -94,14 +92,13 @@ final class PlayerPool {
             }
         }
         // Create missing slots (bounded to keepIds.count <= 3).
-        for id in keepIds where slots[id] == nil {
-            guard let index = indexById[id],
-                  notes.indices.contains(index),
-                  let video = notes[index].video else { continue }
+        for index in keepIndices {
+            let id = notes[index].id
+            guard slots[id] == nil, let video = notes[index].video else { continue }
             // FED-004: static rendition pick (shared rule; quality
             // preference applies — UX U9 data saver picks the shortest
             // rung ≥360p) — no ABR in V1.
-            let screenHeight = awaitScreenHeight()
+            let screenHeight = displayTargetHeight()
             let chain = mediaChain(for: video, targetHeight: screenHeight, quality: currentQuality)
             guard let first = chain.first, let videoURL = URL(string: first) else { continue }
             mediaChains[id] = chain
@@ -145,9 +142,12 @@ final class PlayerPool {
 
     /// Display long edge for the rendition pick (memoized; main thread).
     private var cachedScreenHeight: Int?
-    private func awaitScreenHeight() -> Int {
+    private func displayTargetHeight() -> Int {
         if let cached = cachedScreenHeight { return cached }
-        let height = Int(UIScreen.main.bounds.height)
+        // UIScreen bounds are logical points. Keep the 640-point floor from
+        // the Bitz rendition contract so compact devices do not fall below a
+        // watchable AUTO rung.
+        let height = max(640, Int(UIScreen.main.bounds.height))
         cachedScreenHeight = height
         return height
     }

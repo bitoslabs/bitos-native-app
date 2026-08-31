@@ -259,7 +259,10 @@ UI anatomy:
   because relay offsets are not portable;
 - Explore prefetches a bounded adjacent poster window so newly revealed rows do
   not wait on full-size image decoding;
-- data-saver/quality indication only when it helps the user;
+- video quality is deterministic across native apps: Auto chooses a rendition
+  for the logical laid-out display height (so dense screens do not force an
+  unnecessarily heavy decode), High chooses the tallest published rung, and
+  Low chooses the shortest rung at or above 360p (or the shortest available);
 - polls (APP-008, web `Poll.svelte`/`votePoll` parity): a kind-1 note with
   `poll_option` tags renders as option rows; votes lazy-load once per poll
   (one-shot kind-1018 `#e` REQ, ≤200 voters) and tapping an option publishes

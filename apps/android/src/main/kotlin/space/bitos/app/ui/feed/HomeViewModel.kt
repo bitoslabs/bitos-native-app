@@ -67,6 +67,23 @@ class HomeViewModel(
     val state: StateFlow<FeedUiState> = repository.state
 
     /**
+     * Profile-only projection for shell consumers such as Chats and the
+     * author-zap sheet. Keeping them off the full [FeedUiState] prevents a
+     * note, pagination, relay-health, or tally update from invalidating the
+     * top-level navigation tree.
+     */
+    val feedProfiles: StateFlow<Map<String, space.bitos.core.model.ProfileMetadata>> = repository.state
+        .map { state -> state.profiles }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            // Keep the latest small profile map ready so opening Chats or a
+            // zap sheet never flashes the construction-time empty value.
+            started = SharingStarted.Eagerly,
+            initialValue = repository.state.value.profiles,
+        )
+
+    /**
      * Card-list projection. `distinctUntilChanged` retains the last emitted
      * instance during pending-pill/relay-health updates, so the keyed
      * LazyColumn receives stable inputs and can skip its rows.

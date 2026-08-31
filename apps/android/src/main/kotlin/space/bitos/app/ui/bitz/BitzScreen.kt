@@ -61,7 +61,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -139,6 +138,22 @@ import space.bitos.core.model.MediaMetadata
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.settings.BitzModeSetting
 import space.bitos.core.settings.SettingsContract
+
+/**
+ * Native pager projection: author mode is an exact private window; the
+ * normal lanes put bounded search picks ahead of the shared video window.
+ * The no-splice path returns the existing immutable list so steady-state
+ * recomposition does not copy the full feed.
+ */
+internal fun projectBitzPlayerNotes(
+    authorMode: Boolean,
+    videos: List<FeedNote>,
+    spliced: List<FeedNote>,
+): List<FeedNote> {
+    if (authorMode || spliced.isEmpty()) return videos
+    val windowIds = videos.mapTo(HashSet(videos.size)) { it.id }
+    return spliced.filterNot { it.id in windowIds } + videos
+}
 
 /**
  * Bitz short-video surface (APP-007, spec §3.7). Owns the glass top bar
@@ -231,7 +246,7 @@ fun BitzScreen(
     }
 
     // ── Window + splice (search picks land ahead of the window) ────────
-    val videos = remember(state.notes) {
+    val videos = remember(authorMode, state.notes, authorState.notes) {
         if (authorMode) authorState.notes.filter { it.video != null } else state.notes.filter { it.video != null }
     }
     val spliced = remember { mutableStateListOf<FeedNote>() }
@@ -240,12 +255,9 @@ fun BitzScreen(
     // search picks spliced ahead, then the verified video window. Author
     // mode plays the author's owned window in loaded order (no splice —
     // playback scope must match the profile grid).
-    val playerNotes = remember(videos, spliced.toList()) {
-        if (authorMode) {
-            videos
-        } else {
-            val windowIds = videos.mapTo(HashSet(videos.size)) { it.id }
-            spliced.filterNot { it.id in windowIds } + videos
+    val playerNotes by remember(authorMode, videos, spliced) {
+        derivedStateOf {
+            projectBitzPlayerNotes(authorMode = authorMode, videos = videos, spliced = spliced)
         }
     }
 

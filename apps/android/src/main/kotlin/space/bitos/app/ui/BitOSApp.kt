@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import space.bitos.app.R
 import space.bitos.app.ui.create.CreateScreen
 import space.bitos.app.ui.discover.DiscoverScreen
@@ -185,7 +187,6 @@ fun BitOSApp(
         var authorThreadTarget by remember {
             mutableStateOf<space.bitos.core.feed.FeedNote?>(null)
         }
-        val authorState by authorRepository.state.collectAsStateWithLifecycle()
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         LaunchedEffect(pendingDeepLink) {
             val uri = pendingDeepLink ?: return@LaunchedEffect
@@ -210,18 +211,31 @@ fun BitOSApp(
             }
         }
         val identity by identityViewModel.state.collectAsStateWithLifecycle()
-        val notificationsState by notifications.state.collectAsStateWithLifecycle()
-        val dmState by dmRepository.state.collectAsStateWithLifecycle()
-        val feedStateForChats by homeViewModel.state.collectAsStateWithLifecycle()
+        // The shell owns badge counts, not the inbox/DM/feed payloads. These
+        // distinct scalar projections keep relay bursts from invalidating
+        // the entire Scaffold and active destination.
+        val unreadCount by remember(notifications) {
+            notifications.state
+                .map { state -> state.items.count { it.id !in state.readIds } }
+                .distinctUntilChanged()
+        }.collectAsStateWithLifecycle(
+            initialValue = notifications.state.value.let { state ->
+                state.items.count { it.id !in state.readIds }
+            },
+        )
+        val dmUnreadCount by remember(dmRepository) {
+            dmRepository.state
+                .map { state -> state.unreadCount + state.requestCount }
+                .distinctUntilChanged()
+        }.collectAsStateWithLifecycle(
+            initialValue = dmRepository.state.value.let { it.unreadCount + it.requestCount },
+        )
         // Shell-level account wiring: the Activity badge needs the inbox
         // subscription alive from app start, not only while the tab is open.
         androidx.compose.runtime.LaunchedEffect(identity.account?.pubkeyHex) {
             notifications.setAccount(identity.account?.pubkeyHex)
             dmRepository.setAccount(identity.account?.pubkeyHex)
         }
-        val unreadCount = notificationsState.items.count { it.id !in notificationsState.readIds }
-        // APP-011: Chats badge = DM unread + pending requests (mock parity).
-        val dmUnreadCount = dmState.unreadCount + dmState.requestCount
         // APP-018 functional setting: font size applies app-wide as a text
         // scale multiplier over the system font scale.
         val fontMultiplier = when (settingsSnapshot.fontSize) {
@@ -441,10 +455,8 @@ fun BitOSApp(
                             // APP-011: profiles feed names/avatars; the zap
                             // chip routes to the author zap pipeline.
                             TopLevelDestination.CHATS -> {
-                                val chatProfiles = feedStateForChats.profiles.entries.associate { (pubkey, profile) ->
-                                    pubkey to (profile.bestDisplayName to profile.picture)
-                                }
-                                space.bitos.app.ui.dm.DmScreen(
+                                ChatDestination(
+                                    homeViewModel = homeViewModel,
                                     identityViewModel = identityViewModel,
                                     dmRepository = dmRepository,
                                     onZapPeer = { peer ->
@@ -452,7 +464,6 @@ fun BitOSApp(
                                         chatZapTarget = peer
                                     },
                                     onOpenProfile = { peer -> authorPageTarget = peer },
-                                    profiles = chatProfiles,
                                 )
                             }
                             TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
@@ -537,6 +548,8 @@ fun BitOSApp(
         // ── APP-011 chat zap chip (author zap pipeline, mock parity) ────
         val zapPeer = chatZapTarget
         if (zapPeer != null) {
+            val feedProfiles by homeViewModel.feedProfiles.collectAsStateWithLifecycle()
+            val peerProfile = feedProfiles[zapPeer]
             androidx.compose.material3.ModalBottomSheet(onDismissRequest = {
                 homeViewModel.dismissZap()
                 chatZapTarget = null
@@ -545,14 +558,14 @@ fun BitOSApp(
                     note = null,
                     recipientPubkey = zapPeer,
                     state = homeViewModel.zapState.collectAsStateWithLifecycle().value,
-                    lud16 = feedStateForChats.profiles[zapPeer]?.lud16,
-                    profileName = feedStateForChats.profiles[zapPeer]?.bestDisplayName,
+                    lud16 = peerProfile?.lud16,
+                    profileName = peerProfile?.bestDisplayName,
                     hasIdentity = identity.account != null,
                     onPaid = { sats, memo -> homeViewModel.onAuthorZapPaid(zapPeer, sats, memo) },
                     onAmountSelected = homeViewModel::selectZapAmount,
                     onZap = { sats, comment, anonymous ->
                         homeViewModel.selectZapAmount(sats)
-                        homeViewModel.zapAuthor(zapPeer, feedStateForChats.profiles[zapPeer]?.lud16, comment, anonymous)
+                        homeViewModel.zapAuthor(zapPeer, peerProfile?.lud16, comment, anonymous)
                     },
                     onClose = {
                         homeViewModel.dismissZap()
@@ -564,6 +577,7 @@ fun BitOSApp(
 
         // ── T16 deep-link surfaces (overlay everything) ────────────────
         deepLinkAuthor?.let { authorPubkey ->
+            val authorState by authorRepository.state.collectAsStateWithLifecycle()
             space.bitos.app.ui.profile.AuthorProfileSheetHost(
                 authorPubkey = authorPubkey,
                 state = authorState,
@@ -605,4 +619,30 @@ fun BitOSApp(
             )
         }
     }
+}
+
+/**
+ * Chats is the only top-level destination that renders feed profile
+ * enrichment. Collect that projection inside this destination so profile
+ * arrivals recompose Chats, never the shell/navigation tree.
+ */
+@Composable
+private fun ChatDestination(
+    homeViewModel: HomeViewModel,
+    identityViewModel: space.bitos.app.identity.IdentityViewModel,
+    dmRepository: space.bitos.app.data.dm.DmRepository,
+    onZapPeer: (String) -> Unit,
+    onOpenProfile: (String) -> Unit,
+) {
+    val feedProfiles by homeViewModel.feedProfiles.collectAsStateWithLifecycle()
+    val chatProfiles = remember(feedProfiles) {
+        feedProfiles.mapValues { (_, profile) -> profile.bestDisplayName to profile.picture }
+    }
+    space.bitos.app.ui.dm.DmScreen(
+        identityViewModel = identityViewModel,
+        dmRepository = dmRepository,
+        onZapPeer = onZapPeer,
+        onOpenProfile = onOpenProfile,
+        profiles = chatProfiles,
+    )
 }

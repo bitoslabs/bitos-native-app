@@ -134,8 +134,13 @@ and latency in redacted diagnostics; never log private content or keys.
 - Hoist ViewModels and repositories above individual tab compositions.
 - Use `rememberSaveableStateHolder` for per-tab scroll/pager state when only the
   selected destination is composed.
+- Keep shell subscriptions scalar and distinct (selected tab, theme, badge
+  counts). Collect feed/profile/thread payloads inside the active destination
+  so a relay burst cannot invalidate the whole `Scaffold` and navigation bar.
 - Use `remember`/`derivedStateOf` for derived collections only when their inputs
-  are stable and profiling confirms useful work is avoided.
+  are stable and profiling confirms useful work is avoided. Every source read
+  by the derivation must be a key/dependency; author-scoped Bitz, for example,
+  depends on the author window rather than the global feed window.
 - Give `LazyColumn`, lazy grids and pagers stable keys and content types.
 - Do not allocate transports, image loaders, formatters or players from a row
   composable.
@@ -207,6 +212,10 @@ fitting pick, `high` forces the tallest rung, `low` is the data saver —
 shortest rung at or above 360p, else the shortest available. A preference
 change releases the bounded player slots so the next reconciliation
 re-prepares at the new rung; players never keep a rung the user turned down.
+Native adapters pass logical layout height (points on iOS, density-independent
+pixels on Android), with the 640 logical-pixel watchability floor, to the shared
+AUTO rule; raw physical pixels or a fixed 4K-class bucket over-select
+renditions on dense low/mid-tier devices.
 
 Nostr feed pagination is cursor-based, never offset-based. Each backwards REQ
 is broadcast to the connected read relays in parallel with one subscription

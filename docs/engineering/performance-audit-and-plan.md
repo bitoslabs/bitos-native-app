@@ -1,6 +1,6 @@
 # Performance & UX Audit — Feed, Bitz Video, Full System (2026-02)
 
-> **Implementation status (2026-02, Phase 1–3 + Phase 4/5 slice):**
+> **Implementation status (2026-08 follow-up, Phase 1–5 slices):**
 >
 > | Plan item | Status |
 > |---|---|
@@ -12,7 +12,7 @@
 > | Batched persistence (iOS `EventStore.insertBatch` + WAL, Android `SqliteEventCache.upsertAll`) | ✅ done |
 > | R9 keepalive: iOS `RelayPool` 25 s client pings, failed ping → reconnect path | ✅ done |
 > | R8 posters: ImageIO off-main decode at rendered size; no flash-to-nil on scroll (Home + Bitz) | ✅ done |
-> | PlayerPool single-pass reconciliation (id→index map) | ✅ done |
+> | PlayerPool reconciliation: settled-id lookup once, direct adjacent indices, no full-window id dictionary allocation (iOS); bounded id slots (Android) | ✅ done |
 > | R10 single KMP client in `AppEnvironment` (no duplicate framework init) | ✅ done |
 > | Android WAL (`SqliteEventCache.onConfigure`) + LazyColumn `contentType` | ✅ done |
 > | U1 splash hold — already resolved: `BootSplashScreen` is disabled at app entry (fast-access decision 2026-08-28); plan correction | ✅ n/a |
@@ -36,11 +36,14 @@
 > at launch — closes the loop once internal builds ship | ✅ done |
 > | UX U8 duration affordance: tile duration badge (shared formatter,
 > both platforms, hidden while unknown) | ✅ done |
+> | Android shell state isolation: distinct scalar badge flows at the shell; feed profiles collected only by Chats/zap consumers; author state only by its active overlay | ✅ done |
+> | Bitz pager projection: author-window dependency fixed on Android; empty-splice steady state reuses the existing bounded video list on both platforms | ✅ done |
+> | Android AUTO rendition bucket uses logical display height instead of a fixed 1920 target (High/Low semantics unchanged) | ✅ done |
 > | UX U2–U10 checklist | ✅ closed (U10 = splash already off + skeletons honor reduce-motion) |
 > | First device captures (fill the baseline table) | ⬜ open — needs physical devices |
 >
 > Verification: `:shared:business-core:macosArm64Test` (445 tests),
-> `:apps:android:testDebugUnitTest` (73 tests) + `assembleDebug`, iOS target
+> `:apps:android:testDebugUnitTest` (75 tests) + `assembleDebug`, iOS target
 > type-checked under Swift 6 / strict concurrency (no simulator runtime on
 > this machine — run `BitOSTests` on a simulator before merging). Known
 > flake to watch: `NotePublisherTest.surfacesRejectionReasons` failed once

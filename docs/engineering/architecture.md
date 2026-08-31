@@ -134,6 +134,10 @@ Rules:
 - Native feature stores own cancellation and lifecycle.
 - Ignore stale effect results using job/project revision tokens.
 - UI derives buttons/progress from state; it does not infer the state machine.
+- Top-level shells observe only navigation/theme and scalar badge projections;
+  destination payloads (feed notes, profiles, threads and player bindings) are
+  collected inside the destination that renders them. A relay update must not
+  invalidate the whole tab scaffold.
 
 ### 6.1 Relay request lifecycle
 
@@ -210,4 +214,3 @@ Required over time:
 ## 12. Decision process
 
 Create an ADR in `docs/adr/` when a choice changes a platform boundary, persistent schema, protocol profile, cloud provider, security model or supported OS. An ADR records context, decision, alternatives, consequences, rollout and rollback. Normal refactors do not need ADR ceremony.
-
