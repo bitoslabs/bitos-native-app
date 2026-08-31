@@ -36,6 +36,11 @@ must include a trace, cause, owner and explicit follow-up or approved tradeoff.
 
 Long-lived work belongs to the narrowest stable owner:
 
+- Every relay socket runs a **client-initiated keepalive ping** (25 s,
+  matching OkHttp) so idle connections are not silently dropped; a failed
+  ping routes through the normal reconnect path (audit R9). Answering relay
+  pings alone is not sufficient — URLSession never sends its own.
+
 - The process composition root constructs relay pools, repositories and stores
   once. Android starts process work from `Application.onCreate`, never an
   `Application` constructor/`init` block. iOS constructs it in
@@ -59,20 +64,42 @@ resources.
 The intended path is:
 
 ```text
-relay/cache -> verify and decode -> bounded feed window -> feature store
-            -> immutable UI state -> lazy native list/pager -> visible rows
+relay/cache -> verify and decode (off the main actor) -> bounded feed window
+            -> feature store -> coalesced immutable UI state
+            -> lazy native list/pager -> visible rows
 ```
 
 Rules:
 
 - Hydrate the bounded cache before waiting for relays.
-- Verify event ID and signature before projection or display.
+- Verify event ID and signature before projection or display. Verification
+  is **once per (id, pubkey, signature) per process**: the shared codec's
+  outcome cache dedupes the store fan-out and the four-relay redelivery, so
+  the Schnorr pair runs once, not once per collector (audit R1).
+- Decode and verify in the ingest stage BEFORE the main-actor/UI-thread hop
+  (iOS `FeedStore` ingest task; Android repository on `Dispatchers.Default`).
+  Never move the trust gate into the view or skip it for cached events.
 - Decode, normalize, rank and filter outside the view body/composable.
+- **Coalesce burst publication**: absorption mutates state per frame; the
+  full UI projection (window snapshot, filter, rank, thread assembly)
+  publishes once per coalescing window (~150 ms), not once per event.
+  User-intent paths (reveal, filter, timeline, follow, bookmark) still
+  publish synchronously. Tests must await stable state predicates, never
+  transient intermediate sizes (StateFlow/@Observable conflation may skip
+  them — see `NotificationRepositoryTest.readCursor…`).
+- **Persist in batches**: verified events buffer and flush as ONE
+  transaction per coalesced tick or ≥64 events (WAL + synchronous=NORMAL
+  on iOS; one transaction per batch on Android). The cache is rebuildable;
+  a lost batch only costs a re-fetch.
 - Bound every feed window, pending queue, metadata queue, profile cache and
   player pool. Document the bound beside its owner.
+- The shared `FeedAggregator` maintains its canonical order incrementally
+  (binary-insert by (created_at desc, id)); never reintroduce a per-event
+  full re-sort on the read path.
+- A note's presentation fields must survive the window round trip
+  (insert → snapshot) field-for-field; the bridge/window adapter contract
+  tests lock this (audit R11).
 - Deduplicate by canonical event ID before publishing state.
-- Coalesce a burst of relay frames before expensive sorting/state publication
-  when profiling shows per-event publication causes frame loss.
 - Do not copy or sort the full feed for an individual row.
 - Use stable event IDs as lazy-list/pager keys. Never use the current array
   index for relay-backed content.
@@ -157,7 +184,11 @@ Allocations and Network) and MetricKit diagnostics from internal builds.
 - Pause all players when the app backgrounds or the feed destination hides.
 - Cancel obsolete image/video requests when rows leave the active window.
 - Use decoded image dimensions appropriate to the rendered size. Do not decode
-  an original multi-megapixel avatar for a small feed icon.
+  an original multi-megapixel avatar for a small feed icon. Posters decode
+  via ImageIO thumbnailing **off the main actor** at the row's laid-out
+  pixel size (iOS `PosterImagePipeline`); a displayed poster is never
+  cleared before its replacement has decoded (no flash-to-background while
+  scrolling).
 - Cache by canonical URL plus transformation size, with a byte/count limit.
 - Explore warms only the next 12 poster URLs at grid decode size. Moving the
   window cancels obsolete requests; iOS retains at most 96 decoded posters / 48
@@ -169,6 +200,13 @@ and exhaustion state. An older-page walk stays in flight until its bounded walk
 finishes, counts only newly playable videos toward the Bitz page budget, and
 uses non-video events only to advance the backwards cursor. UI end-of-window
 triggers may repeat safely because repositories reject overlapping walks.
+
+The persisted `bitos_video_quality` preference (auto/high/low) owns the
+rendition pick through the shared rule (UX U9): `auto` keeps the display-
+fitting pick, `high` forces the tallest rung, `low` is the data saver —
+shortest rung at or above 360p, else the shortest available. A preference
+change releases the bounded player slots so the next reconciliation
+re-prepares at the new rung; players never keep a rung the user turned down.
 
 Nostr feed pagination is cursor-based, never offset-based. Each backwards REQ
 is broadcast to the connected read relays in parallel with one subscription
@@ -205,6 +243,11 @@ Every optimization must state:
 
 ## 10. Startup and failure diagnostics
 
+- Phase 0 instrumentation is compiled in: iOS `Perf` signposts (subsystem
+  `space.bitos.app`) and Android `PerfTrace` atrace sections share the
+  interval names `relay.decode`, `feed.publish`, `poster.decode`. Capture
+  procedure and the baseline table live in
+  [`performance-baselines.md`](./performance-baselines.md).
 - Keep `Application`/app initialization synchronous work minimal. Defer cache
   hydration and relay connection to structured background work after dependency
   construction is complete.
