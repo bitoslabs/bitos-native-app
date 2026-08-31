@@ -1,44 +1,72 @@
 import SwiftUI
+import UIKit
 
 /**
- * BitOS design tokens, ported 1:1 from the Flutter/web product tokens
- * (app_colors.dart / app_spacing.dart / app_radius.dart): bitcoin-orange
- * primary on near-black surfaces with semantic social-action colors.
+ * BitOS design tokens — SwiftUI side of the shared token contract
+ * (`space.bitos.core.design.DesignTokens`, DESIGN_SYSTEM.md §2).
+ *
+ * Values mirror the contract's two palettes 1:1 (parity locked by
+ * `DesignTokensTest` in the shared module). Every color is a *dynamic*
+ * asset: it resolves dark or light at draw time from the active trait,
+ * overridden by [modeOverride] (APP-023). Existing call sites read the
+ * same names (`BitOSTheme.surface`, …) and pick up light mode for free —
+ * extend, don't fork.
  */
 enum BitOSTheme {
+    /// App-level appearance override: nil = follow the system. The
+    /// settings adapter sets this at launch from `ThemeModeSetting`
+    /// (product default: dark). Views never mutate it.
+    static var modeOverride: UIUserInterfaceStyle? = .dark
+
+    /// Dynamic brand color from the contract's two palettes (light, dark).
+    private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
+        Color(UIColor { traits in
+            let mode = modeOverride ?? traits.userInterfaceStyle
+            return mode == .dark ? UIColor(rgb: dark) : UIColor(rgb: light)
+        })
+    }
+
     // Surfaces
-    static let background = Color(hex: 0x0A0A0F)
-    static let surface = Color(hex: 0x12121A)
-    static let surfaceElevated = Color(hex: 0x1A1A26)
-    static let surfaceOverlay = Color(hex: 0x22222E)
+    static var background = dynamic(0xFAFAFC, 0x0A0A0F)
+    static var surface = dynamic(0xFFFFFF, 0x12121A)
+    static var surfaceElevated = dynamic(0xF5F5F7, 0x1A1A26)
+    static var surfaceOverlay = dynamic(0xEEEEF0, 0x22222E)
 
     // Brand
-    static let accent = Color(hex: 0xF7931A)
-    static let accentContainer = Color(hex: 0xF7931A).opacity(0.2)
-    static let cyan = Color(hex: 0x06B6D4)
+    static var accent = dynamic(0xF7931A, 0xF7931A)
+    static var accentContainer = accent.opacity(0.2)
+    static var accentLight = Color(hex: 0xF9A84B)
+    static var accentDark = Color(hex: 0xD4790F)
+    static var cyan = dynamic(0x0E7490, 0x06B6D4)
 
-    // Text
-    static let textPrimary = Color(hex: 0xF8F8FF)
-    static let textSecondary = Color(hex: 0x9CA3AF)
-    static let textTertiary = Color(hex: 0x6B7280)
+    // Text (light-mode roles are the AA-tuned variants from the contract)
+    static var textPrimary = dynamic(0x111827, 0xF8F8FF)
+    static var textSecondary = dynamic(0x4B5563, 0x9CA3AF)
+    static var textTertiary = dynamic(0x717684, 0x6B7280)
+    static var textLink = dynamic(0xB45309, 0xF7931A)
 
-    // Semantic
-    static let success = Color(hex: 0x10B981)
-    static let warning = Color(hex: 0xF59E0B)
-    static let error = Color(hex: 0xEF4444)
+    // Semantic (fills) + their readable-as-text variants
+    static var success = dynamic(0x10B981, 0x10B981)
+    static var successText = dynamic(0x047857, 0x10B981)
+    static var warning = dynamic(0xF59E0B, 0xF59E0B)
+    static var warningText = dynamic(0xB45309, 0xF59E0B)
+    static var error = dynamic(0xEF4444, 0xEF4444)
+    static var errorText = dynamic(0xB91C1C, 0xEF4444)
+    static var info = dynamic(0x3B82F6, 0x3B82F6)
+    static var infoText = dynamic(0x1D4ED8, 0x3B82F6)
 
     // Social actions
-    static let like = Color(hex: 0xEC4899)
-    static let repost = Color(hex: 0x10B981)
-    static let zap = Color(hex: 0xF59E0B)
-    static let reply = Color(hex: 0x3B82F6)
-    static let bookmark = Color(hex: 0xF7931A)
+    static var like = dynamic(0xBE185D, 0xEC4899)
+    static var repost = dynamic(0x047857, 0x10B981)
+    static var zap = dynamic(0xB45309, 0xF59E0B)
+    static var reply = dynamic(0x1D4ED8, 0x3B82F6)
+    static var bookmark = dynamic(0xB45309, 0xF7931A)
 
     // Lines
-    static let border = Color(hex: 0x2A2A3A)
-    static let divider = Color(hex: 0x1F1F2E)
+    static var border = dynamic(0xE5E7EB, 0x2A2A3A)
+    static var divider = dynamic(0xF3F4F6, 0x1F1F2E)
 
-    // Spacing (app_spacing.dart)
+    // Spacing (app_spacing.dart / DesignTokens.Spacing)
     enum Spacing {
         static let xs: CGFloat = 4
         static let sm: CGFloat = 8
@@ -47,18 +75,112 @@ enum BitOSTheme {
         static let lg: CGFloat = 20
         static let xl: CGFloat = 24
         static let xxl: CGFloat = 32
+        static let xxxl: CGFloat = 48
         static let screen: CGFloat = 24
+        static let card: CGFloat = 16
         static let avatarGap: CGFloat = 12
     }
 
-    // Radii (app_radius.dart)
+    // Radii (DesignTokens.Radius)
     enum Radius {
+        static let xs: CGFloat = 4
         static let sm: CGFloat = 8
         static let md: CGFloat = 12
         static let lg: CGFloat = 16
+        static let xl: CGFloat = 20
         static let pill: CGFloat = 999
     }
+
+    /// Avatar diameters (DESIGN_SYSTEM §2.3).
+    enum AvatarSize {
+        static let xs: CGFloat = 24
+        static let sm: CGFloat = 32
+        static let md: CGFloat = 40
+        static let lg: CGFloat = 56
+        static let xl: CGFloat = 80
+        static let xxl: CGFloat = 120
+    }
+
+    /// Minimum touch target (§2.6): 44 pt on iOS.
+    static let minTouchTarget: CGFloat = 44
+
+    /// Number formatter for social counters (unchanged behavior).
+    static func counter(_ value: Int) -> String {
+        switch value {
+        case 1_000_000...: return String(format: "%.1fM", Double(value) / 1_000_000)
+        case 1_000...: return String(format: "%.1fK", Double(value) / 1_000)
+        default: return "\(value)"
+        }
+    }
 }
+
+// MARK: - Typography (DESIGN_SYSTEM §2.2)
+
+/**
+ * Type roles from `DesignTokens.Type`. The app currently maps them onto
+ * the system font; bundling Inter/JetBrains Mono later changes only this
+ * file (same rule as the AppIcons token swap).
+ */
+enum BitOSType {
+    static let displayLarge = Font.system(size: 32, weight: .bold).leading(.tight)
+    static let headlineLarge = Font.system(size: 24, weight: .bold)
+    static let headlineMedium = Font.system(size: 20, weight: .semibold)
+    static let headlineSmall = Font.system(size: 18, weight: .semibold)
+    static let bodyLarge = Font.system(size: 16)
+    static let bodyMedium = Font.system(size: 14)
+    static let bodySmall = Font.system(size: 12)
+    static let labelLarge = Font.system(size: 14, weight: .semibold)
+    static let labelMedium = Font.system(size: 12, weight: .medium)
+    static let labelSmall = Font.system(size: 10, weight: .medium)
+    static let menuItem = Font.system(size: 13, weight: .semibold)
+    /// npub/nsec/ids/sats (JetBrains Mono when bundled).
+    static let mono = Font.system(size: 13, weight: .regular, design: .monospaced)
+}
+
+// MARK: - Motion (DESIGN_SYSTEM §2.4)
+
+/// Duration/curve ladder from `DesignTokens.Duration`/`Curve`.
+enum BitOSMotion {
+    static let instant: TimeInterval = 0.10
+    static let fast: TimeInterval = 0.20
+    static let normal: TimeInterval = 0.30
+    static let slow: TimeInterval = 0.50
+    static let emphasis: TimeInterval = 0.80
+
+    /// easeInOutCubic — default.
+    static func standard(_ duration: TimeInterval = normal) -> Animation {
+        .easeInOut(duration: duration)
+    }
+    /// easeOutCubic — entering.
+    static func enter(_ duration: TimeInterval = normal) -> Animation {
+        .easeOut(duration: duration)
+    }
+    /// easeInCubic — exiting.
+    static func exit(_ duration: TimeInterval = normal) -> Animation {
+        .easeIn(duration: duration)
+    }
+    /// elasticOut — the like scale-bounce (1 → 1.3 → 1, §2.4).
+    static func bounce(_ duration: TimeInterval = normal) -> Animation {
+        .spring(response: duration, dampingFraction: 0.55)
+    }
+    static let likeScalePeak: CGFloat = 1.3
+}
+
+// MARK: - Elevation (dark uses brand glow, not gray shadows)
+
+extension View {
+    /// cardGlow: primary 5%, blur 20, y 4 (§DESIGN_SYSTEM shadows).
+    func cardGlow() -> some View {
+        shadow(color: BitOSTheme.accent.opacity(0.05), radius: 20, y: 4)
+    }
+
+    /// elevatedGlow: primary 10%, blur 30, y 8.
+    func elevatedGlow() -> some View {
+        shadow(color: BitOSTheme.accent.opacity(0.10), radius: 30, y: 8)
+    }
+}
+
+// MARK: - Color helpers
 
 extension Color {
     init(hex: UInt32) {
@@ -66,6 +188,17 @@ extension Color {
             red: Double((hex >> 16) & 0xFF) / 255,
             green: Double((hex >> 8) & 0xFF) / 255,
             blue: Double(hex & 0xFF) / 255
+        )
+    }
+}
+
+extension UIColor {
+    convenience init(rgb: UInt32) {
+        self.init(
+            red: CGFloat((rgb >> 16) & 0xFF) / 255,
+            green: CGFloat((rgb >> 8) & 0xFF) / 255,
+            blue: CGFloat(rgb & 0xFF) / 255,
+            alpha: 1
         )
     }
 }

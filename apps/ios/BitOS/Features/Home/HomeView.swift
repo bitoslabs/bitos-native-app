@@ -4,6 +4,39 @@ import Network
 import SwiftUI
 import UIKit
 
+/// APP-009 ref-open states (mockup app-10 "Loading / not found"): copy and
+/// classification come from the shared `ThreadOpen`/`ThreadOpenCopy` rules
+/// through the bridge; timing stays native.
+enum RefOpenPlate: Identifiable {
+    case loading
+    case invalid
+    case notFound(raw: String, hints: [String])
+
+    var id: String {
+        switch self {
+        case .loading: return "loading"
+        case .invalid: return "invalid"
+        case .notFound(let raw, _): return "not-found-\(raw)"
+        }
+    }
+
+    var hints: [String] {
+        if case .notFound(_, let hints) = self { return hints }
+        return []
+    }
+}
+
+/// Shared `ThreadOpenCopy` accessors (single source, no literal drift).
+enum ThreadCopy {
+    static var loadingTitle: String { BusinessCoreBridge().threadOpenLoadingTitle() as String }
+    static var invalidTitle: String { BusinessCoreBridge().threadOpenInvalidTitle() as String }
+    static var invalidBody: String { BusinessCoreBridge().threadOpenInvalidBody() as String }
+    static var notFoundTitle: String { BusinessCoreBridge().threadOpenNotFoundTitle() as String }
+    static var notFoundBody: String { BusinessCoreBridge().threadOpenNotFoundBody() as String }
+    static var retry: String { BusinessCoreBridge().threadOpenRetryLabel() as String }
+    static var addRelay: String { BusinessCoreBridge().threadOpenAddRelayLabel() as String }
+}
+
 /// Home surface (FED-001): full-screen vertical paging feed; only the
 /// settled page plays. Text notes render as full-screen cards, video notes
 /// (kind 22 or legacy mp4 links) render through the three-slot player pool.
@@ -24,8 +57,11 @@ struct HomeView: View {
     @State private var moreSheetTarget: FeedNote?
     /** External-link confirm sheet (never opens the browser unattended). */
     @State private var externalLink: String?
-    /** In-place note-ref open (note1/nevent1/naddr1 → thread sheet). */
+    /** In-place note-ref open (note1/nevent1/naddr1/hex → thread sheet). */
     @State private var refOpenTarget: String?
+    /** APP-009 states plate (mockup app-10): Loading / Invalid / NotFound
+     *  with the nevent TLV hints for Retry-with-hints / Add relay. */
+    @State private var refOpenPlate: RefOpenPlate?
     @State private var shareText: String?
     /// List-surface scroll anchors (hold/reveal + re-tap-to-top).
     @State private var listAtTop = true
@@ -138,7 +174,8 @@ struct HomeView: View {
     }
 
     private func moreMenuEntries(_ note: FeedNote) -> [AppMenuEntry] {
-        [
+        let authorName = store.profiles[note.pubkey]?.bestDisplayName
+        var entries: [AppMenuEntry] = [
             .item(AppMenuItem(id: "share", label: "Share", systemImage: AppIcons.share)),
             .item(AppMenuItem(
                 id: "save",
@@ -148,17 +185,41 @@ struct HomeView: View {
             .item(AppMenuItem(id: "copy-id", label: "Copy note ID", systemImage: AppIcons.copy)),
             .item(AppMenuItem(id: "copy-text", label: "Copy note text", systemImage: AppIcons.pen)),
             .item(AppMenuItem(id: "copy-npub", label: "Copy author npub", systemImage: AppIcons.user)),
-            .divider,
-            .item(AppMenuItem(
-                id: "mute",
-                label: store.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
-                systemImage: AppIcons.mute
-            )),
-            .divider,
-            .item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)),
-            .item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)),
-            .item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)),
         ]
+        // Web PostCard menu parity: attachment actions when media rides along.
+        if !note.mediaUrls.isEmpty {
+            entries.append(.item(AppMenuItem(id: "open-attachment", label: "Open attachment", systemImage: AppIcons.globe)))
+            entries.append(.item(AppMenuItem(id: "copy-attachment", label: "Copy attachment URL", systemImage: AppIcons.copy)))
+        }
+        entries.append(.divider)
+        // Web interaction-profile parity: local ranking signals.
+        let interaction = environment.interaction
+        entries.append(.item(AppMenuItem(id: "not-interested", label: "Not interested", systemImage: AppIcons.close)))
+        entries.append(.item(AppMenuItem(id: "hide-note", label: "Hide this note", systemImage: AppIcons.mute)))
+        entries.append(.item(AppMenuItem(
+            id: "show-less-from",
+            label: (interaction.isAuthorDemoted(note.pubkey) ? "Show more from " : "Show less from ")
+                + (authorName ?? "this author"),
+            systemImage: AppIcons.user
+        )))
+        if let tag = note.hashtags.first {
+            entries.append(.item(AppMenuItem(
+                id: "show-less-about",
+                label: (interaction.isTagDemoted(tag) ? "Show more about #" : "Show less about #") + tag,
+                systemImage: AppIcons.close
+            )))
+        }
+        entries.append(.divider)
+        entries.append(.item(AppMenuItem(
+            id: "mute",
+            label: store.muted.contains(note.pubkey) ? "Unmute author" : "Mute author",
+            systemImage: AppIcons.mute
+        )))
+        entries.append(.divider)
+        entries.append(.item(AppMenuItem(id: "report-spam", label: "Report as spam", systemImage: AppIcons.reportSpam, isDestructive: true)))
+        entries.append(.item(AppMenuItem(id: "report-illicit", label: "Report as illicit", systemImage: AppIcons.reportIllicit, isDestructive: true)))
+        entries.append(.item(AppMenuItem(id: "report-harassment", label: "Report as harassment", systemImage: AppIcons.reportHarassment, isDestructive: true)))
+        return entries
     }
 
     private func handleMoreSelect(_ note: FeedNote, _ id: String) {
@@ -175,8 +236,30 @@ struct HomeView: View {
             UIPasteboard.general.string = note.content
         case "copy-npub":
             UIPasteboard.general.string = (bridge.npubEncode(pubkeyHex: note.pubkey) as String?) ?? note.pubkey
+        case "open-attachment":
+            // The external-link confirm gate owns the actual open.
+            if let url = note.mediaUrls.first { externalLink = url }
+        case "copy-attachment":
+            if let url = note.mediaUrls.first { UIPasteboard.general.string = url }
         case "mute":
             toggleMute(note.pubkey)
+        case "not-interested":
+            // Web parity: hide the note AND demote its author + topics.
+            environment.interaction.dismissNote(note.id)
+            environment.interaction.demoteAuthor(note.pubkey)
+            note.hashtags.forEach { environment.interaction.demoteTag($0) }
+            store.republish()
+        case "hide-note":
+            environment.interaction.dismissNote(note.id)
+            store.republish()
+        case "show-less-from":
+            environment.interaction.toggleDemotedAuthor(note.pubkey)
+            store.republish()
+        case "show-less-about":
+            if let tag = note.hashtags.first {
+                environment.interaction.toggleDemotedTag(tag)
+                store.republish()
+            }
         case "report-spam":
             report(note, reason: "spam")
         case "report-illicit":
@@ -210,10 +293,24 @@ struct HomeView: View {
         let turningOn = !store.localActions.liked.contains(note.id)
         store.localActions.toggleLike(note.id)
         if turningOn { likeTick += 1 } // sensory feedback trigger
-        // Signed accounts publish a real kind-7 reaction on like; unlikes
-        // stay local until reaction deletion (kind 5) lands with SOC-002.
-        guard turningOn, environment.identityStore.account != nil else { return }
-        Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        // Signed accounts publish a real kind-7 on like; an unlike deletes
+        // my reaction event (kind-5, web `unlikeNote` parity).
+        guard environment.identityStore.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = store.myReactionEventIds[note.id] {
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
+    }
+
+    /// APP-009 states-plate title (shared copy through the bridge).
+    private var refOpenPlateTitle: String {
+        switch refOpenPlate {
+        case .loading: return ThreadCopy.loadingTitle
+        case .invalid: return ThreadCopy.invalidTitle
+        case .notFound: return ThreadCopy.notFoundTitle
+        case nil: return ""
+        }
     }
 
     var body: some View {
@@ -393,19 +490,61 @@ struct HomeView: View {
                     ExternalLinkConfirmSheet(url: externalLink)
                 }
             }
-            // In-place note-ref open: poll until the head arrives (3 s),
-            // then show the thread sheet.
+            // In-place note-ref open (mockup app-10 states): classify via
+            // the shared rule (invalid never issues a REQ), poll until the
+            // head arrives (3 s), then open the thread sheet or surface the
+            // not-found plate with Retry / Add relay.
             .task(id: refOpenTarget) {
                 guard let raw = refOpenTarget else { return }
+                defer { refOpenTarget = nil }
+                guard let ref = BusinessCoreBridge().eventRefParse(bech32: raw) else {
+                    refOpenPlate = .invalid
+                    return
+                }
+                refOpenPlate = .loading
                 for _ in 0..<20 where !Task.isCancelled {
                     if let fetched = store.refNote(raw: raw) {
-                        refOpenTarget = nil
+                        refOpenPlate = nil
                         commentTarget = fetched
                         return
                     }
                     try? await Task.sleep(nanoseconds: 150_000_000)
                 }
-                refOpenTarget = nil
+                let hints = (ref["relays"] as? [String]) ?? []
+                refOpenPlate = .notFound(raw: raw, hints: hints)
+            }
+            // APP-009 states plate (loading / invalid / not-found).
+            .alert(
+                refOpenPlateTitle,
+                isPresented: Binding(
+                    get: { refOpenPlate != nil },
+                    set: { if !$0 { refOpenPlate = nil } }
+                )
+            ) {
+                if case .notFound = refOpenPlate {
+                    Button(ThreadCopy.retry) {
+                        if case .notFound(let raw, _) = refOpenPlate {
+                            refOpenPlate = nil
+                            refOpenTarget = raw
+                            store.openNoteReference(raw: raw)
+                        }
+                    }
+                    let hints = (refOpenPlate.flatMap(\.hints) ?? [])
+                    if !hints.isEmpty {
+                        Button(ThreadCopy.addRelay) {
+                            for hint in hints { environment.relayManager.add(rawUrl: hint) }
+                            refOpenPlate = nil
+                        }
+                    }
+                }
+                Button("Close", role: .cancel) { refOpenPlate = nil }
+            } message: {
+                switch refOpenPlate {
+                case .loading: Text("REQ ids / coordinate · readable relays")
+                case .invalid: Text(ThreadCopy.invalidBody)
+                case .notFound: Text(ThreadCopy.notFoundBody)
+                case nil: Text("")
+                }
             }
             .sheet(item: Binding(
                 get: { authorTarget.map { AuthorTarget(id: $0) } },
@@ -556,14 +695,14 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - APP-004: sticky mode tabs (underline + live counts)
+    // MARK: - APP-004: sticky mode tabs (underline)
 
     private var timelineTabs: some View {
         HStack(spacing: BitOSTheme.Spacing.lg) {
-            timelineTab(title: "For you", symbol: AppIcons.sparkles, isSelected: store.timeline == .forYou, count: 0) {
+            timelineTab(title: "For you", symbol: AppIcons.sparkles, isSelected: store.timeline == .forYou) {
                 store.selectTimeline(.forYou)
             }
-            timelineTab(title: "Following", symbol: AppIcons.people, isSelected: store.timeline == .following, count: store.followingCount) {
+            timelineTab(title: "Following", symbol: AppIcons.people, isSelected: store.timeline == .following) {
                 store.selectTimeline(.following)
             }
             Spacer(minLength: 0)
@@ -574,7 +713,7 @@ struct HomeView: View {
         }
     }
 
-    private func timelineTab(title: LocalizedStringKey, symbol: String, isSelected: Bool, count: Int, action: @escaping () -> Void) -> some View {
+    private func timelineTab(title: LocalizedStringKey, symbol: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 5) {
                 HStack(spacing: 6) {
@@ -582,11 +721,6 @@ struct HomeView: View {
                         .font(.system(size: 12, weight: .semibold))
                     Text(title)
                         .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
-                    if count > 0 {
-                        Text(count > 999 ? "999+" : "\(count)")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle((isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary).opacity(0.7))
-                    }
                 }
                 .foregroundStyle(isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary)
                 Rectangle()
@@ -625,7 +759,15 @@ struct HomeView: View {
                                 refOpenTarget = raw
                                 store.openNoteReference(raw: raw)
                             },
-                            onOpenExternalLink: { externalLink = $0 }
+                            onOpenExternalLink: { externalLink = $0 },
+                            // APP-008 poll voting.
+                            pollTally: store.pollTallies[note.id],
+                            canVotePoll: environment.identityStore.account != nil,
+                            onLoadPollVotes: { store.loadPollVotes(targetEventId: note.id) },
+                            onVotePoll: { optionIndex in
+                                store.applyOptimisticPollVote(pollId: note.id, optionIndex: optionIndex)
+                                Task { await environment.notePublisher.publishPollVote(targetEventId: note.id, optionIndex: optionIndex) }
+                            }
                         )
                         // Legacy UI parity: hairline divider between cards.
                         .overlay(alignment: .bottom) {
@@ -633,7 +775,6 @@ struct HomeView: View {
                                 Rectangle()
                                     .fill(BitOSTheme.divider)
                                     .frame(height: 0.5)
-                                    .padding(.leading, 60)
                             }
                         }
                         .onAppear {
@@ -652,7 +793,6 @@ struct HomeView: View {
                                 store.holdNewNotes(true)
                             }
                         }
-                        Divider().background(BitOSTheme.divider)
     }
 
     /// Home tab: scrolling compact NoteCard list (legacy UX parity).
@@ -834,35 +974,83 @@ private extension FeedStore {
     }
 }
 
-/// APP-008 poll display (V1): option rows; voting/bars land with the
-/// response-format decision (legacy is compose-only).
+/// APP-008 poll display + voting (web `Poll.svelte` parity): option rows
+/// with proportional bars, counts, my-vote highlight, total votes; votes
+/// lazy-load once per poll and taps publish a kind-1018.
 private struct PollOptionsView: View {
+    let noteId: String
     let options: [String]
+    let tally: PollTally?
+    let canVote: Bool
+    let onLoadVotes: () -> Void
+    let onVote: (Int) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(options.enumerated()), id: \.offset) { _, label in
+            ForEach(Array(options.enumerated()), id: \.offset) { index, label in
+                optionRow(index: index, label: label)
+            }
+            Text(footer)
+                .font(.system(size: 11))
+                .foregroundStyle(BitOSTheme.textTertiary)
+        }
+        .onAppear { onLoadVotes() }
+    }
+
+    private var voted: Bool { tally?.myVote != nil }
+
+    private var footer: String {
+        guard let tally else { return "Poll · \(options.count) options" }
+        let word = tally.total == 1 ? "vote" : "votes"
+        return "\(tally.total) \(word)" + (voted ? " · tap an option to change" : "")
+    }
+
+    private func optionRow(index: Int, label: String) -> some View {
+        let count = tally.flatMap { $0.counts[KotlinInt(int: Int32(index))] }.map { $0.intValue } ?? 0
+        let total = tally.map { Int($0.total) } ?? 0
+        let fraction = total > 0 ? Double(count) / Double(total) : 0
+        let mine = (tally?.myVote).map { $0.intValue == Int32(index) } == true
+        return Button {
+            guard canVote else { return }
+            onVote(index)
+        } label: {
+            ZStack(alignment: .leading) {
+                Capsule().fill(BitOSTheme.surface)
+                // Proportional result bar (web parity: fills after voting).
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(mine ? BitOSTheme.accent.opacity(0.30) : BitOSTheme.accent.opacity(0.14))
+                        .frame(width: voted ? geo.size.width * max(fraction, 0.02) : 0)
+                }
                 HStack(spacing: 10) {
-                    Circle()
-                        .strokeBorder(BitOSTheme.textTertiary, lineWidth: 1.5)
-                        .frame(width: 18, height: 18)
+                    ZStack {
+                        Circle()
+                            .strokeBorder(mine ? BitOSTheme.accent : BitOSTheme.textTertiary, lineWidth: 1.5)
+                        if mine {
+                            Circle().fill(BitOSTheme.accent)
+                                .frame(width: 8, height: 8)
+                        }
+                    }
+                    .frame(width: 16, height: 16)
                     Text(label)
                         .font(.system(size: 14))
                         .foregroundStyle(BitOSTheme.textPrimary)
                         .lineLimit(1)
                     Spacer()
+                    if voted, total > 0 {
+                        Text("\(Int(fraction * 100))% · \(count)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(mine ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                    }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(BitOSTheme.surface)
-                )
             }
-            Text("Poll · \(options.count) options")
-                .font(.system(size: 11))
-                .foregroundStyle(BitOSTheme.textTertiary)
+            .frame(height: 38)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .disabled(!canVote)
+        .accessibilityLabel("Vote \(label)")
     }
 }
 
@@ -996,6 +1184,11 @@ private struct NoteCardRow: View {
     var onOpenNoteRef: ((String) -> Void)? = nil
     /** External-link tap → confirm sheet (owned by the parent). */
     var onOpenExternalLink: (String) -> Void = { _ in }
+    /** APP-008 poll voting (wired by the owning screen). */
+    var pollTally: PollTally? = nil
+    var canVotePoll: Bool = false
+    var onLoadPollVotes: () -> Void = {}
+    var onVotePoll: (Int) -> Void = { _ in }
     @State private var revealed = false
     @State private var lightboxUrl: String?
 
@@ -1056,7 +1249,14 @@ private struct NoteCardRow: View {
                     onOpenNoteRef: { raw in onOpenNoteRef?(raw) }
                 )
                 if !note.pollOptions.isEmpty {
-                    PollOptionsView(options: note.pollOptions)
+                    PollOptionsView(
+                        noteId: note.id,
+                        options: note.pollOptions,
+                        tally: pollTally,
+                        canVote: canVotePoll,
+                        onLoadVotes: onLoadPollVotes,
+                        onVote: onVotePoll
+                    )
                 }
                 if !note.mediaUrls.isEmpty {
                     if settings.state.mediaPreview {

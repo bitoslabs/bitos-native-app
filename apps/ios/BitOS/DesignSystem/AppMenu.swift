@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /**
  * AppMenu system (unified feature spec §4, APP-022): the screen-clamped
@@ -54,9 +55,41 @@ enum AppMenuLayout {
     static let rowHeight: CGFloat = 44
     static let dividerHeight: CGFloat = 9
     static let cardPadding: CGFloat = 12
-    static let width: CGFloat = 248
+    /// Width auto-fits the widest label (legacy dropdown parity): floor is
+    /// the web Popover `min-w-52` (208), cap keeps long labels bounded.
+    static let minWidth: CGFloat = 208
+    static let maxWidth: CGFloat = 280
     static let margin: CGFloat = 8
     static let anchorOffset: CGFloat = 4
+
+    /// Row chrome added around the measured label: 12×2 row padding,
+    /// 6×2 card side insets, icon slot (20 + 12 gap), check slot (12 + 12).
+    private static let rowHorizontalPadding: CGFloat = 24
+    private static let cardSideInset: CGFloat = 12
+    private static let iconSlot: CGFloat = 32
+    private static let checkSlot: CGFloat = 24
+
+    /// Menu width for a set of entries: the widest label + row chrome,
+    /// clamped to [minWidth, maxWidth]. Deterministic (fixed font
+    /// metrics) so screen clamping stays pure and testable.
+    static func width(entries: [AppMenuEntry]) -> CGFloat {
+        let font = UIFont.systemFont(ofSize: 13, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        var widestLabel: CGFloat = 0
+        var hasIcon = false
+        var hasCheck = false
+        for entry in entries {
+            if case .item(let item) = entry {
+                widestLabel = max(widestLabel, (item.label as NSString).size(withAttributes: attributes).width)
+                hasIcon = hasIcon || item.systemImage != nil
+                hasCheck = hasCheck || item.isChecked
+            }
+        }
+        var content = widestLabel + rowHorizontalPadding + cardSideInset
+        if hasIcon { content += iconSlot }
+        if hasCheck { content += checkSlot }
+        return min(max(content.rounded(.up), minWidth), maxWidth)
+    }
 
     /// Estimated popover size before first render (deterministic clamping).
     static func estimatedSize(entries: [AppMenuEntry]) -> CGSize {
@@ -64,7 +97,7 @@ enum AppMenuLayout {
         for entry in entries {
             height += entry == .divider ? dividerHeight : rowHeight
         }
-        return CGSize(width: width, height: height)
+        return CGSize(width: width(entries: entries), height: height)
     }
 
     /// Screen-clamped frame for a menu opening at `anchor` (host-local
@@ -179,8 +212,8 @@ struct AppMenu: View {
             ForEach(entries) { entry in
                 switch entry {
                 case .item(let item):
-                    // Web MenuItem parity: rows carry their own rounded
-                    // container (press + destructive tint).
+                    // Web MenuItem parity: rows carry their own rounded-lg
+                    // pill with a press fill; the card insets them p-1.5.
                     AppMenuItemRow(item: item) { onSelect(item.id) }
                         .padding(.horizontal, 6)
                 case .divider:
@@ -225,23 +258,40 @@ struct AppMenuItemRow: View {
             .padding(.vertical, 10)
             .frame(minHeight: AppMenuLayout.rowHeight)
             .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(item.isDestructive ? BitOSTheme.error.opacity(0.08) : .clear)
-            )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppMenuItemPressStyle(destructive: item.isDestructive))
         .accessibilityLabel(item.label)
         .accessibilityAddTraits(item.isChecked ? [.isSelected] : [])
     }
 }
 
+/// Web MenuItem parity: each row is a rounded-lg (8 pt) pill whose fill
+/// appears while pressed — web `--interactive-hover-bg` (white 6%) for
+/// normal rows, the error tone for destructive ones.
+private struct AppMenuItemPressStyle: ButtonStyle {
+    let destructive: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm, style: .continuous)
+                    .fill(configuration.isPressed ? pressFill : Color.clear)
+            )
+    }
+
+    private var pressFill: Color {
+        destructive ? BitOSTheme.error.opacity(0.12) : BitOSTheme.textPrimary.opacity(0.06)
+    }
+}
+
 private struct AppMenuDividerView: View {
     var body: some View {
+        // Web MenuDivider parity: 1 px rule spanning the padded content
+        // width (my-1 vertical rhythm).
         Rectangle()
             .fill(BitOSTheme.divider)
             .frame(height: 1)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 6)
             .padding(.vertical, 4)
     }
 }

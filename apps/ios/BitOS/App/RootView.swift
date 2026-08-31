@@ -26,6 +26,10 @@ struct RootView: View {
     /** T16 deep-link surfaces. */
     @State private var deepLinkAuthor: String?
     @State private var deepLinkInvoice: String?
+    /** APP-011 chat-header ⚡ chip target (author zap pipeline). */
+    @State private var chatZapPeer: String?
+    /** UX-010: full profile page target from chat headers. */
+    @State private var chatProfilePeer: String?
     /// APP-003: bumped when the user re-taps the active Home/Bitz tab —
     /// the surface scrolls to top, or refreshes when already at top.
     @State private var feedRetapTick = 0
@@ -45,7 +49,10 @@ struct RootView: View {
     var body: some View {
         Group {
             if showOnboarding {
-                OnboardingScreen {
+                // Spec §4: first launch gates on the identity onboarding
+                // flow (welcome → add identity → import/backup → npub
+                // confirmation); Browse now exits into the feed as guest.
+                OnboardingScreen(store: environment.identityStore) {
                     OnboardingPrefs.markOnboarded()
                     showOnboarding = false
                 }
@@ -69,9 +76,13 @@ struct RootView: View {
                 .tag(AppDestination.bitz)
                 .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
 
-            DmScreen()
-                .tag(AppDestination.chats)
-                .tabItem { Label { Text("Chats") } icon: { AppIcons.image(for: AppIcons.chat) } }
+            DmScreen(
+                onZapPeer: { chatZapPeer = $0 },
+                onOpenProfile: { chatProfilePeer = $0 }
+            )
+            .tag(AppDestination.chats)
+            .tabItem { Label { Text("Chats") } icon: { AppIcons.image(for: AppIcons.chat) } }
+            .badge(chatsBadge)
 
             InboxView(store: environment.inboxStore)
                 .tag(AppDestination.activity)
@@ -101,10 +112,37 @@ struct RootView: View {
             await environment.feedStore.start()
         }
         // Shell-level account wiring: the Activity badge needs the inbox
-        // subscription alive from app start, not only while the tab is open.
+        // subscription alive from app start, not only while the tab is open;
+        // the Chats badge rides the DM store's own subscription.
         .task(id: environment.identityStore.account?.pubkeyHex) {
             environment.feedStore.setAccount(environment.identityStore.account?.pubkeyHex)
             environment.inboxStore.setAccount(environment.identityStore.account?.pubkeyHex)
+            environment.dmStore.setAccount(environment.identityStore.account?.pubkeyHex)
+            environment.hashtagFollows.setAccount(environment.identityStore.account?.pubkeyHex)
+        }
+        // APP-011 chat ⚡ chip → profile zap sheet (mock chip-orange parity).
+        .sheet(item: Binding(
+            get: { chatZapPeer.map { ZapPeerTarget(pubkey: $0) } },
+            set: { chatZapPeer = $0?.pubkey }
+        )) { target in
+            ZapSheet(
+                authorPubkey: target.pubkey,
+                profile: environment.feedStore.profiles[target.pubkey],
+                onClose: { chatZapPeer = nil }
+            )
+            .environment(environment.identityStore)
+            .preferredColorScheme(.dark)
+        }
+        // UX-010: chat header → full in-app profile page.
+        .sheet(item: Binding(
+            get: { chatProfilePeer.map { ZapPeerTarget(pubkey: $0) } },
+            set: { chatProfilePeer = $0?.pubkey }
+        )) { target in
+            AuthorProfileSheet(authorPubkey: target.pubkey) {
+                chatProfilePeer = nil
+            }
+            .environment(environment)
+            .environment(environment.identityStore)
         }
         .sheet(isPresented: $showMore) {
             MoreView(
@@ -166,9 +204,21 @@ struct RootView: View {
         var id: String { pubkey }
     }
 
+    private struct ZapPeerTarget: Identifiable {
+        let pubkey: String
+        var id: String { pubkey }
+    }
+
     /** Unread badge for the Activity tab; "9+" cap keeps the bar tidy. */
     private var activityBadge: Text? {
         let count = environment.inboxStore.unreadCount
+        guard count > 0 else { return nil }
+        return Text(count > 9 ? "9+" : "\(count)")
+    }
+
+    /** APP-011: Chats badge = DM unread + pending requests (mock parity). */
+    private var chatsBadge: Text? {
+        let count = environment.dmStore.unreadCount + environment.dmStore.requestCount
         guard count > 0 else { return nil }
         return Text(count > 9 ? "9+" : "\(count)")
     }

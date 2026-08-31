@@ -159,6 +159,19 @@ struct DiscoverView: View {
                                     .foregroundStyle(BitOSTheme.textSecondary)
                             }
                             Spacer()
+                            Button {
+                                let updated = environment.hashtagFollows.toggle(topic)
+                                Task { await environment.notePublisher.publishInterestSet(hashtags: updated) }
+                            } label: {
+                                Text(environment.hashtagFollows.isFollowed(topic) ? "Following ✓" : "Follow")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(
+                                        environment.hashtagFollows.isFollowed(topic)
+                                            ? BitOSTheme.textTertiary : BitOSTheme.accent
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Follow hashtag \(topic)")
                         }
                         .padding(BitOSTheme.Spacing.base)
                         .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.surface))

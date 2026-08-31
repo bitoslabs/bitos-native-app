@@ -77,11 +77,22 @@ final class FeedStore {
     /// APP-015 saved notes (newest-saved first; window + by-id refetch).
     private(set) var bookmarkedNotes: [FeedNote] = []
     private(set) var zapCounts: [String: Int] = [:]
+    /** APP-008 poll tallies per poll note id (latest-vote-per-pubkey rule). */
+    private(set) var pollTallies: [String: PollTally] = [:]
+    /** pollId → pubkey → latest vote (bounded: 16 polls × MAX_VOTERS). */
+    private var pollVoters: [String: [String: PollVote]] = [:]
+    private let pollVotes = PollVotes()
+    /** Matches shared PollVotes.MAX_VOTERS (kind-1018 fan-in bound). */
+    private let pollVotersMax = 200
+    private var pollVotesRequested: Set<String> = []
     /** APP-014: verified embedded 9734 request ids per target (paid match). */
     private(set) var zapRequestIds: [String: Set<String>] = [:]
     /** APP-009 live per-note tallies (reactions/reposts/zaps+msat). */
     private(set) var tallies: [String: NoteTallyMirror] = [:]
     private(set) var muted: Set<String> = []
+    /** My kind-7 reaction event id per liked note (web `myEventId` parity) —
+     *  the kind-5 unlike target. */
+    private(set) var myReactionEventIds: [String: String] = [:]
     /** Web feedPreferences parity: protocol-payload notes stay hidden until
      *  the reader opts in (Settings → Feed → Protocol notes). */
     private(set) var showProtocolNotes = false
@@ -93,6 +104,8 @@ final class FeedStore {
     private let pool: RelayPool
     private let client: any BusinessCoreClient
     private let eventStore: EventStore?
+    /** Local ranking signals (hide + author/tag demotions). */
+    private let interaction: InteractionProfileStore
     private var window: (any FeedWindowing)?
     private var followingWindow: (any FeedWindowing)?
     private var followingAuthors: Set<String> = []
@@ -125,11 +138,13 @@ final class FeedStore {
     // (replyCount, assembled) per rootId — skips bridge when thread size unchanged.
     private var assembledThreadsCache: [String: (Int, [ThreadDisplayItem])] = [:]
 
-    init(pool: RelayPool, client: any BusinessCoreClient, eventStore: EventStore? = nil) {
+    init(pool: RelayPool, client: any BusinessCoreClient, eventStore: EventStore? = nil,
+         interaction: InteractionProfileStore = InteractionProfileStore()) {
         muted = Set(UserDefaults.standard.stringArray(forKey: "bitos_mutes") ?? [])
         self.pool = pool
         self.client = client
         self.eventStore = eventStore
+        self.interaction = interaction
         paginationPrefetchThreshold = client.bitzWalkPrefetchThreshold()
     }
 
@@ -149,7 +164,11 @@ final class FeedStore {
         healthTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.relayHealth = await self.pool.health()
+                let health = await self.pool.health()
+                self.relayHealth = health
+                // Cold-start bootstrap: re-issue lost account heads while
+                // unresolved (shared `AccountBootstrap` policy).
+                self.reissueUnresolvedAccountHeads(connectedRelays: health.connected)
                 try? await Task.sleep(for: Self.healthPollInterval)
             }
         }
@@ -252,6 +271,12 @@ final class FeedStore {
         isLoading = !hasLoadedAnyEvent
         resetOlderLanes()
         subscribe()
+    }
+
+    /// Local-only state changed (interaction profile, settings): republish
+    /// projections without touching the relay subscriptions.
+    func republish() {
+        publishState()
     }
 
     /// APP-004: manual retry from the relay-error / empty state — resets the
@@ -498,6 +523,11 @@ final class FeedStore {
                 else { tally.reposts += 1 }
                 talliesBuffer[target] = tally
             }
+            // Web `myEventId` parity: remember MY reaction event per note so
+            // an unlike can publish its kind-5 deletion.
+            if event.kind == 7, event.pubkey == accountPubkey, let target = eTagged.first {
+                myReactionEventIds[target] = event.id
+            }
         } else if event.kind == 3 {
             absorbContactList(frame)
         } else if event.kind == 9735 {
@@ -532,6 +562,26 @@ final class FeedStore {
             absorbBlockList(frame, event: event)
         } else if client.isProfileKind(event.kind) {
             absorbProfile(event)
+            // DAT-003: kind-0 heads persist so the You page (and every
+            // author card) hydrates from cache on the next cold start.
+            persist(event)
+        } else if event.kind == 1111 {
+            // NIP-22 comments (ADR-003): kind-1111 projects into the comment
+            // thread only — never the feed windows.
+            let note = client.feedNote(from: event)
+            if let parent = note.replyTo, var thread = commentThreads[parent] {
+                thread.append(note)
+                if thread.count > 100 { thread.removeFirst(thread.count - 100) }
+                commentThreads[parent] = thread
+            } else if let root = note.threadRootId, var thread = commentThreads[root] {
+                thread.append(note)
+                if thread.count > 100 { thread.removeFirst(thread.count - 100) }
+                commentThreads[root] = thread
+            }
+        } else if event.kind == 1018 {
+            // APP-008 poll votes: kind-1018 tallies per poll note
+            // (shared latest-vote-per-pubkey rule).
+            absorbPollVote(event)
         } else if client.isFeedKind(event.kind) {
             let subscriptionId = bridgeFacade().relayEventSubscriptionId(message: frame.message)
             let fromOlderPage = subscriptionId?
@@ -569,10 +619,17 @@ final class FeedStore {
                 }
             }
         }
-        if let target = note.replyTo, var thread = commentThreads[target] {
+        // Arrival keys on the direct parent; a nested reply whose parent
+        // comment has no open thread falls back to its root tag so the
+        // thread the reader opened still receives it (NIP-10 + NIP-22).
+        if let parent = note.replyTo, var thread = commentThreads[parent] {
             thread.append(note)
             if thread.count > 100 { thread.removeFirst(thread.count - 100) }
-            commentThreads[target] = thread
+            commentThreads[parent] = thread
+        } else if let root = note.threadRootId, var thread = commentThreads[root] {
+            thread.append(note)
+            if thread.count > 100 { thread.removeFirst(thread.count - 100) }
+            commentThreads[root] = thread
         }
         enqueueProfile(event.pubkey)
         // Web parity: mentioned pubkeys' profiles resolve for @display.
@@ -681,6 +738,9 @@ final class FeedStore {
         bookmarked = []
         blocked = []
         blockHeadAt = nil
+        // Heads must re-resolve: re-arm the bootstrap for them.
+        accountHeadAttempts = [0, 0, 0, 0]
+        bookmarkHeadReceived = false
     }
 
     /** In-place note-ref open: fetch the head, caller polls [refNote]. */
@@ -815,6 +875,8 @@ final class FeedStore {
         guard let account = accountPubkey else { return }
         guard let decoded = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
               decoded.pubkey == account else { return }
+        // The account's bookmark head resolved — the bootstrap stops re-asking.
+        bookmarkHeadReceived = true
         let ids = (bridgeFacade().bookmarkIds(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) ?? []
         // Newer verified heads replace the local set (bounded by composer).
         if decoded.createdAt >= (bookmarkHeadAt ?? Int64.min) {
@@ -842,6 +904,50 @@ final class FeedStore {
             targetEventId: targetEventId
         ) as String?) {
             Task { await pool.broadcast(request) }
+        }
+    }
+
+    // MARK: - APP-008 poll votes (web `rebuildPoll` parity)
+
+    /// One-shot REQ for a poll's kind-1018 votes (called when it renders).
+    func loadPollVotes(targetEventId: String) {
+        guard !pollVotesRequested.contains(targetEventId) else { return }
+        pollVotesRequested.insert(targetEventId)
+        if pollVoters[targetEventId] == nil { pollVoters[targetEventId] = [:] }
+        if pollVoters.count > 16, let oldest = pollVoters.keys.first {
+            pollVoters.removeValue(forKey: oldest)
+        }
+        if let request = (bridgeFacade().pollVotesRequest(
+            subscriptionId: "bitos-pollvotes-" + String(targetEventId.prefix(44)),
+            targetEventId: targetEventId
+        ) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+        publishState()
+    }
+
+    /// Optimistic local vote before the kind-1018 relay echo lands.
+    func applyOptimisticPollVote(pollId: String, optionIndex: Int) {
+        guard let account = accountPubkey else { return }
+        var voters = pollVoters[pollId] ?? [:]
+        // Shared latest-vote-per-pubkey rule, applied inline (map bridge).
+        voters[account] = PollVote(pubkey: account, optionIndex: Int32(optionIndex), at: Int64(Date.now.timeIntervalSince1970))
+        pollVoters[pollId] = voters
+        publishState()
+    }
+
+    private func absorbPollVote(_ event: VerifiedEvent) {
+        guard let target = event.tags.first(where: { $0.first == "e" })?.dropFirst().first,
+              let optionText = event.tags.first(where: { $0.first == "response" })?.dropFirst().first,
+              let option = Int32(optionText), option >= 0, option <= 255 else { return }
+        var voters = pollVoters[target] ?? [:]
+        if voters.count >= pollVotersMax && voters[event.pubkey] == nil { return }
+        let vote = PollVote(pubkey: event.pubkey, optionIndex: option, at: event.createdAt)
+        if let prev = voters[event.pubkey], prev.at >= vote.at { return }
+        voters[event.pubkey] = vote
+        pollVoters[target] = voters
+        if pollVoters.count > 16, let oldest = pollVoters.keys.first {
+            pollVoters.removeValue(forKey: oldest)
         }
     }
 
@@ -896,6 +1002,14 @@ final class FeedStore {
         ) as String?) {
             Task { await pool.broadcast(request) }
         }
+        // NIP-22 companion REQ: uppercase-`E` rooted comments are invisible
+        // to the plain `#e` filter (relay tag filters are case-sensitive).
+        if let rootRequest = (bridgeFacade().commentsRootRequest(
+            subscriptionId: "bitos-comments-e-" + String(targetEventId.prefix(44)),
+            targetEventId: targetEventId
+        ) as String?) {
+            Task { await pool.broadcast(rootRequest) }
+        }
         publishState()
     }
 
@@ -907,19 +1021,79 @@ final class FeedStore {
         followingAuthors.removeAll()
         followingSubscribed = false
         followingResolved = pubkey == nil
-        if let pubkey, let request = (bridgeFacade().contactListRequest(subscriptionId: "bitos-contacts", accountPubkey: pubkey) as String?) {
-            Task { await pool.broadcast(request) }
-        }
-        if let pubkey, let request = (bridgeFacade().bookmarkListRequest(subscriptionId: "bitos-bookmarks", accountPubkey: pubkey) as String?) {
-            Task { await pool.broadcast(request) }
-        }
-        if let pubkey, let request = (bridgeFacade().encodeBlockListRequest(subscriptionId: "bitos-blocks", accountPubkey: pubkey) as String?) {
-            Task { await pool.broadcast(request) }
-        }
+        // Shared `AccountBootstrap`: a new account episode re-arms the head
+        // re-issue budget and the received flags.
+        accountHeadAttempts = [0, 0, 0, 0]
+        bookmarkHeadReceived = false
+        lastConnectedRelays = 0
+        if let pubkey { requestAccountHeads(for: pubkey) }
         bookmarked.removeAll()
         blocked.removeAll()
         blockHeadAt = nil
         publishState()
+    }
+
+    // MARK: - Cold-start account bootstrap (shared `AccountBootstrap`)
+    //
+    // The account heads (own kind-0, kind-3 contacts, 30003 bookmarks,
+    // 10004 blocks) are one-shot REQs; a cold start composes them before
+    // any relay socket opened and the send is silently dropped. The health
+    // poll drives a bounded re-issue while a head is unresolved.
+
+    /// Indexes into `accountHeadAttempts`.
+    private enum AccountHead { static let profile = 0; static let contacts = 1; static let bookmarks = 2; static let blocks = 3 }
+    private var accountHeadAttempts: [Int] = [0, 0, 0, 0]
+    private var bookmarkHeadReceived = false
+    private var lastConnectedRelays = 0
+
+    private func requestAccountHeads(for pubkey: String) {
+        // The signed-in profile is not necessarily an author in the feed.
+        // Request its kind-0 head explicitly so the You surface has a fresh
+        // projection on a cold start and after account switching.
+        requestProfile(pubkey, force: true)
+        if let request = (bridgeFacade().contactListRequest(subscriptionId: "bitos-contacts", accountPubkey: pubkey) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+        if let request = (bridgeFacade().bookmarkListRequest(subscriptionId: "bitos-bookmarks", accountPubkey: pubkey) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+        if let request = (bridgeFacade().encodeBlockListRequest(subscriptionId: "bitos-blocks", accountPubkey: pubkey) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+    }
+
+    /// Called from the health poll with the current connected-relay count.
+    private func reissueUnresolvedAccountHeads(connectedRelays: Int) {
+        if client.accountBootstrapShouldOpenEpisode(previousConnected: lastConnectedRelays, currentConnected: connectedRelays) {
+            accountHeadAttempts = [0, 0, 0, 0]
+        }
+        lastConnectedRelays = connectedRelays
+        guard let pubkey = accountPubkey else { return }
+        func should(_ head: Int, resolved: Bool) -> Bool {
+            client.accountBootstrapShouldReissue(resolved: resolved, attempts: accountHeadAttempts[head], connectedRelays: connectedRelays)
+        }
+        if should(AccountHead.profile, resolved: profiles[pubkey] != nil) {
+            accountHeadAttempts[AccountHead.profile] += 1
+            requestProfile(pubkey, force: true)
+        }
+        if should(AccountHead.contacts, resolved: followingResolved) {
+            accountHeadAttempts[AccountHead.contacts] += 1
+            if let request = (bridgeFacade().contactListRequest(subscriptionId: "bitos-contacts", accountPubkey: pubkey) as String?) {
+                Task { await pool.broadcast(request) }
+            }
+        }
+        if should(AccountHead.bookmarks, resolved: bookmarkHeadReceived) {
+            accountHeadAttempts[AccountHead.bookmarks] += 1
+            if let request = (bridgeFacade().bookmarkListRequest(subscriptionId: "bitos-bookmarks", accountPubkey: pubkey) as String?) {
+                Task { await pool.broadcast(request) }
+            }
+        }
+        if should(AccountHead.blocks, resolved: blockHeadAt != nil) {
+            accountHeadAttempts[AccountHead.blocks] += 1
+            if let request = (bridgeFacade().encodeBlockListRequest(subscriptionId: "bitos-blocks", accountPubkey: pubkey) as String?) {
+                Task { await pool.broadcast(request) }
+            }
+        }
     }
 
     private func absorbContactList(_ frame: RelayFrame) {
@@ -929,6 +1103,7 @@ final class FeedStore {
         // (The bridge verified the frame; the author check filters.)
         guard let decoded = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue), decoded.pubkey == account else { return }
         followingAuthors = Set(authors)
+        followingAuthors.forEach { enqueueProfile($0) }
         followingSubscribed = false
         subscribeFollowing()
         followingResolved = true
@@ -1011,6 +1186,20 @@ final class FeedStore {
                 self?.drainProfiles()
             }
         }
+    }
+
+    /// Requests a profile head for a native surface outside the notes feed.
+    func requestProfile(_ pubkey: String, force: Bool = false) {
+        guard !pubkey.isEmpty else { return }
+        if !force {
+            enqueueProfile(pubkey)
+            return
+        }
+        profileRequestCounter += 1
+        let request = client.profileRequest(
+            subscriptionId: "bitos-profile-head-\(profileRequestCounter)", authors: [pubkey]
+        )
+        Task { await pool.broadcast(request) }
     }
 
     private func drainProfiles() {
@@ -1113,6 +1302,9 @@ final class FeedStore {
         let following = followingAuthors.map { "\"\($0)\"" }
         let zaps = zapCountsBuffer.map { "\"\($0.key)\":\($0.value)" }
         let replies = commentThreads.map { "\"\($0.key)\":\($0.value.count)" }
+        func stringSetJson(_ set: Set<String>) -> String {
+            "[" + set.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        }
         guard let ids = bridgeFacade().algorithmRankIds(
             notesJson: "[\(rows.joined(separator: ","))]",
             surfaceWire: "feed",
@@ -1120,7 +1312,10 @@ final class FeedStore {
             followingJson: "[\(following.joined(separator: ","))]",
             zapCountsJson: "{\(zaps.joined(separator: ","))}",
             replyCountsJson: "{\(replies.joined(separator: ","))}",
-            nowSeconds: Int64(Date.now.timeIntervalSince1970)
+            nowSeconds: Int64(Date.now.timeIntervalSince1970),
+            dismissedNoteIdsJson: stringSetJson(interaction.dismissedNotes),
+            mutedAuthorsJson: stringSetJson(interaction.demotedAuthors),
+            mutedTagsJson: stringSetJson(interaction.demotedTags)
         ) as? [String], !ids.isEmpty else {
             return base
         }
@@ -1134,8 +1329,14 @@ final class FeedStore {
         let ownPubkey = accountPubkey
         let liked = Array(localActions.liked)
         let protocolNotesVisible = showProtocolNotes
-        let forYouBase = (window?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && (protocolNotesVisible || !$0.isProtocolPayload) }
-        let followingBase = (followingWindow?.snapshot() ?? []).filter { !hiddenSet.contains($0.pubkey) && (protocolNotesVisible || !$0.isProtocolPayload) }
+        // Dismissed notes (hide / not-interested) never surface anywhere.
+        let dismissed = interaction.dismissedNotes
+        let forYouBase = (window?.snapshot() ?? []).filter {
+            !hiddenSet.contains($0.pubkey) && !dismissed.contains($0.id) && (protocolNotesVisible || !$0.isProtocolPayload)
+        }
+        let followingBase = (followingWindow?.snapshot() ?? []).filter {
+            !hiddenSet.contains($0.pubkey) && !dismissed.contains($0.id) && (protocolNotesVisible || !$0.isProtocolPayload)
+        }
         forYouCount = forYouBase.count
         followingCount = followingBase.count
         notes = (timeline == .following ? followingBase : rankedForYou(forYouBase)).filter {
@@ -1168,6 +1369,9 @@ final class FeedStore {
             bookmarkedNotes = bookmarked.reversed().compactMap { bookmarkedNoteBodies[$0] ?? byId[$0] }
         }
         zapCounts = zapCountsBuffer
+        pollTallies = pollVoters.mapValues { voters in
+            pollVotes.tally(byPubkey: voters, myPubkey: accountPubkey)
+        }
         zapRequestIds = zapRequestIdsBuffer
         tallies = talliesBuffer
         isLoading = false

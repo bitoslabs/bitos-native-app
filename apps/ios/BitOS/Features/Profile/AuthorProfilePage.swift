@@ -23,6 +23,18 @@ struct AuthorProfilePage: View {
     @State private var showZap = false
     /** X-style: tapping a note/grid tile opens its thread (CommentSheet). */
     @State private var threadTarget: FeedNote?
+    /** Note zap from a profile card. */
+    @State private var noteZapTarget: FeedNote?
+    /** Report-user flow (kind-1984, p-tag only). */
+    @State private var reportReason = ""
+    @State private var showReportPrompt = false
+    /** Web Zaps-tab parity: this viewer's verified zaps to the author. */
+    @State private var sentZaps = SentZapsStore()
+    /** Web `/bitz?author=<npub>#bitz=<id>` parity: Bitz-tab tile → the
+     *  shared reels player scoped to this author. */
+    @State private var bitzPlayerTarget: BitzPlayerTarget?
+    /** Web ProfileActionMenu parity popover (rounded pill rows). */
+    @State private var moreMenu: AppMenuPresentation?
 
     private var profile: ProfileMetadata? { store?.profile }
     private var notes: [FeedNote] { store?.notes ?? [] }
@@ -34,8 +46,17 @@ struct AuthorProfilePage: View {
     private var tabNotes: [FeedNote] { notes.filter { $0.replyTo == nil } }
     private var tabReplies: [FeedNote] { notes.filter { $0.replyTo != nil } }
     private var tabBitz: [FeedNote] { notes.filter { $0.video != nil || !$0.mediaUrls.isEmpty } }
+    /// Verified zaps THIS viewer sent the author (local ledger only —
+    /// relays can't truthfully total everyone else's zaps to an author).
+    private var sentToAuthor: [SentZapsStore.SentZapRecord] {
+        sentZaps.records.filter { $0.recipientPubkey == authorPubkey }
+    }
     private var tabs: [(String, [FeedNote])] {
-        [("Notes", tabNotes), ("Replies", tabReplies), ("Bitz", tabBitz)]
+        [("Notes", tabNotes), ("Replies", tabReplies), ("Bitz", tabBitz), ("Zaps", [])]
+    }
+
+    private func zapFormatSats(_ sats: Int64) -> String {
+        BusinessCoreBridge().zapFormatSats(sats: sats)
     }
 
     var body: some View {
@@ -68,11 +89,12 @@ struct AuthorProfilePage: View {
                     .accessibilityLabel("Close profile")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    moreMenu
+                    moreMenuButton
                 }
             }
         }
         .preferredColorScheme(.dark)
+        .appMenuHost($moreMenu)
         .task {
             // Private store: cover/sheet lifecycles cannot clear this page's data.
             let store = store ?? AuthorStore(pool: environment.relayPool, client: environment.businessCore)
@@ -111,6 +133,90 @@ struct AuthorProfilePage: View {
             .environment(identity)
             .presentationDetents([.medium, .large])
         }
+        // Web ProfileBitzGrid parity: tile tap → shared reels player
+        // scoped to this author, deep-linked at the tapped tile.
+        .fullScreenCover(item: $bitzPlayerTarget) { target in
+            BitzView(
+                authorPubkey: target.authorPubkey,
+                initialNoteId: target.noteId,
+                onExitAuthorMode: { bitzPlayerTarget = nil }
+            )
+            .environment(environment)
+            .environment(identity)
+            .environment(settings)
+            .preferredColorScheme(.dark)
+        }
+        // Note zap from a profile card.
+        .sheet(item: $noteZapTarget) { target in
+            ZapSheet(
+                note: target,
+                profiles: zapProfiles,
+                initialAmountSats: settings.state.defaultZapAmount,
+                zapCount: environment.feedStore.zapCounts[target.id] ?? 0,
+                paidRequestIds: environment.feedStore.zapRequestIds[target.id] ?? [],
+                onPaid: { sats, memo in
+                    environment.sentZaps.record(.init(
+                        id: "zap-\(target.id)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                        amountSats: Int64(sats),
+                        recipientPubkey: target.pubkey,
+                        createdAt: Int64(Date.now.timeIntervalSince1970),
+                        targetNoteId: target.id,
+                        memo: memo.isEmpty ? nil : memo
+                    ))
+                },
+                onClose: { noteZapTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium])
+        }
+        // Report user (kind-1984, p-tag only — web ProfileActionMenu parity).
+        .alert("Report this user", isPresented: $showReportPrompt) {
+            TextField("Reason (spam, harassment…)", text: $reportReason)
+            Button("Report", role: .destructive) {
+                let reason = reportReason.trimmingCharacters(in: .whitespacesAndNewlines)
+                reportReason = ""
+                guard !reason.isEmpty else { return }
+                Task {
+                    await environment.notePublisher.publishReport(
+                        targetEventId: nil, targetPubkey: authorPubkey, reason: reason
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) { reportReason = "" }
+        } message: {
+            Text("The report is published as a kind-1984 event.")
+        }
+    }
+
+    /// Feed-store profiles overlaid with this author's live kind-0.
+    private var zapProfiles: [String: ProfileMetadata] {
+        var merged = environment.feedStore.profiles
+        if let profile { merged[authorPubkey] = profile }
+        return merged
+    }
+
+    // MARK: - Note actions (web PostCard parity, shared-core paths)
+
+    private func like(_ note: FeedNote) {
+        let turningOn = !environment.feedStore.localActions.liked.contains(note.id)
+        environment.feedStore.localActions.toggleLike(note.id)
+        guard identity.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = environment.feedStore.myReactionEventIds[note.id] {
+            // Web unlike parity: delete my kind-7 from relays (NIP-09).
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
+    }
+
+    private func repostNote(_ note: FeedNote) {
+        guard identity.account != nil else { return }
+        Task { await environment.notePublisher.publishRepost(targetEventId: note.id, targetPubkey: note.pubkey) }
+    }
+
+    private func openNoteZap(_ note: FeedNote) {
+        environment.feedStore.loadZaps(targetEventId: note.id)
+        noteZapTarget = note
     }
 
     // MARK: - Hero (cover + avatar, "You"-page parity)
@@ -289,6 +395,14 @@ struct AuthorProfilePage: View {
             Spacer()
             stat("Bitz", FeedFormat.count(tabBitz.count))
             Spacer()
+            // Web stats parity: sats THIS viewer zapped the author (local
+            // verified ledger — relays can't truthfully total everyone).
+            Button { showZap = true } label: {
+                stat("Zapped by you", zapFormatSats(Int64(sentToAuthor.reduce(0) { $0 + $1.amountSats })))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zap author")
+            Spacer()
         }
         .padding(.horizontal, BitOSTheme.Spacing.base)
     }
@@ -304,36 +418,80 @@ struct AuthorProfilePage: View {
         }
     }
 
-    // MARK: - More menu (copy link · npub · lightning)
+    // MARK: - More menu (copy link · npub · lightning · mute · report)
 
-    private var moreMenu: some View {
-        Menu {
+    /// Web ProfileActionMenu parity: the AppMenu popover (rounded pill
+    /// rows with press fill) instead of a system-styled Menu.
+    private var moreMenuButton: some View {
+        let entries: [AppMenuEntry] = {
+            var items: [AppMenuEntry] = []
             if let npub {
-                Button {
-                    UIPasteboard.general.string = "https://njump.me/\(npub)"
-                } label: {
-                    Label("Copy profile link", systemImage: "link")
-                }
-                Button {
-                    UIPasteboard.general.string = npub
-                } label: {
-                    Label("Copy npub", systemImage: AppIcons.copy)
-                }
+                items.append(.item(AppMenuItem(id: "copy-link", label: "Copy profile link", systemImage: "link")))
+                items.append(.item(AppMenuItem(id: "copy-npub", label: "Copy npub", systemImage: AppIcons.copy)))
             }
             if let lud16 = profile?.lud16, !lud16.isEmpty {
-                Button {
-                    UIPasteboard.general.string = lud16
-                } label: {
-                    Label("Copy lightning address", systemImage: AppIcons.zap)
-                }
+                items.append(.item(AppMenuItem(id: "copy-lightning", label: "Copy lightning address", systemImage: AppIcons.zap)))
             }
+            if identity.account?.pubkeyHex != authorPubkey {
+                let muted = environment.feedStore.muted.contains(authorPubkey)
+                items.append(.divider)
+                items.append(.item(AppMenuItem(
+                    id: "mute",
+                    label: muted ? "Unmute author" : "Mute author",
+                    systemImage: muted ? "speaker.wave.2" : "speaker.slash"
+                )))
+                items.append(.item(AppMenuItem(
+                    id: "report",
+                    label: "Report user…",
+                    systemImage: "exclamationmark.bubble",
+                    isDestructive: true
+                )))
+            }
+            return items
+        }()
+        return Button {
+            // no-op — the overlay tap gesture below reports the anchor
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(BitOSTheme.textPrimary)
                 .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .overlay {
+            GeometryReader { geo in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        let frame = geo.frame(in: .global)
+                        moreMenu = AppMenuPresentation(
+                            anchor: CGPoint(x: frame.maxX, y: frame.minY),
+                            entries: entries
+                        ) { id in
+                            handleMoreMenu(id)
+                        }
+                    }
+            }
         }
         .accessibilityLabel("More profile actions")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func handleMoreMenu(_ id: String) {
+        switch id {
+        case "copy-link":
+            if let npub { UIPasteboard.general.string = "https://njump.me/\(npub)" }
+        case "copy-npub":
+            if let npub { UIPasteboard.general.string = npub }
+        case "copy-lightning":
+            if let lud16 = profile?.lud16 { UIPasteboard.general.string = lud16 }
+        case "mute":
+            environment.feedStore.toggleMute(authorPubkey)
+        case "report":
+            showReportPrompt = true
+        default:
+            break
+        }
     }
 
     // MARK: - Pinned tab rail (Notes · Replies · Bitz)
@@ -374,42 +532,94 @@ struct AuthorProfilePage: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        let content = tabs[tab].1
-        if store?.isLoading ?? true, notes.isEmpty {
-            ProgressView()
-                .tint(BitOSTheme.accent)
-                .frame(maxWidth: .infinity)
-                .padding(BitOSTheme.Spacing.xxl)
-        } else if content.isEmpty {
-            tabEmptyState
-        } else if tab == 2 {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
-                ForEach(Array(content), id: \.id) { note in
-                    Button {
-                        threadTarget = note
-                    } label: {
-                        BitzGridTile(note: note)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open note thread")
-                    .onAppear {
-                        if note.id == content.last?.id { store?.loadMoreNotes() }
-                    }
-                }
-            }
-            .padding(.horizontal, 2)
-            loadMoreFooter
+        if tab == 3 {
+            // Zaps — this viewer's verified zaps to the author (wallet rule).
+            zapTabContent
         } else {
-            ForEach(Array(content), id: \.id) { note in
-                ProfileNoteCard(note: note, profile: profile) {
-                    threadTarget = note
+            let content = tabs[tab].1
+            if (store?.isLoading ?? true), notes.isEmpty {
+                ProgressView()
+                    .tint(BitOSTheme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(BitOSTheme.Spacing.xxl)
+            } else if content.isEmpty {
+                tabEmptyState
+            } else if tab == 2 {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+                    ForEach(Array(content), id: \.id) { note in
+                        Button {
+                            bitzPlayerTarget = .init(authorPubkey: authorPubkey, noteId: note.id)
+                        } label: {
+                            BitzGridTile(note: note)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Play bitz")
+                        .onAppear {
+                            if note.id == content.last?.id { store?.loadMoreNotes() }
+                        }
+                    }
                 }
-                .onAppear {
-                    if note.id == content.last?.id { store?.loadMoreNotes() }
+                .padding(.horizontal, 2)
+                loadMoreFooter
+            } else {
+                notesList(content)
+            }
+        }
+    }
+
+    /// Zaps tab body (web parity): rows from the local verified ledger.
+    @ViewBuilder
+    private var zapTabContent: some View {
+        if sentToAuthor.isEmpty {
+            VStack(spacing: BitOSTheme.Spacing.md) {
+                Text("⚡").font(.system(size: 34))
+                Text("You haven't zapped this author yet")
+                    .font(.system(size: 14))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, BitOSTheme.Spacing.xxl)
+        } else {
+            LazyVStack(spacing: BitOSTheme.Spacing.sm) {
+                ForEach(Array(sentToAuthor.prefix(50).enumerated()), id: \.offset) { index, record in
+                    ZapLedgerRowView(
+                        row: .init(
+                            id: "sent-\(record.id)",
+                            direction: "sent",
+                            sats: record.amountSats,
+                            peer: record.recipientPubkey,
+                            at: record.createdAt,
+                            memo: record.memo ?? "",
+                            note: record.targetNoteId ?? ""
+                        ),
+                        profile: environment.feedStore.profiles[record.recipientPubkey]
+                    )
                 }
             }
-            loadMoreFooter
+            .padding(.horizontal, BitOSTheme.Spacing.base)
         }
+    }
+    /// Notes/replies list — shared card, X-style thread open on tap.
+    @ViewBuilder
+    private func notesList(_ content: [FeedNote]) -> some View {
+        ForEach(Array(content), id: \.id) { note in
+            ProfileNoteCard(
+                note: note,
+                profile: profile,
+                onOpen: { threadTarget = note },
+                actionRow: NoteActionRow(
+                    isLiked: environment.feedStore.localActions.liked.contains(note.id),
+                    tally: environment.feedStore.tallies[note.id],
+                    onLike: { like(note) },
+                    onRepost: { repostNote(note) },
+                    onZap: { openNoteZap(note) }
+                )
+            )
+            .onAppear {
+                if note.id == content.last?.id { store?.loadMoreNotes() }
+            }
+        }
+        loadMoreFooter
     }
 
     /// Pages of five load on demand; footer surfaces the in-flight page.
@@ -434,6 +644,7 @@ struct AuthorProfilePage: View {
             switch tab {
             case 1: return (AppIcons.comment, "No replies yet")
             case 2: return (AppIcons.photo, "No bitz yet")
+            case 3: return (AppIcons.zap, "No zaps yet")
             default: return (AppIcons.pen, "No posts yet")
             }
         }()

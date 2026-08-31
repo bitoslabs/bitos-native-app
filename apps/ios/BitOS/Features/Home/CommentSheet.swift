@@ -17,6 +17,9 @@ struct CommentSheet: View {
     @State private var zapTarget: FeedNote?
     /** Author avatar/name taps open the profile sheet (UX-010). */
     @State private var profileTarget: String?
+    /** Own-note deletion (NIP-09): locally hidden rows + confirm target. */
+    @State private var deletedIds: Set<String> = []
+    @State private var deleteTarget: FeedNote?
 
     // APP-009 reply bar (legacy `_ThreadReplyBar` parity): sub-reply
     // targeting, URL/GIF/gallery attachments, PoW, pill input + send.
@@ -37,9 +40,9 @@ struct CommentSheet: View {
     private let uploader = BlossomUploader()
     private let blossomServer = "https://blossom.primal.net"
 
-    private var comments: [FeedNote] { store.comments[note.id] ?? [] }
+    private var comments: [FeedNote] { (store.comments[note.id] ?? []).filter { !deletedIds.contains($0.id) } }
     /// NIP-10 assembled display list (depth + orphan flag).
-    private var threadItems: [ThreadDisplayItem] { store.threads[note.id] ?? [] }
+    private var threadItems: [ThreadDisplayItem] { (store.threads[note.id] ?? []).filter { !deletedIds.contains($0.id) } }
     private var noteById: [String: FeedNote] {
         Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
     }
@@ -48,6 +51,9 @@ struct CommentSheet: View {
 
     private var effectiveTarget: FeedNote { replyTarget ?? note }
     private var canAddAttachment: Bool { attachments.count < 4 }
+    /** NIP-22 mode (ADR-003): non-kind-1 roots publish kind-1111 comments
+     *  instead of kind-1 replies; PoW rides only the kind-1 path. */
+    private var commentMode: Bool { note.kind != 1 }
     private var sending: Bool { publisher.busy && awaitingReply }
     private var canSend: Bool {
         !sending && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
@@ -155,6 +161,16 @@ struct CommentSheet: View {
             .environment(identity)
             .presentationDetents([.medium, .large])
         }
+        // Own-note delete confirmation (kind-5).
+        .alert("Delete this note?", isPresented: Binding(
+            get: { deleteTarget != nil },
+            set: { if !$0 { deleteTarget = nil } }
+        )) {
+            Button("Delete", role: .destructive, action: confirmDelete)
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+        } message: {
+            Text("The deletion publishes to your relays and cannot be undone.")
+        }
     }
 
     private struct ProfileTarget: Identifiable {
@@ -197,7 +213,8 @@ struct CommentSheet: View {
                         onRepost: { repost(note) },
                         onBookmark: { toggleBookmark(note) },
                         onZap: { openZap(note) },
-                        onOpenProfile: { profileTarget = note.pubkey }
+                        onOpenProfile: { profileTarget = note.pubkey },
+                        onDelete: note.pubkey == identity.account?.pubkeyHex ? { requestDelete(note) } : nil
                     )
                     if comments.isEmpty {
                         Text(store.hasLoadedAnyEvent ? "No replies yet." : "Loading replies…")
@@ -217,10 +234,12 @@ struct CommentSheet: View {
                                 isLiked: store.localActions.liked.contains(reply.id),
                                 onLike: { like(reply) },
                                 onZap: { openZap(reply) },
-                                onOpenProfile: { profileTarget = reply.pubkey }
-                            ) {
-                                replyTarget = reply
-                            }
+                                onOpenProfile: { profileTarget = reply.pubkey },
+                                onDelete: reply.pubkey == identity.account?.pubkeyHex ? { requestDelete(reply) } : nil,
+                                // Web parity: root comment → one reply only.
+                                // A depth-1 reply never becomes a new parent.
+                                onReplyTo: item.depth == 0 ? { replyTarget = reply } : nil
+                            )
                         }
                     }
                 }
@@ -254,8 +273,13 @@ struct CommentSheet: View {
     private func like(_ note: FeedNote) {
         let turningOn = !store.localActions.liked.contains(note.id)
         store.localActions.toggleLike(note.id)
-        guard turningOn, environment.identityStore.account != nil else { return }
-        Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        guard environment.identityStore.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = store.myReactionEventIds[note.id] {
+            // Web unlike parity: delete my kind-7 from relays (NIP-09).
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
     }
 
     private func repost(_ note: FeedNote) {
@@ -275,6 +299,23 @@ struct CommentSheet: View {
     private func openZap(_ note: FeedNote) {
         store.loadZaps(targetEventId: note.id)
         zapTarget = note
+    }
+
+    // MARK: - Own-note deletion (NIP-09, web `feed.deleteNote` parity)
+
+    private func requestDelete(_ target: FeedNote) {
+        deleteTarget = target
+    }
+
+    private func confirmDelete() {
+        guard let target = deleteTarget else { return }
+        deleteTarget = nil
+        Task { await publisher.publishDeletion(targetEventIds: [target.id]) }
+        if target.id == note.id {
+            onClose()
+        } else {
+            deletedIds.insert(target.id)
+        }
     }
 
     // MARK: - APP-009 reply bar (legacy `_ThreadReplyBar` parity)
@@ -307,14 +348,17 @@ struct CommentSheet: View {
                 attachments.remove(at: index)
             }
             // Options row: gallery · GIF · media URL · PoW (legacy order).
+            // NIP-22 comment mode: PoW rides only the kind-1 reply path.
             HStack(spacing: BitOSTheme.Spacing.xs) {
                 optionButton(AppIcons.photo, "Attach from gallery", enabled: canAddAttachment) { pickerPrompt = true }
                 optionGlyphButton("GIF", "Add GIF", enabled: canAddAttachment) { gifSheet = true }
                 optionButton(AppIcons.globe, "Add media URL", enabled: canAddAttachment) { urlAlert = true }
-                if powOutcome != nil || powTarget > 0 {
-                    optionButton(AppIcons.qrCode, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
-                } else {
-                    optionButton(AppIcons.qrCode, "Proof of work") { powSheet = true }
+                if !commentMode {
+                    if powOutcome != nil || powTarget > 0 {
+                        optionButton(AppIcons.qrCode, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
+                    } else {
+                        optionButton(AppIcons.qrCode, "Proof of work") { powSheet = true }
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -412,19 +456,38 @@ struct CommentSheet: View {
         )
     }
 
+    /// NIP-22 comment tags (web `feed.comment` parity): uppercase E/K/P
+    /// root + lowercase e/k parent; the parent is the comment being
+    /// answered, or the root itself for top-level comments.
+    private func commentTagsJson() -> String? {
+        let parent = replyTarget
+        return bridge.commentTagsJson(
+            targetEventId: note.id,
+            targetPubkey: note.pubkey,
+            targetKind: Int64(note.kind),
+            parentEventId: parent.map(\.id),
+            parentPubkey: parent.map(\.pubkey),
+            content: composedContent()
+        ) as String?
+    }
+
     private func send() {
-        guard canSend, let tagsJson = replyTagsJson() else { return }
+        guard canSend else { return }
         let content = composedContent()
         awaitingReply = true
-        if let pow = powOutcome {
-            Task {
-                await publisher.publishPowNote(
-                    content: content, nonce: pow.nonce, targetDifficulty: Int32(pow.targetDifficulty),
-                    createdAt: pow.createdAt, tagsJson: tagsJson
-                )
+        if commentMode, let tagsJson = commentTagsJson() {
+            Task { await publisher.publishComment(content: content, tagsJson: tagsJson) }
+        } else if let tagsJson = replyTagsJson() {
+            if let pow = powOutcome {
+                Task {
+                    await publisher.publishPowNote(
+                        content: content, nonce: pow.nonce, targetDifficulty: Int32(pow.targetDifficulty),
+                        createdAt: pow.createdAt, tagsJson: tagsJson
+                    )
+                }
+            } else {
+                Task { await publisher.publishNote(content: content, tagsJson: tagsJson) }
             }
-        } else {
-            Task { await publisher.publishNote(content: content, tagsJson: tagsJson) }
         }
     }
 
@@ -466,7 +529,19 @@ private struct ThreadRootCard: View {
     let onBookmark: () -> Void
     let onZap: () -> Void
     var onOpenProfile: (() -> Void)? = nil
+    /** Own notes only (NIP-09 kind-5 delete). */
+    var onDelete: (() -> Void)? = nil
     @State private var showRaw = false
+    /** APP-009 ⋯ Share action → system sheet. */
+    @State private var shareText: String?
+
+    /// Shared `NoteShare` copy through the bridge (excerpt + attribution).
+    private func shareCopy(npub: String?) -> String {
+        if let npub {
+            return BusinessCoreBridge().noteShareText(content: note.content, authorNpub: npub)
+        }
+        return note.content
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
@@ -505,6 +580,15 @@ private struct ThreadRootCard: View {
                     isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary,
                     action: onBookmark
                 )
+                if let onDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14))
+                            .foregroundStyle(BitOSTheme.error)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete this note")
+                }
                 Spacer()
                 Button {
                     showRaw = true
@@ -515,10 +599,33 @@ private struct ThreadRootCard: View {
                 }
                 .accessibilityLabel("Raw note details")
                 .alert("Raw note", isPresented: $showRaw) {
+                    // Web PostCard menu parity: diagnostic copies.
+                    Button("Copy note ID") { UIPasteboard.general.string = note.id }
+                    if let npub = BusinessCoreBridge().npubEncode(pubkeyHex: note.pubkey) as String? {
+                        Button("Copy author npub") { UIPasteboard.general.string = npub }
+                    }
+                    Button("Copy note text") { UIPasteboard.general.string = note.content }
+                    // APP-009 ⋯ parity (mockup app-10): share + web link.
+                    Button("Share") {
+                        shareText = shareCopy(npub: BusinessCoreBridge().npubEncode(pubkeyHex: note.pubkey) as String?)
+                    }
+                    Button("Copy link") {
+                        UIPasteboard.general.string = "https://njump.me/\(note.id)"
+                    }
                     Button("Close", role: .cancel) {}
                 } message: {
                     Text("id: \(note.id)\nauthor: \(note.pubkey)\nkind: \(note.kind)\nat: \(note.createdAt)")
                         .font(.system(size: 11, design: .monospaced))
+                }
+                // APP-009 ⋯ parity: system share sheet (BitzView pattern).
+                .sheet(isPresented: Binding(
+                    get: { shareText != nil },
+                    set: { if !$0 { shareText = nil } }
+                )) {
+                    if let shareText {
+                        ShareSheet(items: [shareText])
+                            .presentationDetents([.medium])
+                    }
                 }
             }
         }
@@ -581,6 +688,8 @@ private struct ReplyRow: View {
     var onLike: (() -> Void)? = nil
     var onZap: (() -> Void)? = nil
     var onOpenProfile: (() -> Void)? = nil
+    /** Own notes only (NIP-09 kind-5 delete). */
+    var onDelete: (() -> Void)? = nil
     var onReplyTo: (() -> Void)? = nil
 
     // Depth-keyed tint for the vertical thread line (TikTok/X pattern).
@@ -665,6 +774,15 @@ private struct ReplyRow: View {
                                 trailing: nil,
                                 action: onReplyTo
                             )
+                        }
+                        if let onDelete {
+                            Button(action: onDelete) {
+                                Text("Delete")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(BitOSTheme.error)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Delete this reply")
                         }
                     }
                 }

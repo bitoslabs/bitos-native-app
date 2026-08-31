@@ -107,6 +107,63 @@ struct HexAvatarView: View {
     }
 }
 
+/// Outlined ring-hex avatar (mock 06 `.hex-avatar` parity): a 2 pt identity
+/// ring around a dark inner hex with the colored initial — the honeycomb
+/// variant used by aggregated inbox rows. `verified` adds the small orange
+/// NIP-05 bolt badge (mock `.hex-avatar.verified`).
+struct RingHexAvatarView: View {
+    let pubkey: String
+    var size: CGFloat = 40
+    var ring: Color? = nil
+    var label: String? = nil
+    var imageURL: URL? = nil
+    var verified: Bool = false
+
+    private var identity: Color { ring ?? HexIdentity.avatarGradient(for: pubkey).start }
+
+    private var initials: some View {
+        Text(avatarInitials(label ?? pubkey))
+            .font(.system(size: size / 3, weight: .bold))
+            .foregroundStyle(identity)
+    }
+
+    var body: some View {
+        let inner = size - 4
+        ZStack {
+            HexShape().fill(identity)
+            ZStack {
+                BitOSTheme.surface
+                if let imageURL {
+                    AsyncImage(url: imageURL) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        initials
+                    }
+                    .frame(width: inner, height: inner)
+                    .clipShape(HexShape())
+                } else {
+                    initials
+                }
+            }
+            .frame(width: inner, height: inner)
+            .clipShape(HexShape())
+        }
+        .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if verified {
+                AppIcons.image(for: AppIcons.zap)
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 15, height: 15)
+                    .background(Circle().fill(BitOSTheme.accent))
+                    .overlay(Circle().stroke(BitOSTheme.background, lineWidth: 2))
+                    .offset(x: 2, y: 2)
+            }
+        }
+        .accessibilityLabel("Avatar \(avatarInitials(label ?? pubkey))")
+    }
+}
+
 /// Profile metadata is untrusted. Avatar fetches use only bounded HTTPS URLs
 /// and never load remote SVG documents; callers retain the hex fallback.
 func safeProfilePictureURL(_ raw: String?) -> URL? {

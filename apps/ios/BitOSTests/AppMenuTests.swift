@@ -21,9 +21,24 @@ final class AppMenuTests: XCTestCase {
             .item(AppMenuItem(id: "c", label: "C")),
         ]
         let size = AppMenuLayout.estimatedSize(entries: entries)
-        XCTAssertEqual(size.width, AppMenuLayout.width)
+        // Short labels clamp to the width floor (web Popover min-w-52).
+        XCTAssertEqual(size.width, AppMenuLayout.minWidth, accuracy: 0.001)
         // cardPadding 12 + 3 rows (44) + 1 divider (9)
         XCTAssertEqual(size.height, 12 + 3 * 44 + 9, accuracy: 0.001)
+    }
+
+    func testWidthFitsWidestLabel() {
+        // A mid-length label lands strictly between floor and cap.
+        let mid = AppMenuLayout.width(entries: [
+            .item(AppMenuItem(id: "a", label: String(repeating: "M", count: 16), systemImage: "link")),
+        ])
+        XCTAssertGreaterThan(mid, AppMenuLayout.minWidth)
+        XCTAssertLessThan(mid, AppMenuLayout.maxWidth)
+        // Long labels cap out instead of stretching the card.
+        let capped = AppMenuLayout.width(entries: [
+            .item(AppMenuItem(id: "a", label: String(repeating: "M", count: 60), systemImage: "link")),
+        ])
+        XCTAssertEqual(capped, AppMenuLayout.maxWidth, accuracy: 0.001)
     }
 
     // MARK: - Clamped frame

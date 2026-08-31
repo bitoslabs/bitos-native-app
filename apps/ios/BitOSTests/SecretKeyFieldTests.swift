@@ -39,4 +39,13 @@ final class SecretKeyFieldTests: XCTestCase {
         XCTAssertNil(wrongType.secretHex)
         XCTAssertEqual(bridge.keyImportCheck(raw: "  ").verdict, "EMPTY")
     }
+
+    /// KF-6: a READY check carries the derived identity the preview card renders.
+    func testBridgeReadyCheckCarriesDerivedIdentity() {
+        let ready = BusinessCoreBridge().keyImportCheck(raw: nsec)
+        XCTAssertEqual(ready.pubkeyHex?.count, 64)
+        XCTAssertTrue(ready.npub?.hasPrefix("npub1") ?? false)
+        XCTAssertNil(BusinessCoreBridge().keyImportCheck(raw: npub).npub)
+        XCTAssertNil(BusinessCoreBridge().keyImportCheck(raw: "").pubkeyHex)
+    }
 }

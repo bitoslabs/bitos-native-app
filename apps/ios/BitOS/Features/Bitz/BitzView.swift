@@ -95,6 +95,13 @@ struct BitzView: View {
     /// APP-003: bumped when the user re-taps the active Bitz tab — scroll
     /// to top; a re-tap while already at top refreshes.
     var retapTick: Int = 0
+    /// Web `/bitz?author=<npub>` parity: author-scoped playback from a
+    /// profile Bitz-grid tile. Nil = the normal three-tab surface.
+    var authorPubkey: String? = nil
+    /// Web `#bitz=<id>` parity: the tapped profile grid tile lands first.
+    var initialNoteId: String? = nil
+    /// Author-mode back bar → returns to the profile.
+    var onExitAuthorMode: (() -> Void)? = nil
 
     @Environment(AppEnvironment.self) private var environment
     @Environment(SettingsStore.self) private var settings
@@ -132,16 +139,27 @@ struct BitzView: View {
     @State private var shareText: String?
     /** Swipe-right on settled Bitz video → full-screen profile for that creator. */
     @State private var fullProfileTarget: String?
+    /** Author playback scope (web `/bitz?author=` parity): one REQ + one
+     * private window; leaving releases it. */
+    @State private var authorStore: AuthorStore?
     private let rules = BitzBridgeRules()
 
+    private var authorMode: Bool { authorPubkey != nil }
+
     private var videos: [FeedNote] {
-        environment.feedStore.notes.filter { $0.video != nil }
+        if authorMode {
+            return authorStore?.notes.filter { $0.video != nil } ?? []
+        }
+        return environment.feedStore.notes.filter { $0.video != nil }
     }
 
     private var playerNotes: [FeedNote] {
         // The paged list is the active tab's window (legacy
         // `displayedEvents`): search picks spliced ahead, then the
-        // verified video window.
+        // verified video window. Author mode plays the author's owned
+        // window in loaded order (no splice — playback scope must match
+        // the profile grid).
+        if authorMode { return videos }
         let windowIds = Set(videos.map(\.id))
         return spliced.filter { !windowIds.contains($0.id) } + videos
     }
@@ -202,6 +220,12 @@ struct BitzView: View {
                 }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+        }
+        .task(id: authorPubkey) {
+            // Web `#bitz=<id>` parity: the tapped profile grid tile is the
+            // first thing on screen; the resolver waits for the author REQ.
+            guard authorMode, let initialNoteId else { return }
+            pendingJumpId = initialNoteId
         }
         .sheet(item: Binding(
             get: { authorTarget.map { BitzAuthorTarget(id: $0) } },
@@ -369,10 +393,19 @@ struct BitzView: View {
             stopPathMonitor()
             pool.releaseAll()
         }
+        .task(id: authorPubkey) {
+            // Web `/bitz?author=` parity: one REQ for one author over the
+            // private store (cover/sheet lifecycles never clear it).
+            guard let authorPubkey else { return }
+            let store = authorStore ?? AuthorStore(pool: environment.relayPool, client: environment.businessCore)
+            authorStore = store
+            store.open(authorPubkey: authorPubkey)
+        }
         .task(id: mode) {
             // Three tabs (legacy Flutter parity): the pills drive the same
-            // shared window Home uses.
-            guard let mode else { return }
+            // shared window Home uses. Author playback skips the global
+            // lanes entirely — its data comes from the author REQ.
+            guard let mode, !authorMode else { return }
             switch mode {
             case .forYou:
                 environment.feedStore.selectTimeline(.forYou)
@@ -429,12 +462,26 @@ struct BitzView: View {
                 default: playerSurface
                 }
             }
-            BitzTopBar(
-                mode: mode,
-                onSelectMode: selectMode,
-                onSearch: { showSearch = true },
-                onRecord: { showCreateHub = true }
-            )
+            if authorMode {
+                // Author-mode chrome (web back-to-profile bar): replaces the
+                // mode rail; the title opens the full profile.
+                BitzAuthorBar(
+                    title: authorStore?.profile?.bestDisplayName
+                        ?? (authorPubkey.map(FeedFormat.shortPubkey) ?? ""),
+                    onBack: { onExitAuthorMode?() },
+                    onOpenAuthor: {
+                        onExitAuthorMode?()
+                        fullProfileTarget = authorPubkey
+                    }
+                )
+            } else {
+                BitzTopBar(
+                    mode: mode,
+                    onSelectMode: selectMode,
+                    onSearch: { showSearch = true },
+                    onRecord: { showCreateHub = true }
+                )
+            }
         }
         // No "New note" FAB (user decision 2026-08-29): creation entries are
         // the header record button and the feed FAB.
@@ -442,7 +489,28 @@ struct BitzView: View {
 
     private var playerSurface: some View {
         Group {
-            if playerNotes.isEmpty && !environment.feedStore.isLoading {
+            if authorMode {
+                if authorStore?.isLoading ?? true, playerNotes.isEmpty {
+                    BitzLoadingView()
+                } else if playerNotes.isEmpty {
+                    VStack(spacing: BitOSTheme.Spacing.sm) {
+                        AppIcons.image(for: AppIcons.bitz)
+                            .font(.system(size: 44))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                        Text("No Bitz yet")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Text("Short videos this creator publishes will collect here.")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(BitOSTheme.Spacing.xxl)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    pager
+                }
+            } else if playerNotes.isEmpty && !environment.feedStore.isLoading {
                 playerEmptyState
             } else {
                 pager
@@ -576,6 +644,14 @@ struct BitzView: View {
                     .id(note.id)
                     .onAppear {
                         topId = topId ?? note.id
+                        if authorMode {
+                            // Author window pages through the private REQ —
+                            // same 5-note pages as the profile grid.
+                            if index >= playerNotes.count - 2 {
+                                authorStore?.loadMoreNotes()
+                            }
+                            return
+                        }
                         // Prepare the next ten videos before this tab reaches its edge.
                         let threshold = environment.feedStore.paginationPrefetchThreshold
                         if index >= playerNotes.count - threshold,
@@ -594,7 +670,7 @@ struct BitzView: View {
         .ignoresSafeArea(edges: .bottom)
         .refreshable { refreshWindow() }
         .onChange(of: environment.feedStore.isLoadingOlder) { _, loading in
-            guard !loading, !environment.feedStore.noMoreOlder,
+            guard !authorMode, !loading, !environment.feedStore.noMoreOlder,
                   let topId,
                   let index = playerNotes.firstIndex(where: { $0.id == topId }),
                   index >= playerNotes.count - environment.feedStore.paginationPrefetchThreshold else { return }
@@ -739,6 +815,8 @@ struct BitzView: View {
     }
 
     private func selectMode(_ next: SettingsBitzMode) {
+        // Author playback has no mode rail (web parity) — swipes stay inert.
+        guard !authorMode else { return }
         guard let current = mode else { return }
         if current == next {
             // Re-tap the active pill: back to top; at top, refresh.
@@ -763,7 +841,7 @@ struct BitzView: View {
      * gesture.
      */
     private func handleSwipe(left: Bool) {
-        guard !showSearch,
+        guard !authorMode, !showSearch,
               commentTarget == nil, chainTarget == nil, zapTarget == nil,
               authorTarget == nil, remixAskTarget == nil else { return }
         let order: [SettingsBitzMode] = [.explore, .following, .forYou]
@@ -805,8 +883,13 @@ struct BitzView: View {
     private func like(_ note: FeedNote) {
         let turningOn = !environment.feedStore.localActions.liked.contains(note.id)
         environment.feedStore.localActions.toggleLike(note.id)
-        guard turningOn, environment.identityStore.account != nil else { return }
-        Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        guard environment.identityStore.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = environment.feedStore.myReactionEventIds[note.id] {
+            // Web unlike parity: delete my kind-7 from relays (NIP-09).
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
     }
 
     private func toggleBookmark(_ note: FeedNote) {
@@ -961,7 +1044,6 @@ private struct BitzTopBar: View {
         .padding(.vertical, 8)
     }
 
-    /// Bare-text tab (legacy parity): active bold opaque, inactive 70%.
     private func pill(_ label: String, _ value: SettingsBitzMode) -> some View {
         let selected = mode == value
         return Button {
@@ -976,6 +1058,48 @@ private struct BitzTopBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Show \(label) videos")
+    }
+}
+
+// MARK: - Author bar
+
+/// Author-mode chrome (web `/bitz?author=` back-to-profile bar): back
+/// chevron + creator name; the name opens the full profile. Replaces the
+/// mode rail over the media.
+private struct BitzAuthorBar: View {
+    let title: String
+    let onBack: () -> Void
+    let onOpenAuthor: () -> Void
+
+    var body: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Back to profile")
+            Button(action: onOpenAuthor) {
+                Text(title)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open full profile")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.xs)
+        .padding(.top, BitOSTheme.Spacing.lg)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.55), .clear],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .top)
+        )
     }
 }
 

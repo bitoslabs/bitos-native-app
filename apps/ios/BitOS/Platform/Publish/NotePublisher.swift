@@ -140,6 +140,31 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// NIP-22 kind-1111 comment on a non-kind-1 event (web `feed.comment`
+    /// parity): tags come from the bridge's `commentTagsJson`.
+    func publishComment(content: String, tagsJson: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeCommentWithTagsEventId(
+                  content: content, pubkeyHex: account.pubkeyHex, nowSeconds: now, tagsJson: tagsJson
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.commentWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now,
+                  signatureHex: signature, tagsJson: tagsJson
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
     /// Tags-aware mining window for the composer page (template carries
     /// the same tags the publisher will commit).
     func minePowChunkWithTags(
@@ -349,6 +374,80 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// NIP-51 interest set publish (kind 30015 d=interest — followed hashtags).
+    func publishInterestSet(hashtags: [String]) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeInterestSetEventId(
+                  authorPubkey: account.pubkeyHex, hashtags: hashtags, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.interestSetPublishMessage(
+                  authorPubkey: account.pubkeyHex, hashtags: hashtags,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-1018 poll vote publish (web `votePoll` wire parity).
+    func publishPollVote(targetEventId: String, optionIndex: Int) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composePollVoteEventId(
+                  targetEventId: targetEventId, optionIndex: Int64(optionIndex),
+                  authorPubkey: account.pubkeyHex, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.pollVotePublishMessage(
+                  targetEventId: targetEventId, optionIndex: Int64(optionIndex),
+                  authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-5 deletion publish (NIP-09, web `feed.deleteNote` parity).
+    func publishDeletion(targetEventIds: [String], reason: String = "Deleted from BitOS") async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeDeletionEventId(
+                  targetEventIds: targetEventIds, authorPubkey: account.pubkeyHex,
+                  reason: reason, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.deletionPublishMessage(
+                  targetEventIds: targetEventIds, authorPubkey: account.pubkeyHex,
+                  reason: reason, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
     /// Kind-30003 bookmark-list publish (NIP-51, addressable head).
     func publishBookmarkList(eventIds: [String]) async {
         guard result == nil, inFlightId == nil, !busy else { return }
@@ -496,6 +595,16 @@ final class NotePublisher {
         } else {
             result = .timeout
         }
+
+        // Feed and Bitz rails share this publisher with the composer. Keep a
+        // terminal receipt visible briefly, then release the publisher so a
+        // later card action can sign and fan out to relays.
+        let terminalResult = result
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let self, self.inFlightId == nil, self.result == terminalResult else { return }
+            self.dismiss()
+        }
     }
 
     private func absorbFrame(_ frame: RelayFrame) {
@@ -515,4 +624,3 @@ final class NotePublisher {
         result = nil
     }
 }
-

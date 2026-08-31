@@ -22,6 +22,8 @@ struct AuthorProfileSheet: View {
     @State private var showZap = false
     /** X-style: tapping a note card opens its thread (CommentSheet). */
     @State private var threadTarget: FeedNote?
+    /** Note zap from a profile card (NIP-57 note zap). */
+    @State private var noteZapTarget: FeedNote?
 
     private var profile: ProfileMetadata? { environment.authorStore.profile }
     private var notes: [FeedNote] { environment.authorStore.notes }
@@ -100,6 +102,61 @@ struct AuthorProfileSheet: View {
             .environment(identity)
             .presentationDetents([.medium, .large])
         }
+        // Note zap from a profile card (web PostCard zap parity).
+        .sheet(item: $noteZapTarget) { target in
+            ZapSheet(
+                note: target,
+                profiles: zapProfiles,
+                initialAmountSats: settings.state.defaultZapAmount,
+                zapCount: environment.feedStore.zapCounts[target.id] ?? 0,
+                paidRequestIds: environment.feedStore.zapRequestIds[target.id] ?? [],
+                onPaid: { sats, memo in
+                    environment.sentZaps.record(.init(
+                        id: "zap-\(target.id)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                        amountSats: Int64(sats),
+                        recipientPubkey: target.pubkey,
+                        createdAt: Int64(Date.now.timeIntervalSince1970),
+                        targetNoteId: target.id,
+                        memo: memo.isEmpty ? nil : memo
+                    ))
+                },
+                onClose: { noteZapTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium])
+        }
+    }
+
+    /// Feed-store profiles overlaid with this author's live kind-0, so the
+    /// zap sheet always shows the recipient's lud16.
+    private var zapProfiles: [String: ProfileMetadata] {
+        var merged = environment.feedStore.profiles
+        if let profile { merged[authorPubkey] = profile }
+        return merged
+    }
+
+    // MARK: - Note actions (web PostCard parity, shared-core paths)
+
+    private func like(_ note: FeedNote) {
+        let turningOn = !environment.feedStore.localActions.liked.contains(note.id)
+        environment.feedStore.localActions.toggleLike(note.id)
+        guard identity.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = environment.feedStore.myReactionEventIds[note.id] {
+            // Web unlike parity: delete my kind-7 from relays (NIP-09).
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
+    }
+
+    private func repostNote(_ note: FeedNote) {
+        guard identity.account != nil else { return }
+        Task { await environment.notePublisher.publishRepost(targetEventId: note.id, targetPubkey: note.pubkey) }
+    }
+
+    private func openNoteZap(_ note: FeedNote) {
+        environment.feedStore.loadZaps(targetEventId: note.id)
+        noteZapTarget = note
     }
 
     // MARK: - Banner
@@ -439,9 +496,15 @@ struct AuthorProfileSheet: View {
                 // Pages of five arrive on demand — reaching the last loaded
                 // note asks for the next older page.
                 ForEach(notes) { note in
-                    AuthorNoteCard(note: note, profile: profile) {
+                    AuthorNoteCard(note: note, profile: profile, onOpen: {
                         threadTarget = note
-                    }
+                    }, actionRow: NoteActionRow(
+                        isLiked: environment.feedStore.localActions.liked.contains(note.id),
+                        tally: environment.feedStore.tallies[note.id],
+                        onLike: { like(note) },
+                        onRepost: { repostNote(note) },
+                        onZap: { openNoteZap(note) }
+                    ))
                     .onAppear {
                         if note.id == notes.last?.id {
                             environment.authorStore.loadMoreNotes()
@@ -479,13 +542,73 @@ struct AuthorProfileFullView: View {
 
 // MARK: - Author note card
 
+/// Compact like · repost · zap row shared by profile-surface note cards
+/// (web PostCard action-bar parity; comment opens the thread sheet).
+struct NoteActionRow: View {
+    var isLiked: Bool = false
+    var tally: NoteTallyMirror? = nil
+    var onLike: () -> Void
+    var onRepost: () -> Void
+    var onZap: () -> Void
+
+    var body: some View {
+        HStack(spacing: BitOSTheme.Spacing.base) {
+            Button(action: onLike) {
+                HStack(spacing: 4) {
+                    AppIcons.image(for: isLiked ? AppIcons.heartFill : AppIcons.heart)
+                        .font(.system(size: 13))
+                        .foregroundStyle(isLiked ? BitOSTheme.like : BitOSTheme.textSecondary)
+                    if let count = tally?.reactions, count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isLiked ? BitOSTheme.like : BitOSTheme.textSecondary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isLiked ? "Unlike" : "Like")
+
+            Button(action: onRepost) {
+                HStack(spacing: 4) {
+                    AppIcons.image(for: AppIcons.repost)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.repost)
+                    if let count = tally?.reposts, count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.repost)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Repost")
+
+            Button(action: onZap) {
+                HStack(spacing: 4) {
+                    AppIcons.image(for: AppIcons.zap)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.zap)
+                    if let sats = tally?.zapMillisats, sats > 0 {
+                        Text(BusinessCoreBridge().zapFormatSats(sats: sats / 1000))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.zap)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zap")
+        }
+    }
+}
+
 /// X-style card: time + media badge, clamped content, inline media preview
-/// (image row / 16:9 video tile), whole card opens the note's thread when
-/// `onOpen` is provided.
+/// (image row / 16:9 video tile), optional action row, whole card opens the
+/// note's thread when `onOpen` is provided.
 private struct AuthorNoteCard: View {
     let note: FeedNote
     let profile: ProfileMetadata?
     var onOpen: (() -> Void)? = nil
+    var actionRow: NoteActionRow? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -544,6 +667,10 @@ private struct AuthorNoteCard: View {
                 }
             }
             mediaPreview
+            if let actionRow {
+                Divider().background(BitOSTheme.divider)
+                actionRow
+            }
         }
         .padding(BitOSTheme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)

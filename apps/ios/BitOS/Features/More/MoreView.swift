@@ -1,3 +1,4 @@
+import BusinessCore
 import SwiftUI
 
 /**
@@ -356,6 +357,11 @@ private struct AddAccountSheet: View {
                 onSubmit: { identity.importKeyPreview(importText) }
             )
             .onChange(of: importText) { _, _ in identity.clearImportError() }
+            if secretKeyReady(importText) {
+                DerivedIdentityCard(
+                    check: BusinessCoreBridge().keyImportCheck(raw: importText)
+                )
+            }
             HStack {
                 Button {
                     identity.importKeyPreview(importText)

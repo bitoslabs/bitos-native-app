@@ -201,6 +201,18 @@ class BusinessCoreBridge {
      */
     fun emptyFeedRetryDelayMs(attempt: Int): Long = space.bitos.core.feed.EmptyFeedRetry.delayMs(attempt)
 
+    /**
+     * Cold-start account bootstrap: whether an unresolved account head (own
+     * kind-0, kind-3 contacts, bookmarks, blocks) should be re-issued now —
+     * shared `AccountBootstrap` policy through the client seam.
+     */
+    fun accountBootstrapShouldReissue(resolved: Boolean, attempts: Int, connectedRelays: Int): Boolean =
+        space.bitos.core.identity.AccountBootstrap.shouldReissue(resolved, attempts, connectedRelays)
+
+    /** Shared `AccountBootstrap`: fresh relay connectivity opens a new episode. */
+    fun accountBootstrapShouldOpenEpisode(previousConnected: Int, currentConnected: Int): Boolean =
+        space.bitos.core.identity.AccountBootstrap.shouldOpenEpisode(previousConnected, currentConnected)
+
     /** APP-004 pagination: one older page — feed kinds before `until`. */
     fun olderFeedRequest(subscriptionId: String, until: Long, limit: Int): String =
         NostrEventCodec.encodeRequest(
@@ -669,13 +681,21 @@ class BusinessCoreBridge {
 
     /**
      * Import-field rule wire (ID-004): one classifier for the SwiftUI login
-     * field's live feedback. `secretHex` is non-null iff verdict == "READY".
+     * field's live feedback. `secretHex`/`pubkeyHex`/`npub` are non-null iff
+     * verdict == "READY"; the derived identity powers the live
+     * derived-identity preview (KF-6).
      */
-    class KeyImportCheckWire(val verdict: String, val message: String?, val secretHex: String?)
+    class KeyImportCheckWire(
+        val verdict: String,
+        val message: String?,
+        val secretHex: String?,
+        val pubkeyHex: String? = null,
+        val npub: String? = null,
+    )
 
     fun keyImportCheck(raw: String): KeyImportCheckWire {
         val check = space.bitos.core.identity.KeyImportForm.check(raw)
-        return KeyImportCheckWire(check.verdict.name, check.message, check.secretHex)
+        return KeyImportCheckWire(check.verdict.name, check.message, check.secretHex, check.pubkeyHex, check.npub)
     }
 
     /** hex64 secret -> nsec; only for key-backup display. */
@@ -936,16 +956,60 @@ class BusinessCoreBridge {
         }
     }
 
-    /** APP-002 onboarding pages (shared contract) for the iOS carousel. */
-    fun onboardingContent(): List<Map<String, Any>> =
-        space.bitos.core.settings.OnboardingContent.pages.map { page ->
-            mapOf(
-                "id" to page.id,
-                "icon" to page.iconToken,
-                "title" to page.title,
-                "body" to page.body,
-            )
-        }
+    /**
+     * Identity onboarding content (spec §4, docs/ui/app-01): shared copy for
+     * the SwiftUI onboarding flow — welcome props, method cards, backup gate
+     * and confirmation copy, decoded as a map-of-maps by the iOS mirror.
+     */
+    fun identityOnboardingContent(): Map<String, Any> {
+        val content = space.bitos.core.settings.IdentityOnboardingContent
+        return mapOf(
+            "schemaVersion" to content.SCHEMA_VERSION,
+            "appName" to content.APP_NAME,
+            "tagline" to content.TAGLINE,
+            "guestToast" to content.GUEST_TOAST,
+            "privacyFootnote" to content.PRIVACY_FOOTNOTE,
+            "valueProps" to content.VALUE_PROPS.map { prop ->
+                mapOf("id" to prop.id, "icon" to prop.iconToken, "title" to prop.title, "body" to prop.body)
+            },
+            "methodTitle" to content.METHOD_TITLE,
+            "methodBody" to content.METHOD_BODY,
+            "methodInfo" to content.METHOD_INFO,
+            "nip46ComingSoon" to content.NIP46_COMING_SOON,
+            "nip55ComingSoon" to content.NIP55_COMING_SOON,
+            "methods" to content.METHODS.map { method ->
+                mapOf(
+                    "id" to method.id,
+                    "icon" to method.iconToken,
+                    "title" to method.title,
+                    "subtitle" to method.subtitle,
+                    "recommended" to method.recommended,
+                    "available" to method.available,
+                    "androidOnly" to method.androidOnly,
+                )
+            },
+            "importFieldLabel" to content.IMPORT_FIELD_LABEL,
+            "importReviewNote" to content.IMPORT_REVIEW_NOTE,
+            "derivedIdentityLabel" to content.DERIVED_IDENTITY_LABEL,
+            "backupWarning" to content.BACKUP_WARNING,
+            "backupFieldLabel" to content.BACKUP_FIELD_LABEL,
+            "backupRevealPrompt" to content.BACKUP_REVEAL_PROMPT,
+            "backupAdvice" to content.BACKUP_ADVICE,
+            "backupNextStepsTitle" to content.BACKUP_NEXT_STEPS_TITLE,
+            "backupNextSteps" to content.BACKUP_NEXT_STEPS,
+            "backupAckLabel" to content.BACKUP_ACK_LABEL,
+            "backupConfirmLabel" to content.BACKUP_CONFIRM_LABEL,
+            "verifyTitle" to content.VERIFY_TITLE,
+            "verifyBody" to content.VERIFY_BODY,
+            "verifyConfirmLabel" to content.VERIFY_CONFIRM_LABEL,
+            "successTitle" to content.SUCCESS_TITLE,
+            "successBody" to content.SUCCESS_BODY,
+            "successProfileNote" to content.SUCCESS_PROFILE_NOTE,
+            "successInfo" to content.SUCCESS_INFO,
+            "successDoneLabel" to content.SUCCESS_DONE_LABEL,
+            "copyNpubLabel" to content.COPY_NPUB_LABEL,
+        )
+    }
 
     /** APP-020 static pages (legacy copy verbatim from the shared contract). */
     fun staticAboutHeadline(): String = space.bitos.core.settings.StaticPagesContent.ABOUT_HEADLINE
@@ -969,6 +1033,17 @@ class BusinessCoreBridge {
     fun staticTermsSummaryBody(): String = space.bitos.core.settings.StaticPagesContent.TERMS_SUMMARY_BODY
     fun staticTermsSections(): List<Map<String, Any>> =
         space.bitos.core.settings.StaticPagesContent.termsSections.map { mapOf("title" to it.title, "body" to it.body) }
+
+    // ── APP-009 thread open: state-plate copy (mockup app-10, shared) ──
+
+    fun threadOpenLoadingTitle(): String = space.bitos.core.feed.ThreadOpenCopy.LOADING_TITLE
+    fun threadOpenInvalidTitle(): String = space.bitos.core.feed.ThreadOpenCopy.INVALID_TITLE
+    fun threadOpenInvalidBody(): String = space.bitos.core.feed.ThreadOpenCopy.INVALID_BODY
+    fun threadOpenNotFoundTitle(): String = space.bitos.core.feed.ThreadOpenCopy.NOT_FOUND_TITLE
+    fun threadOpenNotFoundBody(): String = space.bitos.core.feed.ThreadOpenCopy.NOT_FOUND_BODY
+    fun threadOpenRetryLabel(): String = space.bitos.core.feed.ThreadOpenCopy.RETRY
+    fun threadOpenRetryWithHintsLabel(): String = space.bitos.core.feed.ThreadOpenCopy.RETRY_WITH_HINTS
+    fun threadOpenAddRelayLabel(): String = space.bitos.core.feed.ThreadOpenCopy.ADD_RELAY
 
     /** APP-006 Stories: subscribe REQ for account + followed authors. */
     fun storiesRequest(subscriptionId: String, authorPubkeys: List<String>): String {
@@ -1076,6 +1151,68 @@ class BusinessCoreBridge {
     fun bolt11AmountMillisats(invoice: String): Long =
         space.bitos.core.model.Bolt11.amountMillisats(invoice) ?: 0L
 
+    // ── APP-011 DM presentation rules (shared so platforms agree) ────
+
+    /** Unread count for one conversation (received messages past the cursor). */
+    fun dmUnreadCount(
+        peerMessages: List<Map<String, Any>>,
+        myPubkey: String,
+        lastReadAt: Long,
+    ): Int {
+        val conversation = dmConversation(peerMessages) ?: return 0
+        return space.bitos.core.model.DmPresentation.unreadCount(conversation, myPubkey, lastReadAt)
+    }
+
+    /** Generic NIP-17 preview line (never plaintext outside the chat). */
+    fun dmPreviewLine(
+        peerMessages: List<Map<String, Any>>,
+        myPubkey: String,
+        lastReadAt: Long,
+    ): String {
+        val conversation = dmConversation(peerMessages) ?: return "No messages"
+        return space.bitos.core.model.DmPresentation.previewLine(conversation, myPubkey, lastReadAt)
+    }
+
+    /** Message-request acceptance verdict for one peer. */
+    fun dmIsAccepted(
+        peerPubkey: String,
+        everSentTo: List<String>,
+        explicitlyAccepted: List<String>,
+        explicitlyDeclined: List<String>,
+    ): Boolean = space.bitos.core.model.DmPresentation.isAccepted(
+        peerPubkey = peerPubkey,
+        everSentTo = everSentTo.toSet(),
+        explicitlyAccepted = explicitlyAccepted.toSet(),
+        explicitlyDeclined = explicitlyDeclined.toSet(),
+    )
+
+    /** Next read cursor when a conversation opens (never rewinds). */
+    fun dmNextCursor(
+        peerMessages: List<Map<String, Any>>,
+        currentCursor: Long,
+    ): Long {
+        val conversation = dmConversation(peerMessages) ?: return currentCursor
+        return space.bitos.core.model.DmPresentation.nextCursor(conversation, currentCursor)
+    }
+
+    /** {id, authorPubkey, peerPubkey, content, createdAt} maps → conversation. */
+    private fun dmConversation(peerMessages: List<Map<String, Any>>): space.bitos.core.model.DmConversation? {
+        if (peerMessages.isEmpty()) return null
+        val messages = peerMessages.mapNotNull { map ->
+            val id = map["id"] as? String ?: return@mapNotNull null
+            val author = map["authorPubkey"] as? String ?: return@mapNotNull null
+            val peer = map["peerPubkey"] as? String ?: return@mapNotNull null
+            val content = map["content"] as? String ?: return@mapNotNull null
+            val createdAt = (map["createdAt"] as? Number)?.toLong() ?: return@mapNotNull null
+            space.bitos.core.model.DmMessage(id, author, peer, content, createdAt)
+        }
+        if (messages.isEmpty()) return null
+        return space.bitos.core.model.DmConversation(
+            peerPubkey = messages.first().peerPubkey,
+            messages = messages.sortedBy { it.createdAt },
+        )
+    }
+
     fun zapFormatSats(sats: Long): String = space.bitos.core.model.ZapFormat.sats(sats)
 
     /** APP-014 invoice expiry (epoch seconds); 0 when unparseable. */
@@ -1160,6 +1297,50 @@ class BusinessCoreBridge {
             put("sent", totals.sentSats)
             put("avg", totals.averageSats)
             put("net", totals.netSats)
+        }.toString()
+    }
+
+    /**
+     * Per-author zap summary (profile "Sats zapped" stat + Zaps tab),
+     * shared rule. Received arrays are the notification-stream shape the
+     * ledger merge already consumes; sent records only count when their
+     * recipient is [pubkey].
+     */
+    fun authorZapsSummary(
+        pubkey: String,
+        receivedSatsJson: String,
+        receivedFromJson: String,
+        sentRecordsJson: String,
+    ): String? {
+        val receivedSats = try {
+            Json.parseToJsonElement(receivedSatsJson).jsonArray.mapNotNull {
+                (it.jsonPrimitive).content.toLongOrNull()
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        val receivedFrom = try {
+            Json.parseToJsonElement(receivedFromJson).jsonArray.map { (it.jsonPrimitive).content }
+        } catch (_: Exception) {
+            return null
+        }
+        val sent = try {
+            sentZapRecordsFromJson(sentRecordsJson)
+        } catch (_: Exception) {
+            return null
+        }
+        val summary = space.bitos.core.model.AuthorZaps.summary(
+            pubkey = pubkey,
+            receivedSats = receivedSats,
+            receivedFrom = receivedFrom,
+            sentRecords = sent,
+        )
+        return buildJsonObject {
+            put("received", summary.receivedSats)
+            put("receivedCount", summary.receivedCount)
+            put("sent", summary.sentSats)
+            put("sentCount", summary.sentCount)
+            put("total", summary.totalSats)
         }.toString()
     }
 
@@ -1439,6 +1620,30 @@ class BusinessCoreBridge {
         return composer.publishMessage(unsigned, signatureHex)
     }
 
+    /** Composes the unsigned kind-5 deletion (NIP-09) and returns its id. */
+    fun composeDeletionEventId(
+        targetEventIds: List<String>,
+        authorPubkey: String,
+        reason: String,
+        nowSeconds: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeDeletion(targetEventIds, authorPubkey, reason)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-5 deletion, or null. */
+    fun deletionPublishMessage(
+        targetEventIds: List<String>,
+        authorPubkey: String,
+        reason: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeDeletion(targetEventIds, authorPubkey, reason) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
     /**
      * Followed pubkeys from a verified kind-3 relay frame; null when the
      * frame is malformed or fails verification.
@@ -1517,17 +1722,97 @@ class BusinessCoreBridge {
             ?.let(space.bitos.core.store.TagsCodec::encode)
     }
 
-    /** REQ for replies to one event (NIP-01 tagged #e filter). */
+    /** REQ for replies to one event (NIP-01 tagged #e filter). ADR-003
+     *  migration window: kind-1111 comments ride the same thread. */
     fun commentsRequest(subscriptionId: String, targetEventId: String): String =
-        NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},7,6,${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#e":["$targetEventId"],"limit":50}""")
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.VIDEO_COMMENT},7,6,${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#e":["$targetEventId"],"limit":50}""",
+        )
+
+    /** NIP-22 companion REQ: kind-1111 comments root-tag the target with
+     *  UPPERCASE `E`, so the plain `#e` filter misses them — ask both
+     *  explicitly (relay tag filters are case-sensitive). */
+    fun commentsRootRequest(subscriptionId: String, targetEventId: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${NostrKinds.VIDEO_COMMENT}],"#E":["$targetEventId"],"limit":50}""",
+        )
+
+    /** NIP-22 comment tags as JSON (reply-bar parity with [replyTagsJson]). */
+    fun commentTagsJson(
+        targetEventId: String,
+        targetPubkey: String,
+        targetKind: Long,
+        parentEventId: String?,
+        parentPubkey: String?,
+        content: String,
+    ): String? =
+        space.bitos.core.publish.NoteComposer
+            .commentTags(targetEventId, targetPubkey, targetKind.toInt(), parentEventId, parentPubkey, content)
+            ?.let(space.bitos.core.store.TagsCodec::encode)
+
+    /** NIP-22 tags-aware kind-1111 compose id. */
+    fun composeCommentWithTagsEventId(content: String, pubkeyHex: String, nowSeconds: Long, tagsJson: String): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeCommentWithTags(pubkeyHex, content, tags)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-1111 comment, or null. */
+    fun commentWithTagsPublishMessage(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val note = composer.composeCommentWithTags(pubkeyHex, content, tags) ?: return null
+        return composer.publishMessage(note, signatureHex)
+    }
+
+    /** Composes the unsigned kind-1018 poll vote and returns its id. */
+    fun composePollVoteEventId(
+        targetEventId: String,
+        optionIndex: Long,
+        authorPubkey: String,
+        nowSeconds: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composePollVote(targetEventId, optionIndex.toInt(), authorPubkey)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-1018 poll vote, or null. */
+    fun pollVotePublishMessage(
+        targetEventId: String,
+        optionIndex: Long,
+        authorPubkey: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composePollVote(targetEventId, optionIndex.toInt(), authorPubkey) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** REQ for one poll's kind-1018 votes (bounded relay fan-in). */
+    fun pollVotesRequest(subscriptionId: String, targetEventId: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${NostrKinds.POLL_RESPONSE}],"#e":["$targetEventId"],"limit":${space.bitos.core.model.PollVotes.MAX_VOTERS}}""",
+        )
 
     /**
      * APP-009 root resolution: `note1`/`nevent1`/`naddr1` (± `nostr:`
      * prefix) → pointer map. Forms: `id` → {form, id, author, relays};
      * `coord` → {form, kind(int), pubkey, d, author, relays}. Null = invalid.
+     * Accepts bare 64-char lowercase hex ids next to the bech32 forms
+     * (shared `ThreadOpen.classify`).
      */
     fun eventRefParse(bech32: String): Map<String, Any>? {
-        val ref = space.bitos.core.nostr.EventRefs.parse(bech32) ?: return null
+        val ref = space.bitos.core.feed.ThreadOpen.classify(bech32) ?: return null
         return when (ref) {
             is space.bitos.core.nostr.EventRef.ById -> mapOf(
                 "form" to "id",
@@ -1619,6 +1904,60 @@ class BusinessCoreBridge {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeFollowList(authorPubkey, follows) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    // ── NIP-51 interest set (kind 30015 d=interest — followed hashtags) ──
+
+    /** Composes the unsigned interest set and returns its canonical id. */
+    fun composeInterestSetEventId(authorPubkey: String, hashtags: List<String>, nowSeconds: Long): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeInterestSet(authorPubkey, hashtags)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed interest set, or null. */
+    fun interestSetPublishMessage(
+        authorPubkey: String,
+        hashtags: List<String>,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeInterestSet(authorPubkey, hashtags) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** REQ for the account's interest-set head (replaceable, newest wins). */
+    fun interestSetRequest(subscriptionId: String, accountPubkey: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${space.bitos.core.model.InterestSet.KIND}],"authors":["$accountPubkey"],""" +
+                """"#d":["${space.bitos.core.model.InterestSet.D_TAG}"],"limit":1}""",
+        )
+
+    /** Followed hashtags from the ACCOUNT's verified kind-30015 frame, or null. */
+    fun interestSetHashtags(message: String, relayUrl: String, accountPubkey: String): List<String>? {
+        val event = interestSetEvent(message, relayUrl) ?: return null
+        if (event.pubkey.value != accountPubkey) return null
+        return space.bitos.core.model.InterestSet.followedHashtags(event)
+    }
+
+    /** The account's verified kind-30015 frame's created_at, or null. */
+    fun interestSetCreatedAt(message: String, relayUrl: String, accountPubkey: String): Long? {
+        val event = interestSetEvent(message, relayUrl) ?: return null
+        if (event.pubkey.value != accountPubkey) return null
+        return event.createdAt
+    }
+
+    private fun interestSetEvent(message: String, relayUrl: String): space.bitos.core.model.NostrEvent? {
+        val relay = RelayUrl.parse(relayUrl) ?: return null
+        val event = try {
+            NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            return null
+        }
+        if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
+        if (event.kind != space.bitos.core.model.InterestSet.KIND) return null
+        return event
     }
 
     // ── Relay manager (APP-018 §3.18, NIP-65) ──────────────────────
@@ -1752,6 +2091,10 @@ class BusinessCoreBridge {
         zapCountsJson: String,
         replyCountsJson: String,
         nowSeconds: Long,
+        /** Local negative feedback (web interaction-profile parity). */
+        dismissedNoteIdsJson: String = "[]",
+        mutedAuthorsJson: String = "[]",
+        mutedTagsJson: String = "[]",
     ): List<String> {
         val surface = space.bitos.core.feed.AlgorithmSurface.entries.first { it.wire == surfaceWire }
         val snapshot = space.bitos.core.feed.AlgorithmContract.decode(snapshotJson)
@@ -1768,6 +2111,9 @@ class BusinessCoreBridge {
                 following = following,
                 zapCounts = zapCounts,
                 replyCounts = replyCounts,
+                dismissedNoteIds = parseStringSet(dismissedNoteIdsJson),
+                mutedAuthors = parseStringSet(mutedAuthorsJson),
+                mutedTags = parseStringSet(mutedTagsJson),
             ),
         ).map { it.id }
     }
@@ -2173,12 +2519,30 @@ class BusinessCoreBridge {
         return composer.publishMessage(unsigned, signatureHex)
     }
 
-    /** REQ for events targeting the account (notification inbox). */
-    fun notificationsRequest(subscriptionId: String, accountPubkey: String): String =
-        NostrEventCodec.encodeRequest(
+    /** Page size for notification REQs (web `PAGE_LIMIT` parity). */
+    val NOTIFICATION_PAGE_LIMIT: Int get() = 60
+
+    /**
+     * REQ for events targeting the account (notification inbox). Zap
+     * receipts keep their own filter so relay per-filter limits cannot crowd
+     * them out of a busy account's history (web parity); [untilSeconds]
+     * pages older history (0 = live head subscription).
+     */
+    fun notificationsRequest(
+        subscriptionId: String,
+        accountPubkey: String,
+        untilSeconds: Long = 0,
+        limit: Int = NOTIFICATION_PAGE_LIMIT,
+    ): String {
+        val timeBound = if (untilSeconds > 0) ",\"until\":$untilSeconds" else ""
+        return NostrEventCodec.encodeRequest(
             subscriptionId,
-            """{"kinds":[1,7,6,${space.bitos.core.model.ZapReceipt.RECEIPT_KIND},3],"#p":["$accountPubkey"],"limit":50}""",
+            listOf(
+                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},3],"#p":["$accountPubkey"],"limit":$limit$timeBound}""",
+                """{"kinds":[${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#p":["$accountPubkey"],"limit":$limit$timeBound}""",
+            ),
         )
+    }
 
     /** APP-012 blocked-author filter: REQ for the account's kind-10004 list. */
     fun blockListRequest(subscriptionId: String, accountPubkey: String): String =

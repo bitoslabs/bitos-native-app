@@ -119,6 +119,13 @@ protocol BusinessCoreClient: Sendable {
     /// APP-004 empty-feed retry delay in ms (shared `EmptyFeedRetry` policy:
     /// 2 s exponential backoff capped at 30 s).
     func emptyFeedRetryDelayMs(attempt: Int) -> Int
+    /// Cold-start account bootstrap (shared `AccountBootstrap` policy):
+    /// whether an unresolved account head (own kind-0, kind-3 contacts,
+    /// bookmarks, blocks) should be re-issued now.
+    func accountBootstrapShouldReissue(resolved: Bool, attempts: Int, connectedRelays: Int) -> Bool
+    /// Shared `AccountBootstrap`: grown relay connectivity opens a fresh
+    /// attempt episode.
+    func accountBootstrapShouldOpenEpisode(previousConnected: Int, currentConnected: Int) -> Bool
     /// APP-004 pagination: one older page — feed kinds before `until`.
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String
     /// FED-004 walk budget: fresh playable notes one load-more targets.
@@ -199,6 +206,14 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func emptyFeedRetryDelayMs(attempt: Int) -> Int {
         Int(bridge.emptyFeedRetryDelayMs(attempt: Int32(attempt)))
+    }
+
+    func accountBootstrapShouldReissue(resolved: Bool, attempts: Int, connectedRelays: Int) -> Bool {
+        bridge.accountBootstrapShouldReissue(resolved: resolved, attempts: Int32(attempts), connectedRelays: Int32(connectedRelays))
+    }
+
+    func accountBootstrapShouldOpenEpisode(previousConnected: Int, currentConnected: Int) -> Bool {
+        bridge.accountBootstrapShouldOpenEpisode(previousConnected: Int32(previousConnected), currentConnected: Int32(currentConnected))
     }
 
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String {
@@ -443,6 +458,12 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         FrameworkBusinessCoreClient().humanTags(tags)
     }
     func emptyFeedRetryDelayMs(attempt: Int) -> Int { 2_000 }
+    func accountBootstrapShouldReissue(resolved: Bool, attempts: Int, connectedRelays: Int) -> Bool {
+        FrameworkBusinessCoreClient().accountBootstrapShouldReissue(resolved: resolved, attempts: attempts, connectedRelays: connectedRelays)
+    }
+    func accountBootstrapShouldOpenEpisode(previousConnected: Int, currentConnected: Int) -> Bool {
+        FrameworkBusinessCoreClient().accountBootstrapShouldOpenEpisode(previousConnected: previousConnected, currentConnected: currentConnected)
+    }
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }
     func bitzWalkPageBudget() -> Int { 10 }
     func bitzWalkPrefetchThreshold() -> Int { 10 }

@@ -25,6 +25,25 @@ struct ZapsView: View {
         let note: String
     }
 
+    /// Entries JSON (bridge `zapLedgerEntries`) → rows. Shared by the
+    /// wallet and the profile Zaps tab — one decode, no fork.
+    static func decodeLedgerRows(_ entriesJson: String) -> [LedgerRow] {
+        guard let data = entriesJson.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.enumerated().compactMap { index, obj in
+            guard let direction = obj["direction"] as? String,
+                  let sats = (obj["sats"] as? NSNumber)?.int64Value,
+                  let peer = obj["peer"] as? String,
+                  let at = (obj["at"] as? NSNumber)?.int64Value else { return nil }
+            return LedgerRow(
+                id: "\(index)-\(direction)-\(sats)-\(at)",
+                direction: direction, sats: sats, peer: peer, at: at,
+                memo: (obj["memo"] as? String) ?? "",
+                note: (obj["note"] as? String) ?? ""
+            )
+        }
+    }
+
     private var receivedItems: [NotificationItem] {
         environment.inboxStore.items.filter { $0.kind == .zap }
     }
@@ -53,21 +72,8 @@ struct ZapsView: View {
               let receivedData = try? JSONSerialization.data(withJSONObject: received),
               let receivedJson = String(data: receivedData, encoding: .utf8) else { return [] }
         let bridge = BusinessCoreBridge()
-        guard let entriesJson = (bridge.zapLedgerEntries(sentRecordsJson: sentJson, receivedJson: receivedJson) as String?),
-              let data = entriesJson.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-        return array.enumerated().compactMap { index, obj in
-            guard let direction = obj["direction"] as? String,
-                  let sats = (obj["sats"] as? NSNumber)?.int64Value,
-                  let peer = obj["peer"] as? String,
-                  let at = (obj["at"] as? NSNumber)?.int64Value else { return nil }
-            return LedgerRow(
-                id: "\(index)-\(direction)-\(sats)-\(at)",
-                direction: direction, sats: sats, peer: peer, at: at,
-                memo: (obj["memo"] as? String) ?? "",
-                note: (obj["note"] as? String) ?? ""
-            )
-        }
+        guard let entriesJson = (bridge.zapLedgerEntries(sentRecordsJson: sentJson, receivedJson: receivedJson) as String?) else { return [] }
+        return Self.decodeLedgerRows(entriesJson)
     }
 
     private var totals: (received: Int64, sent: Int64, avg: Int64, net: Int64) {
@@ -176,7 +182,7 @@ struct ZapsView: View {
     }
 }
 
-private struct ZapLedgerRowView: View {
+struct ZapLedgerRowView: View {
     let row: ZapsView.LedgerRow
     let profile: ProfileMetadata?
     private let bridge = BusinessCoreBridge()

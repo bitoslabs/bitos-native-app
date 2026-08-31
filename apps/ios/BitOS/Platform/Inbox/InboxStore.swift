@@ -120,9 +120,18 @@ final class InboxStore {
     private(set) var items: [NotificationItem] = []
     private(set) var loaded = false
     private(set) var hasAccount = false
+    /** True after the head subscription's EOSE (web `connected` parity). */
+    private(set) var connected = false
+    /** True when the head EOSE deadline expired without a relay answer. */
+    private(set) var offline = false
+    /** Older-history paging (web `loadMore` parity). */
+    private(set) var loadingMore = false
+    private(set) var hasMore = true
     private(set) var readIds: Set<String> = []
     private(set) var rawEvents: [String: String] = [:]
     private(set) var origins: [String: OriginNoteState] = [:]
+    /** Self-preview per mention/reply id (clean excerpt + media strip). */
+    private(set) var previews: [String: OriginNote] = [:]
     /** Per-type mutes (kind names); muted kinds never reach items or counts. */
     private(set) var mutedKinds: Set<NotificationKind> = []
     /** Blocked authors (kind-10004 head) — rows evicted, badge-safe. */
@@ -133,15 +142,32 @@ final class InboxStore {
     private let defaults: UserDefaults
     private var accountPubkey: String?
     private var watchTask: Task<Void, Never>?
+    private var offlineDeadline: Task<Void, Never>?
     private var originBatch = 0
     private var originTimeoutTasks: [String: Task<Void, Never>] = [:]
     private var seen = Set<String>()
     private var blockHeadAt: Int64?
     private var cursorSeconds: Int64 = -1
+
+    /// One `until`-bounded REQ → EOSE/timeout page (web `loadMore`).
+    private struct PageBatch {
+        let subId: String
+        let startedCount: Int
+        let expectedRelays: Set<RelayURL>
+        let timeoutTask: Task<Void, Never>
+        var eoseRelays: Set<RelayURL> = []
+    }
+
+    private var activePage: PageBatch?
+    private var pageCounter = 0
     private static let readIdsKey = "bitos_notification_read_ids"
     private static let mutedKindsKey = "bitos_notification_muted_kinds"
     private static let cursorKey = "bitos_notification_cursor"
-    private static let maxItems = 100
+    private static let maxItems = 200
+    private static let pageLimit = 60
+    private static let headSubId = "bitos-notifications"
+    private static let pageTimeoutNanos: UInt64 = 10_000_000_000
+    private static let offlineDeadlineNanos: UInt64 = 10_000_000_000
     private static let originTimeoutNanos: UInt64 = 8_000_000_000
 
     init(
@@ -163,9 +189,18 @@ final class InboxStore {
         seen.removeAll()
         rawEvents.removeAll()
         origins.removeAll()
+        previews.removeAll()
         originTimeoutTasks.values.forEach { $0.cancel() }
         originTimeoutTasks.removeAll()
         loaded = false
+        connected = false
+        offline = false
+        loadingMore = false
+        hasMore = true
+        activePage?.timeoutTask.cancel()
+        activePage = nil
+        offlineDeadline?.cancel()
+        offlineDeadline = nil
         hasAccount = pubkey != nil
         readIds = Set(defaults.stringArray(forKey: Self.readIdsKey) ?? [])
         blockedPubkeys = []
@@ -176,6 +211,62 @@ final class InboxStore {
         watchTask = nil
         guard accountPubkey != nil else { return }
         Task { await start() }
+    }
+
+    /// Web `loadMore`: page older history with an `until` REQ (exact batch:
+    /// close on all-relay EOSE or the hard timeout).
+    func loadMore() {
+        guard accountPubkey != nil, !loadingMore, hasMore, activePage == nil else { return }
+        guard let oldest = items.map(\.createdAt).min() else { return }
+        pageCounter += 1
+        let subId = "\(Self.headSubId)-p\(pageCounter)"
+        let startedCount = items.count
+        loadingMore = true
+        Task { [weak self] in
+            guard let self else { return }
+            let expected = await self.pool.connectedRelays()
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.pageTimeoutNanos)
+                guard !Task.isCancelled else { return }
+                self?.completePage(subId: subId)
+            }
+            self.activePage = PageBatch(
+                subId: subId,
+                startedCount: startedCount,
+                expectedRelays: expected,
+                timeoutTask: timeout
+            )
+            if let account = self.accountPubkey,
+               let request = self.bridge.notificationsRequest(
+                   subscriptionId: subId,
+                   accountPubkey: account,
+                   untilSeconds: oldest - 1,
+                   limit: Int32(Self.pageLimit)
+               ) as String? {
+                await self.pool.broadcast(request)
+            }
+        }
+    }
+
+    /// Web reconnect: re-open the head subscription (fresh snapshot).
+    func reconnect() {
+        guard accountPubkey != nil else { return }
+        if watchTask == nil {
+            Task { await start() }
+        } else {
+            sendHeadRequests()
+        }
+    }
+
+    private func completePage(subId: String) {
+        guard let batch = activePage, batch.subId == subId else { return }
+        activePage = nil
+        batch.timeoutTask.cancel()
+        let close = bridge.close(subscriptionId: subId)
+        Task { await pool.broadcast(close) }
+        let added = items.count - batch.startedCount
+        hasMore = added > 0 && items.count < Self.maxItems
+        loadingMore = false
     }
 
     func isRead(_ item: NotificationItem) -> Bool {
@@ -330,13 +421,7 @@ final class InboxStore {
     private func start() async {
         guard watchTask == nil else { return }
         await pool.start()
-        if let request = (bridge.notificationsRequest(subscriptionId: "bitos-notifications", accountPubkey: accountPubkey!) as String?) {
-            Task { await pool.broadcast(request) }
-        }
-        // Blocked-author set (kind-10004 head) rides the same round.
-        if let request = (bridge.blockListRequest(subscriptionId: "bitos-blocks", accountPubkey: accountPubkey!) as String?) {
-            Task { await pool.broadcast(request) }
-        }
+        sendHeadRequests()
         let stream = await pool.frames()
         watchTask = Task { [weak self] in
             for await frame in stream {
@@ -346,8 +431,36 @@ final class InboxStore {
         }
     }
 
+    /// Head REQ round (web `start`): notifications + the blocked-author set,
+    /// with an offline deadline when no relay answers.
+    private func sendHeadRequests() {
+        guard let account = accountPubkey else { return }
+        connected = false
+        offline = false
+        hasMore = true
+        offlineDeadline?.cancel()
+        offlineDeadline = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.offlineDeadlineNanos)
+            guard !Task.isCancelled, let self else { return }
+            if !self.connected { self.offline = true }
+        }
+        if let request = bridge.notificationsRequest(
+            subscriptionId: Self.headSubId,
+            accountPubkey: account,
+            untilSeconds: 0,
+            limit: Int32(Self.pageLimit)
+        ) as String? {
+            Task { await pool.broadcast(request) }
+        }
+        // Blocked-author set (kind-10004 head) rides the same round.
+        if let request = bridge.blockListRequest(subscriptionId: "bitos-blocks", accountPubkey: account) as String? {
+            Task { await pool.broadcast(request) }
+        }
+    }
+
     private func absorb(_ frame: RelayFrame) {
         guard let account = accountPubkey else { return }
+        absorbEose(frame)
         absorbBlockList(frame, account: account)
         absorbOrigin(frame)
         guard let notification = bridge.extractNotification(
@@ -384,6 +497,33 @@ final class InboxStore {
         if items.count > Self.maxItems { items.removeLast(items.count - Self.maxItems) }
         rawEvents[item.id] = frame.message
         loaded = true
+        // Mention/reply rows render the note itself: cleaned excerpt + a
+        // media strip behind the NIP-36 cover (web preview parity).
+        if item.kind == .mention || item.kind == .reply {
+            previews[item.id] = Self.decodeOriginNote(
+                bridge.originNoteFromFrame(
+                    message: frame.message,
+                    relayUrl: frame.relay.rawValue,
+                    wantedIds: [item.id]
+                )
+            )?.note
+        }
+    }
+
+    /// Head EOSE → connected; page EOSE → close the batch when all relays answered.
+    private func absorbEose(_ frame: RelayFrame) {
+        guard let subId = bridge.relayEoseSubscriptionId(message: frame.message) as String? else { return }
+        if subId == activePage?.subId {
+            activePage?.eoseRelays.insert(frame.relay)
+            if let batch = activePage, !batch.expectedRelays.isEmpty, batch.expectedRelays.isSubset(of: batch.eoseRelays) {
+                completePage(subId: subId)
+            }
+        } else if subId == Self.headSubId {
+            connected = true
+            offline = false
+            offlineDeadline?.cancel()
+            offlineDeadline = nil
+        }
     }
 
     /// APP-012 blocked-author filter: newest verified kind-10004 head wins;
@@ -416,26 +556,36 @@ final class InboxStore {
     private func absorbOrigin(_ frame: RelayFrame) {
         let loadingIds = origins.filter { $0.value == .loading }.map(\.key)
         guard !loadingIds.isEmpty else { return }
-        guard let note = bridge.originNoteFromFrame(
-            message: frame.message,
-            relayUrl: frame.relay.rawValue,
-            wantedIds: loadingIds
-        ) as? [String: Any] else { return }
-        guard let id = note["id"] as? String else { return }
-        origins[id] = .ready(OriginNote(
-            id: id,
-            authorPubkey: (note["authorPubkey"] as? String) ?? "",
-            kind: (note["kind"] as? KotlinInt)?.intValue ?? 0,
-            createdAt: Self.int64(note["createdAt"]),
-            excerpt: (note["excerpt"] as? String) ?? "",
-            thumbUrl: (note["thumbUrl"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-            content: (note["content"] as? String) ?? "",
-            mediaUrls: (note["mediaUrls"] as? [String]) ?? [],
-            contentWarning: (note["contentWarning"] as? KotlinBoolean)?.boolValue ?? false
-        ))
-        originTimeoutTasks[id]?.cancel()
-        originTimeoutTasks[id] = nil
-        rawEvents[id] = frame.message
+        guard let decoded = Self.decodeOriginNote(
+            bridge.originNoteFromFrame(
+                message: frame.message,
+                relayUrl: frame.relay.rawValue,
+                wantedIds: loadingIds
+            )
+        ), origins[decoded.id] != nil else { return }
+        origins[decoded.id] = .ready(decoded.note)
+        originTimeoutTasks[decoded.id]?.cancel()
+        originTimeoutTasks[decoded.id] = nil
+        rawEvents[decoded.id] = frame.message
+    }
+
+    /// Bridge map → `OriginNote` (nil when the frame did not match).
+    private static func decodeOriginNote(_ raw: Any?) -> (id: String, note: OriginNote)? {
+        guard let note = raw as? [String: Any], let id = note["id"] as? String else { return nil }
+        return (
+            id,
+            OriginNote(
+                id: id,
+                authorPubkey: (note["authorPubkey"] as? String) ?? "",
+                kind: (note["kind"] as? KotlinInt)?.intValue ?? 0,
+                createdAt: int64(note["createdAt"]),
+                excerpt: (note["excerpt"] as? String) ?? "",
+                thumbUrl: (note["thumbUrl"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                content: (note["content"] as? String) ?? "",
+                mediaUrls: (note["mediaUrls"] as? [String]) ?? [],
+                contentWarning: (note["contentWarning"] as? KotlinBoolean)?.boolValue ?? false
+            )
+        )
     }
 }
 

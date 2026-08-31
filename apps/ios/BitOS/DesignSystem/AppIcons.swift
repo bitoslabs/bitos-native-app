@@ -116,6 +116,9 @@ enum AppIcons {
     static let create = "plus.square.fill"
     static let inbox = "bell.fill"
     static let chat = "message.fill"                  // DMs
+    static let lock = "lock.fill"                     // NIP-17 encryption indicator
+    static let chevronLeft = "chevron.left"            // chat / subpage back
+    static let chevronRight = "chevron.right"          // disclosure rows
     static let globe = "globe"                        // Solar: global
     static let logout = "rectangle.portrait.and.arrow.right"
 

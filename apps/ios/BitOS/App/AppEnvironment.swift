@@ -23,6 +23,10 @@ final class AppEnvironment {
     let privacyPrefs: PrivacyPrefsStore
     let profileLookup: ProfileLookupStore
     let posterImages: PosterImagePipeline
+    /** Local ranking signals (hide + author/tag demotions). */
+    let interaction: InteractionProfileStore
+    /** NIP-51 followed hashtags (kind 30015 d=interest). */
+    let hashtagFollows: HashtagFollowsStore
 
     init(
         relayPool: RelayPool? = nil,
@@ -34,9 +38,10 @@ final class AppEnvironment {
         let relayPool = relayPool ?? Self.bootRelayPool()
         let businessCore = businessCore ?? FrameworkBusinessCoreClient()
         let eventStore = eventStore ?? Self.defaultEventStore(client: FrameworkBusinessCoreClient())
+        let interaction = InteractionProfileStore()
         self.relayPool = relayPool
         self.businessCore = businessCore
-        self.feedStore = FeedStore(pool: relayPool, client: businessCore, eventStore: eventStore)
+        self.feedStore = FeedStore(pool: relayPool, client: businessCore, eventStore: eventStore, interaction: interaction)
         self.identityStore = IdentityStore()
         self.notePublisher = NotePublisher(pool: relayPool, identity: identityStore)
         self.inboxStore = InboxStore(pool: relayPool)
@@ -52,6 +57,8 @@ final class AppEnvironment {
         }
         self.profileLookup = ProfileLookupStore(pool: relayPool, client: businessCore)
         self.posterImages = PosterImagePipeline()
+        self.interaction = interaction
+        self.hashtagFollows = HashtagFollowsStore(pool: relayPool)
         // Algorithm wire drives the For-You ranking for the process lifetime.
         algorithm.sink = { [weak feedStore] json in
             feedStore?.setAlgorithm(snapshotJson: json)

@@ -1,3 +1,4 @@
+import BusinessCore
 import SwiftUI
 import UIKit
 
@@ -20,6 +21,12 @@ struct ProfileView: View {
     @State private var showQr = false
     @State private var npubCopied = false
     @State private var ownTab = 0
+    @State private var sentZaps = SentZapsStore()
+    /** Web `/bitz?author=<npub>#bitz=<id>` parity: Bitz-tab tile → the
+     *  shared reels player scoped to this account. */
+    @State private var bitzPlayerTarget: BitzPlayerTarget?
+    @State private var showFollowing = false
+    @State private var showFollowersInfo = false
     @State private var moreMenu: AppMenuPresentation?
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
@@ -90,12 +97,31 @@ struct ProfileView: View {
             .padding(BitOSTheme.Spacing.base)
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showFollowing) {
+            connectionsSheet
+        }
+        .sheet(isPresented: $showFollowersInfo) {
+            followersInfoSheet
+        }
         .fullScreenCover(isPresented: $showEdit) {
             ProfileEditSheet(
                 publisher: environment.notePublisher,
                 initialProfile: environment.feedStore.profiles[store.account?.pubkeyHex ?? ""],
                 onClose: { showEdit = false }
             )
+        }
+        // Web ProfileBitzGrid parity: tile tap → shared reels player
+        // scoped to this account, deep-linked at the tapped tile.
+        .fullScreenCover(item: $bitzPlayerTarget) { target in
+            BitzView(
+                authorPubkey: target.authorPubkey,
+                initialNoteId: target.noteId,
+                onExitAuthorMode: { bitzPlayerTarget = nil }
+            )
+            .environment(environment)
+            .environment(identity)
+            .environment(settings)
+            .preferredColorScheme(.dark)
         }
         .sheet(item: $store.preview) { preview in
             ConfirmIdentitySheet(
@@ -111,6 +137,47 @@ struct ProfileView: View {
 
     // MARK: - Own profile
 
+    /// Truthful per-author zap total (shared rule via the bridge): local
+    /// sent records + verified received 9735 receipts targeting us.
+    private func zapTotalText(account: AccountIdentity) -> String {
+        let received = environment.inboxStore.items.filter { $0.kind == .zap }
+        let sentToMe = sentZapRecordsJson()
+        let bridge = BusinessCoreBridge()
+        guard let satsJson = encodeJson(received.map { ($0.amountMsat ?? 0) / 1000 }),
+              let fromJson = encodeJson(received.map { $0.authorPubkey}),
+              let summaryJson = (bridge.authorZapsSummary(
+                  pubkey: account.pubkeyHex,
+                  receivedSatsJson: satsJson,
+                  receivedFromJson: fromJson,
+                  sentRecordsJson: sentToMe
+              ) as String?),
+              let data = summaryJson.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let total = (obj["total"] as? NSNumber)?.int64Value else {
+            return "0"
+        }
+        return BusinessCoreBridge().zapFormatSats(sats: total)
+    }
+
+    private func sentZapRecordsJson() -> String {
+        let array = sentZaps.records.map { record -> [String: Any] in
+            var obj: [String: Any] = [
+                "id": record.id, "sats": record.amountSats,
+                "to": record.recipientPubkey, "at": record.createdAt,
+            ]
+            if let note = record.targetNoteId { obj["note"] = note }
+            if let memo = record.memo { obj["memo"] = memo }
+            return obj
+        }
+        return (try? JSONSerialization.data(withJSONObject: array))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+    }
+
+    private func encodeJson(_ values: [Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: values) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     private func accountPanel(_ account: AccountIdentity) -> some View {
         let feed = environment.feedStore
         let profile = feed.profiles[account.pubkeyHex]
@@ -120,6 +187,8 @@ struct ProfileView: View {
             ("Replies", own.filter { $0.replyTo != nil && $0.repostedBy == nil }),
             ("Bitz", own.filter { $0.video != nil || !$0.mediaUrls.isEmpty }),
             ("Reposts", own.filter { $0.repostedBy == account.pubkeyHex }),
+            // Web parity: merged zap ledger (wallet rule — no fork).
+            ("Zaps", []),
         ]
         return LazyVStack(spacing: BitOSTheme.Spacing.md, pinnedViews: [.sectionHeaders]) {
             // ── Full-bleed cover + avatar hero (legacy _ProfileHeader). The
@@ -178,14 +247,32 @@ struct ProfileView: View {
             }
             .padding(.horizontal, BitOSTheme.Spacing.base)
             profileCompletionCard(profile)
-            // ── Stats row (evenly spaced) ───────────────────────────────
+            // ── Stats row (Posts · Following · Followers · Bitz · Sats) ──
             HStack {
                 Spacer()
                 stat("Posts", FeedFormat.count(tabs[0].1.count))
                 Spacer()
-                stat("Following", FeedFormat.count(feed.following.count))
+                Button { showFollowing = true } label: {
+                    stat("Following", FeedFormat.count(feed.following.count))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Following connections")
+                Spacer()
+                Button { showFollowersInfo = true } label: {
+                    stat("Followers", "—")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Followers information")
                 Spacer()
                 stat("Bitz", FeedFormat.count(tabs[2].1.count))
+                Spacer()
+                // Web stats-row parity: truthful sats from the merged
+                // ledger (tap opens the zap wallet).
+                Button { showZaps = true } label: {
+                    stat("Sats zapped", zapTotalText(account: account))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Zap wallet")
                 Spacer()
             }
             .padding(.horizontal, BitOSTheme.Spacing.base)
@@ -245,6 +332,43 @@ struct ProfileView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, BitOSTheme.Spacing.base)
+    }
+
+    private var connectionsSheet: some View {
+        NavigationStack {
+            List(Array(environment.feedStore.following).sorted(), id: \.self) { pubkey in
+                let profile = environment.feedStore.profiles[pubkey]
+                HStack(spacing: 12) {
+                    HexAvatarView(pubkey: pubkey, size: 42, imageURL: safeProfilePictureURL(profile?.picture), label: profile?.bestDisplayName)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
+                            .font(.system(size: 15, weight: .semibold))
+                        if let name = profile?.name, !name.isEmpty {
+                            Text("@\(name)").font(.system(size: 12)).foregroundStyle(BitOSTheme.textSecondary)
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if environment.feedStore.following.isEmpty {
+                    ContentUnavailableView("No following yet", systemImage: "person.2", description: Text("Follow creators to build your timeline."))
+                }
+            }
+            .navigationTitle("Following")
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var followersInfoSheet: some View {
+        VStack(spacing: 12) {
+            Text("Followers").font(.system(size: 18, weight: .bold))
+            Text("Follower lists are not a canonical Nostr profile field. Connected relays may omit unfollows or older contact lists, so BitOS does not show an unreliable count.")
+                .font(.system(size: 14))
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .presentationDetents([.height(230)])
     }
 
     private func chip(icon: String, label: String, foreground: Color) -> some View {
@@ -517,13 +641,27 @@ struct ProfileView: View {
 
     @ViewBuilder
     private func tabContent(_ notes: [FeedNote], profile: ProfileMetadata?) -> some View {
-        if notes.isEmpty {
+        if ownTab == 4 {
+            // Zaps — merged ledger entries (sent + received), wallet parity.
+            zapTabContent
+        } else if notes.isEmpty {
             tabEmptyState
         } else if ownTab == 2 {
-            // Bitz — 3-column media grid, 2px gutters.
+            // Bitz — 3-column media grid, 2px gutters. Tile tap opens the
+            // shared reels player scoped to this account (web parity).
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
                 ForEach(notes.prefix(60), id: \.id) { note in
-                    BitzGridTile(note: note)
+                    if let account = store.account {
+                        Button {
+                            bitzPlayerTarget = .init(authorPubkey: account.pubkeyHex, noteId: note.id)
+                        } label: {
+                            BitzGridTile(note: note)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Play bitz")
+                    } else {
+                        BitzGridTile(note: note)
+                    }
                 }
             }
             .padding(.horizontal, 2)
@@ -540,6 +678,52 @@ struct ProfileView: View {
         }
     }
 
+    /// Zaps tab body: entries from the shared ledger, newest first.
+    @ViewBuilder
+    private var zapTabContent: some View {
+        let entries = zapLedgerEntries()
+        if entries.isEmpty {
+            VStack(spacing: BitOSTheme.Spacing.md) {
+                Text("⚡")
+                    .font(.system(size: 34))
+                Text("No zaps yet")
+                    .font(.system(size: 14))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, BitOSTheme.Spacing.xxl)
+        } else {
+            LazyVStack(spacing: BitOSTheme.Spacing.sm) {
+                ForEach(entries.prefix(50)) { row in
+                    ZapLedgerRowView(row: row, profile: environment.feedStore.profiles[row.peer])
+                }
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+        }
+    }
+
+    /// Merged ledger entries for the Zaps tab (wallet parity shared rule).
+    private func zapLedgerEntries() -> [ZapsView.LedgerRow] {
+        let sentJson = sentZapRecordsJson()
+        let received = environment.inboxStore.items.filter { $0.kind == .zap }
+        let receivedArray = received.map { item -> [String: Any] in
+            var obj: [String: Any] = [
+                "sats": (item.amountMsat ?? 0) / 1000,
+                "from": item.authorPubkey,
+                "at": item.createdAt,
+            ]
+            if let note = item.targetEventId { obj["note"] = note }
+            return obj
+        }
+        guard let receivedData = try? JSONSerialization.data(withJSONObject: receivedArray),
+              let receivedJson = String(data: receivedData, encoding: .utf8),
+              let entriesJson = (BusinessCoreBridge().zapLedgerEntries(
+                  sentRecordsJson: sentJson,
+                  receivedJson: receivedJson
+              ) as String?) else { return [] }
+        return ZapsView.decodeLedgerRows(entriesJson)
+    }
+
     @ViewBuilder
     private var tabEmptyState: some View {
         let (symbol, message): (String, String) = {
@@ -547,6 +731,7 @@ struct ProfileView: View {
             case 1: return (AppIcons.comment, "No replies yet")
             case 2: return (AppIcons.photo, "No bitz yet")
             case 3: return (AppIcons.repost, "No reposts yet")
+            case 4: return (AppIcons.zap, "No zaps yet")
             default: return (AppIcons.pen, "No posts yet")
             }
         }()
@@ -628,6 +813,11 @@ struct ProfileView: View {
                 onSubmit: { store.importKeyPreview(importText) }
             )
             .onChange(of: importText) { _, _ in store.clearImportError() }
+            if secretKeyReady(importText) {
+                DerivedIdentityCard(
+                    check: BusinessCoreBridge().keyImportCheck(raw: importText)
+                )
+            }
             Button {
                 store.importKeyPreview(importText)
             } label: {
@@ -727,6 +917,8 @@ struct ProfileNoteCard: View {
     let note: FeedNote
     let profile: ProfileMetadata?
     var onOpen: (() -> Void)? = nil
+    /// Optional like · repost · zap row (profile surfaces; inert on "You").
+    var actionRow: NoteActionRow? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -785,6 +977,12 @@ struct ProfileNoteCard: View {
                 }
             }
             mediaPreview
+            if let actionRow {
+                Rectangle()
+                    .fill(BitOSTheme.border.opacity(0.5))
+                    .frame(height: 1)
+                actionRow
+            }
         }
         .padding(.horizontal, BitOSTheme.Spacing.screen)
         .padding(.vertical, BitOSTheme.Spacing.md)
@@ -818,6 +1016,14 @@ struct ProfileNoteCard: View {
 }
 
 // MARK: - Bitz grid tiles (legacy _PostGrid/_MediaTile parity)
+
+/// Web `/bitz?author=<npub>#bitz=<id>` parity: one shared reels player,
+/// context-aware data (presented full-screen from a profile grid tile).
+struct BitzPlayerTarget: Identifiable {
+    let authorPubkey: String
+    let noteId: String
+    var id: String { "\(authorPubkey)/\(noteId)" }
+}
 
 /// Shared with the author profile page (Bitz tab).
 struct BitzGridTile: View {

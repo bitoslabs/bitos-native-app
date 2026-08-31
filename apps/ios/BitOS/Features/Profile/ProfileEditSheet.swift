@@ -24,6 +24,10 @@ struct ProfileEditSheet: View {
     @State private var website = ""
     @State private var published = false
     @State private var loaded = false
+    /// Cold-start race: the kind-0 head may land AFTER the editor opened
+    /// (relays connect late), so untouched fields seed from it as soon as it
+    /// arrives. Any keystroke claims the fields and stops further seeding.
+    @State private var edited = false
     @State private var uploadingTarget: String?
     @State private var uploadError: String?
     @State private var avatarItem: PhotosPickerItem?
@@ -98,15 +102,34 @@ struct ProfileEditSheet: View {
         .onAppear {
             guard !loaded else { return }
             loaded = true
-            name = initialProfile?.name ?? ""
-            displayName = initialProfile?.displayName ?? ""
-            about = initialProfile?.about ?? ""
-            nip05 = initialProfile?.nip05 ?? ""
-            lud16 = initialProfile?.lud16 ?? ""
-            picture = initialProfile?.picture ?? ""
-            banner = initialProfile?.banner ?? ""
-            website = initialProfile?.website ?? ""
+            if let initialProfile { fill(from: initialProfile) }
         }
+        .onChange(of: profileSignature) { _, _ in
+            guard !edited, let initialProfile else { return }
+            fill(from: initialProfile)
+        }
+    }
+
+    /// Stable per-head signature (separator can never appear in kind-0
+    /// strings) so the late fill observes the profile arriving, without
+    /// requiring `ProfileMetadata: Equatable`.
+    private var profileSignature: String {
+        [initialProfile?.name, initialProfile?.displayName, initialProfile?.about,
+         initialProfile?.nip05, initialProfile?.lud16, initialProfile?.picture,
+         initialProfile?.banner, initialProfile?.website]
+            .map { $0 ?? "" }
+            .joined(separator: "\u{1F}")
+    }
+
+    private func fill(from profile: ProfileMetadata) {
+        name = profile.name
+        displayName = profile.displayName
+        about = profile.about
+        nip05 = profile.nip05
+        lud16 = profile.lud16
+        picture = profile.picture
+        banner = profile.banner
+        website = profile.website
     }
 
     /// Legacy editor page chrome: back chevron + inline title.
@@ -179,7 +202,7 @@ struct ProfileEditSheet: View {
                 field("Display name", "Your name", $displayName)
                 VStack(alignment: .leading, spacing: 4) {
                     fieldLabel("Bio")
-                    FormTextField(placeholder: "Tell the world about yourself\u{2026}", text: $about, axis: .vertical)
+                    FormTextField(placeholder: "Tell the world about yourself\u{2026}", text: editing($about), axis: .vertical)
                         .lineLimit(3)
                     Text("\(about.count) / 300 characters")
                         .font(.system(size: 11))
@@ -397,8 +420,17 @@ struct ProfileEditSheet: View {
     private func field(_ label: String, _ placeholder: String, _ binding: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             fieldLabel(label)
-            FormTextField(placeholder: placeholder, text: binding)
+            FormTextField(placeholder: placeholder, text: editing(binding))
         }
+    }
+
+    /// Marks the form as user-owned on the first keystroke so a late profile
+    /// head can no longer overwrite what the reader typed.
+    private func editing(_ binding: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { edited = true; binding.wrappedValue = $0 }
+        )
     }
 }
 

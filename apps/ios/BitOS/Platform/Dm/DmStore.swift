@@ -3,25 +3,55 @@ import Foundation
 import Observation
 
 /// APP-011 DM store (iOS mirror through the bridge).
+///
+/// Conversation state beyond grouping — read cursors, unread counts,
+/// message-request acceptance, generic NIP-17 previews and relay-OK
+/// delivery — derives from the shared `DmPresentation` rules so SwiftUI
+/// and Compose render identical state from identical inputs
+/// (mock `app-06-inbox-activity-messages` + spec §3.11).
 @MainActor
 @Observable
 final class DmStore {
+    // Derived, published state (mirrors the Android DmUiState).
     private(set) var conversations: [DmConversationMirror] = []
+    private(set) var previews: [String: String] = [:]          // peer → generic line
+    private(set) var unreadCounts: [String: Int] = [:]         // peer → unread
+    private(set) var requestPeers: Set<String> = []            // unaccepted peers
+    private(set) var deliveryByRumorId: [String: Bool] = [:]   // sent → delivered
     private(set) var hasAccount = false
     private(set) var loaded = false
+    private(set) var unreadCount = 0
+    private(set) var requestCount = 0
     var openPeerPubkey: String?
 
     private let pool: RelayPool
     private let bridge: BusinessCoreBridge
     private let secretProvider: () async -> String?
+    private let defaults: UserDefaults
     private var accountPubkey: String?
     private var watchTask: Task<Void, Never>?
     private var requested = false
 
-    init(pool: RelayPool, bridge: BusinessCoreBridge = BusinessCoreBridge(), secretProvider: @escaping () async -> String?) {
+    // Persistence keys (bounded).
+    private static let cursorsKey = "bitos_dm_read_cursors"
+    private static let acceptedKey = "bitos_dm_accepted_peers"
+    private static let declinedKey = "bitos_dm_declined_peers"
+    private static let maxPersisted = 512
+
+    private var readCursors: [String: Int64] = [:]
+    private var acceptedPeers: Set<String> = []
+    private var declinedPeers: Set<String> = []
+    /** Peers this account has ever messaged (outgoing side). */
+    private var sentPeers: Set<String> = []
+    /** Rumor id → wrap event ids (OK receipts reference wrap ids). */
+    private var pendingWrapIds: [String: Set<String>] = [:]
+
+    init(pool: RelayPool, bridge: BusinessCoreBridge = BusinessCoreBridge(), secretProvider: @escaping () async -> String?, defaults: UserDefaults = .standard) {
         self.pool = pool
         self.bridge = bridge
         self.secretProvider = secretProvider
+        self.defaults = defaults
+        loadPersisted()
     }
 
     func setAccount(_ pubkey: String?) {
@@ -29,8 +59,15 @@ final class DmStore {
         accountPubkey = pubkey
         requested = false
         conversations = []
+        previews = [:]
+        unreadCounts = [:]
+        requestPeers = []
+        deliveryByRumorId = [:]
+        pendingWrapIds = [:]
         hasAccount = pubkey != nil
         loaded = false
+        unreadCount = 0
+        requestCount = 0
         watchTask?.cancel()
         watchTask = nil
         guard pubkey != nil else { return }
@@ -39,6 +76,35 @@ final class DmStore {
 
     func openConversation(_ peerPubkey: String?) {
         openPeerPubkey = peerPubkey
+        if let peerPubkey { markConversationRead(peerPubkey) }
+    }
+
+    /// Advances the peer's cursor to the conversation's newest message
+    /// (shared `DmPresentation.nextCursor` via the bridge — never rewinds).
+    func markConversationRead(_ peerPubkey: String) {
+        guard let conversation = conversations.first(where: { $0.peerPubkey == peerPubkey }) else { return }
+        let current = readCursors[peerPubkey] ?? 0
+        let next = bridge.dmNextCursor(peerMessages: conversation.wireMessages, currentCursor: current)
+        guard next > current else { return }
+        readCursors[peerPubkey] = next
+        persistCursors()
+        recomputeDerivedState()
+    }
+
+    /// Accepts a message request: the thread joins the main list.
+    func acceptRequest(_ peerPubkey: String) {
+        declinedPeers.remove(peerPubkey)
+        acceptedPeers.insert(peerPubkey)
+        persistPeers()
+        recomputeDerivedState()
+    }
+
+    /// Deletes a request: rows hide locally; the sender is never told.
+    func declineRequest(_ peerPubkey: String) {
+        acceptedPeers.remove(peerPubkey)
+        declinedPeers.insert(peerPubkey)
+        persistPeers()
+        recomputeDerivedState()
     }
 
     func sendMessage(recipientPubkey: String, content: String) async -> Bool {
@@ -46,9 +112,19 @@ final class DmStore {
         let now = Int64(Date.now.timeIntervalSince1970)
         guard let outgoing = wrapMessage(secret, recipientPubkey, content, now) else { return false }
         publishWrapEvent(outgoing.wrapEvent)
+        var wrapIds: Set<String> = [outgoing.wrapEvent.id]
         if let selfWrap = wrapMessage(secret, account, content, now) {
             publishWrapEvent(selfWrap.wrapEvent)
+            wrapIds.insert(selfWrap.wrapEvent.id)
         }
+        // Talking to a peer accepts their request (shared rule).
+        if !acceptedPeers.contains(recipientPubkey) {
+            acceptedPeers.insert(recipientPubkey)
+            declinedPeers.remove(recipientPubkey)
+            persistPeers()
+        }
+        pendingWrapIds[outgoing.rumorId] = wrapIds
+        deliveryByRumorId[outgoing.rumorId] = false // optimistic sending…
         appendMessage(id: outgoing.rumorId, author: outgoing.rumorPubkey, peer: recipientPubkey, content: outgoing.rumorContent, createdAt: outgoing.rumorCreatedAt)
         return true
     }
@@ -128,6 +204,13 @@ final class DmStore {
 
     private func absorb(_ frame: RelayFrame) {
         guard let account = accountPubkey else { return }
+        // Relay OK receipt: any pending wrap accepted → delivered tick.
+        if let accepted = bridge.parseOkAccepted(message: frame.message) as? Bool,
+           accepted,
+           let wrapId = bridge.okEventId(message: frame.message) as String? {
+            absorbOk(wrapId: wrapId)
+            return
+        }
         guard let map = bridge.secureDmUnwrap(message: frame.message, relayUrl: frame.relay.rawValue, myPrivateKeyHex: secretProviderSync()) as? [String: Any] else { return }
         // Map: {id, author, peer, content, createdAt}
         guard let id = map["id"] as? String,
@@ -138,8 +221,15 @@ final class DmStore {
         appendMessage(id: id, author: author, peer: peer, content: content, createdAt: createdAt)
     }
 
+    private func absorbOk(wrapId: String) {
+        guard let rumorId = pendingWrapIds.first(where: { $0.value.contains(wrapId) })?.key else { return }
+        deliveryByRumorId[rumorId] = true
+        pendingWrapIds.removeValue(forKey: rumorId)
+    }
+
     private func appendMessage(id: String, author: String, peer: String, content: String, createdAt: Int64) {
         if conversations.contains(where: { conv in conv.messages.contains { $0.id == id } }) { return }
+        if author == accountPubkey { sentPeers.insert(peer) }
         let message = DmMessageMirror(id: id, authorPubkey: author, peerPubkey: peer, content: content, createdAt: createdAt)
         if let index = conversations.firstIndex(where: { $0.peerPubkey == peer }) {
             var conv = conversations[index]
@@ -152,6 +242,78 @@ final class DmStore {
         conversations.sort { $0.lastAt > $1.lastAt }
         if conversations.count > 32 { conversations = Array(conversations.prefix(32)) }
         loaded = true
+        recomputeDerivedState()
+    }
+
+    // MARK: - Derived state (shared DmPresentation rules)
+
+    /// Recomputes previews/unread/requests from the shared `DmPresentation`
+    /// rules through the bridge. Mirrors `DmRepository.publishState` on
+    /// Android 1:1 — one rulebook, two platforms.
+    private func recomputeDerivedState() {
+        guard let account = accountPubkey else { return }
+        var previews: [String: String] = [:]
+        var unreadCounts: [String: Int] = [:]
+        var requests: Set<String> = []
+        var totalUnread = 0
+        for conversation in conversations {
+            let cursor = readCursors[conversation.peerPubkey] ?? 0
+            // Kotlin Int crosses the bridge as Int32; clamp to Int.
+            let unread = Int(bridge.dmUnreadCount(peerMessages: conversation.wireMessages, myPubkey: account, lastReadAt: cursor))
+            unreadCounts[conversation.peerPubkey] = unread
+            previews[conversation.peerPubkey] = bridge.dmPreviewLine(peerMessages: conversation.wireMessages, myPubkey: account, lastReadAt: cursor)
+            let isAccepted = bridge.dmIsAccepted(
+                peerPubkey: conversation.peerPubkey,
+                everSentTo: Array(sentPeers),
+                explicitlyAccepted: Array(acceptedPeers),
+                explicitlyDeclined: Array(declinedPeers)
+            )
+            if !isAccepted {
+                requests.insert(conversation.peerPubkey)
+            } else {
+                totalUnread += unread
+            }
+        }
+        self.previews = previews
+        self.unreadCounts = unreadCounts
+        self.requestPeers = requests
+        self.requestCount = requests.count
+        self.unreadCount = totalUnread
+    }
+
+    // MARK: - Persistence (bounded)
+
+    private func loadPersisted() {
+        readCursors = Self.decodeCursors(defaults.stringArray(forKey: Self.cursorsKey) ?? [])
+        acceptedPeers = Set(defaults.stringArray(forKey: Self.acceptedKey) ?? [])
+        declinedPeers = Set(defaults.stringArray(forKey: Self.declinedKey) ?? [])
+    }
+
+    private func persistCursors() {
+        let bounded = readCursors.sorted { $0.value > $1.value }.prefix(Self.maxPersisted)
+        let kept = Dictionary(uniqueKeysWithValues: bounded.map { ($0.key, $0.value) })
+        defaults.set(Self.encodeCursors(kept), forKey: Self.cursorsKey)
+        readCursors = kept
+    }
+
+    private func persistPeers() {
+        defaults.set(Array(acceptedPeers.prefix(Self.maxPersisted)), forKey: Self.acceptedKey)
+        defaults.set(Array(declinedPeers.prefix(Self.maxPersisted)), forKey: Self.declinedKey)
+    }
+
+    /// Cursor wire format: "peer|seconds" entries (bounded, greppable).
+    private static func encodeCursors(_ cursors: [String: Int64]) -> [String] {
+        cursors.map { "\($0.key)|\($0.value)" }
+    }
+
+    private static func decodeCursors(_ entries: [String]) -> [String: Int64] {
+        var result: [String: Int64] = [:]
+        for entry in entries.prefix(maxPersisted) {
+            let parts = entry.split(separator: "|", maxSplits: 1)
+            guard parts.count == 2, let seconds = Int64(parts[1]) else { continue }
+            result[String(parts[0])] = seconds
+        }
+        return result
     }
 }
 
@@ -168,4 +330,17 @@ struct DmConversationMirror: Identifiable, Equatable, Sendable {
     var messages: [DmMessageMirror]
     var id: String { peerPubkey }
     var lastAt: Int64 { messages.last?.createdAt ?? 0 }
+
+    /// Bridge wire form for the shared `DmPresentation` rules.
+    var wireMessages: [[String: Any]] {
+        messages.map { message in
+            [
+                "id": message.id,
+                "authorPubkey": message.authorPubkey,
+                "peerPubkey": message.peerPubkey,
+                "content": message.content,
+                "createdAt": message.createdAt,
+            ]
+        }
+    }
 }

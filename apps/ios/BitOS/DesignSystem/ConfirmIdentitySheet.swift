@@ -3,9 +3,10 @@ import UIKit
 
 /**
  * Identity confirmation gate (ID-004), shared by the You tab and the
- * More-hub add-account sheet. For a freshly generated key this is also
- * the one-time backup moment: the secret can be revealed and copied
- * here — deliberately, never automatically — before it is sealed.
+ * More-hub add-account sheet. For a freshly generated key this is also the
+ * one-time backup moment: the secret can be revealed and copied here —
+ * deliberately, never automatically — and the confirm action stays disabled
+ * until the user acknowledges the backup (mockup scr-backup gate).
  */
 struct ConfirmIdentitySheet: View {
     let preview: IdentityPreview
@@ -16,6 +17,7 @@ struct ConfirmIdentitySheet: View {
     let onCancel: () -> Void
 
     @State private var revealed = false
+    @State private var savedAcknowledged = false
 
     var body: some View {
         VStack(spacing: BitOSTheme.Spacing.base) {
@@ -35,7 +37,10 @@ struct ConfirmIdentitySheet: View {
                     secretNsec: secretNsec,
                     revealed: $revealed
                 )
-            } else if !preview.isNewKey {
+                BackupAcknowledgementRow(
+                    title: "I saved my key somewhere safe and understand it can't be recovered.",
+                    checked: $savedAcknowledged
+                )            } else if !preview.isNewKey {
                 Text("Imported keys are already in your possession; no backup is needed here.")
                     .font(.caption2)
                     .foregroundStyle(BitOSTheme.textTertiary)
@@ -47,7 +52,7 @@ struct ConfirmIdentitySheet: View {
                 Button(confirmLabel) { onConfirm() }
                     .buttonStyle(.borderedProminent)
                     .tint(BitOSTheme.accent)
-                    .disabled(busy)
+                    .disabled(busy || (preview.isNewKey && !savedAcknowledged))
             }
             Spacer()
         }
@@ -157,5 +162,39 @@ private struct BackupRevealBlock: View {
         .padding(BitOSTheme.Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md).fill(BitOSTheme.surfaceElevated))
+    }
+}
+
+/// CB-2: the backup gate only opens once the user owns the consequence.
+struct BackupAcknowledgementRow: View {
+    let title: String
+    @Binding var checked: Bool
+
+    var body: some View {
+        Button {
+            checked.toggle()
+        } label: {
+            HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(BitOSTheme.surfaceElevated)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(BitOSTheme.border, lineWidth: 1)
+                    if checked {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(BitOSTheme.accent)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(checked ? [.isSelected] : [])
     }
 }
