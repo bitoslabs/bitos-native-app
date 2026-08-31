@@ -178,6 +178,9 @@ class FeedRepository(
     private val myReactionEventIds = LinkedHashMap<String, String>()
     private val tallyTargets = LinkedHashSet<String>()
     private val bookmarked = linkedSetOf<String>()
+    /** One owner for profile projection and its request queue. Relay frames,
+     * cache hydration, fallback timers, and UI reads all use [scope]. */
+    private val profileLock = Any()
     private val profiles = mutableMapOf<String, ProfileMetadata>()
     private val profileQueue = ArrayDeque<String>()
     private val requestedProfiles = mutableSetOf<String>()
@@ -360,9 +363,12 @@ class FeedRepository(
         retryJob = null
         connectivityJob?.cancel()
         connectivityJob = null
-        profileDrainJob?.cancel()
-        profileFallbackJobs.forEach(Job::cancel)
-        profileFallbackJobs.clear()
+        synchronized(profileLock) {
+            profileDrainJob?.cancel()
+            profileDrainJob = null
+            profileFallbackJobs.forEach(Job::cancel)
+            profileFallbackJobs.clear()
+        }
         // Flush any coalesced publication + buffered persistence so stopped
         // state is final.
         publishJob?.cancel()
@@ -812,7 +818,7 @@ class FeedRepository(
     private fun reissueUnresolvedAccountHeads(connectedRelays: Int) {
         val pubkey = accountPubkey ?: return
         if (AccountBootstrap.shouldReissue(
-                resolved = profiles.containsKey(pubkey),
+                resolved = hasProfile(pubkey),
                 attempts = accountHeadAttempts[HEAD_PROFILE],
                 connectedRelays = connectedRelays,
             )
@@ -1090,13 +1096,15 @@ class FeedRepository(
 
     private fun absorbProfile(event: NostrEvent) {
         val metadata = ProfileMetadata.parse(event) ?: return
-        val knownAt = profileTimestamps[metadata.pubkey.value] ?: Long.MIN_VALUE
-        if (event.createdAt >= knownAt) {
-            profiles[metadata.pubkey.value] = metadata
-            profileTimestamps[metadata.pubkey.value] = event.createdAt
+        synchronized(profileLock) {
+            val knownAt = profileTimestamps[metadata.pubkey.value] ?: Long.MIN_VALUE
+            if (event.createdAt >= knownAt) {
+                profiles[metadata.pubkey.value] = metadata
+                profileTimestamps[metadata.pubkey.value] = event.createdAt
+            }
+            profilesGeneration++
         }
         persist(event)
-        profilesGeneration++
         requestPublish()
     }
 
@@ -1177,6 +1185,19 @@ class FeedRepository(
 
     private val profileTimestamps = mutableMapOf<String, Long>()
 
+    private fun hasProfile(pubkey: String): Boolean = synchronized(profileLock) {
+        profiles.containsKey(pubkey)
+    }
+
+    /** Returns a coherent, immutable profile projection for UI publication. */
+    private fun profileSnapshot(): Map<String, ProfileMetadata> = synchronized(profileLock) {
+        if (cachedProfilesGeneration != profilesGeneration) {
+            cachedProfilesSnapshot = profiles.toMap()
+            cachedProfilesGeneration = profilesGeneration
+        }
+        cachedProfilesSnapshot
+    }
+
     /** Mentioned pubkeys (NIP-27 profile entities) — names resolve for @display. */
     fun requestMentionProfiles(pubkeys: List<String>) {
         pubkeys.take(PROFILE_BATCH).forEach(::enqueueProfile)
@@ -1227,52 +1248,69 @@ class FeedRepository(
     fun requestProfile(pubkey: String, force: Boolean = false) {
         if (pubkey.isBlank()) return
         if (force) {
-            profileRequestCounter += 1
-            pool.broadcast(bridge.profileRequest("bitos-profile-head-$profileRequestCounter", listOf(pubkey)))
+            val requestId = synchronized(profileLock) {
+                profileRequestCounter += 1
+                profileRequestCounter
+            }
+            pool.broadcast(bridge.profileRequest("bitos-profile-head-$requestId", listOf(pubkey)))
             return
         }
         enqueueProfile(pubkey)
     }
 
     private fun enqueueProfile(pubkey: String) {
-        if (profiles.containsKey(pubkey)) return
-        if (pubkey !in profileQueue && pubkey !in requestedProfiles) {
+        val drainNow = synchronized(profileLock) {
+            if (profiles.containsKey(pubkey) || pubkey in profileQueue || pubkey in requestedProfiles) return
             profileQueue.addLast(pubkey)
+            profileDrainJob?.cancel()
             if (profileQueue.size >= PROFILE_BATCH) {
-                profileDrainJob?.cancel()
-                drainProfiles()
+                profileDrainJob = null
+                true
             } else {
                 // Debounce small batches so single arrivals do not spam REQs.
-                profileDrainJob?.cancel()
                 profileDrainJob = scope.launch {
                     delay(PROFILE_DRAIN_DELAY_MS)
                     drainProfiles()
                 }
+                false
             }
+        }
+        if (drainNow) {
+            drainProfiles()
         }
     }
 
     private fun drainProfiles() {
-        val batch = buildList {
-            while (size < PROFILE_BATCH && profileQueue.isNotEmpty()) add(profileQueue.removeFirst())
+        val batch = synchronized(profileLock) {
+            buildList {
+                while (size < PROFILE_BATCH && profileQueue.isNotEmpty()) add(profileQueue.removeFirst())
+            }.also {
+                requestedProfiles.addAll(it)
+                profileDrainJob = null
+            }
         }
         if (batch.isEmpty()) return
-        requestedProfiles.addAll(batch)
-        profileRequestCounter += 1
+        val requestId = synchronized(profileLock) {
+            profileRequestCounter += 1
+            profileRequestCounter
+        }
         val primary = pool.primaryRelay()
-        val request = bridge.profileRequest("bitos-profiles-$profileRequestCounter", batch)
+        val request = bridge.profileRequest("bitos-profiles-$requestId", batch)
         if (primary == null) pool.broadcast(request) else pool.sendTo(listOf(primary), request)
 
         val fallback = scope.launch {
             delay(PROFILE_FALLBACK_DELAY_MS)
-            val unresolved = batch.filterNot(profiles::containsKey)
+            val unresolved = batch.filterNot(::hasProfile)
             val relays = pool.fallbackRelays(primary)
             if (unresolved.isNotEmpty() && relays.isNotEmpty()) {
-                profileRequestCounter += 1
-                pool.sendTo(relays, bridge.profileRequest("bitos-profiles-fallback-$profileRequestCounter", unresolved))
+                val fallbackRequestId = synchronized(profileLock) {
+                    profileRequestCounter += 1
+                    profileRequestCounter
+                }
+                pool.sendTo(relays, bridge.profileRequest("bitos-profiles-fallback-$fallbackRequestId", unresolved))
             }
         }
-        profileFallbackJobs += fallback
+        synchronized(profileLock) { profileFallbackJobs += fallback }
     }
 
     private fun publishState() = space.bitos.app.diagnostics.PerfTrace.section(
@@ -1322,13 +1360,7 @@ class FeedRepository(
             pendingNotes = pendingNotes.snapshot(mutableState.value.timeline),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
-            profiles = run {
-                if (cachedProfilesGeneration != profilesGeneration) {
-                    cachedProfilesSnapshot = profiles.toMap()
-                    cachedProfilesGeneration = profilesGeneration
-                }
-                cachedProfilesSnapshot
-            },
+            profiles = profileSnapshot(),
             comments = commentThreads.mapValues { (rootId, replies) ->
                 val size = replies.size
                 threadCache[rootId]?.takeIf { it.size == size }?.comments

@@ -1,5 +1,9 @@
 package space.bitos.core.feed
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import space.bitos.core.model.EventId
 import space.bitos.core.model.NostrEvent
 import space.bitos.core.model.NostrKinds
@@ -211,5 +215,30 @@ class FeedAggregatorTest {
         aggregator.insert(note("a", 100))
         aggregator.insert(note("b", 100))
         assertEquals(listOf("a", "b", "c"), aggregator.snapshot().map { it.id })
+    }
+
+    @Test
+    fun snapshotsRemainConsistentDuringConcurrentInserts() = runBlocking {
+        val aggregator = FeedAggregator(maxItems = 200)
+        coroutineScope {
+            repeat(4) { writer ->
+                launch(Dispatchers.Default) {
+                    repeat(100) { index ->
+                        aggregator.insert(note("$writer-$index", writer * 1_000L + index))
+                    }
+                }
+            }
+            repeat(4) {
+                launch(Dispatchers.Default) {
+                    repeat(500) {
+                        val snapshot = aggregator.snapshot()
+                        assertEquals(snapshot.map { it.id }.toSet().size, snapshot.size)
+                        assertTrue(snapshot.zipWithNext().all { (a, b) -> a.createdAt >= b.createdAt })
+                    }
+                }
+            }
+        }
+        assertEquals(200, aggregator.size())
+        assertEquals(200, aggregator.snapshot().map { it.id }.toSet().size)
     }
 }

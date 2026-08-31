@@ -1,5 +1,8 @@
 package space.bitos.core.feed
 
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+
 /**
  * Bounded, deterministic feed window shared by iOS and Android.
  *
@@ -11,35 +14,53 @@ package space.bitos.core.feed
  * - `prepend` preserves the caller's visible order for already-present ids so
  *   live arrivals do not reshuffle the screen.
  *
- * Performance (docs/engineering/performance-audit-and-plan.md §2.2): the
- * canonical order is maintained incrementally — `insert` places the id by
- * binary search (no re-sort per event) and eviction removes the true minimum
- * from the tail. `snapshot` is a walk of the ordered ids, cached until the
- * next mutation, so burst absorption never pays O(n log n) per frame.
+ * Each update publishes an immutable window with a compare-and-set. Relay
+ * collection, cache hydration, and UI projection can run in separate native
+ * coroutines, so mutating an ArrayList in place would let `snapshot` iterate
+ * while another coroutine changes it. A snapshot therefore always reads one
+ * complete window revision. Canonical order remains incremental, and each
+ * revision caches its snapshot after its first read.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class FeedAggregator(private val maxItems: Int = 200) {
 
-    private val notes = LinkedHashMap<String, FeedNote>()
+    private data class Window(
+        val notes: Map<String, FeedNote> = emptyMap(),
+        /** Ids in canonical order: `created_at` desc, then id asc. */
+        val orderedIds: List<String> = emptyList(),
+        val sortedCache: List<FeedNote>? = null,
+    )
 
-    /** Ids in canonical order: `created_at` desc, then id asc. */
-    private val orderedIds = ArrayList<String>(maxItems.coerceAtLeast(16))
-    private var sortedCache: List<FeedNote>? = null
+    private val window = AtomicReference(Window())
 
-    fun snapshot(): List<FeedNote> =
-        sortedCache ?: buildList {
-            for (id in orderedIds) notes[id]?.let(::add)
-        }.also { sortedCache = it }
+    fun snapshot(): List<FeedNote> {
+        val current = window.load()
+        current.sortedCache?.let { return it }
+        val snapshot = buildList(current.orderedIds.size) {
+            for (id in current.orderedIds) current.notes[id]?.let(::add)
+        }
+        // Caching is an optimization only. If an insert won the race, its
+        // revision intentionally keeps its own empty cache.
+        window.compareAndSet(current, current.copy(sortedCache = snapshot))
+        return snapshot
+    }
 
-    fun size(): Int = notes.size
+    fun size(): Int = window.load().notes.size
 
     /** Insert an event; returns false when it was a duplicate. */
     fun insert(note: FeedNote): Boolean {
-        if (notes.containsKey(note.id)) return false
-        notes[note.id] = note
-        orderedIds.add(insertionIndex(note.id), note.id)
-        sortedCache = null
-        trimIfNeeded()
-        return true
+        while (true) {
+            val current = window.load()
+            if (note.id in current.notes) return false
+
+            val notes = current.notes.toMutableMap().apply { put(note.id, note) }
+            val orderedIds = current.orderedIds.toMutableList().apply {
+                add(insertionIndex(note, current), note.id)
+            }
+            trimIfNeeded(notes, orderedIds)
+            val next = Window(notes = notes, orderedIds = orderedIds)
+            if (window.compareAndSet(current, next)) return true
+        }
     }
 
     /**
@@ -48,53 +69,46 @@ class FeedAggregator(private val maxItems: Int = 200) {
      * recency order, so live relay arrivals never reshuffle what is visible.
      */
     fun prepend(newNotes: List<FeedNote>, visibleOrder: List<String>): List<FeedNote> {
-        val pinned = LinkedHashMap<String, FeedNote>()
-        for (id in visibleOrder) {
-            notes.remove(id)?.let { pinned[id] = it }
+        while (true) {
+            val current = window.load()
+            val pinned = LinkedHashMap<String, FeedNote>()
+            for (id in visibleOrder) {
+                current.notes[id]?.let { pinned[id] = it }
+            }
+            val fresh = newNotes
+                .filter { !pinned.containsKey(it.id) }
+                .sortedByDescending { it.createdAt }
+            for (note in fresh) pinned[note.id] = note
+
+            val notes = LinkedHashMap<String, FeedNote>().apply {
+                putAll(pinned.entries.take(maxItems).associate { it.toPair() })
+            }
+            val orderedIds = notes.values
+                .sortedWith(compareByDescending<FeedNote> { it.createdAt }.thenBy { it.id })
+                .map(FeedNote::id)
+            val next = Window(notes = notes, orderedIds = orderedIds)
+            if (window.compareAndSet(current, next)) return notes.values.toList()
         }
-        val fresh = newNotes
-            .filter { !pinned.containsKey(it.id) }
-            .sortedByDescending { it.createdAt }
-        for (note in fresh) pinned[note.id] = note
-        notes.clear()
-        for (note in pinned.values.take(maxItems)) notes[note.id] = note
-        rebuildOrder()
-        trimIfNeeded()
-        return notes.values.toList()
     }
 
     /** True when [a] precedes [b] in canonical order (newer, then smaller id). */
     private fun precedes(a: FeedNote, b: FeedNote): Boolean =
         if (a.createdAt != b.createdAt) a.createdAt > b.createdAt else a.id < b.id
 
-    /** First index whose note [id] itself precedes — the binary-search slot. */
-    private fun insertionIndex(id: String): Int {
-        val note = notes[id] ?: return orderedIds.size
+    /** First index whose note follows [note] — the binary-search slot. */
+    private fun insertionIndex(note: FeedNote, current: Window): Int {
         var low = 0
-        var high = orderedIds.size
+        var high = current.orderedIds.size
         while (low < high) {
             val mid = (low + high) ushr 1
-            val other = notes[orderedIds[mid]]
+            val other = current.notes[current.orderedIds[mid]]
             if (other == null || precedes(note, other)) high = mid else low = mid + 1
         }
         return low
     }
 
-    /** Re-derives [orderedIds] from current contents (prepend path). */
-    private fun rebuildOrder() {
-        orderedIds.clear()
-        for (note in notes.values.sortedWith(compareByDescending<FeedNote> { it.createdAt }.thenBy { it.id })) {
-            orderedIds.add(note.id)
-        }
-        sortedCache = null
-    }
-
-    /**
-     * Evicts the minimum by (`created_at`, id) — the first id of the oldest
-     * same-timestamp run, matching the eviction rule this class has always
-     * documented. Ties are rare; the scan stops at the run's start.
-     */
-    private fun trimIfNeeded() {
+    /** Evicts the oldest id, with the documented first-id tie behavior. */
+    private fun trimIfNeeded(notes: MutableMap<String, FeedNote>, orderedIds: MutableList<String>) {
         while (notes.size > maxItems && orderedIds.isNotEmpty()) {
             var index = orderedIds.size - 1
             val oldestAt = notes[orderedIds[index]]?.createdAt ?: break
