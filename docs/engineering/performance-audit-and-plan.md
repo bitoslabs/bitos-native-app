@@ -247,8 +247,8 @@ Fix direction (keeps the rule, changes the owner):
   carries `pubkeyHex`); `switchTo` keeps its signature but task-wraps the
   derive. Android mirrors it: `identityFor` is now `suspend` on
   `Dispatchers.Default`, previews build inside `viewModelScope.launch` with
-  `busy` gating, import
-  advance is reactive (`LaunchedEffect(state.preview)`), and `revealNsec`
+  `busy` gating, the import advance is reactive
+  (`LaunchedEffect(state.preview)`), and `revealNsec`
   resolves the active slot first (previously legacy-only — wrong key after
   a switch).
 
