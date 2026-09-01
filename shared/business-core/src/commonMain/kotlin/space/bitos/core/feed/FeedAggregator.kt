@@ -64,6 +64,29 @@ class FeedAggregator(private val maxItems: Int = 200) {
     }
 
     /**
+     * Insert an older-page event. Differs from [insert] only at the size
+     * bound: the NEWEST id is evicted (head side) so a bounded backwards
+     * walk can extend a full window. Tail eviction would immediately drop
+     * the just-landed older page — the "load more does nothing while the
+     * window is full" trap. Retention follows the reader, who is scrolling
+     * into older history; the head re-opens from the watermark on refresh.
+     */
+    fun insertOlder(note: FeedNote): Boolean {
+        while (true) {
+            val current = window.load()
+            if (note.id in current.notes) return false
+
+            val notes = current.notes.toMutableMap().apply { put(note.id, note) }
+            val orderedIds = current.orderedIds.toMutableList().apply {
+                add(insertionIndex(note, current), note.id)
+            }
+            trimFromHeadIfNeeded(notes, orderedIds)
+            val next = Window(notes = notes, orderedIds = orderedIds)
+            if (window.compareAndSet(current, next)) return true
+        }
+    }
+
+    /**
      * Insert new arrivals while keeping [visibleOrder] stable for ids that
      * are already on screen. Unknown ids append below the visible window in
      * recency order, so live relay arrivals never reshuffle what is visible.
@@ -116,6 +139,23 @@ class FeedAggregator(private val maxItems: Int = 200) {
                 val previous = notes[orderedIds[index - 1]] ?: break
                 if (previous.createdAt != oldestAt) break
                 index--
+            }
+            notes.remove(orderedIds.removeAt(index))
+        }
+    }
+
+    /**
+     * Evicts from the NEWEST end for older-page inserts, mirroring
+     * [trimIfNeeded]'s tie handling at the head.
+     */
+    private fun trimFromHeadIfNeeded(notes: MutableMap<String, FeedNote>, orderedIds: MutableList<String>) {
+        while (notes.size > maxItems && orderedIds.isNotEmpty()) {
+            var index = 0
+            val newestAt = notes[orderedIds[index]]?.createdAt ?: break
+            while (index < orderedIds.size - 1) {
+                val next = notes[orderedIds[index + 1]] ?: break
+                if (next.createdAt != newestAt) break
+                index++
             }
             notes.remove(orderedIds.removeAt(index))
         }

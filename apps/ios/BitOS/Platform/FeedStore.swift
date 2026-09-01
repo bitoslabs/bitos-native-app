@@ -326,15 +326,12 @@ final class FeedStore {
         guard let source = olderSourceWindow(for: timeline) else { return }
         let snapshot = source.snapshot()
         guard !snapshot.isEmpty else { return }
-        // For You and Following overlap for followed authors, so their sum
-        // can look full while the active lane still has room for history.
-        // Bound only the source window that will receive this older page.
-        if snapshot.count >= Self.olderWindowMax {
-            lane.exhausted = true
-            olderLanes[timeline] = lane
-            syncPaginationState()
-            return
-        }
+        // A full window is NOT timeline exhaustion — the walk pages backward
+        // through it (older pages evict at the head via insertOlder). The
+        // cap-as-exhaustion check here permanently dead-ended Home as soon
+        // as the window filled (cache hydrate + head page = 200), the
+        // "cannot load more / You're all caught up" trap. True exhaustion
+        // remains the two-empty-pages / relay-stall rules below.
         guard let oldest = snapshot.map(\.createdAt).min() else { return }
         if lane.anchorSeconds != oldest {
             lane.anchorSeconds = oldest
@@ -406,8 +403,12 @@ final class FeedStore {
         }
         olderCounter += 1
         let subId = "bitos-older-\(olderCounter)"
-        let knownBefore = knownNoteIds
-            .union(window?.snapshot().map(\.id) ?? [])
+        // Freshness compares only against the CURRENT lane window (+ its
+        // held arrivals): relays re-send ids the app has ever seen, and ids
+        // evicted from the bounded window are gone from the reader's world.
+        // The ever-growing knownNoteIds set would mark every re-fetch
+        // "known" and the walk would strand as "load more does nothing".
+        let knownBefore = Set(olderSourceWindow(for: timeline)?.snapshot().map(\.id) ?? [])
             .union(pendingForYou.map(\.id))
             .union(pendingFollowing.map(\.id))
         Task { [weak self, pool] in
@@ -664,6 +665,11 @@ final class FeedStore {
                 if pendingForYou.count > Self.pendingMax {
                     pendingForYou.removeFirst(pendingForYou.count - Self.pendingMax)
                 }
+            } else if fromOlderPage {
+                // Older pages extend the window at its head boundary
+                // (newest evicted) — tail eviction at a full window would
+                // drop the just-landed older note itself.
+                window?.insertOlder(note)
             } else {
                 window?.insert(note)
             }
@@ -673,6 +679,8 @@ final class FeedStore {
                     if pendingFollowing.count > Self.pendingMax {
                         pendingFollowing.removeFirst(pendingFollowing.count - Self.pendingMax)
                     }
+                } else if fromOlderPage {
+                    followingWindow?.insertOlder(note)
                 } else {
                     followingWindow?.insert(note)
                 }
@@ -1547,7 +1555,6 @@ final class FeedStore {
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
     private static let headSnapshotMaxWaitMs = 2_500
-    private static let olderWindowMax = 200
     /// Relay-burst publication coalescing window (audit R3).
     private static let publishCoalesceMs = 150
     /// Verified events per one transactional cache flush (audit R6).

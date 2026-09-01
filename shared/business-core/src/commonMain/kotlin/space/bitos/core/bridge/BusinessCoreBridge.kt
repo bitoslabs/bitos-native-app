@@ -2948,6 +2948,10 @@ class FeedWindow(maxItems: Int) {
     fun insert(note: BusinessCoreBridge.Note): Boolean =
         aggregator.insert(note.toCore())
 
+    /** Older-page insert: evicts at the head so a full window can page backward. */
+    fun insertOlder(note: BusinessCoreBridge.Note): Boolean =
+        aggregator.insertOlder(note.toCore())
+
     fun snapshot(): List<BusinessCoreBridge.Note> =
         aggregator.snapshot().map { it.toBridge() }
 

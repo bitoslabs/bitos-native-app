@@ -182,6 +182,52 @@ class FeedAggregatorTest {
     }
 
     @Test
+    fun insertOlderExtendsAFullWindowBackward() {
+        // The "load more does nothing at a full window" trap: an older page
+        // landing on a bounded window must evict at the HEAD (newest), not
+        // the tail — tail eviction drops the just-landed older note itself.
+        val aggregator = FeedAggregator(maxItems = 3)
+        for (i in 0 until 3) aggregator.insert(note("id$i", 100L + i * 10L))
+        assertTrue(aggregator.insertOlder(note("old0", 40L)))
+        assertEquals(3, aggregator.size())
+        // The NEWEST id (id2) is evicted at the head; the window extends
+        // downward — the reader is scrolling into older history.
+        assertEquals(listOf("id1", "id0", "old0"), aggregator.snapshot().map { it.id })
+        // Dedupe parity with insert().
+        assertFalse(aggregator.insertOlder(note("old0", 40L)))
+    }
+
+    @Test
+    fun insertOlderSlidesTheWindowDeepIntoHistory() {
+        // A bounded backwards walk keeps the window full while the oldest
+        // boundary retreats — Home "load more" at the cap.
+        val aggregator = FeedAggregator(maxItems = 4)
+        for (i in 0 until 4) aggregator.insert(note("id$i", 1_000L - i * 10L))
+        var cursor = 950L
+        repeat(6) { step ->
+            aggregator.insertOlder(note("old$step", cursor))
+            cursor -= 10L
+        }
+        assertEquals(4, aggregator.size())
+        val ids = aggregator.snapshot().map { it.id }
+        // Canonical newest-first order: the four retained older notes.
+        assertEquals(listOf("old2", "old3", "old4", "old5"), ids)
+        // The oldest boundary retreated from 970 to 900 (old5).
+        assertEquals(900L, aggregator.snapshot().last().createdAt)
+    }
+
+    @Test
+    fun insertOlderEvictsAllIdsSharingTheNewestSecond() {
+        // Tie behavior mirrors trimIfNeeded from the head end: ids sharing
+        // the boundary second are evictable, never a mid-window note.
+        val aggregator = FeedAggregator(maxItems = 2)
+        aggregator.insert(note("a", 100))
+        aggregator.insert(note("b", 100))
+        assertTrue(aggregator.insertOlder(note("c", 50)))
+        assertEquals(listOf("a", "c"), aggregator.snapshot().map { it.id })
+    }
+
+    @Test
     fun prependKeepsVisibleOrderStable() {
         val aggregator = FeedAggregator()
         aggregator.insert(note("old1", 100))

@@ -82,4 +82,30 @@ final class BusinessCoreClientTests: XCTestCase {
         XCTAssertEqual(roundTripped.video?.url, full.video?.url)
         XCTAssertEqual(roundTripped.video?.posterUrl, full.video?.posterUrl)
     }
+
+    /// Home "load more" at the cap (UX U7 regression contract): an
+    /// older-page insert into a FULL window evicts at the head (newest
+    /// out), so a bounded backwards walk extends the window instead of
+    /// dropping the just-landed older note at the tail.
+    func testInsertOlderExtendsAFullWindowBackward() {
+        let client = FrameworkBusinessCoreClient()
+        let window = client.makeFeedWindow(maxItems: 3)
+        func note(_ id: String, _ createdAt: Int64) -> FeedNote {
+            FeedNote(
+                id: id, pubkey: String(repeating: "22", count: 32), content: id,
+                createdAt: createdAt, kind: 1, replyTo: nil, hashtags: [], mentions: [],
+                mediaUrls: [], isProtocolPayload: false
+            )
+        }
+        window.insert(note("a", 300))
+        window.insert(note("b", 200))
+        window.insert(note("c", 100))
+        XCTAssertTrue(window.insertOlder(note("d", 50)))
+        XCTAssertEqual(window.count(), 3)
+        XCTAssertEqual(window.snapshot().map(\.id), ["b", "c", "d"])
+        XCTAssertFalse(window.insertOlder(note("d", 50)))
+        // Live arrivals keep tail eviction — refresh re-opens the head.
+        window.insert(note("e", 400))
+        XCTAssertEqual(window.snapshot().map(\.id), ["e", "b", "c"])
+    }
 }

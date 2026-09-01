@@ -221,6 +221,14 @@ Rules the native port must keep (all delivered):
   nothing on every tab" bug.
 - **Following pages against its own window** — the global oldest
   `created_at` is not that tab's boundary.
+- **A full window is not exhaustion** (2026-09 fix, UX U7): the bounded
+  window (200) evicts at the HEAD during a backward walk — older pages
+  insert via `FeedAggregator.insertOlder` so retention follows the reader;
+  `loadOlder` never reports `noMoreOlder` merely because the window is at
+  its cap (cold-start hydration alone fills it). Walk freshness counts ids
+  in the ACTIVE lane window + pending notes — not the session-global id
+  set — so cap-evicted notes re-fetched deeper still count as fresh
+  progress.
 - **One scroll memory per tab**, not per surface — the pager index is
   restored on tab return from the in-memory session (§2.5).
 - Native realization: shared `BitzTimelinePolicy` walk rules + bridge

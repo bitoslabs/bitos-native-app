@@ -18,6 +18,7 @@ import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.RelayTransport
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.RelayUrl
+import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -232,6 +233,50 @@ class FeedRepositoryTest {
 
         val state = withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
         assertEquals(2, state.notes.map { it.id }.toSet().size)
+    }
+
+    /**
+     * The full-window trap (UX U7 regression): a window at the OLDER cap is
+     * NOT timeline exhaustion. Cold-start cache hydration fills the window
+     * to its bound (the same state a warm session reaches); loadOlder must
+     * still issue the `until` walk rather than flipping to "You're all
+     * caught up" on the first scroll to the bottom.
+     */
+    @Test
+    fun loadOlderWalksAndExtendsAFullWindowBackward(): Unit = runBlocking {
+        val signer = space.bitos.core.identity.DeterministicTestSigner(
+            "4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d",
+        )
+        // Seed the local cache with a full window of verified notes (200 =
+        // the aggregator bound); cold-start hydration then fills the window
+        // to its cap exactly, without relay frame buffering.
+        repeat(200) { step ->
+            val composer = space.bitos.core.publish.NoteComposer(clock = { 1_709_900_000L - step * 60L })
+            val unsigned = composer.composeTextNote(signer.publicKeyHex(), "filler $step")!!
+            val signature = signer.sign(unsigned.messageBytes())!!
+            val relayFrame = composer.publishMessage(unsigned, signature)!!
+                .replaceFirst("[\"EVENT\",", "[\"EVENT\",\"seed\",")
+            cache.upsertVerified(
+                runCatching { NostrEventCodec.decodeRelayEvent(hasher, relayFrame, null) }.getOrNull()!!,
+            )
+        }
+        val fullWindowRepository = FeedRepository(scope, pool, hasher, cache, bootstrapPollMs = 25)
+        try {
+            fullWindowRepository.start()
+            // Hydration filled the For You window to its bound (200).
+            withTimeout(20_000) { fullWindowRepository.state.first { it.forYouCount >= 200 } }
+
+            // loadOlder at the cap: a REQ MUST still go out — not exhaustion.
+            fullWindowRepository.loadOlder()
+            withTimeout(20_000) {
+                while (transport.sent.none { it.contains("bitos-older-") && it.contains("\"until\":") }) {
+                    kotlinx.coroutines.delay(10)
+                }
+            }
+            assertFalse(fullWindowRepository.state.value.noMoreOlder, "full window must not read as exhausted")
+        } finally {
+            fullWindowRepository.stop()
+        }
     }
 
     @Test

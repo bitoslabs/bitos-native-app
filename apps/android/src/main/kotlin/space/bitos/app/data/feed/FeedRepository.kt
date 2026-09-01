@@ -467,14 +467,12 @@ class FeedRepository(
         if (lane.exhausted) return
         val snapshot = windowFor(timeline).snapshot()
         if (snapshot.isEmpty()) return
-        // The windows overlap: a followed note exists in both For You and
-        // Following. Only the active lane's bounded window determines
-        // whether it can retain another older page.
-        if (snapshot.size >= OLDER_WINDOW_MAX) {
-            lane.exhausted = true
-            publishState()
-            return
-        }
+        // A full window is NOT timeline exhaustion — the walk pages backward
+        // through it (older pages evict at the head via insertOlder). The
+        // cap-as-exhaustion check here permanently dead-ended Home as soon
+        // as the window filled (cache hydrate + head page = 200), the
+        // "cannot load more / You're all caught up" trap. True exhaustion
+        // remains the two-empty-pages / relay-stall rules.
         val oldest = snapshot.minOf { it.createdAt }
         if (oldest != lane.anchorSeconds) {
             lane.anchorSeconds = oldest
@@ -509,12 +507,15 @@ class FeedRepository(
         }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
-        val knownBefore = synchronized(knownNoteIdsLock) {
-            HashSet(knownNoteIds)
-        }.apply {
-            addAll(pendingNotes.ids())
-            addAll(aggregator.snapshot().map { it.id })
-        }
+        // Freshness compares only against the CURRENT lane window (+ its
+        // held arrivals): relays re-send ids the app has ever seen, and ids
+        // evicted from the bounded window are gone from the reader's world.
+        // The ever-growing knownNoteIds set would mark every re-fetch
+        // "known" and the walk would strand as "load more does nothing".
+        val knownBefore = windowFor(timeline).snapshot().mapTo(HashSet()) { it.id }
+            .apply {
+                addAll(pendingNotes.ids())
+            }
         val batch = OlderBatch(
             timeline = timeline,
             subId = subId,
@@ -921,12 +922,19 @@ class FeedRepository(
                 aggregator.size() > 0 && FeedTimeline.FOR_YOU in heldTimelines
             if (holdLiveArrival) {
                 pendingNotes.add(FeedTimeline.FOR_YOU, note)
+            } else if (fromOlderPage) {
+                // Older pages extend the window at its head boundary
+                // (newest evicted) — tail eviction at a full window would
+                // drop the just-landed older note itself.
+                aggregator.insertOlder(note)
             } else {
                 aggregator.insert(note)
             }
             if (event.pubkey.value in followingAuthors) {
                 if (holdLiveArrival && FeedTimeline.FOLLOWING in heldTimelines && followingWindow.size() > 0) {
                     pendingNotes.add(FeedTimeline.FOLLOWING, note)
+                } else if (fromOlderPage) {
+                    followingWindow.insertOlder(note)
                 } else {
                     followingWindow.insert(note)
                 }
@@ -1440,7 +1448,6 @@ class FeedRepository(
         const val PROFILE_BATCH = 48
         const val PROFILE_DRAIN_DELAY_MS = 250L
         const val PROFILE_FALLBACK_DELAY_MS = 900L
-        const val OLDER_WINDOW_MAX = 200
         const val OLDER_WATCHDOG_MS = 8_000L
         const val OLDER_SUBSCRIPTION_PREFIX = "bitos-older-"
 

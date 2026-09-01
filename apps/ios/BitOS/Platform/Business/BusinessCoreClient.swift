@@ -92,6 +92,10 @@ struct ProfileMetadata: Sendable, Equatable {
 protocol FeedWindowing: AnyObject {
     @discardableResult
     func insert(_ note: FeedNote) -> Bool
+    /// Older-page insert: evicts at the head so a full window can page
+    /// backward instead of dropping the just-landed older page.
+    @discardableResult
+    func insertOlder(_ note: FeedNote) -> Bool
     func snapshot() -> [FeedNote]
     func count() -> Int
 }
@@ -345,6 +349,11 @@ private final class SharedFeedWindow: FeedWindowing {
         window.insert(note: note.bridgeNote)
     }
 
+    @discardableResult
+    func insertOlder(_ note: FeedNote) -> Bool {
+        window.insertOlder(note: note.bridgeNote)
+    }
+
     func snapshot() -> [FeedNote] {
         window.snapshot().map { note in
             FeedNote(
@@ -499,6 +508,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
 
 private final class NoopWindow: FeedWindowing {
     func insert(_ note: FeedNote) -> Bool { true }
+    func insertOlder(_ note: FeedNote) -> Bool { true }
     func snapshot() -> [FeedNote] { [] }
     func count() -> Int { 0 }
 }
