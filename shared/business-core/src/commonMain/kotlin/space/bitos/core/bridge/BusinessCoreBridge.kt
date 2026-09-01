@@ -451,6 +451,16 @@ class BusinessCoreBridge {
         NostrEventCodec.encodeClose(subscriptionId)
     }
 
+    /** Reconnect/pull-to-refresh head query from a second-granularity watermark. */
+    fun feedRequestSince(subscriptionId: String, since: Long): String = try {
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            space.bitos.core.feed.BitzQuery.headFilters(since),
+        )
+    } catch (_: NostrEventCodec.Rejected) {
+        NostrEventCodec.encodeClose(subscriptionId)
+    }
+
     /** NIP-01 `["REQ", id, filter]` for a batched kind-0 author lookup. */
     fun profileRequest(subscriptionId: String, authors: List<String>): String {
         val requested = authors.distinct().take(48)

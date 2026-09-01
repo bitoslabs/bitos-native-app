@@ -226,9 +226,9 @@ Comment bottom-sheet anatomy (both platforms):
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
      -> cached notes render immediately; relay head fills one bounded snapshot
-     -> after EOSE (or a short deadline), live notes increment “New posts” only
-     -> tap “New posts” to reveal them at the top; the current reading position never jumps
-     -> reselect active Home: reveal held posts first; otherwise scroll to top, then refresh
+     -> after EOSE (or a short deadline), live notes merge at top or buffer while reading older posts
+     -> return to top or pull to refresh to merge the bounded buffer; no pending-count control is shown
+     -> reselect active Home: scroll to top, then refresh if already there
      -> vertical swipe changes active player lease
      -> ten buffered Bitz remaining starts that mode's older-video query
      -> parallel relays merge by event id until EOSE; oldest time becomes next cursor
@@ -237,6 +237,11 @@ Home -> poster/first frame -> autoplay visible Bitz
      -> caption/sound/author/provenance sheets
      -> comment / repost / bookmark / zap / share / report
 ```
+
+The head subscription retains a newest-event watermark and reconnects from a
+one-second overlap (event-id de-duplication resolves the boundary). This
+forward lane is independent from the per-timeline older cursor, so scrolling
+back from an opening snapshot cannot lose notes published in the meantime.
 
 UI anatomy:
 

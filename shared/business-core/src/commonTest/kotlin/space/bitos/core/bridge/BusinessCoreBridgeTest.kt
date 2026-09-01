@@ -184,6 +184,8 @@ class BusinessCoreBridgeTest {
         assertTrue(request.startsWith("""["REQ","feed1","""), request)
         assertTrue(request.contains(""""kinds":[21,22],"limit":16"""), request)
         assertTrue(request.contains(""""kinds":[1],"limit":48"""), request)
+        val gapRequest = bridge.feedRequestSince("feed-gap", 600)
+        assertTrue(gapRequest.contains(""""kinds":[1],"limit":48,"since":600"""), gapRequest)
         assertEquals("""["CLOSE","feed1"]""", bridge.close("feed1"))
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)

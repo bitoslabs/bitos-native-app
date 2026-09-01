@@ -163,8 +163,6 @@ class HomeViewModel(
     // APP-004: content-filter window + new-notes hold/reveal.
     fun selectFilter(filter: space.bitos.core.feed.FeedFilter) = repository.selectFilter(filter)
 
-    fun revealPendingNotes() = repository.revealPendingNotes()
-
     fun holdNewNotes(hold: Boolean) = repository.holdNewNotes(hold)
 
     fun refresh() {

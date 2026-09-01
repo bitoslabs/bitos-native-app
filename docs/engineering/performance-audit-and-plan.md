@@ -308,7 +308,7 @@ Fix direction (keeps the rule, changes the owner):
 | U1 | Boot | 0.9 s forced brand hold every launch | First-launch only; ≤0.3 s otherwise |
 | U2 | Home/Bitz cold open | Blank + spinner until relay burst completes (seconds on bad relays) | Cache-first render is built (DAT-003) — ensure window hydrate publishes **before** relay wait (it does; verify after ingest refactor), add skeleton rows matching card layout |
 | U3 | Bitz pager | Poster flash-to-black on scroll; first frame of video late | Keep last poster visible under video until first frame renders (`AVPlayerLayer.isReadyForDisplay` / PlayerView `onRenderedFirstFrame`) |
-| U4 | Feed | New-notes pill good; but list "jump" on reveal during scroll | Use `scrollPosition` anchor preservation already present; add `withAnimation` only when at top |
+| U4 | Feed | Live arrivals can disturb a reader's anchor | Buffer only while away from the top; auto-merge at top/refresh with no pending-count control; reconnect from the durable head watermark |
 | U5 | Bitz grid | Loading tile appears/disappears per walk batch | Show persistent end-of-list spinner while `isLoadingOlder` lane active (state already exists) |
 | U6 | Profiles | Anonymous npub rows for up to ~1.15 s after burst (250 ms debounce + 900 ms fallback) | Render npub fallback immediately (already) + cache top-N author metadata locally (extend EventStore kinds beyond kind-0/1/21/22 today? kind-0 is persisted — ensure hydrate fills `profiles` map on cold start, currently only feed kinds + profiles are absorbed: verify order) |
 | U7 | Pagination | "Load more" silently does nothing when lane exhausted (two empty pages) | Footer state: "You're all caught up" when `noMoreOlder` |

@@ -203,18 +203,6 @@ fun FeedScreen(
     val pagerState = rememberPagerState(pageCount = { feedNotes.size })
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val revealPendingAtTop = {
-        scope.launch {
-            if (videoOnly && pagerState.currentPage != 0) {
-                pagerState.animateScrollToPage(0)
-            } else if (!videoOnly && (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0)) {
-                listState.animateScrollToItem(0)
-            }
-            viewModel.revealPendingNotes()
-        }
-        Unit
-    }
-
     DisposableEffect(Unit) {
         onDispose { pool.releaseAll() }
     }
@@ -263,19 +251,10 @@ fun FeedScreen(
     LaunchedEffect(listNearEnd, state.isLoadingOlder, state.noMoreOlder) {
         if (!videoOnly && listNearEnd && !state.noMoreOlder && !state.isLoadingOlder) viewModel.loadOlder()
     }
-    // APP-003/APP-004: re-tapping Home reveals held arrivals before the
-    // usual scroll-to-top/refresh behavior. It gives the Home tab a useful
-    // one-tap path to the exact "N new notes" state without shifting cards
-    // during ordinary reading.
+    // Re-tapping Home returns to the head; arrivals merge automatically once
+    // that top position is reached, without a pending-count control.
     LaunchedEffect(retapTick) {
         if (retapTick == 0) return@LaunchedEffect
-        if (!videoOnly && state.pendingNotes.isNotEmpty()) {
-            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-                listState.animateScrollToItem(0)
-            }
-            viewModel.revealPendingNotes()
-            return@LaunchedEffect
-        }
         if (videoOnly) {
             if (pagerState.currentPage != 0) {
                 scope.launch { pagerState.animateScrollToPage(0) }
@@ -341,6 +320,7 @@ fun FeedScreen(
                             )
                         } else NotesList(
                             notes = feedNotes, content = feedContent, actions = actions, viewModel = viewModel,
+                            onLoadOlder = viewModel::loadOlder,
                             compact = settingsSnapshot.compactMode,
                             listState = listState, onComment = { showCommentsFor = it }, onZap = { viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
                             onAuthor = { authorTarget = it }, onLike = { note ->
@@ -385,19 +365,6 @@ fun FeedScreen(
             )
         }
 
-        androidx.compose.animation.AnimatedVisibility(
-                    visible = state.pendingNotes.isNotEmpty(),
-                    enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut(),
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = BitOSSpacing.xs),
-                ) {
-                    NewNotesPill(
-                        pending = state.pendingNotes,
-                        authorName = { state.profiles[it]?.bestDisplayName },
-                        hasLightning = { !state.profiles[it]?.lud16.isNullOrBlank() },
-                        onReveal = revealPendingAtTop,
-                    )
-                }
             }
         }
 
@@ -1271,6 +1238,7 @@ private fun NotesList(
     onRepost: (FeedNote) -> Unit,
     onOpenExternalLink: (String) -> Unit = {},
     onOpenNoteRef: (String) -> Unit = {},
+    onLoadOlder: () -> Unit,
     /** APP-008 poll voting. */
     pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
     canVotePoll: Boolean = false,
@@ -1330,6 +1298,18 @@ private fun NotesList(
                     // text column: span the entire viewport like the web UI.
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        }
+        // A dedicated end sentinel is more reliable than relying solely on
+        // the final card's visibility: it also covers short lists and list
+        // mutations while the reader is already at the bottom. The repository
+        // owns all in-flight/exhausted guards.
+        if (!content.noMoreOlder && notes.isNotEmpty()) {
+            item(key = "older-trigger", contentType = { "older_trigger" }) {
+                androidx.compose.runtime.LaunchedEffect(notes.last().id, content.isLoadingOlder) {
+                    if (!content.isLoadingOlder) onLoadOlder()
+                }
+                Spacer(Modifier.height(1.dp))
             }
         }
         // APP-004 pagination: footer spinner while an older page loads.
@@ -1439,71 +1419,6 @@ private fun FeedHeader(
             Spacer(Modifier.width(BitOSSpacing.lg))
             TimelineTab("Following", AppIcons.People, state.timeline == FeedTimeline.FOLLOWING) { onTimeline(FeedTimeline.FOLLOWING) }
             Spacer(Modifier.weight(1f))
-        }
-    }
-}
-
-/** APP-004: reveal pill with author avatars and a count centered in its badge. */
-@Composable
-private fun NewNotesPill(
-    pending: List<FeedNote>,
-    authorName: (String) -> String?,
-    hasLightning: (String) -> Boolean,
-    onReveal: () -> Unit,
-) {
-    val authors = pending.asSequence().map { it.pubkey }.distinct().take(4).toList()
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = BitOSColors.primary,
-        shadowElevation = 6.dp,
-        modifier = Modifier.clickable(onClickLabel = "Show ${pending.size} new notes") { onReveal() },
-    ) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (authors.isNotEmpty()) {
-                // X-style overlapping avatar stack; later entries draw on top.
-                Row(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
-                    authors.forEach { pubkey ->
-                        Box(
-                            Modifier
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(BitOSColors.primary)
-                                .padding(1.5.dp),
-                        ) {
-                            PubkeyAvatar(pubkey = pubkey, size = 18, label = authorName(pubkey), hasLightning = hasLightning(pubkey))
-                        }
-                    }
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(Color(0xFF0A0A0F).copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (pending.size > 99) "99+" else pending.size.toString(),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.W800,
-                    color = Color(0xFF0A0A0F),
-                )
-            }
-            Icon(
-                AppIcons.ArrowUp,
-                contentDescription = null,
-                tint = Color(0xFF0A0A0F),
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                "New ${if (pending.size == 1) "note" else "notes"}",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.W700,
-                color = Color(0xFF0A0A0F),
-            )
         }
     }
 }

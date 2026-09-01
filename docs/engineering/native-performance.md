@@ -205,6 +205,16 @@ and exhaustion state. An older-page walk stays in flight until its bounded walk
 finishes, counts only newly playable videos toward the Bitz page budget, and
 uses non-video events only to advance the backwards cursor. UI end-of-window
 triggers may repeat safely because repositories reject overlapping walks.
+Native lists also render a one-point end sentinel: entering it triggers the
+next older-page walk even when the final content row was already composed or
+the list is shorter than the viewport.
+
+The feed head is a separate forward-only lane. It retains the newest accepted
+`created_at` watermark and reconnects or refreshes from one second before it;
+event-id de-duplication retains siblings from the boundary second. This never
+changes either older-page cursor. Arrivals are buffered only while the reader
+is away from the top, then merge silently on return or refresh—there is no
+pending-count UI.
 
 The persisted `bitos_video_quality` preference (auto/high/low) owns the
 rendition pick through the shared rule (UX U9): `auto` keeps the display-
@@ -277,7 +287,7 @@ Every optimization must state:
 - Are hidden players paused/released while scroll position survives?
 - Can a metadata timeout delay the note itself? It must not.
 - Is any work executed once per row that could be batched once per state update?
-- Are list keys stable across insert, pending-note reveal and ranking changes?
+- Are list keys stable across insert, automatic head merge and ranking changes?
 - Are collections, retries, caches and subscriptions bounded?
 - Does cancellation stop monitors, players and obsolete relay requests?
 - Was the change tested with slow relays, missing metadata, offline mode and a

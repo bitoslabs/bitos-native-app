@@ -92,11 +92,23 @@ object BitzQuery {
     const val MEDIA_PAGE_LIMIT = 16
     const val TEXT_PAGE_LIMIT = 48
 
-    fun initialFilters(): List<String> = listOf(
-        """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT}""",
-        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT}""",
-        """{"kinds":[6,0],"limit":80}""",
-    )
+    fun initialFilters(): List<String> = headFilters(null)
+
+    /**
+     * Re-open the head from the last accepted event instead of asking a busy
+     * relay for another arbitrary "latest N" slice. The one-second overlap
+     * is intentional: Nostr timestamps are second-granularity, so native
+     * stores deduplicate ids while retaining siblings from the boundary
+     * second.
+     */
+    fun headFilters(since: Long?): List<String> {
+        val boundary = since?.coerceAtLeast(0)?.let { ",\"since\":$it" } ?: ""
+        return listOf(
+            """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT$boundary}""",
+            """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT$boundary}""",
+            """{"kinds":[6,0],"limit":80$boundary}""",
+        )
+    }
 
     fun olderFilters(until: Long): List<String> = listOf(
         """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",

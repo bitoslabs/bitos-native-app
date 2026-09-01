@@ -413,8 +413,7 @@ struct HomeView: View {
                 stopPathMonitor()
                 pool.releaseAll()
             }
-            // APP-003/APP-004: re-tapping Home reveals held arrivals before
-            // the usual scroll-to-top/refresh behavior.
+            // Re-tapping Home returns to the head; arrivals merge there.
             .onChange(of: retapTick) { _, tick in
                 guard tick > 0 else { return }
                 handleRetap()
@@ -422,10 +421,6 @@ struct HomeView: View {
     }
 
     private func handleRetap() {
-        if !videoOnly, !store.pendingNotes.isEmpty {
-            revealPendingAtTop()
-            return
-        }
         if videoOnly {
             if topId != notes.first?.id, let first = notes.first {
                 topId = first.id
@@ -439,15 +434,6 @@ struct HomeView: View {
                 listScrollToTopTick += 1
             }
         }
-    }
-
-    /// Revealing buffered arrivals deliberately returns to the list head so
-    /// the newly prepended cards are immediately visible. The scroll request
-    /// is driven by the list's reader below; the store remains UI-agnostic.
-    private func revealPendingAtTop() {
-        if !videoOnly, !listAtTop { listScrollToTopTick += 1 }
-        store.revealPendingNotes()
-        if videoOnly { topId = notes.first?.id }
     }
 
     private func storyViewerHosted(_ base: some View) -> some View {
@@ -614,8 +600,7 @@ struct HomeView: View {
     private var content: some View {
         VStack(spacing: 0) {
             timelineTabs
-            ZStack(alignment: .top) {
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
                     if identity.account == nil {
                         GuestBanner(onGetStarted: onOpenProfile)
             // APP-006: stories bar (above the timeline content).
@@ -627,24 +612,9 @@ struct HomeView: View {
                 )
             }
                     }
-                    timelineContent
-                }
-                // Float in the feed area immediately below the tabs, never
-                // above them, so the tab targets remain unobstructed.
-                if !store.pendingNotes.isEmpty {
-                    NewNotesPill(
-                        count: store.pendingNotes.count,
-                        authors: store.pendingAuthors,
-                        profiles: store.profiles,
-                        onReveal: revealPendingAtTop
-                    )
-                    .padding(.top, BitOSTheme.Spacing.xs)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(1)
-                }
+                timelineContent
             }
         }
-        .animation(.spring(duration: 0.3), value: store.pendingNotes.count)
         .overlay(alignment: .bottomTrailing) {
             // APP-004: New-note extended FAB (spec §3.4).
             Button {
@@ -808,6 +778,18 @@ struct HomeView: View {
                     ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
                         noteCardRow(note: note, index: index)
                     }
+                    // Dedicated bottom sentinel. Unlike a card's onAppear,
+                    // this remains a reliable pagination edge after short
+                    // lists or live list mutations. FeedStore guards overlap
+                    // and exhaustion before issuing any relay request.
+                    if !store.noMoreOlder, let last = notes.last {
+                        Color.clear
+                            .frame(height: 1)
+                            .id("older-trigger-\(last.id)")
+                            .onAppear {
+                                if !store.isLoadingOlder { store.loadOlder() }
+                            }
+                    }
                     // APP-004 pagination: footer spinner while an older
                     // page loads.
                     if store.isLoadingOlder {
@@ -917,51 +899,6 @@ struct HomeView: View {
             onMore: { point in presentMoreMenu(for: note, at: point) },
             onOpenExternalLink: { externalLink = $0 }
         )
-    }
-}
-
-// MARK: - APP-004 chrome: new-notes pill + guest banner
-
-/// Header reveal pill: author avatars plus a count centered in its badge.
-private struct NewNotesPill: View {
-    let count: Int
-    let authors: [String]
-    let profiles: [String: ProfileMetadata]
-    let onReveal: () -> Void
-
-    var body: some View {
-        Button(action: onReveal) {
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                HStack(spacing: -8) {
-                    ForEach(authors, id: \.self) { pubkey in
-                        PubkeyAvatarView(
-                            pubkey: pubkey,
-                            size: 20,
-                            picture: profiles[pubkey]?.picture,
-                            label: profiles[pubkey]?.bestDisplayName,
-                            hasLightning: !(profiles[pubkey]?.lud16?.isEmpty ?? true)
-                        )
-                            .overlay(Circle().stroke(BitOSTheme.accent, lineWidth: 1.5))
-                    }
-                }
-                Text(count > 99 ? "99+" : "\(count)")
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundStyle(BitOSTheme.background)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(BitOSTheme.background.opacity(0.16)))
-                AppIcons.image(for: AppIcons.arrowUp)
-                    .font(.system(size: 11, weight: .bold))
-                Text("New \(count == 1 ? "note" : "notes")")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(BitOSTheme.background)
-            .padding(.horizontal, BitOSTheme.Spacing.base)
-            .padding(.vertical, 7)
-            .background(Capsule().fill(BitOSTheme.accent))
-            .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Show \(count) new notes")
     }
 }
 

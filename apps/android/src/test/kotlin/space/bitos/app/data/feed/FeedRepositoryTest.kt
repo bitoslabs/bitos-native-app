@@ -73,12 +73,27 @@ class FeedRepositoryTest {
         assertEquals(1, state.relayHealth.total)
     }
 
+    @Test
+    fun refreshReopensHeadFromWatermarkWithoutChangingOlderCursor(): Unit = runBlocking {
+        repository.start()
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+
+        repository.refresh()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-2") && it.contains("\"since\":1710000299") }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
+        assertTrue(transport.sent.none { it.contains("bitos-older-") })
+    }
+
     /**
-     * Live arrivals hold after the initial relay snapshot, reveal prepends
-     * them, and relay redelivery never duplicates a pending or inserted note.
+     * Live arrivals hold only while the reader is away from the head, then
+     * merge when they return. Relay redelivery never duplicates the note.
      */
     @Test
-    fun heldArrivalsWaitForRevealAndRedeliveryNeverDuplicates(): Unit = runBlocking {
+    fun heldArrivalsMergeAtTopAndRedeliveryNeverDuplicates(): Unit = runBlocking {
         repository.start()
         withTimeout(20_000) {
             while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
@@ -87,25 +102,19 @@ class FeedRepositoryTest {
         withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
 
         transport.emit("""["EOSE","bitos-feed-1"]""")
+        repository.holdNewNotes(true)
         transport.emit(VALID_SECOND_KEY_MESSAGE)
-        val held = withTimeout(20_000) { repository.state.first { it.pendingNotes.size == 1 } }
-        assertEquals(1, held.notes.size, "window must not jump while holding")
+        kotlinx.coroutines.delay(100)
+        assertEquals(1, repository.state.value.notes.size, "window must not jump while holding")
 
         transport.emit(VALID_SECOND_KEY_MESSAGE) // relay redelivery
-        assertEquals(1, repository.state.value.pendingNotes.size)
-
-        repository.revealPendingNotes()
+        repository.holdNewNotes(false)
         val revealed = withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
-        assertEquals(0, revealed.pendingNotes.size)
         assertEquals(2, revealed.notes.map { it.id }.toSet().size)
-
-        // Returning to the top does not flush later arrivals.
-        transport.emit(VALID_SECOND_KEY_MESSAGE)
-        withTimeout(20_000) { repository.state.first { it.notes.size == 2 && it.pendingNotes.isEmpty() } }
     }
 
     @Test
-    fun liveArrivalsAfterInitialEoseOnlyUpdateThePendingPill(): Unit = runBlocking {
+    fun liveArrivalsAtTopMergeWithoutPendingCount(): Unit = runBlocking {
         repository.start()
         withTimeout(20_000) {
             while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
@@ -113,17 +122,11 @@ class FeedRepositoryTest {
         transport.emit(VALID_TEXT_NOTE_MESSAGE)
         withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
 
-        // The persistent head is now live. No scroll-position signal is
-        // required: a reader at the top must still get a stable timeline.
+        // The persistent head is now live and the reader is at the top.
         transport.emit("""["EOSE","bitos-feed-1"]""")
         transport.emit(VALID_SECOND_KEY_MESSAGE)
-        val pending = withTimeout(20_000) {
-            repository.state.first { it.notes.size == 1 && it.pendingNotes.size == 1 }
-        }
-        assertEquals("second author note", pending.pendingNotes.single().content)
-
-        repository.revealPendingNotes()
-        withTimeout(20_000) { repository.state.first { it.notes.size == 2 && it.pendingNotes.isEmpty() } }
+        val updated = withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
+        assertTrue(updated.notes.any { it.content == "second author note" })
     }
 
     @Test
@@ -228,7 +231,7 @@ class FeedRepositoryTest {
         transport.emit(VALID_SECOND_KEY_MESSAGE.replace("\"sub1\"", "\"bitos-older-1\""))
 
         val state = withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
-        assertTrue(state.pendingNotes.isEmpty())
+        assertEquals(2, state.notes.map { it.id }.toSet().size)
     }
 
     @Test

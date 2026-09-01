@@ -80,7 +80,6 @@ data class FeedUiState(
     val timeline: FeedTimeline = FeedTimeline.FOR_YOU,
     val filter: FeedFilter = FeedFilter.ALL,
     val notes: List<FeedNote> = emptyList(),
-    val pendingNotes: List<FeedNote> = emptyList(),
     /** Live tab counts (spec §3.4): ALL-window size per timeline, mutes and
      * protocol payload hidden — what each tab shows under the All filter. */
     val forYouCount: Int = 0,
@@ -200,6 +199,10 @@ class FeedRepository(
     val state: StateFlow<FeedUiState> = mutableState.asStateFlow()
 
     private val pendingNotes = PendingFeedNotes(PENDING_MAX)
+    /** Timelines whose reader is away from the top. */
+    private val heldTimelines = mutableSetOf<FeedTimeline>()
+    /** Reconnects overlap this second and rely on canonical ID de-duplication. */
+    private var headWatermarkSeconds: Long? = null
 
     private var collectJob: Job? = null
     private var retryJob: Job? = null
@@ -410,6 +413,8 @@ class FeedRepository(
 
     fun selectTimeline(timeline: FeedTimeline) {
         mutableState.value = mutableState.value.copy(timeline = timeline)
+        heldTimelines.remove(timeline)
+        drainPending(timeline)
         publishState()
     }
 
@@ -424,6 +429,8 @@ class FeedRepository(
         }
         cancelActiveOlderBatch()
         loadingOlderTimeline = null
+        heldTimelines.remove(mutableState.value.timeline)
+        drainPending(mutableState.value.timeline)
         subscribe()
     }
 
@@ -502,8 +509,9 @@ class FeedRepository(
         }
         olderCounter += 1
         val subId = "bitos-older-$olderCounter"
-        val knownBefore = HashSet<String>(knownNoteIds.size).apply {
-            addAll(knownNoteIds)
+        val knownBefore = synchronized(knownNoteIdsLock) {
+            HashSet(knownNoteIds)
+        }.apply {
             addAll(pendingNotes.ids())
             addAll(aggregator.snapshot().map { it.id })
         }
@@ -873,10 +881,11 @@ class FeedRepository(
             delay(HEAD_SNAPSHOT_MAX_WAIT_MS)
             completeInitialSnapshot(subId)
         }
+        val since = headWatermarkSeconds?.minus(1)?.coerceAtLeast(0)
         pool.broadcast(
             NostrEventCodec.encodeRequest(
                 subId,
-                space.bitos.core.feed.BitzQuery.initialFilters(),
+                space.bitos.core.feed.BitzQuery.headFilters(since),
             ),
         )
         mutableState.value = mutableState.value.copy(isLoading = !mutableState.value.hasLoadedAnyEvent)
@@ -901,20 +910,22 @@ class FeedRepository(
 
     private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
         val note = FeedNote.from(event)
-        if (note.id !in knownNoteIds) {
-            knownNoteIds.add(note.id)
-            // Once the initial bounded snapshot is complete, every live
-            // arrival is held. The UI changes only the small pending pill;
-            // it never shifts the reader's list behind their finger.
+        val isNew = synchronized(knownNoteIdsLock) { knownNoteIds.add(note.id) }
+        if (isNew) {
+            if (!fromOlderPage) {
+                headWatermarkSeconds = maxOf(headWatermarkSeconds ?: event.createdAt, event.createdAt)
+            }
+            // Preserve the reader's anchor only while they are away from the
+            // top. Returning to the head drains this bounded buffer silently.
             val holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
-                aggregator.size() > 0
+                aggregator.size() > 0 && FeedTimeline.FOR_YOU in heldTimelines
             if (holdLiveArrival) {
                 pendingNotes.add(FeedTimeline.FOR_YOU, note)
             } else {
                 aggregator.insert(note)
             }
             if (event.pubkey.value in followingAuthors) {
-                if (holdLiveArrival && followingWindow.size() > 0) {
+                if (holdLiveArrival && FeedTimeline.FOLLOWING in heldTimelines && followingWindow.size() > 0) {
                     pendingNotes.add(FeedTimeline.FOLLOWING, note)
                 } else {
                     followingWindow.insert(note)
@@ -1005,17 +1016,24 @@ class FeedRepository(
         if (mutableState.value.filter == FeedFilter.LIKED) publishState()
     }
 
-    /** Legacy UI hook. New arrivals are never auto-revealed merely because
-     * the reader reached the top; only [revealPendingNotes] changes the list. */
-    fun holdNewNotes(@Suppress("UNUSED_PARAMETER") hold: Boolean) = Unit
-
-    fun revealPendingNotes() {
+    /** Hold only while the active reader is away from the head. Returning to
+     * the head merges arrivals without a visible pending-count control. */
+    fun holdNewNotes(hold: Boolean) {
         val timeline = mutableState.value.timeline
-        val revealed = pendingNotes.drain(timeline)
-        revealed.forEach { windowFor(timeline).insert(it) }
-        publishState()
+        val changed = if (hold) heldTimelines.add(timeline) else heldTimelines.remove(timeline)
+        val drained = if (!hold) drainPending(timeline) else false
+        if (changed || drained) publishState()
     }
 
+    private fun drainPending(timeline: FeedTimeline): Boolean {
+        val revealed = pendingNotes.drain(timeline)
+        revealed.forEach { windowFor(timeline).insert(it) }
+        return revealed.isNotEmpty()
+    }
+
+    /** Relay ingest and older-page completion can run on different scope
+     * coroutines. Snapshot/check-and-add must share this lock. */
+    private val knownNoteIdsLock = Any()
     private val knownNoteIds = HashSet<String>(512)
     private var likedIds: Set<String> = emptySet()
 
@@ -1360,7 +1378,6 @@ class FeedRepository(
                     it.id !in dismissedNoteIds &&
                     FeedFilters.passes(it, filter, ownPubkey, liked, protocolNotesVisible)
             },
-            pendingNotes = pendingNotes.snapshot(mutableState.value.timeline),
             forYouCount = allWindow(forYouWindow),
             followingCount = allWindow(followingSnapshot),
             profiles = profileSnapshot(),

@@ -56,11 +56,8 @@ final class FeedStore {
      *  publication — Bitz surfaces must not re-filter the 200-note window
      *  on every body evaluation (audit §4). */
     private(set) var videoNotes: [FeedNote] = []
-    /** Text-note projection for Home. Like [videoNotes], this is derived
-     *  once per coalesced publication so a pending-pill animation never
-     *  filters the full feed window from a SwiftUI body. */
+    /** Text-note projection for Home, derived once per coalesced publication. */
     private(set) var textNotes: [FeedNote] = []
-    private(set) var pendingNotes: [FeedNote] = []
     /// APP-004 live tab counts: ALL-window size per timeline (mutes +
     /// protocol payload hidden) — what each tab shows under the All filter.
     private(set) var forYouCount = 0
@@ -235,6 +232,8 @@ final class FeedStore {
 
     func selectTimeline(_ timeline: FeedTimeline) {
         self.timeline = timeline
+        heldTimelines.remove(timeline)
+        _ = drainPending(for: timeline)
         syncPaginationState()
         publishState()
     }
@@ -246,32 +245,32 @@ final class FeedStore {
         publishState()
     }
 
-    /// Legacy UI hook. Reaching the top does not flush live arrivals: the
-    /// reader explicitly selects the pending pill to change the list.
+    /// While the reader is away from the head, preserve its scroll anchor.
+    /// Returning to the head silently merges the bounded arrival buffer.
     func holdNewNotes(_ hold: Bool) {
-        _ = hold
+        let changed: Bool
+        let drained: Bool
+        if hold {
+            changed = heldTimelines.insert(timeline).inserted
+            drained = false
+        } else {
+            changed = heldTimelines.remove(timeline) != nil
+            drained = drainPending(for: timeline)
+        }
+        if changed || drained { publishState() }
     }
 
-    func revealPendingNotes() {
+    private func drainPending(for timeline: FeedTimeline) -> Bool {
         if timeline == .following {
+            guard !pendingFollowing.isEmpty else { return false }
             for note in pendingFollowing { followingWindow?.insert(note) }
             pendingFollowing.removeAll()
         } else {
+            guard !pendingForYou.isEmpty else { return false }
             for note in pendingForYou { window?.insert(note) }
             pendingForYou.removeAll()
         }
-        publishState()
-    }
-
-    /// Up to four distinct arrival authors for the pill avatar stack.
-    var pendingAuthors: [String] {
-        var seen = Set<String>()
-        var authors: [String] = []
-        for note in pendingNotes where seen.insert(note.pubkey).inserted {
-            authors.append(note.pubkey)
-            if authors.count == 4 { break }
-        }
-        return authors
+        return true
     }
 
     /// APP-005: NIP-27 rich-content tokens (bridge seam; JSON shape locked
@@ -290,6 +289,8 @@ final class FeedStore {
         // exist again after new arrivals push the window deeper.
         isLoading = !hasLoadedAnyEvent
         resetOlderLanes()
+        heldTimelines.remove(timeline)
+        _ = drainPending(for: timeline)
         subscribe()
     }
 
@@ -407,7 +408,8 @@ final class FeedStore {
         let subId = "bitos-older-\(olderCounter)"
         let knownBefore = knownNoteIds
             .union(window?.snapshot().map(\.id) ?? [])
-            .union(pendingNotes.map(\.id))
+            .union(pendingForYou.map(\.id))
+            .union(pendingFollowing.map(\.id))
         Task { [weak self, pool] in
             let expectedRelays = await pool.connectedRelays()
             guard let self, self.loadingOlderTimeline == timeline else { return }
@@ -652,8 +654,11 @@ final class FeedStore {
         let note = client.feedNote(from: event)
         if !knownNoteIds.contains(note.id) {
             knownNoteIds.insert(note.id)
+            if !fromOlderPage {
+                headWatermarkSeconds = max(headWatermarkSeconds ?? event.createdAt, event.createdAt)
+            }
             let holdLiveArrival = !fromOlderPage && initialSnapshotComplete &&
-                (window?.count() ?? 0) > 0
+                (window?.count() ?? 0) > 0 && heldTimelines.contains(.forYou)
             if holdLiveArrival {
                 pendingForYou.append(note)
                 if pendingForYou.count > Self.pendingMax {
@@ -663,7 +668,7 @@ final class FeedStore {
                 window?.insert(note)
             }
             if followingAuthors.contains(event.pubkey) {
-                if holdLiveArrival && (followingWindow?.count() ?? 0) > 0 {
+                if holdLiveArrival && heldTimelines.contains(.following) && (followingWindow?.count() ?? 0) > 0 {
                     pendingFollowing.append(note)
                     if pendingFollowing.count > Self.pendingMax {
                         pendingFollowing.removeFirst(pendingFollowing.count - Self.pendingMax)
@@ -1303,7 +1308,14 @@ final class FeedStore {
             guard !Task.isCancelled else { return }
             self?.completeInitialSnapshot(subscriptionId: subscriptionId)
         }
-        let request = client.feedRequest(subscriptionId: subscriptionId)
+        let request: String
+        if let watermark = headWatermarkSeconds {
+            // Nostr time is second-granular. Re-fetch the boundary second and
+            // rely on canonical event-id de-duplication for a gap-free head.
+            request = client.feedRequestSince(subscriptionId: subscriptionId, since: max(0, watermark - 1))
+        } else {
+            request = client.feedRequest(subscriptionId: subscriptionId)
+        }
         Task { [weak self, pool] in
             let expectedRelays = await pool.connectedRelays()
             guard let self, self.currentSubscriptionId == subscriptionId else { return }
@@ -1400,7 +1412,6 @@ final class FeedStore {
         }
         videoNotes = notes.filter { $0.video != nil }
         textNotes = notes.filter { $0.video == nil }
-        pendingNotes = timeline == .following ? pendingFollowing : pendingForYou
         comments = commentThreads
         var assembled: [String: [ThreadDisplayItem]] = [:]
         for (rootId, replies) in commentThreads {
@@ -1549,4 +1560,6 @@ final class FeedStore {
     private var knownNoteIds: Set<String> = []
     private var pendingForYou: [FeedNote] = []
     private var pendingFollowing: [FeedNote] = []
+    private var heldTimelines: Set<FeedTimeline> = []
+    private var headWatermarkSeconds: Int64?
 }

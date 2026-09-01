@@ -135,6 +135,7 @@ protocol BusinessCoreClient: Sendable {
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
     func feedRequest(subscriptionId: String) -> String
+    func feedRequestSince(subscriptionId: String, since: Int64) -> String
     func profileRequest(subscriptionId: String, authors: [String]) -> String
     func close(subscriptionId: String) -> String
     func makeFeedWindow(maxItems: Int) -> any FeedWindowing
@@ -282,6 +283,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func feedRequest(subscriptionId: String) -> String {
         bridge.feedRequest(subscriptionId: subscriptionId)
+    }
+
+    func feedRequestSince(subscriptionId: String, since: Int64) -> String {
+        bridge.feedRequestSince(subscriptionId: subscriptionId, since: since)
     }
 
     func profileRequest(subscriptionId: String, authors: [String]) -> String {
@@ -481,6 +486,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
                  video: MediaMetadata(url: "", mimeType: nil, posterUrl: nil, width: nil, height: nil, durationSeconds: nil))
     }
     func feedRequest(subscriptionId: String) -> String { "" }
+    func feedRequestSince(subscriptionId: String, since: Int64) -> String { "" }
     func profileRequest(subscriptionId: String, authors: [String]) -> String { "" }
     func close(subscriptionId: String) -> String { "" }
     func makeFeedWindow(maxItems: Int) -> any FeedWindowing { NoopWindow() }

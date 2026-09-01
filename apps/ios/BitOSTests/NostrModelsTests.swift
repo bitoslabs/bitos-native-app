@@ -122,6 +122,7 @@ final class BusinessCoreFacadeTests: XCTestCase {
         XCTAssertTrue(request.hasPrefix(#"["REQ","feed1","#))
         XCTAssertTrue(request.contains(#""kinds":[21,22],"limit":16"#))
         XCTAssertTrue(request.contains(#""kinds":[1],"limit":48"#))
+        XCTAssertTrue(client.feedRequestSince(subscriptionId: "feed-gap", since: 600).contains(#""since":600"#))
         XCTAssertEqual(client.close(subscriptionId: "feed1"), #"["CLOSE","feed1"]"#)
     }
 
