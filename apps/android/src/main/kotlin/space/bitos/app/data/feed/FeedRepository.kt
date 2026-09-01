@@ -431,6 +431,10 @@ class FeedRepository(
         loadingOlderTimeline = null
         heldTimelines.remove(mutableState.value.timeline)
         drainPending(mutableState.value.timeline)
+        // Flush notes absorbed mid-walk whose per-note publish was suppressed
+        // when the batch was cancelled — must precede subscribe(), which
+        // re-sets isLoading from the fresh snapshot.
+        publishState()
         subscribe()
     }
 
@@ -446,6 +450,9 @@ class FeedRepository(
         }
         cancelActiveOlderBatch()
         loadingOlderTimeline = null
+        // Same mid-walk flush as refresh(): cancelled batches must not
+        // strand suppressed publishes.
+        publishState()
         subscribe()
     }
 
@@ -603,6 +610,10 @@ class FeedRepository(
             freshMedia = batch.freshMedia + freshPlayable,
             emptyAttempts = nextEmptyAttempts,
         )
+        // The walk continues, but this relay batch is DONE — publish it now
+        // (Flutter appends each completed EOSE batch) instead of holding the
+        // page hidden until the whole multi-batch walk ends.
+        requestPublish()
     }
 
     private fun cancelActiveOlderBatch() {
@@ -957,7 +968,10 @@ class FeedRepository(
                 bookmarkedNoteMap.remove(bookmarkedNoteMap.keys.first())
             }
         }
-        requestPublish()
+        // Older-page frames publish once per completed walk (batch parity
+        // with Flutter appending the whole EOSE page at once); late or
+        // non-older events still publish per-event.
+        if (!fromOlderPage || loadingOlderTimeline == null) requestPublish()
     }
 
     /**

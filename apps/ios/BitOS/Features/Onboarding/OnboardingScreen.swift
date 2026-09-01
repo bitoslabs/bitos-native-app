@@ -186,7 +186,6 @@ struct OnboardingScreen: View {
                         onEdit: { store.clearImportError() },
                         onReview: {
                             store.importKeyPreview(importInput)
-                            if store.preview != nil { step = .verify }
                         }
                     )
                 case .backup:
@@ -240,9 +239,14 @@ struct OnboardingScreen: View {
         .background(BitOSTheme.background)
         .preferredColorScheme(BitOSTheme.preferredScheme)
         // Confirmation closes the loop: once the preview is sealed into the
-        // keychain the success screen finishes the flow.
+        // keychain the success screen finishes the flow. Import advance is
+        // also driven from the preview: derivation is async (off-main), so
+        // the verify step reacts when the preview lands.
         .onChange(of: store.preview) { _, preview in
-            guard preview == nil else { return }
+            if preview != nil {
+                if step == .importKey { step = .verify }
+                return
+            }
             switch step {
             case .backup:
                 step = store.account != nil ? .success : .method

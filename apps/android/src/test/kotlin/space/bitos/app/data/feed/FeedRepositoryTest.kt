@@ -309,6 +309,49 @@ class FeedRepositoryTest {
     }
 
     @Test
+    fun olderPageNotesPublishAsOneBatch(): Unit = runBlocking {
+        // Regression (Bitz Explore): relay pages used to surface one card at
+        // a time because every absorbed EVENT frame published immediately.
+        // A page (e.g. a 3-item reply) must land as ONE state update — the
+        // first published state that contains any older-page note contains
+        // the whole page.
+        repository.start()
+        // Head is the oldest fixture; the older page returns the two newer
+        // fixtures back-to-back before EOSE completes the walk.
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+        repository.loadOlder()
+        withTimeout(2_000) {
+            while (transport.sent.none { it.contains("bitos-older-1") }) kotlinx.coroutines.delay(10)
+        }
+
+        val escapedOlder = VALID_ESCAPED_CONTENT_MESSAGE.replace("\"sub1\"", "\"bitos-older-1\"")
+        val secondKeyOlder = VALID_SECOND_KEY_MESSAGE.replace("\"sub1\"", "\"bitos-older-1\"")
+        val headId = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val olderIds = setOf(
+            "6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd",
+            "c52c5fdb44ec230447a503a33f60bb729077fd8b62208456c1752d2c3dcaec1a",
+        )
+
+        // Both verified page events arrive back-to-back, then EOSE ends the
+        // batch with ONE publish that already contains both notes.
+        transport.emit(escapedOlder)
+        transport.emit(secondKeyOlder)
+        transport.emit("""["EOSE","bitos-older-1"]""")
+
+        withTimeout(2_000) {
+            repository.state.first { state -> state.notes.any { it.id in olderIds } }
+        }.let { first ->
+            val landedIds = first.notes.map { it.id }.toSet()
+            assertTrue(headId in landedIds)
+            assertTrue(
+                olderIds.all { it in landedIds },
+                "older page must publish atomically; got ${landedIds - setOf(headId)}",
+            )
+        }
+    }
+
+    @Test
     fun dropsSignatureUnverifiedAndUnsignedEvents() = runBlocking {
         val unsigned = """["EVENT","sub1",{"id":"${"0".repeat(64)}","pubkey":"${"aa".repeat(32)}","created_at":1710000900,"kind":1,"tags":[],"content":"unsigned"}]"""
         repository.start()
@@ -741,6 +784,8 @@ private const val VALID_TEXT_NOTE_MESSAGE =
     """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"gm from BitOS","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
 private const val VALID_SECOND_KEY_MESSAGE =
     """["EVENT","sub1",{"kind":1,"created_at":1710000300,"tags":[],"content":"second author note","pubkey":"e93fbf1000405bc8bb536a8ae37eebe349ebde8ecae3779ad3786def739aa301","id":"c52c5fdb44ec230447a503a33f60bb729077fd8b62208456c1752d2c3dcaec1a","sig":"7d560e1a017cea1aa15271a5d0d0e3e6e8ada4f44261b770e27cadb51bf884398360b5464e39f739eb1860163b37ccedf9bf81b87e4b7026abe6d539a39bddcc"}]"""
+private const val VALID_ESCAPED_CONTENT_MESSAGE =
+    """["EVENT","sub1",{"kind":1,"created_at":1710000200,"tags":[["e","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],["p","cccccccccccccccccccccccccccccccc"]],"content":"line1\nline2 \"quoted\" ₿\u0007end","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd","sig":"6678f8524132e35027dd2403993fe012a3728b100cfce94a656a9a5da39f37802185d8e6d7120518436c773e64d8e19758a6ba914fd98a0fd86339caa6adf61b"}]"""
 private const val VALID_ID_WRONG_SIGNATURE_MESSAGE =
     """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"tampered but re-identified","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"2cbc3c8affa0828e03b11f975337317f8e415397933fc87069265e17f719e95b","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
 

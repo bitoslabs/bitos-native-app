@@ -20,6 +20,8 @@ import space.bitos.core.nostr.Sha256EventHasher
 
 /** A pending identity awaiting explicit user confirmation (ID-004). */
 data class IdentityPreview(
+    /** Derived once at preview creation so confirmation needs no second secp256k1 pass. */
+    val pubkeyHex: String,
     val npub: String,
     val secretHex: String,
     val replacesExisting: Boolean,
@@ -93,22 +95,31 @@ class IdentityViewModel(
         }
     }
 
-    /** Prepares a freshly generated key for confirmation. */
+    /** Prepares a freshly generated key for confirmation (derivation off-main). */
     fun createKeyPreview() {
-        val secret = store.generateSecretHex()
-        val identity = identityFor(secret) ?: return
-        mutableState.value = mutableState.value.copy(
-            preview = IdentityPreview(
-                npub = identity.npub,
-                secretHex = secret,
-                replacesExisting = mutableState.value.account != null,
-                isNewKey = true,
-            ),
-            importError = null,
-        )
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(busy = true)
+            val secret = store.generateSecretHex()
+            val identity = identityFor(secret)
+            if (identity == null) {
+                mutableState.value = mutableState.value.copy(busy = false)
+                return@launch
+            }
+            mutableState.value = mutableState.value.copy(
+                preview = IdentityPreview(
+                    pubkeyHex = identity.pubkeyHex,
+                    npub = identity.npub,
+                    secretHex = secret,
+                    replacesExisting = mutableState.value.account != null,
+                    isNewKey = true,
+                ),
+                importError = null,
+                busy = false,
+            )
+        }
     }
 
-    /** Validates an nsec/hex import and prepares it for confirmation. */
+    /** Validates an nsec/hex import and prepares it for confirmation (derivation off-main). */
     fun importNsecPreview(input: String) {
         val check = KeyImportForm.check(input)
         val secret = when (check.verdict) {
@@ -120,19 +131,25 @@ class IdentityViewModel(
                 return
             }
         }
-        val identity = identityFor(secret) ?: run {
-            mutableState.value = mutableState.value.copy(importError = "Key rejected by the signer.")
-            return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(busy = true)
+            val identity = identityFor(secret)
+            if (identity == null) {
+                mutableState.value = mutableState.value.copy(importError = "Key rejected by the signer.", busy = false)
+                return@launch
+            }
+            mutableState.value = mutableState.value.copy(
+                preview = IdentityPreview(
+                    pubkeyHex = identity.pubkeyHex,
+                    npub = identity.npub,
+                    secretHex = secret,
+                    replacesExisting = mutableState.value.account != null,
+                    isNewKey = false,
+                ),
+                importError = null,
+                busy = false,
+            )
         }
-        mutableState.value = mutableState.value.copy(
-            preview = IdentityPreview(
-                npub = identity.npub,
-                secretHex = secret,
-                replacesExisting = mutableState.value.account != null,
-                isNewKey = false,
-            ),
-            importError = null,
-        )
     }
 
     /** Clears a stale submit error while the user edits the field. */
@@ -149,16 +166,20 @@ class IdentityViewModel(
     fun previewNsec(): String? =
         mutableState.value.preview?.let { NostrKeyCodec.nsec(it.secretHex) }
 
-    /** Stores the previewed identity; the visible npub is the confirmation. */
+    /** Stores the previewed identity; the visible npub is the confirmation.
+     *  The preview already carries the derived pubkey — no second pass. */
     fun confirmPreview() {
         val preview = mutableState.value.preview ?: return
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(busy = true)
+            val identity = identityFor(preview.secretHex) ?: run {
+                mutableState.value = mutableState.value.copy(busy = false)
+                return@launch
+            }
             withContext(Dispatchers.IO) {
                 store.storeSecret(preview.secretHex)
-                store.storeSecret(preview.secretHex, slotPubkey = currentPubkeyHex(preview) ?: "")
+                store.storeSecret(preview.secretHex, slotPubkey = identity.pubkeyHex)
             }
-            val identity = identityFor(preview.secretHex) ?: return@launch
             registry.register(
                 space.bitos.core.identity.RegisteredAccount(
                     pubkeyHex = identity.pubkeyHex,
@@ -203,7 +224,7 @@ class IdentityViewModel(
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(busy = true)
             val secret = withContext(Dispatchers.IO) { store.loadSecret(slotPubkey = pubkeyHex) }
-            val identity = secret?.let(::identityFor)
+            val identity = secret?.let { identityFor(it) }
             if (identity == null) {
                 // Slot lost (keychain wipe): drop the dead row.
                 registry.remove(pubkeyHex)
@@ -272,14 +293,18 @@ class IdentityViewModel(
      * here — the value crosses to the view exactly once per reveal.
      */
     suspend fun revealNsec(): String? = withContext(Dispatchers.IO) {
-        store.loadSecret()?.let { NostrKeyCodec.nsec(it) }
+        // Active slot first (multi-account); the legacy slot only matches the
+        // original install key — same resolution as [createSigner].
+        (registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) } ?: store.loadSecret())
+            ?.let { NostrKeyCodec.nsec(it) }
     }
 
-    private fun identityFor(secretHex: String): AccountIdentity? {
-        val publicKey = SchnorrSigning.publicKey(hexBytes(secretHex), Sha256EventHasher) ?: return null
+    /** secp256k1 scalar multiplication is ~50ms — always off the main thread. */
+    private suspend fun identityFor(secretHex: String): AccountIdentity? = withContext(Dispatchers.Default) {
+        val publicKey = SchnorrSigning.publicKey(hexBytes(secretHex), Sha256EventHasher) ?: return@withContext null
         val pubkeyHex = publicKey.joinToString("") { ((it.toInt() and 0xf0) ushr 4).toString(16) + (it.toInt() and 0x0f).toString(16) }
-        val npub = NostrKeyCodec.npub(pubkeyHex) ?: return null
-        return AccountIdentity(
+        val npub = NostrKeyCodec.npub(pubkeyHex) ?: return@withContext null
+        AccountIdentity(
             pubkeyHex = pubkeyHex,
             npub = npub,
             signerKind = SignerKind.LOCAL_KEY,
@@ -289,10 +314,6 @@ class IdentityViewModel(
 
     private fun hexBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
-
-    /** Slot key for the preview identity (pubkey derived from the secret). */
-    private fun currentPubkeyHex(preview: IdentityPreview): String? =
-        identityFor(preview.secretHex)?.pubkeyHex
 
     companion object {
         fun factory(

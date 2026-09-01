@@ -158,6 +158,15 @@ from secure storage) before any websocket finishes connecting, so the
 first account heads are silently lost and the You surface would stay
 anonymous with an empty follow set.
 
+Since the 2026-09 identity rework (performance audit R13), iOS cold start
+no longer blocks on identity: `IdentityStore.init` renders the active
+registry row as a provisional account (public projection only) and
+`RootView` verifies it asynchronously (`restoreActiveSession`: Keychain
+load on the actor, secp256k1 derive off-main, epoch-guarded). The shell
+fan-out above therefore fires on the provisional account and self-corrects
+when restore replaces or clears it — the same `.task(id: pubkey)` race
+window, now explicitly bounded by the registry pointer.
+
 ## 7. Composition roots
 
 Construct dependencies once at the app/service boundary:

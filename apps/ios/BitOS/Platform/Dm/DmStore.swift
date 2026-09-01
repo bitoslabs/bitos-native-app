@@ -56,7 +56,10 @@ final class DmStore {
 
     func setAccount(_ pubkey: String?) {
         guard accountPubkey != pubkey else { return }
+        // Account switch: everything account-scoped resets, including the
+        // cached secret (it belongs to the previous account).
         accountPubkey = pubkey
+        cachedSecret = nil
         requested = false
         conversations = []
         previews = [:]
@@ -196,9 +199,11 @@ final class DmStore {
     private var cachedSecret: String?
     private func secretProviderSync() -> String {
         if let cachedSecret { return cachedSecret }
-        // Synchronous fallback — the async provider runs at start; the cached
-        // value is refreshed there. This is only used for unwrap in the stream.
-        cachedSecret = IdentityKeychain.loadSecret()
+        // Legacy multi-account gap: resolve by ACTIVE registry pointer — the
+        // legacy single-secret slot only matches the original install key.
+        let active = UserDefaults(suiteName: "bitos.accounts")?.string(forKey: "active_pubkey")
+        cachedSecret = active.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) }
+            ?? IdentityKeychain.loadSecret()
         return cachedSecret ?? ""
     }
 

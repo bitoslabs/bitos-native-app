@@ -229,6 +229,13 @@ Rules the native port must keep (all delivered):
   in the ACTIVE lane window + pending notes — not the session-global id
   set — so cap-evicted notes re-fetched deeper still count as fresh
   progress.
+- **A page lands as ONE update** (2026-09 fix, UX U6+): relay pages used to
+  surface one card at a time because every absorbed EVENT frame published
+  immediately; now mid-walk older-page frames never publish singly — each
+  completed EOSE batch (or its 4 s deadline / walk end / cancel+refresh
+  flush) publishes the whole batch at once, on both platforms (Flutter
+  appends the full EOSE page per request). Late frames after a walk ended
+  still publish per-event so nothing is stranded.
 - **One scroll memory per tab**, not per surface — the pager index is
   restored on tab return from the in-memory session (§2.5).
 - Native realization: shared `BitzTimelinePolicy` walk rules + bridge
@@ -268,11 +275,11 @@ Native gaps this plan closes (tracked →):
 | G1 ✅ Query depth & kind coverage | kinds `[20,21,22,34235,34236]` now in `feedKinds`/`reelMediaKinds` + `BitzTimelinePolicy.initialFilters()` | Delivered (shared, tested) |
 | G2 ✅ Multi-batch backward walk policy | `BitzTimelinePolicy` (fresh budget 18, 6 batches, monotonic `until`, stall detect) — repository seam adoption pending | Policy shared+tested; repo walk pending (REL) |
 | G3 ◐ Per-batch `maxWait` 4 s | `PAGE_MAX_WAIT_MS` shared const; relay-layer enforcement pending | REL |
-| G4 ◐ Progressive paint (primary-first, secondary merge) | First relay paints; slow ones merge in | REL |
+| G4 ✅ Progressive paint (primary-first, secondary merge) | First relay paints; slow ones merge in — each completed EOSE batch (or its 4 s deadline) publishes the whole batch at once, mid-walk EVENT frames never publish singly | Delivered (REL; `FeedRepository`/`FeedStore`) |
 | G5 ✅ Three-layer distance triggers on the pager | Android pager + iOS `onChange(topId)` now fire load-older at the shared `PREFETCH_BUFFER_THRESHOLD` distance; store-side render batching rides the pools | APP-007 delivered |
 | G6 ○ Cold-start snapshot + tab-session with position restore | 10 reels / 15 min TTL; session index + scroll top; 60 s refresh gate | FED pending |
 | G7 ✅ Rendition selection + mirror failover on the read path | `selectRendition` (screen ×1.25 static pick) + pick→mirrors→renditions chain on item error, BOTH players; imeta parsing bounded | FED-004 delivered |
-| G8 ○ `imeta` poster/thumbnail use | Grid thumbs should use `thumb` when present | APP-007 polish pending |
+| G8 ◐ `imeta` poster/thumbnail use | Grid thumbs honor explicit publisher hints (Flutter `posterUrlFor` parity: top-level `preview`/`image` tags, then `imeta` `preview`/`image` field values) before derived-attachment posters — shared `MediaMetadata`, both UIs consume `posterUrl`; `thumb` key + native frame extraction still pending | FED hint parity delivered; APP-007 polish pending |
 | G9 ◐ Engagement second-pass patch-in | Tallies already patch in place on both platforms; the kinds `[7,6,16,9735,1111,1018]` `#e`-batched second pass is not yet issued per page | FED partial |
 
 **Tab-system gap (closed, then revised):** the web's 5-tab cycle was

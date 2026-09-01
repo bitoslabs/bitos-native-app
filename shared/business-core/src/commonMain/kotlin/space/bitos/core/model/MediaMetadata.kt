@@ -120,6 +120,9 @@ data class MediaMetadata(
             var videoUrl: String? = null
             var videoMime: String? = null
             var posterUrl: String? = null
+            // Explicit cover hints (preview/image) render instantly and cost
+            // no video download, so they outrank any derived poster.
+            var posterHint: String? = null
             var width: Int? = null
             var height: Int? = null
             var durationSeconds: Long? = null
@@ -138,6 +141,13 @@ data class MediaMetadata(
                         }
                         // Mirrors ride along any imeta block, order preserved.
                         fields["fallback"]?.takeIf(::isHttpUrl)?.let { fallbacks.add(it) }
+                        // Flutter parity (media_utils.dart posterUrlFor): an
+                        // imeta `preview <url>` / `image <url>` value is a
+                        // non-standard but harmless explicit cover hint.
+                        if (posterHint == null) {
+                            val hinted = fields["preview"] ?: fields["image"]
+                            posterHint = hinted?.takeIf(::isHttpUrl)
+                        }
                         val url = fields["url"]?.takeIf(::isHttpUrl) ?: continue
                         val mime = fields["m"]?.takeIf { it.length <= 128 }
                         when {
@@ -163,6 +173,13 @@ data class MediaMetadata(
                             posterUrl = url
                         }
                     }
+                    // Flutter parity: top-level `preview <url>` / `image <url>`
+                    // tags are the primary publisher cover hint.
+                    "preview", "image" -> {
+                        if (posterHint == null) {
+                            posterHint = tag.getOrNull(1)?.takeIf(::isHttpUrl)
+                        }
+                    }
                     "fallback" -> {
                         // Legacy/positional mirror tag form.
                         tag.getOrNull(1)?.takeIf(::isHttpUrl)?.let { fallbacks.add(it) }
@@ -176,6 +193,8 @@ data class MediaMetadata(
                 videoMime = null
             }
             if (videoUrl == null) return null
+            // A hinted poster beats any poster-derived-from-attachment URL.
+            val resolvedPoster = posterHint ?: posterUrl
             // Same-URL variants are mirrors, not renditions (codec parity).
             val ladder = renditions
                 .filter { it.url != videoUrl }
@@ -185,7 +204,7 @@ data class MediaMetadata(
             return MediaMetadata(
                 videoUrl,
                 videoMime,
-                posterUrl,
+                resolvedPoster,
                 width,
                 height,
                 durationSeconds,

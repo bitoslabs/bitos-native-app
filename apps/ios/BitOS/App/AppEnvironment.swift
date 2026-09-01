@@ -55,7 +55,11 @@ final class AppEnvironment {
         self.privacyPrefs = PrivacyPrefsStore()
         self.storiesStore = StoriesStore(pool: relayPool)
         self.dmStore = DmStore(pool: relayPool) {
-            IdentityKeychain.loadSecret()
+            // Active registry pointer first; legacy single-secret slot only
+            // matches the original install key (multi-account parity).
+            let active = UserDefaults(suiteName: "bitos.accounts")?.string(forKey: "active_pubkey")
+            return active.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) }
+                ?? IdentityKeychain.loadSecret()
         }
         self.profileLookup = ProfileLookupStore(pool: relayPool, client: businessCore)
         self.posterImages = PosterImagePipeline()

@@ -225,6 +225,8 @@ Comment bottom-sheet anatomy (both platforms):
 
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
+     -> poster prefers explicit publisher hints (top-level preview/image tag,
+        then imeta preview/image value) before derived image attachments
      -> cached notes render immediately; relay head fills one bounded snapshot
      -> after EOSE (or a short deadline), live notes merge at top or buffer while reading older posts
      -> return to top or pull to refresh to merge the bounded buffer; no pending-count control is shown
@@ -232,6 +234,8 @@ Home -> poster/first frame -> autoplay visible Bitz
      -> vertical swipe changes active player lease
      -> ten buffered Bitz remaining starts that mode's older-video query
      -> parallel relays merge by event id until EOSE; oldest time becomes next cursor
+     -> each completed EOSE batch (or its short deadline) appends as ONE update —
+        mid-page frames never surface one card at a time
      -> the final page remains visible until the next verified video appends
      -> tap pause; double tap react; hold speed
      -> caption/sound/author/provenance sheets

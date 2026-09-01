@@ -119,12 +119,15 @@ fun OnboardingScreen(
         }
     }
     // Safety: a backup/verify step without a pending preview has nothing to
-    // show (process-death restore) — fall back to the method picker.
+    // show (process-death restore) — fall back to the method picker. The
+    // reverse also advances the import flow: derivation runs off-main, so
+    // the verify step reacts when the preview lands.
     LaunchedEffect(state.preview) {
-        if (state.preview == null &&
-            (step == OnboardingStep.BACKUP || step == OnboardingStep.VERIFY)
-        ) {
-            if (step == OnboardingStep.BACKUP) step = OnboardingStep.METHOD else step = OnboardingStep.IMPORT
+        if (state.preview == null) {
+            if (step == OnboardingStep.BACKUP) step = OnboardingStep.METHOD
+            if (step == OnboardingStep.VERIFY) step = OnboardingStep.IMPORT
+        } else if (step == OnboardingStep.IMPORT) {
+            step = OnboardingStep.VERIFY
         }
     }
     LaunchedEffect(comingSoonNotice) {
@@ -163,7 +166,6 @@ fun OnboardingScreen(
                 error = state.importError,
                 onReview = {
                     identityViewModel.importNsecPreview(importInput)
-                    if (identityViewModel.state.value.preview != null) step = OnboardingStep.VERIFY
                 },
             )
             OnboardingStep.BACKUP -> BackupStep(

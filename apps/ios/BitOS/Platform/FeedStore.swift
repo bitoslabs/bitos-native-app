@@ -291,6 +291,10 @@ final class FeedStore {
         resetOlderLanes()
         heldTimelines.remove(timeline)
         _ = drainPending(for: timeline)
+        // Flush notes absorbed mid-walk whose per-note publish was
+        // suppressed when the batch was cancelled — must precede
+        // subscribe(), which re-opens the head snapshot.
+        publishState()
         subscribe()
     }
 
@@ -305,6 +309,9 @@ final class FeedStore {
     func retryNow() {
         retryAttempt = 0
         resetOlderLanes()
+        // Same mid-walk flush as refresh(): cancelled batches must not
+        // strand suppressed publishes.
+        publishState()
         subscribe()
     }
 
@@ -498,6 +505,10 @@ final class FeedStore {
         walkOlder(timeline: batch.timeline, cursor: nextCursor,
                   batches: batch.batches + 1, budget: remaining,
                   emptyAttempts: nextEmptyAttempts)
+        // The walk continues, but this relay batch is DONE — publish it now
+        // (Flutter appends each completed EOSE batch) instead of holding the
+        // page hidden until the whole multi-batch walk ends.
+        schedulePublish()
     }
 
     private func finishOlderWalk(_ timeline: FeedTimeline) {
@@ -571,6 +582,10 @@ final class FeedStore {
     }
 
     private func absorbVerified(_ event: VerifiedEvent, frame: RelayFrame) {
+        // Older-page feed frames publish once per completed walk (batch
+        // parity with Flutter appending the whole EOSE page at once); late
+        // frames after the walk ended and every other kind still publish.
+        var suppressPublish = false
         if event.kind == 7 || event.kind == 6 {
             // APP-009: live tallies per thread note (root or reply).
             let eTagged = event.tags.filter { $0.first == "e" }.compactMap { $0.dropFirst().first }
@@ -647,8 +662,11 @@ final class FeedStore {
             recordOlderEvent(subscriptionId: subscriptionId, event: event, note: note)
             absorbNote(event, fromOlderPage: fromOlderPage)
             persist(event)
+            if fromOlderPage && loadingOlderTimeline != nil {
+                suppressPublish = true
+            }
         }
-        schedulePublish()
+        if !suppressPublish { schedulePublish() }
     }
 
     private func absorbNote(_ event: VerifiedEvent, fromOlderPage: Bool = false) {

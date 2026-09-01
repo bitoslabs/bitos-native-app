@@ -36,6 +36,11 @@
 > at launch — closes the loop once internal builds ship | ✅ done |
 > | UX U8 duration affordance: tile duration badge (shared formatter,
 > both platforms, hidden while unknown) | ✅ done |
+> | R13 identity cold-start & signing (2026-09): iOS init is registry-only
+> (zero Keychain/crypto before first frame) with async epoch-guarded restore;
+> derives & signs off-main on both platforms; session-cached signing secret
+> (active slot only); derive-free confirm; active-slot-first DM reveal/unwrap;
+> reactive import advance replacing sync preview checks | ✅ done |
 > | Android shell state isolation: distinct scalar badge flows at the shell; feed profiles collected only by Chats/zap consumers; author state only by its active overlay | ✅ done |
 > | Bitz pager projection: author-window dependency fixed on Android; empty-splice steady state reuses the existing bounded video list on both platforms | ✅ done |
 > | Android AUTO rendition bucket uses logical display height instead of a fixed 1920 target (High/Low semantics unchanged) | ✅ done |
@@ -77,6 +82,7 @@ friction; **P3** = polish.
 | R8 | `PosterImage` (Home inline video poster) decodes at **full-screen × scale** regardless of rendered size; poster views flash `nil` on scroll before cache hit | iOS | **P1** | Scroll jank + memory spikes (a 1290×2796 decode for a ~300 pt card) |
 | R9 | iOS `RelayPool` has **no client-initiated WebSocket ping** (Android OkHttp has 25 s) — idle sockets silently die, recovery rides the 2 s health poll + backoff | iOS | **P1** | "Feed is slow/empty" after backgrounding: wait for reconnect + re-REQ |
 | R10 | Startup: `TabView` composes **all 5 heavy tabs** at first frame; `AppEnvironment` opens SQLite + initializes the KMP framework twice synchronously; splash enforces a 0.9 s brand hold | iOS | **P2** | Perceived cold-launch slowness before any data work |
+| R13 | Identity cold-start & signing: `IdentityStore.init` performs a **synchronous Keychain read + secp256k1 derive + npub encode on the MainActor before the first frame** (~51–62 ms derive + keychain I/O, every launch); signing re-reads Keychain and signs (~100–117 ms) on main; Android `identityFor` scalar-multiply also ran on the main thread; `confirmPreview` derived twice | iOS + Android | **P1** | Multi-100 ms stall at every launch and on every key action; wrong-slot DM reveal/sign paths after account switch |
 | R11 | **Correctness bug found during audit:** `SharedFeedWindow.snapshot()` drops `threadRootId/threadParentId/pollOptions/remixOfEventId/remixOfPubkey/license/fallbackUrls/renditionSpecs` — every note that passes through the window loses thread anchors, polls, remix and rendition-ladder data | iOS | **P0 (bug)** | Polls/remix/thread UI broken for windowed notes; Bitz rendition failover degraded |
 
 Secondary findings (image pipeline, profile fan-out, UX friction, missing
@@ -224,6 +230,27 @@ Fix direction (keeps the rule, changes the owner):
 - `BootSplashTiming.minDisplay = 0.9 s` enforces an artificial brand hold on
   every launch. Recommend: hold only on first-ever launch (pair with
   onboarding), otherwise drop to ~0.3 s total.
+- **(2026-09, done)** R13 identity leg: `IdentityStore.init` used to do the
+  Keychain read + secp256k1 derive + npub encode synchronously on the
+  MainActor at every launch. Now init is registry-only — the active registry
+  row becomes a provisional account (pubkey/npub are public projections
+  already persisted, so the signed-in shell renders immediately) and
+  `RootView`'s `.task` calls `IdentityStore.restoreActiveSession()`, which
+  loads the secret on the actor, derives off-main via a `nonisolated static`
+  helper (fresh `BusinessCoreBridge` inside — the KMP class is not Sendable),
+  then replaces the provisional account (epoch-guarded against concurrent
+  account switches) or drops a dead pointer. Signing (`signLocally`) uses a
+  session-cached secret (memory only) — no per-sign Keychain read — and
+  hops the ~100 ms `signDetached` off-main through the same helper pattern;
+  the Keychain fallback resolves the ACTIVE slot only, never the legacy slot
+  (wrong-key signing guard). `confirmPreview` no longer derives (preview
+  carries `pubkeyHex`); `switchTo` keeps its signature but task-wraps the
+  derive. Android mirrors it: `identityFor` is now `suspend` on
+  `Dispatchers.Default`, previews build inside `viewModelScope.launch` with
+  `busy` gating, import
+  advance is reactive (`LaunchedEffect(state.preview)`), and `revealNsec`
+  resolves the active slot first (previously legacy-only — wrong key after
+  a switch).
 
 ### 3.6 Bitz view specifics — `Features/Bitz/BitzView.swift`
 - `videos = environment.feedStore.notes.filter { $0.video != nil }` and

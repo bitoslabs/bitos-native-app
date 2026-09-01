@@ -101,6 +101,98 @@ class MediaMetadataTest {
         assertEquals("https://mirror.example/thumb.png", media.posterUrl)
     }
 
+    // MARK: - Poster hint parity with Flutter posterUrlFor (issue: bitz
+    // cover thumbnails blank despite explicit publisher hints)
+
+    @Test
+    fun topLevelPreviewTagWinsOverDerivedPoster() {
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("preview", "https://cdn.example/hint.jpg"),
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4"),
+                    listOf("imeta", "url https://x/derived.jpg", "m image/jpeg"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://cdn.example/hint.jpg", media.posterUrl)
+    }
+
+    @Test
+    fun topLevelImageTagHintIsHonored() {
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4"),
+                    listOf("image", "https://cdn.example/cover.webp"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://cdn.example/cover.webp", media.posterUrl)
+    }
+
+    @Test
+    fun imetaPreviewFieldHintBeatsImageBlockUrl() {
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4", "preview https://x/hint.png"),
+                    listOf("imeta", "url https://x/derived.jpg", "m image/jpeg"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://x/hint.png", media.posterUrl)
+    }
+
+    @Test
+    fun imetaImageFieldHintIsHonored() {
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4", "image https://x/hint.jpg"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://x/hint.jpg", media.posterUrl)
+    }
+
+    @Test
+    fun hintOverSizeOrNonHttpIsIgnored() {
+        // Non-http hint falls back to the derived poster.
+        val nonHttp = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("preview", "javascript:alert(1)"),
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4"),
+                    listOf("imeta", "url https://x/derived.jpg", "m image/jpeg"),
+                ),
+            ),
+        )
+        assertNotNull(nonHttp)
+        assertEquals("https://x/derived.jpg", nonHttp.posterUrl)
+        // Oversized hint (> 2048 chars) is dropped entirely.
+        val overSize = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("preview", "https://x.example/" + "a".repeat(2100)),
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4"),
+                ),
+            ),
+        )
+        assertNotNull(overSize)
+        assertNull(overSize.posterUrl)
+    }
+
     @Test
     fun parsesLegacyKind1VideoUrlInContent() {
         val media = MediaMetadata.fromEvent(

@@ -133,6 +133,13 @@ struct RootView: View {
         .task {
             await environment.feedStore.start()
         }
+        // Audit R10: the signed-in shell renders immediately from the public
+        // account registry; this task re-verifies the active entry against
+        // its sealed slot off-main and replaces or clears the provisional
+        // account (see `IdentityStore.restoreActiveSession`).
+        .task {
+            await environment.identityStore.restoreActiveSession()
+        }
         // Shell-level account wiring: the Activity badge needs the inbox
         // subscription alive from app start, not only while the tab is open;
         // the Chats badge rides the DM store's own subscription.
