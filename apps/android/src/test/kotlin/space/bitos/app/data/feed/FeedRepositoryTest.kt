@@ -74,6 +74,42 @@ class FeedRepositoryTest {
         assertEquals(1, state.relayHealth.total)
     }
 
+    /**
+     * UX-UI batch paint (Explore grid "1,2,3 drip" regression): the head
+     * page is ONE relay page. Its EVENT frames must publish as ONE state —
+     * the first published state that contains ANY page note contains the
+     * WHOLE page (alette: EOSE flush), never a 1,2,3 drip. Live arrivals
+     * AFTER the snapshot still publish per-event.
+     */
+    @Test
+    fun headPagePublishesAsOneBatchAtEose(): Unit = runBlocking {
+        repository.start()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
+        }
+
+        // The whole head page lands back-to-back, then EOSE completes it.
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        transport.emit(VALID_ESCAPED_CONTENT_MESSAGE)
+        transport.emit("""["EOSE","bitos-feed-1"]""")
+
+        val pageIds = setOf(
+            "6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd",
+            "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a",
+            "c52c5fdb44ec230447a503a33f60bb729077fd8b62208456c1752d2c3dcaec1a",
+        )
+        withTimeout(20_000) {
+            repository.state.first { state -> state.notes.any { it.id in pageIds } }
+        }.let { first ->
+            val landedIds = first.notes.map { it.id }.toSet()
+            assertTrue(
+                pageIds.all { it in landedIds },
+                "head page must publish atomically; got ${landedIds.intersect(pageIds).size}/3 page notes",
+            )
+        }
+    }
+
     @Test
     fun refreshReopensHeadFromWatermarkWithoutChangingOlderCursor(): Unit = runBlocking {
         repository.start()
@@ -157,6 +193,30 @@ class FeedRepositoryTest {
                 (0 until 500).map { "arrival-$it" }.toSet() + "initial",
                 receivedIds,
             )
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun pendingBufferCopiesIdsWhileAnotherThreadAddsAnArrival() {
+        val pending = PendingFeedNotes(maxItems = 100)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            repeat(500) { index ->
+                val start = CountDownLatch(1)
+                val copied = executor.submit<Set<String>> {
+                    start.await()
+                    buildSet { pending.copyIdsTo(this) }
+                }
+                val add = executor.submit {
+                    start.await()
+                    pending.add(FeedTimeline.FOR_YOU, testNote("arrival-$index"))
+                }
+                start.countDown()
+                copied.get()
+                add.get()
+            }
         } finally {
             executor.shutdownNow()
         }

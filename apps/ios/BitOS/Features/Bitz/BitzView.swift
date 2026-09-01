@@ -1922,6 +1922,20 @@ private struct BitzPosterImage: View {
             } else {
                 Color.black
             }
+            // Explore grid placeholder (Android `PosterImage` parity): a
+            // relay page lands as ONE state batch but each poster decodes
+            // on its own — centered progress per tile says "loading"
+            // instead of empty slabs popping in one at a time.
+            if image == nil && purpose == .grid {
+                if url != nil {
+                    ProgressView()
+                        .tint(.white.opacity(0.6))
+                } else {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
             if let image {
                 if purpose == .grid {
                     Image(uiImage: image)

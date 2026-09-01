@@ -1092,7 +1092,14 @@ private fun BitzTile(
                 )
             },
     ) {
-        PosterImage(url = note.video?.posterUrl, modifier = Modifier.fillMaxSize())
+        PosterImage(
+            url = note.video?.posterUrl,
+            modifier = Modifier.fillMaxSize(),
+            // Explore grid parity with iOS: centered progress while each
+            // poster loads — a 6-item relay page structurally lands as one
+            // batch; posters still decode tile-by-tile.
+            showLoadingProgress = true,
+        )
         if (note.video?.posterUrl == null) {
             Icon(
                 AppIcons.Play,

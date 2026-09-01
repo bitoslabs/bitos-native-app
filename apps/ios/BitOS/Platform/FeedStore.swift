@@ -132,6 +132,9 @@ final class FeedStore {
     private var headExpectedRelays: Set<RelayURL> = []
     private var headEoseRelays: Set<RelayURL> = []
     private var initialSnapshotComplete = false
+    /// True while the head page is collecting its EOSE snapshot — its
+    /// frames publish once as ONE batch when the page completes.
+    private var headBatchPublishing = false
     private var headSnapshotDeadline: Task<Void, Never>?
     private var profileQueue: [String] = []
     private var requestedProfiles: Set<String> = []
@@ -211,6 +214,9 @@ final class FeedStore {
         cancelActiveOlderBatch()
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = nil
+        // A stop mid-head-page must not strand the suppressed per-frame
+        // publishes — drop the batch window and flush as final state.
+        headBatchPublishing = false
         collectTask?.cancel()
         collectTask = nil
         publishTask?.cancel()
@@ -293,8 +299,10 @@ final class FeedStore {
         _ = drainPending(for: timeline)
         // Flush notes absorbed mid-walk whose per-note publish was
         // suppressed when the batch was cancelled — must precede
-        // subscribe(), which re-opens the head snapshot.
+        // subscribe(), which re-opens the head snapshot. The persist flush
+        // rides the same rule.
         publishState()
+        flushPendingPersist()
         subscribe()
     }
 
@@ -312,6 +320,7 @@ final class FeedStore {
         // Same mid-walk flush as refresh(): cancelled batches must not
         // strand suppressed publishes.
         publishState()
+        flushPendingPersist()
         subscribe()
     }
 
@@ -662,7 +671,12 @@ final class FeedStore {
             recordOlderEvent(subscriptionId: subscriptionId, event: event, note: note)
             absorbNote(event, fromOlderPage: fromOlderPage)
             persist(event)
-            if fromOlderPage && loadingOlderTimeline != nil {
+            // Relay PAGE boundaries own the publishes: older-page frames
+            // publish once per completed walk; the INITIAL head page holds
+            // its frames until the page EOSE / snapshot deadline (batch
+            // parity with Flutter appending whole pages — [10, 10, …]).
+            if (fromOlderPage && loadingOlderTimeline != nil) ||
+                (!fromOlderPage && headBatchPublishing) {
                 suppressPublish = true
             }
         }
@@ -1326,6 +1340,11 @@ final class FeedStore {
         subscriptionCounter += 1
         let subscriptionId = currentSubscriptionId
         initialSnapshotComplete = false
+        // UX-UI batch paint: the head page is ONE relay page — its frames
+        // publish ONCE at the page EOSE (or the snapshot deadline below),
+        // so a 10-item page renders 10 tiles at once and later pages
+        // append [10, 10, …] instead of a 1,2,3 drip.
+        headBatchPublishing = true
         headExpectedRelays.removeAll()
         headEoseRelays.removeAll()
         headSnapshotDeadline?.cancel()
@@ -1365,6 +1384,16 @@ final class FeedStore {
         initialSnapshotComplete = true
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = nil
+        // The head page is complete — flush it as ONE projection (the
+        // frames' per-event publishes were suppressed for this window).
+        // flushPendingPersist matters as much: the suppressed publishes
+        // were ALSO the cache-flush driver — without this the page's
+        // events never reach the local cache.
+        if headBatchPublishing {
+            headBatchPublishing = false
+            publishState()
+            flushPendingPersist()
+        }
     }
 
     // MARK: - Algorithm (APP-018 §3.18 — origin parity)

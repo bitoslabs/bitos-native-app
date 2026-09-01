@@ -1198,6 +1198,11 @@ fun PosterImage(
     contentScale: ContentScale = ContentScale.Crop,
     backgroundColor: Color = BitOSColors.surface,
     modifier: Modifier = Modifier,
+    /** Centered progress while the poster loads (Explore grid tiles —
+     * a relay page lands as ONE state batch, but each poster still
+     * decodes on its own; the placeholder says "loading" instead of
+     * an empty slab popping in one tile at a time). */
+    showLoadingProgress: Boolean = false,
 ) {
     Box(modifier.background(if (backgroundColor == BitOSColors.surface) {
         Brush.linearGradient(listOf(BitOSColors.surface, BitOSColors.surfaceElevated))
@@ -1205,11 +1210,34 @@ fun PosterImage(
         Brush.linearGradient(listOf(backgroundColor, backgroundColor))
     })) {
         if (url != null) {
-            coil.compose.AsyncImage(
+            coil.compose.SubcomposeAsyncImage(
                 model = url,
                 contentDescription = null,
                 contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
+                loading = {
+                    if (showLoadingProgress) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                color = BitOSColors.textTertiary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                },
+                error = {
+                    if (showLoadingProgress) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                AppIcons.Play,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(30.dp),
+                            )
+                        }
+                    }
+                },
             )
         }
     }

@@ -60,11 +60,15 @@ internal class PendingFeedNotes(private val maxItems: Int) {
         queueFor(timeline).toList()
     }
 
-    fun ids(): List<String> = synchronized(lock) {
-        buildList(forYou.size + following.size) {
-            addAll(forYou.map(FeedNote::id))
-            addAll(following.map(FeedNote::id))
-        }
+    /**
+     * Copies buffered ids into [destination] while the hand-off buffer is
+     * owned by this lock. Callers must not receive a live collection: older
+     * pagination builds its de-duplication set while relay arrivals can be
+     * appended on another dispatcher thread.
+     */
+    fun copyIdsTo(destination: MutableSet<String>) = synchronized(lock) {
+        forYou.forEach { destination += it.id }
+        following.forEach { destination += it.id }
     }
 
     private fun queueFor(timeline: FeedTimeline): ArrayDeque<FeedNote> =
@@ -256,6 +260,11 @@ class FeedRepository(
     private val olderBatchLock = Any()
     private var activeOlderBatch: OlderBatch? = null
 
+    /** True while the head page is collecting its EOSE snapshot — its
+     * frames publish once as ONE batch when the page completes. */
+    @Volatile
+    private var headBatchPublishing = false
+
     fun start() {
         if (collectJob != null) return
         hydrateFromCache()
@@ -359,6 +368,9 @@ class FeedRepository(
         cancelActiveOlderBatch()
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = null
+        // A stop mid-head-page must not strand the suppressed per-frame
+        // publishes — drop the batch window and flush as final state.
+        headBatchPublishing = false
         pool.broadcast(NostrEventCodec.encodeClose(subscriptionId()))
         collectJob?.cancel()
         collectJob = null
@@ -433,8 +445,10 @@ class FeedRepository(
         drainPending(mutableState.value.timeline)
         // Flush notes absorbed mid-walk whose per-note publish was suppressed
         // when the batch was cancelled — must precede subscribe(), which
-        // re-sets isLoading from the fresh snapshot.
+        // re-sets isLoading from the fresh snapshot (and re-arms the head
+        // batch window). The persist flush rides the same rule.
         publishState()
+        flushPendingPersist()
         subscribe()
     }
 
@@ -453,6 +467,7 @@ class FeedRepository(
         // Same mid-walk flush as refresh(): cancelled batches must not
         // strand suppressed publishes.
         publishState()
+        flushPendingPersist()
         subscribe()
     }
 
@@ -520,9 +535,7 @@ class FeedRepository(
         // The ever-growing knownNoteIds set would mark every re-fetch
         // "known" and the walk would strand as "load more does nothing".
         val knownBefore = windowFor(timeline).snapshot().mapTo(HashSet()) { it.id }
-            .apply {
-                addAll(pendingNotes.ids())
-            }
+        pendingNotes.copyIdsTo(knownBefore)
         val batch = OlderBatch(
             timeline = timeline,
             subId = subId,
@@ -885,6 +898,11 @@ class FeedRepository(
         headExpectedRelays = pool.connectedRelays()
         headEoseRelays.clear()
         initialSnapshotComplete = false
+        // UX-UI batch paint: the head page is ONE relay page — its frames
+        // publish ONCE at the page EOSE (or the snapshot deadline below),
+        // so a 10-item page renders 10 tiles at once and later pages
+        // append [10, 10, …] instead of a 1,2,3 drip.
+        headBatchPublishing = true
         headSnapshotDeadline?.cancel()
         // Some relays do not send EOSE for a persistent subscription. Treat
         // the bounded initial window as complete after a short deadline so
@@ -918,6 +936,16 @@ class FeedRepository(
         initialSnapshotComplete = true
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = null
+        // The head page is complete — flush it as ONE projection (the
+        // frames' per-event publishes were suppressed for this window).
+        // flushPendingPersist matters as much: the suppressed publishes
+        // were ALSO the cache-flush driver — without this the page's
+        // events never reach the local cache.
+        if (headBatchPublishing) {
+            headBatchPublishing = false
+            publishState()
+            flushPendingPersist()
+        }
     }
 
     private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
@@ -968,10 +996,15 @@ class FeedRepository(
                 bookmarkedNoteMap.remove(bookmarkedNoteMap.keys.first())
             }
         }
-        // Older-page frames publish once per completed walk (batch parity
-        // with Flutter appending the whole EOSE page at once); late or
-        // non-older events still publish per-event.
-        if (!fromOlderPage || loadingOlderTimeline == null) requestPublish()
+        // Relay PAGE boundaries own the publishes: older-page frames publish
+        // once per completed walk; the INITIAL head page holds its frames
+        // until the page EOSE / snapshot deadline (batch parity with Flutter
+        // appending whole pages — [10, 10, …]); live arrivals after the
+        // snapshot and every non-feed kind still publish per-event.
+        val suppressPublish =
+            (fromOlderPage && loadingOlderTimeline != null) ||
+                (!fromOlderPage && headBatchPublishing)
+        if (!suppressPublish) requestPublish()
     }
 
     /**
