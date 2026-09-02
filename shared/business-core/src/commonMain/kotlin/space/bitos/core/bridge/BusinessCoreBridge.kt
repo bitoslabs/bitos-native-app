@@ -2796,6 +2796,11 @@ class BusinessCoreBridge {
         )
     }
 
+    /** NIP-50 Bitz search REQ: standard NIP-68/NIP-71 media kinds only
+     *  (Bitz discovery/query standard — Bitz never discovers via kind-1). */
+    fun bitzSearchRequest(subscriptionId: String, query: String, limit: Int): String? =
+        searchRequest(subscriptionId, query, space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS, limit)
+
     /** npub → hex pubkey, when the query is an exact npub (creator search). */
     fun resolveNpub(query: String): String? {
         val trimmed = query.trim()

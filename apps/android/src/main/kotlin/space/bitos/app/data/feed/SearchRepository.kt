@@ -28,6 +28,17 @@ data class SearchUiState(
 )
 
 /**
+ * NIP-50 search scopes (Bitz discovery/query standard, web docs/SYSTEM.md):
+ * Bitz searches the standard NIP-68/NIP-71 media kinds only — it never
+ * discovers media by scanning kind-1 text notes. Discover keeps its
+ * text+video kinds.
+ */
+enum class SearchScope(val kinds: List<Int>) {
+    GENERAL(listOf(NostrKinds.SHORT_TEXT_NOTE, NostrKinds.NORMAL_VIDEO, NostrKinds.SHORT_VIDEO)),
+    BITZ_MEDIA(space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS),
+}
+
+/**
  * NIP-50 search repository (SOC-004): debounced text search over feed kinds,
  * npub resolution for creator queries, verified results in a bounded window.
  * Results clear when the query clears.
@@ -78,8 +89,9 @@ class SearchRepository(
 
     private val profileTimestamps = mutableMapOf<String, Long>()
 
-    /** Debounced search trigger; empty query clears results. */
-    fun search(query: String) {
+    /** Debounced search trigger; empty query clears results. The scope owns
+     *  the queried kind set (Discover general vs Bitz media-only). */
+    fun search(query: String, searchScope: SearchScope = SearchScope.GENERAL) {
         mutableState.value = mutableState.value.copy(query = query)
         searchJob?.cancel()
         val trimmed = query.trim()
@@ -91,11 +103,11 @@ class SearchRepository(
         }
         searchJob = scope.launch {
             delay(DEBOUNCE_MS)
-            performSearch(trimmed)
+            performSearch(trimmed, searchScope)
         }
     }
 
-    private suspend fun performSearch(query: String) {
+    private suspend fun performSearch(query: String, searchScope: SearchScope) {
         subscriptionCounter += 1
         results.clear()
         profiles.clear()
@@ -122,9 +134,10 @@ class SearchRepository(
                 ),
             )
         } else {
-        // Text search over feed kinds (NIP-50; relay support varies — the
-        // empty result state says "relays may not support search").
-        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
+        // Text search over the scope's kind set (NIP-50; relay support varies
+        // — the empty result state says "relays may not support search").
+        val kinds = searchScope.kinds.joinToString(",")
+        val filter = """{"kinds":[$kinds],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-search-$subscriptionCounter", filter))
 
         // npub: request the creator's profile + notes directly.

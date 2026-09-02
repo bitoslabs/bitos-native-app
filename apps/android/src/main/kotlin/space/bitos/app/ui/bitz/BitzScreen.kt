@@ -104,6 +104,7 @@ import space.bitos.app.data.feed.AuthorRepository
 import space.bitos.app.data.feed.FeedTimeline
 import space.bitos.app.data.feed.FeedUiState
 import space.bitos.app.data.feed.SearchRepository
+import space.bitos.app.data.feed.SearchScope
 import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.data.settings.SettingsStore
 import space.bitos.app.identity.IdentityViewModel
@@ -1868,8 +1869,9 @@ private fun BitzSearchOverlay(
     var query by rememberSaveable { mutableStateOf("") }
     val searchState by searchRepository.state.collectAsStateWithLifecycle()
     // Fire on every keystroke; the repository applies the shared 400 ms
-    // relay debounce (BitzSearch.RELAY_DEBOUNCE_MS parity).
-    LaunchedEffect(query) { searchRepository.search(query) }
+    // relay debounce (BitzSearch.RELAY_DEBOUNCE_MS parity). Bitz searches
+    // the standard media kinds only (Bitz discovery/query standard).
+    LaunchedEffect(query) { searchRepository.search(query, SearchScope.BITZ_MEDIA) }
 
     val localEntries = remember(state.notes, state.profiles) {
         state.notes

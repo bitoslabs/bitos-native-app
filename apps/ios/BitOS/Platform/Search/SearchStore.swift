@@ -2,6 +2,17 @@ import BusinessCore
 import Foundation
 import Observation
 
+/// NIP-50 search scopes (Bitz discovery/query standard, web docs/SYSTEM.md):
+/// Bitz searches the standard NIP-68/NIP-71 media kinds only — it never
+/// discovers media by scanning kind-1 text notes. Discover keeps its
+/// text+video kinds.
+enum SearchScope {
+    /// Discover's general search: text + native video kinds.
+    case general
+    /// Bitz search: standard media kinds (bridge `bitzSearchRequest`).
+    case bitzMedia
+}
+
 /// NIP-50 search store (SOC-004): debounced queries, npub creator
 /// resolution, verified results in a bounded window.
 @MainActor
@@ -41,7 +52,7 @@ final class SearchStore {
         }
     }
 
-    func search(_ text: String) {
+    func search(_ text: String, scope: SearchScope = .general) {
         query = text
         searchTask?.cancel()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -52,14 +63,14 @@ final class SearchStore {
             hasSearched = false
             return
         }
-        searchTask = Task { [weak self] in
+        searchTask = Task { [weak self, scope] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
-            await self?.performSearch(trimmed)
+            await self?.performSearch(trimmed, scope: scope)
         }
     }
 
-    private func performSearch(_ query: String) async {
+    private func performSearch(_ query: String, scope: SearchScope) async {
         subscriptionCounter += 1
         seen.removeAll()
         results = []
@@ -70,12 +81,27 @@ final class SearchStore {
         let npub = query.hasPrefix("npub1") ? (bridge.resolveNpub(query: query) as? String) : nil
         resolvedNpub = npub
 
-        if let request = (bridge.searchRequest(
-            subscriptionId: "bitos-search-\(subscriptionCounter)",
-            query: query,
-            kinds: [1, 21, 22],
-            limit: 50
-        ) as String?) {
+        // Bitz discovery/query standard: the Bitz scope queries the standard
+        // NIP-68/NIP-71 media kinds only — never kind-1. Discover keeps its
+        // general text+video set.
+        let request: String? = {
+            switch scope {
+            case .bitzMedia:
+                return bridge.bitzSearchRequest(
+                    subscriptionId: "bitos-search-\(subscriptionCounter)",
+                    query: query,
+                    limit: 50
+                ) as String?
+            case .general:
+                return bridge.searchRequest(
+                    subscriptionId: "bitos-search-\(subscriptionCounter)",
+                    query: query,
+                    kinds: [1, 21, 22],
+                    limit: 50
+                ) as String?
+            }
+        }()
+        if let request {
             Task { await pool.broadcast(request) }
         }
         if let npub {

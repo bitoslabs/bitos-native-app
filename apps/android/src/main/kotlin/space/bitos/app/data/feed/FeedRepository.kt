@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayPool
@@ -227,6 +228,10 @@ class FeedRepository(
     private val headEoseRelays = mutableSetOf<RelayUrl>()
     private var initialSnapshotComplete = false
     private var headSnapshotDeadline: Job? = null
+    /** Trailing head flush: after the first-paint deadline, late frames from
+     *  slow relays stay batched and publish on this repeating tick until the
+     *  page EOSEs or the hard cap ends the batch window. */
+    private var headFlushJob: Job? = null
     private var retryAttempt = 0
     private var subscriptionCounter = 0
     private var olderCounter = 0
@@ -368,6 +373,8 @@ class FeedRepository(
         cancelActiveOlderBatch()
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = null
+        headFlushJob?.cancel()
+        headFlushJob = null
         // A stop mid-head-page must not strand the suppressed per-frame
         // publishes — drop the batch window and flush as final state.
         headBatchPublishing = false
@@ -898,6 +905,8 @@ class FeedRepository(
         headExpectedRelays = pool.connectedRelays()
         headEoseRelays.clear()
         initialSnapshotComplete = false
+        headFlushJob?.cancel()
+        headFlushJob = null
         // UX-UI batch paint: the head page is ONE relay page — its frames
         // publish ONCE at the page EOSE (or the snapshot deadline below),
         // so a 10-item page renders 10 tiles at once and later pages
@@ -927,7 +936,13 @@ class FeedRepository(
         if (subscriptionId != headSubscriptionId) return
         headEoseRelays += relay
         if (headExpectedRelays.isNotEmpty() && headEoseRelays.containsAll(headExpectedRelays)) {
-            completeInitialSnapshot(subscriptionId)
+            if (initialSnapshotComplete) {
+                // The first paint already happened at its deadline; the page
+                // is now truly complete — end the trailing batch window.
+                endHeadBatchPublishing()
+            } else {
+                completeInitialSnapshot(subscriptionId)
+            }
         }
     }
 
@@ -936,16 +951,56 @@ class FeedRepository(
         initialSnapshotComplete = true
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = null
-        // The head page is complete — flush it as ONE projection (the
+        // The head page's first paint — flush it as ONE projection (the
         // frames' per-event publishes were suppressed for this window).
         // flushPendingPersist matters as much: the suppressed publishes
         // were ALSO the cache-flush driver — without this the page's
         // events never reach the local cache.
         if (headBatchPublishing) {
-            headBatchPublishing = false
             publishState()
             flushPendingPersist()
+            if (headExpectedRelays.isNotEmpty() && headEoseRelays.containsAll(headExpectedRelays)) {
+                endHeadBatchPublishing()
+            } else {
+                armHeadFlushLoop(subscriptionId)
+            }
         }
+    }
+
+    /**
+     * Late head-page frames from slow relays must not drip into the grid
+     * one tile at a time (Explore "1,2,3,4…" regression). Keep their
+     * per-event publishes suppressed and repaint on a repeating tick so
+     * they land in page-sized groups; the page's all-relay EOSE (or the
+     * hard cap) closes the batch window with one final publish.
+     */
+    private fun armHeadFlushLoop(subscriptionId: String) {
+        val startedAt = System.nanoTime()
+        headFlushJob?.cancel()
+        headFlushJob = scope.launch {
+            while (isActive) {
+                delay(HEAD_FLUSH_INTERVAL_MS)
+                if (subscriptionId != headSubscriptionId) return@launch
+                val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+                if ((headExpectedRelays.isNotEmpty() && headEoseRelays.containsAll(headExpectedRelays)) ||
+                    elapsedMs >= HEAD_FLUSH_MAX_MS
+                ) {
+                    endHeadBatchPublishing()
+                    return@launch
+                }
+                publishState()
+                flushPendingPersist()
+            }
+        }
+    }
+
+    private fun endHeadBatchPublishing() {
+        headFlushJob?.cancel()
+        headFlushJob = null
+        if (!headBatchPublishing) return
+        headBatchPublishing = false
+        publishState()
+        flushPendingPersist()
     }
 
     private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
@@ -1494,6 +1549,13 @@ class FeedRepository(
         const val PENDING_MAX = 50
         /** Persistent subscriptions may omit EOSE; bound initial catch-up. */
         const val HEAD_SNAPSHOT_MAX_WAIT_MS = 2_500L
+
+        /** Trailing head batch tick: late slow-relay frames repaint in
+         * page-sized groups instead of a 1-by-1 grid drip. */
+        const val HEAD_FLUSH_INTERVAL_MS = 800L
+
+        /** Hard cap on the trailing batch window after the first paint. */
+        const val HEAD_FLUSH_MAX_MS = 5_000L
 
         /** Indexes into [accountHeadAttempts] (shared `AccountBootstrap`). */
         const val HEAD_PROFILE = 0

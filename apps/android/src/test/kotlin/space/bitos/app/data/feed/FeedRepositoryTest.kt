@@ -110,6 +110,23 @@ class FeedRepositoryTest {
     }
 
     /**
+     * Bitz discovery/query standard (web docs/SYSTEM.md port): the head REQ
+     * queries the standard NIP-68/NIP-71 media kinds deep (80/relay) — Bitz
+     * never discovers media via kind-1; Home's shallow kind-1 window rides
+     * the same REQ.
+     */
+    @Test
+    fun headQueriesStandardMediaKindsDeep(): Unit = runBlocking {
+        repository.start()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
+        }
+        val request = transport.sent.last { it.contains("bitos-feed-1") }
+        assertTrue(request.contains("\"kinds\":[20,21,22,34235,34236],\"limit\":80"), request)
+        assertTrue(request.contains("\"kinds\":[1],\"limit\":48"), request)
+    }
+
+    /**
      * UX-UI batch paint (Explore grid "1,2,3 drip" regression): the head
      * page is ONE relay page. Its EVENT frames must publish as ONE state —
      * the first published state that contains ANY page note contains the
@@ -143,6 +160,33 @@ class FeedRepositoryTest {
                 "head page must publish atomically; got ${landedIds.intersect(pageIds).size}/3 page notes",
             )
         }
+    }
+
+    /**
+     * Trailing head batch (slow-relay drip regression): frames that land
+     * AFTER the first-paint deadline but before the page EOSE stay batched —
+     * they repaint in page-sized groups on the flush tick, never one tile
+     * at a time. The all-relay EOSE closes the window with a final publish.
+     */
+    @Test
+    fun lateHeadFramesAfterDeadlineStayBatchedUntilEose(): Unit = runBlocking {
+        repository.start()
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("bitos-feed-1") }) kotlinx.coroutines.delay(10)
+        }
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        // First paint lands at the snapshot deadline (no EOSE yet).
+        withTimeout(20_000) { repository.state.first { it.notes.size == 1 } }
+
+        // A late frame from a slow relay: per-event publishing would land it
+        // within the 10 ms coalesce tick; the trailing batch window must hold
+        // it (well under the 800 ms flush tick) until the page completes.
+        transport.emit(VALID_SECOND_KEY_MESSAGE)
+        kotlinx.coroutines.delay(300)
+        assertEquals(1, repository.state.value.notes.size, "late head frame must not drip into the grid")
+
+        transport.emit("""["EOSE","bitos-feed-1"]""")
+        withTimeout(20_000) { repository.state.first { it.notes.size == 2 } }
     }
 
     @Test

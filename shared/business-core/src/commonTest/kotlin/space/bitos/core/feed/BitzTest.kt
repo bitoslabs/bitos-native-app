@@ -88,10 +88,15 @@ class BitzTest {
     }
 
     @Test
-    fun legacyQuerySeparatesNativeVideoKindsFromTextFallback() {
+    fun headQueriesStandardMediaKindsDeepAndKeepsHomeTextShallow() {
+        // Bitz discovery/query standard (web docs/SYSTEM.md): Bitz discovers
+        // media ONLY through the standard NIP-68/NIP-71 kinds, queried deep.
+        // The native head is the shared Home+Bitz REQ, so Home's shallow
+        // kind-1 window and the repost/profile heads ride along.
+        assertEquals(listOf(20, 21, 22, 34_235, 34_236), BitzQuery.MEDIA_KINDS)
         assertEquals(
             listOf(
-                """{"kinds":[21,22],"limit":16}""",
+                """{"kinds":[20,21,22,34235,34236],"limit":80}""",
                 """{"kinds":[1],"limit":48}""",
                 """{"kinds":[6,0],"limit":80}""",
             ),
@@ -99,10 +104,11 @@ class BitzTest {
         )
         assertEquals(
             listOf(
-                """{"kinds":[21,22],"limit":16,"until":123}""",
-                """{"kinds":[1],"limit":48,"until":123}""",
+                """{"kinds":[20,21,22,34235,34236],"limit":80,"since":600}""",
+                """{"kinds":[1],"limit":48,"since":600}""",
+                """{"kinds":[6,0],"limit":80,"since":600}""",
             ),
-            BitzQuery.olderFilters(123),
+            BitzQuery.headFilters(600),
         )
     }
 

@@ -136,6 +136,10 @@ final class FeedStore {
     /// frames publish once as ONE batch when the page completes.
     private var headBatchPublishing = false
     private var headSnapshotDeadline: Task<Void, Never>?
+    /// Trailing head flush: after the first-paint deadline, late frames from
+    /// slow relays stay batched and publish on this repeating tick until the
+    /// page EOSEs or the hard cap ends the batch window.
+    private var headFlushTask: Task<Void, Never>?
     private var profileQueue: [String] = []
     private var requestedProfiles: Set<String> = []
     private var profileTimestamps: [String: Int64] = [:]
@@ -214,6 +218,8 @@ final class FeedStore {
         cancelActiveOlderBatch()
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = nil
+        headFlushTask?.cancel()
+        headFlushTask = nil
         // A stop mid-head-page must not strand the suppressed per-frame
         // publishes — drop the batch window and flush as final state.
         headBatchPublishing = false
@@ -1340,6 +1346,8 @@ final class FeedStore {
         subscriptionCounter += 1
         let subscriptionId = currentSubscriptionId
         initialSnapshotComplete = false
+        headFlushTask?.cancel()
+        headFlushTask = nil
         // UX-UI batch paint: the head page is ONE relay page — its frames
         // publish ONCE at the page EOSE (or the snapshot deadline below),
         // so a 10-item page renders 10 tiles at once and later pages
@@ -1374,7 +1382,12 @@ final class FeedStore {
     private func recordHeadEose(subscriptionId: String, relay: RelayURL) {
         guard subscriptionId == currentSubscriptionId else { return }
         headEoseRelays.insert(relay)
-        if !headExpectedRelays.isEmpty && headEoseRelays.isSuperset(of: headExpectedRelays) {
+        guard !headExpectedRelays.isEmpty, headEoseRelays.isSuperset(of: headExpectedRelays) else { return }
+        if initialSnapshotComplete {
+            // The first paint already happened at its deadline; the page is
+            // now truly complete — end the trailing batch window.
+            endHeadBatchPublishing()
+        } else {
             completeInitialSnapshot(subscriptionId: subscriptionId)
         }
     }
@@ -1384,16 +1397,55 @@ final class FeedStore {
         initialSnapshotComplete = true
         headSnapshotDeadline?.cancel()
         headSnapshotDeadline = nil
-        // The head page is complete — flush it as ONE projection (the
+        guard headBatchPublishing else { return }
+        // The head page's first paint — flush it as ONE projection (the
         // frames' per-event publishes were suppressed for this window).
         // flushPendingPersist matters as much: the suppressed publishes
         // were ALSO the cache-flush driver — without this the page's
         // events never reach the local cache.
-        if headBatchPublishing {
-            headBatchPublishing = false
-            publishState()
-            flushPendingPersist()
+        publishState()
+        flushPendingPersist()
+        if !headExpectedRelays.isEmpty, headEoseRelays.isSuperset(of: headExpectedRelays) {
+            endHeadBatchPublishing()
+        } else {
+            armHeadFlushLoop(subscriptionId: subscriptionId)
         }
+    }
+
+    /**
+     * Late head-page frames from slow relays must not drip into the grid
+     * one tile at a time (Explore "1,2,3,4…" regression). Keep their
+     * per-event publishes suppressed and repaint on a repeating tick so
+     * they land in page-sized groups; the page's all-relay EOSE (or the
+     * hard cap) closes the batch window with one final publish.
+     */
+    private func armHeadFlushLoop(subscriptionId: String) {
+        headFlushTask?.cancel()
+        let startedAt = Date()
+        headFlushTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(Self.headFlushIntervalMs))
+                guard let self, !Task.isCancelled else { return }
+                guard self.currentSubscriptionId == subscriptionId else { return }
+                let elapsedMs = Date().timeIntervalSince(startedAt) * 1_000
+                if (!self.headExpectedRelays.isEmpty && self.headEoseRelays.isSuperset(of: self.headExpectedRelays)) ||
+                    elapsedMs >= Self.headFlushMaxMs {
+                    self.endHeadBatchPublishing()
+                    return
+                }
+                self.publishState()
+                self.flushPendingPersist()
+            }
+        }
+    }
+
+    private func endHeadBatchPublishing() {
+        headFlushTask?.cancel()
+        headFlushTask = nil
+        guard headBatchPublishing else { return }
+        headBatchPublishing = false
+        publishState()
+        flushPendingPersist()
     }
 
     // MARK: - Algorithm (APP-018 §3.18 — origin parity)
@@ -1602,6 +1654,13 @@ final class FeedStore {
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
     private static let headSnapshotMaxWaitMs = 2_500
+
+    /// Trailing head batch tick: late slow-relay frames repaint in
+    /// page-sized groups instead of a 1-by-1 grid drip.
+    private static let headFlushIntervalMs = 800
+
+    /// Hard cap on the trailing batch window after the first paint.
+    private static let headFlushMaxMs = 5_000.0
     /// Relay-burst publication coalescing window (audit R3).
     private static let publishCoalesceMs = 150
     /// Verified events per one transactional cache flush (audit R6).

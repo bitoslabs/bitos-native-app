@@ -247,6 +247,33 @@ one-second overlap (event-id de-duplication resolves the boundary). This
 forward lane is independent from the per-timeline older cursor, so scrolling
 back from an opening snapshot cannot lose notes published in the meantime.
 
+**Bitz discovery/query standard** (web `docs/SYSTEM.md` parity): the Bitz
+feed, pagination, author playback and NIP-50 search discover media ONLY
+through the standard NIP-68/NIP-71 kinds below — never by querying kind `1`
+text notes and inferring video from a URL in the note body. This keeps the
+Bitz grid media-specific and interoperable with video clients:
+
+| Content | Nostr kind | Standard | Notes |
+| --- | ---: | --- | --- |
+| Picture | `20` | NIP-68 | Image media post. |
+| Normal video | `21` | NIP-71 | Usually landscape/long-form. |
+| Short video | `22` | NIP-71 | Portrait/reels-style; BitOS's normal publish target. |
+| Addressable normal video | `34235` | NIP-71 | Requires a `d` tag; newest event per coordinate is used. |
+| Addressable short video | `34236` | NIP-71 | Requires a `d` tag; newest event per coordinate is used. |
+
+Native keeps ONE shared Home+Bitz subscription (architecture split), so the
+combined head REQ keeps Home's shallow kind-`1` window and the repost/profile
+heads riding alongside the deep media filter (`BitzQuery`, shared
+`business-core`); Bitz pagination (`BitzTimelinePolicy.batchFilters`) and
+Bitz NIP-50 search (`bitzSearchRequest` / `SearchScope.BITZ_MEDIA`) stay
+media-kinds-only. Video metadata belongs in an `imeta` tag (`url`, `m`,
+`dim`, `x`, preview `image`, `fallback`, recommended `duration`); `content`
+is the description/caption. The codec may still render a legacy kind-`1`
+video event passed in from elsewhere, but Bitz never discovers one by
+querying kind `1`. The Explore grid's first paint is ONE batch at the page
+EOSE (or the snapshot deadline); late slow-relay frames stay batched on the
+trailing flush tick instead of dripping in one tile at a time.
+
 UI anatomy:
 
 - full-bleed media respecting safe areas;
@@ -263,6 +290,9 @@ UI anatomy:
   disables loading in the other;
 - Explore always reads and paginates the global For You lane, even after the
   user has visited Following; each mode therefore keeps the correct cursor;
+- Explore discovers media only through the standard NIP-68/NIP-71 kinds
+  (20/21/22/34235/34236) queried deep — the first paint fills the 24-tile
+  grid, not a six-tile sliver (see the Bitz discovery/query standard above);
 - Explore reveals ten more tiles per local page and begins relay pagination ten
   tiles before the loaded edge; Nostr uses the oldest event time as `until`
   because relay offsets are not portable;

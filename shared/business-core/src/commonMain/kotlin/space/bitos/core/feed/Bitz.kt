@@ -84,13 +84,23 @@ object BitzExplore {
 }
 
 /**
- * Legacy-compatible Bitz relay filters. Dedicated NIP-71 kinds are queried
- * separately from kind-1 media-link fallbacks so one noisy text-note filter
- * cannot consume the useful video page budget.
+ * Combined feed head REQ (Bitz discovery/query standard, web `docs/SYSTEM.md`):
+ * Bitz discovers media ONLY through the standard NIP-68/NIP-71 kinds
+ * (20/21/22/34235/34236) queried deep — never by scanning kind-1 text notes
+ * for video URLs. The native head is the shared Home+Bitz subscription, so
+ * Home's shallow kind-1 window and the repost/profile heads ride the same
+ * REQ; Bitz pagination and NIP-50 search stay media-kinds-only
+ * (`BitzTimelinePolicy` / bridge `bitzSearchRequest`).
  */
 object BitzQuery {
-    const val MEDIA_PAGE_LIMIT = 16
-    const val TEXT_PAGE_LIMIT = 48
+    /** Standard reel-media kinds queried deep (NIP-68/NIP-71). */
+    val MEDIA_KINDS: List<Int> = space.bitos.core.model.NostrKinds.reelMediaKinds
+
+    /** Deep media page per relay (FED-004 `MEDIA_INITIAL_LIMIT`). */
+    const val MEDIA_HEAD_LIMIT = BitzTimelinePolicy.MEDIA_INITIAL_LIMIT
+
+    /** Home's shallow text window riding the same head REQ. */
+    const val TEXT_HEAD_LIMIT = 48
 
     fun initialFilters(): List<String> = headFilters(null)
 
@@ -104,16 +114,11 @@ object BitzQuery {
     fun headFilters(since: Long?): List<String> {
         val boundary = since?.coerceAtLeast(0)?.let { ",\"since\":$it" } ?: ""
         return listOf(
-            """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT$boundary}""",
-            """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT$boundary}""",
+            """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_HEAD_LIMIT$boundary}""",
+            """{"kinds":[1],"limit":$TEXT_HEAD_LIMIT$boundary}""",
             """{"kinds":[6,0],"limit":80$boundary}""",
         )
     }
-
-    fun olderFilters(until: Long): List<String> = listOf(
-        """{"kinds":[21,22],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
-        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
-    )
 }
 
 /**

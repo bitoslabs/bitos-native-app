@@ -1744,8 +1744,10 @@ struct BitzSearchOverlay: View {
         .background(Color(red: 0.04, green: 0.04, blue: 0.06).opacity(0.95))
         .onAppear { focused = true }
         .onChange(of: query) { _, value in
-            // SearchStore applies the shared 400 ms relay debounce.
-            environment.searchStore.search(value)
+            // SearchStore applies the shared 400 ms relay debounce. Bitz
+            // searches the standard media kinds only (discovery/query
+            // standard — never kind-1).
+            environment.searchStore.search(value, scope: .bitzMedia)
         }
     }
 }

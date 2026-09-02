@@ -195,10 +195,16 @@ class BusinessCoreBridgeTest {
     fun encodesSubscriptionMessages() {
         val request = bridge.feedRequest("feed1")
         assertTrue(request.startsWith("""["REQ","feed1","""), request)
-        assertTrue(request.contains(""""kinds":[21,22],"limit":16"""), request)
+        // Bitz discovery/query standard: the head queries the standard
+        // NIP-68/NIP-71 media kinds deep; Home's kind-1 window rides along.
+        assertTrue(request.contains(""""kinds":[20,21,22,34235,34236],"limit":80"""), request)
         assertTrue(request.contains(""""kinds":[1],"limit":48"""), request)
         val gapRequest = bridge.feedRequestSince("feed-gap", 600)
         assertTrue(gapRequest.contains(""""kinds":[1],"limit":48,"since":600"""), gapRequest)
+        // Bitz NIP-50 search: media kinds only — never kind-1.
+        val bitzSearch = bridge.bitzSearchRequest("bs1", "lightning", 50)!!
+        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"search":"lightning","limit":50"""), bitzSearch)
+        assertTrue(!bitzSearch.contains(""""kinds":[1]"""), bitzSearch)
         assertEquals("""["CLOSE","feed1"]""", bridge.close("feed1"))
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)
