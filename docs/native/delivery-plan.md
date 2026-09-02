@@ -186,6 +186,12 @@
   profile sheets with follow/unfollow inline; author taps on video
   captions on both apps.
 
+- 2026-09-01 — Author Bitz page performance (web parity): `authorRequest`
+  now splits filters (profile limit-1, media kinds deep 60, kind-1 shallow
+  150 — Nostr `limit` is per relay per filter), and both stores settle
+  pages on ALL-RELAY EOSE with a 4 s deadline + CLOSE per page instead of
+  a blind 3 s sleep; subscriptions no longer leak across pages.
+
 - 2026-08-27 — ID-008 partial: `composeProfileMetadata` (kind 0, 3 new
   tests: JSON escaping + round-trip through ProfileMetadata, minimal
   empty profile, field validation) + edit sheets on both apps; profile

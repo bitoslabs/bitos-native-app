@@ -20,12 +20,18 @@ struct AuthorProfileSheet: View {
     @State private var npubCopied = false
     @State private var showInlineFull = false
     @State private var showZap = false
+    /** Web ProfileActionMenu parity: copy affordances + moderation. */
+    @State private var moreMenu: AppMenuPresentation?
+    /** Report-user flow (kind-1984, p-tag only — full-page menu parity). */
+    @State private var reportReason = ""
+    @State private var showReportPrompt = false
     /** X-style: tapping a note card opens its thread (CommentSheet). */
     @State private var threadTarget: FeedNote?
     /** Note zap from a profile card (NIP-57 note zap). */
     @State private var noteZapTarget: FeedNote?
 
     private var profile: ProfileMetadata? { environment.authorStore.profile }
+    private var npub: String? { BusinessCoreBridge().npubEncode(pubkeyHex: authorPubkey) as String? }
     private var notes: [FeedNote] { environment.authorStore.notes }
     private var isFollowing: Bool { environment.feedStore.following.contains(authorPubkey) }
     private var hasLightning: Bool { !(profile?.lud16 ?? "").isEmpty }
@@ -60,8 +66,26 @@ struct AuthorProfileSheet: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(BitOSTheme.preferredScheme)
+        .appMenuHost($moreMenu)
         .onAppear { environment.authorStore.open(authorPubkey: authorPubkey) }
         .onDisappear { environment.authorStore.close() }
+        // Report user (kind-1984, p-tag only — full-page ⋯ menu parity).
+        .alert("Report this user", isPresented: $showReportPrompt) {
+            TextField("Reason (spam, harassment…)", text: $reportReason)
+            Button("Report", role: .destructive) {
+                let reason = reportReason.trimmingCharacters(in: .whitespacesAndNewlines)
+                reportReason = ""
+                guard !reason.isEmpty else { return }
+                Task {
+                    await environment.notePublisher.publishReport(
+                        targetEventId: nil, targetPubkey: authorPubkey, reason: reason
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) { reportReason = "" }
+        } message: {
+            Text("The report is published as a kind-1984 event.")
+        }
         .fullScreenCover(isPresented: $showInlineFull) {
             AuthorProfileFullView(
                 authorPubkey: authorPubkey,
@@ -162,7 +186,7 @@ struct AuthorProfileSheet: View {
     // MARK: - Banner
 
     private var bannerSection: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .top) {
             Group {
                 if let banner = profile?.banner, !banner.isEmpty, let url = URL(string: banner) {
                     AsyncImage(url: url) { phase in
@@ -180,17 +204,105 @@ struct AuthorProfileSheet: View {
             }
             .frame(height: 130)
 
-            // Close circle on the banner (mock parity): dark glass dot.
-            Button(action: onClose) {
-                AppIcons.image(for: AppIcons.close)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(.black.opacity(0.40)).background(.ultraThinMaterial))
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                moreMenuButton
+                Spacer()
+                closeButton
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close profile")
             .padding(BitOSTheme.Spacing.md)
+        }
+    }
+
+    /// Close circle on the banner (mock parity): dark glass dot.
+    private var closeButton: some View {
+        Button(action: onClose) {
+            AppIcons.image(for: AppIcons.close)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(.black.opacity(0.40)).background(.ultraThinMaterial))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close profile")
+    }
+
+    // MARK: - More menu (copy link · npub · lightning · mute · report)
+
+    /// Web ProfileActionMenu parity — the same entries as the full profile
+    /// page's ⋯ menu, presented over the sheet.
+    private var moreMenuButton: some View {
+        let entries: [AppMenuEntry] = {
+            var items: [AppMenuEntry] = []
+            if let npub {
+                items.append(.item(AppMenuItem(id: "copy-link", label: "Copy profile link", systemImage: AppIcons.link)))
+                items.append(.item(AppMenuItem(id: "copy-npub", label: npubCopied ? "npub copied" : "Copy npub", systemImage: AppIcons.copy)))
+            }
+            if let lud16 = profile?.lud16, !lud16.isEmpty {
+                items.append(.item(AppMenuItem(id: "copy-lightning", label: "Copy lightning address", systemImage: AppIcons.zap)))
+            }
+            if identity.account?.pubkeyHex != authorPubkey {
+                let muted = environment.feedStore.muted.contains(authorPubkey)
+                items.append(.divider)
+                items.append(.item(AppMenuItem(
+                    id: "mute",
+                    label: muted ? "Unmute author" : "Mute author",
+                    systemImage: muted ? "speaker.wave.2" : AppIcons.mute
+                )))
+                items.append(.item(AppMenuItem(
+                    id: "report",
+                    label: "Report user…",
+                    systemImage: AppIcons.reportSpam,
+                    isDestructive: true
+                )))
+            }
+            return items
+        }()
+        return Button {
+            // no-op — the overlay tap gesture below reports the anchor
+        } label: {
+            AppIcons.image(for: AppIcons.more)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(.black.opacity(0.40)).background(.ultraThinMaterial))
+        }
+        .overlay {
+            GeometryReader { geo in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        let frame = geo.frame(in: .global)
+                        moreMenu = AppMenuPresentation(
+                            anchor: CGPoint(x: frame.minX, y: frame.maxY),
+                            entries: entries
+                        ) { id in
+                            handleMoreMenu(id)
+                        }
+                    }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More profile actions")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func handleMoreMenu(_ id: String) {
+        switch id {
+        case "copy-link":
+            if let npub { UIPasteboard.general.string = "https://njump.me/\(npub)" }
+        case "copy-npub":
+            if let npub {
+                UIPasteboard.general.string = npub
+                npubCopied = true
+            }
+        case "copy-lightning":
+            if let lud16 = profile?.lud16 { UIPasteboard.general.string = lud16 }
+        case "mute":
+            environment.feedStore.toggleMute(authorPubkey)
+        case "report":
+            showReportPrompt = true
+        default:
+            break
         }
     }
 
@@ -415,7 +527,7 @@ struct AuthorProfileSheet: View {
                 }
                 if !website.isEmpty, let url = URL(string: website.hasPrefix("http") ? website : "https://\(website)") {
                     Link(destination: url) {
-                        infoChip(symbol: "globe", text: website, tint: BitOSTheme.textSecondary)
+                        infoChip(symbol: AppIcons.globe, text: website, tint: BitOSTheme.textSecondary)
                     }
                     .accessibilityLabel("Open website")
                 }
@@ -425,7 +537,7 @@ struct AuthorProfileSheet: View {
 
     private func infoChip(symbol: String, text: String, tint: Color) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: symbol)
+            AppIcons.image(for: symbol)
                 .font(.system(size: 12))
             Text(text)
                 .font(.system(size: 11))
@@ -635,7 +747,7 @@ private struct AuthorNoteCard: View {
                     Text("·")
                         .foregroundStyle(BitOSTheme.textTertiary)
                     HStack(spacing: 3) {
-                        Image(systemName: "play.circle.fill")
+                        AppIcons.image(for: AppIcons.playCircle)
                             .font(.system(size: 11))
                         Text("Video")
                             .font(.system(size: 11, weight: .semibold))
@@ -645,7 +757,7 @@ private struct AuthorNoteCard: View {
                     Text("·")
                         .foregroundStyle(BitOSTheme.textTertiary)
                     HStack(spacing: 3) {
-                        Image(systemName: "photo")
+                        AppIcons.image(for: AppIcons.photo)
                             .font(.system(size: 11))
                         Text("\(note.mediaUrls.count)")
                             .font(.system(size: 11, weight: .semibold))

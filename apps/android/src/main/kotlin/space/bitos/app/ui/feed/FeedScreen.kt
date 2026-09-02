@@ -341,6 +341,9 @@ fun FeedScreen(
                                 refOpenTarget = raw
                                 viewModel.openNoteReference(raw)
                             },
+                            // Mention taps open the mentioned user's sheet,
+                            // not the note author's.
+                            onOpenMentionProfile = { authorTarget = it },
                             sensitiveShowByDefault = sensitiveShowByDefault,
                             mediaPreview = settingsSnapshot.mediaPreview,
                         )
@@ -599,6 +602,7 @@ fun FeedScreen(
             ComposerContent(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
+                profiles = state.profiles,
                 onPublish = { text, pow ->
                     if (pow != null) {
                         notePublisher.publishPowWith(
@@ -1266,6 +1270,8 @@ private fun NotesList(
     onRepost: (FeedNote) -> Unit,
     onOpenExternalLink: (String) -> Unit = {},
     onOpenNoteRef: (String) -> Unit = {},
+    /** Profile-mention tap → the mentioned user's profile sheet. */
+    onOpenMentionProfile: (String) -> Unit = {},
     onLoadOlder: () -> Unit,
     /** APP-008 poll voting. */
     pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
@@ -1312,6 +1318,7 @@ private fun NotesList(
                 onOpenAttachment = onOpenAttachment,
                 onOpenExternalLink = onOpenExternalLink,
                 onOpenNoteRef = onOpenNoteRef,
+                onOpenMentionProfile = onOpenMentionProfile,
                 sensitiveShowByDefault = sensitiveShowByDefault,
                 mediaPreview = mediaPreview,
                 compact = compact,

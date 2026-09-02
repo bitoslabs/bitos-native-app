@@ -1,6 +1,5 @@
 package space.bitos.app.ui.create
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,14 +38,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.Image
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -55,7 +54,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import space.bitos.app.data.media.GifPickerStore
-import space.bitos.app.ui.components.loadBitmap
+import coil.compose.AsyncImage
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
@@ -67,7 +66,8 @@ import space.bitos.core.publish.GifPickerContract
  * APP-008 GIF picker (legacy Flutter `GifPickerSheet` / web
  * `GifPicker.svelte` parity): trending on open, 350 ms debounced search,
  * Recent tab (≤12, persisted), 24 h trending cache, "Load more"
- * pagination, two-column preview grid and the "Powered by Giphy" footer.
+ * pagination, three-column animated preview grid and the "Powered by Giphy"
+ * footer.
  * Picking hands back the full-resolution URL — the composer embeds it as
  * a plain image URL. All rules run in shared `GifPickerContract`; this
  * sheet owns HTTP, tiles and persistence only.
@@ -232,7 +232,7 @@ fun GifPickerSheet(
                     error.isNotEmpty() -> EmptyState(text = error)
                     visibleItems.isEmpty() && !loading -> EmptyState(text = if (recentTab) "No recent GIFs yet." else "No GIFs yet.")
                     else -> LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Fixed(3),
                         horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -255,7 +255,7 @@ fun GifPickerSheet(
                             }
                         }
                         if (!recentTab && hasMore && visibleItems.isNotEmpty()) {
-                            item(span = { GridItemSpan(2) }) {
+                            item(span = { GridItemSpan(3) }) {
                                 Box(Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm), contentAlignment = Alignment.Center) {
                                     OutlinedButton(
                                         onClick = { fetch(query, append = true) },
@@ -307,31 +307,16 @@ private fun TabPill(label: String, selected: Boolean, modifier: Modifier = Modif
     }
 }
 
-/** Preview tile: first frame while loading, broken-image fallback (legacy parity). */
-private sealed interface TileState {
-    data object Loading : TileState
-    data object Failed : TileState
-    data class Ready(val bitmap: Bitmap) : TileState
-}
-
 @Composable
 private fun GifPreviewTile(preview: String) {
-    var state by remember(preview) { mutableStateOf<TileState>(TileState.Loading) }
-    LaunchedEffect(preview) {
-        state = loadBitmap(preview)?.let(TileState::Ready) ?: TileState.Failed
-    }
-    when (val tile = state) {
-        TileState.Loading -> Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated))
-        TileState.Failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(AppIcons.BrokenImage, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
-        }
-        is TileState.Ready -> Image(
-            bitmap = tile.bitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
+    AsyncImage(
+        model = preview,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize(),
+        placeholder = ColorPainter(BitOSColors.surfaceElevated),
+        error = rememberVectorPainter(AppIcons.BrokenImage),
+    )
 }
 
 @Composable

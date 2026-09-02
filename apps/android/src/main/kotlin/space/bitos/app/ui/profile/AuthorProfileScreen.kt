@@ -527,6 +527,7 @@ fun AuthorProfileScreen(
                             onOpenAttachment = { onOpenExternalLink(it) },
                             onOpenExternalLink = { onOpenExternalLink(it) },
                             onOpenNoteRef = { onOpenNoteRef(it) },
+                            onOpenMentionProfile = onOpenAuthor,
                         )
                     }
                 }

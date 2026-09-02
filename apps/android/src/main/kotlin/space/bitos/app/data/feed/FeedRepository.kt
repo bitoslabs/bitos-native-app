@@ -981,6 +981,14 @@ class FeedRepository(
         }
         absorbReply(note)
         enqueueProfile(event.pubkey.value)
+        // Web parity: mentioned pubkeys' profiles resolve for @display.
+        requestMentionProfiles(
+            space.bitos.core.nostr.Nip27.tokenize(event.content).mapNotNull { token ->
+                (token as? space.bitos.core.nostr.RichToken.Nostr)
+                    ?.takeIf { it.entity == space.bitos.core.nostr.RichToken.Entity.PROFILE }
+                    ?.hex
+            },
+        )
         persist(event)
         // APP-007 Chain: by-id fetches for the remix ancestry land here too.
         synchronized(remixChainEvents) {

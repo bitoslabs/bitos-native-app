@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    implementation(libs.coil.gif)
     implementation(libs.zxing.core)
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation(libs.kotlinx.coroutines.android)

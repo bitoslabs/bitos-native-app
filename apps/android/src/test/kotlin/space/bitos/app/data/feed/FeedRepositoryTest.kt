@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -12,11 +13,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import space.bitos.app.data.publish.NotePublisher
 import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayFrame
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.RelayTransport
 import space.bitos.core.feed.FeedNote
+import space.bitos.core.identity.DeterministicTestSigner
+import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.core.model.RelayUrl
 import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
@@ -72,6 +76,37 @@ class FeedRepositoryTest {
             state.notes.map { it.content }.sorted(),
         )
         assertEquals(1, state.relayHealth.total)
+    }
+
+    @Test
+    fun mentionedProfilesAreRequestedWhenANoteAbsorbs() = runBlocking {
+        repository.start()
+        val mentionHex = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+        val npub = NostrKeyCodec.npub(mentionHex)!!
+        val signer = DeterministicTestSigner("0000000000000000000000000000000000000000000000000000000000000001")
+        val publisher = NotePublisher(scope, pool, clock = { 1_710_000_000 }, ackTimeoutMs = 250)
+        try {
+            publisher.publish("hello nostr:$npub", signer, listOf(relay))
+            // Echo the signed note back as a relay EVENT frame (absorb path).
+            // The publisher frame is ["EVENT",{…}] — slice out the object.
+            withTimeout(20_000) {
+                while (transport.sent.none { it.startsWith("""["EVENT",""") }) delay(10)
+            }
+            val frame = transport.sent.first { it.startsWith("""["EVENT",""") }
+            val eventJson = frame.substringAfter('{').substringBeforeLast('}')
+            transport.emit("""["EVENT","sub1",{$eventJson}]""")
+            withTimeout(20_000) {
+                repository.state.first { state -> state.notes.any { it.content == "hello nostr:$npub" } }
+            }
+
+            // The absorb must enqueue a batched kind-0 REQ covering the
+            // mentioned pubkey (mention names resolve for @display).
+            withTimeout(20_000) {
+                while (transport.sent.none { it.contains("\"kinds\":[0]") && it.contains(mentionHex) }) delay(10)
+            }
+        } finally {
+            publisher.dismiss()
+        }
     }
 
     /**
@@ -792,7 +827,10 @@ private class FakeRelayTransport(private val relay: RelayUrl) : RelayTransport {
 private val mutableFrames = MutableSharedFlow<RelayFrame>(replay = 8, extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     override val state: StateFlow<RelayConnectionState> = mutableState
     override val frames: SharedFlow<RelayFrame> = mutableFrames
-    val sent = mutableListOf<String>()
+
+    // Repository coroutines append while test coroutines iterate/clear —
+    // a plain ArrayList would throw ConcurrentModificationException.
+    val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     override fun connect() {
         mutableState.value = RelayConnectionState.CONNECTED

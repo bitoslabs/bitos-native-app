@@ -20,12 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Photo
-import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -58,6 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.data.feed.AuthorUiState
 import space.bitos.app.data.feed.FeedUiState
+import space.bitos.app.ui.components.AppMenuDropdown
+import space.bitos.app.ui.components.AppMenuEntry
+import space.bitos.app.ui.components.AppMenuItem
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.SheetCloseIcon
 import space.bitos.app.ui.components.formatCount
@@ -100,6 +97,12 @@ fun AuthorProfileContent(
     onZapNote: (FeedNote) -> Unit = {},
     /** Locally liked note ids (optimistic toggles from the feed store). */
     likedIds: Set<String> = emptySet(),
+    /** Moderation menu (⋯): shown only when viewing another account. */
+    showModeration: Boolean = false,
+    /** Current mute state for the [authorPubkey] (menu label). */
+    isMuted: Boolean = false,
+    onToggleMute: () -> Unit = {},
+    onReport: () -> Unit = {},
 ) {
     LaunchedEffect(authorPubkey) { onOpen(authorPubkey) }
 
@@ -108,6 +111,12 @@ fun AuthorProfileContent(
     val clipboard = LocalClipboardManager.current
     var aboutExpanded by remember { mutableStateOf(false) }
     var npubCopied by remember { mutableStateOf(false) }
+    // Web ProfileActionMenu parity: copy affordances + moderation, same
+    // entries as the full profile page's ⋯ menu.
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val npub = remember(authorPubkey) {
+        space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
+    }
 
     Column(
         modifier = Modifier
@@ -143,6 +152,48 @@ fun AuthorProfileContent(
                 ) {
                     DefaultCoverHexPattern()
                 }
+            }
+            // ⋯ actions menu in the banner's top-left corner (copy link ·
+            // npub · lightning, then mute/report — full-page parity).
+            Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
+                IconButton(onClick = { showMoreMenu = true }) {
+                    Icon(
+                        AppIcons.More,
+                        contentDescription = "More profile actions",
+                        tint = Color.White,
+                    )
+                }
+                AppMenuDropdown(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
+                    entries = buildList {
+                        npub?.let {
+                            add(AppMenuEntry.Item(AppMenuItem("copy-link", "Copy profile link", AppIcons.Link)))
+                            add(AppMenuEntry.Item(AppMenuItem("copy-npub", if (npubCopied) "npub copied" else "Copy npub", AppIcons.Copy)))
+                        }
+                        val lud16 = profile?.lud16?.takeIf { v -> v.isNotBlank() }
+                        if (lud16 != null) {
+                            add(AppMenuEntry.Item(AppMenuItem("copy-lightning", "Copy lightning address", AppIcons.Zap)))
+                        }
+                        if (showModeration) {
+                            add(AppMenuEntry.Divider)
+                            add(AppMenuEntry.Item(AppMenuItem("mute", if (isMuted) "Unmute author" else "Mute author", AppIcons.Mute)))
+                            add(AppMenuEntry.Item(AppMenuItem("report", "Report user…", AppIcons.ReportSpam, destructive = true)))
+                        }
+                    },
+                    onSelect = { id ->
+                        when (id) {
+                            "copy-link" -> npub?.let { clipboard.setText(AnnotatedString("https://njump.me/$it")) }
+                            "copy-npub" -> npub?.let {
+                                clipboard.setText(AnnotatedString(it))
+                                npubCopied = true
+                            }
+                            "copy-lightning" -> profile?.lud16?.let { clipboard.setText(AnnotatedString(it)) }
+                            "mute" -> onToggleMute()
+                            "report" -> onReport()
+                        }
+                    },
+                )
             }
             // Close button in top-right corner of the banner
             Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
@@ -222,7 +273,7 @@ fun AuthorProfileContent(
                             if (!profile?.nip05.isNullOrBlank()) {
                                 Spacer(Modifier.width(4.dp))
                                 Icon(
-                                    Icons.Rounded.CheckCircle,
+                                    AppIcons.CheckCircle,
                                     contentDescription = "Verified",
                                     tint = BitOSColors.accent,
                                     modifier = Modifier.size(16.dp),
@@ -244,7 +295,7 @@ fun AuthorProfileContent(
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.ContentCopy,
+                                imageVector = AppIcons.Copy,
                                 contentDescription = null,
                                 tint = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
                                 modifier = Modifier.size(12.dp),
@@ -312,7 +363,7 @@ fun AuthorProfileContent(
                             if (website != null) {
                                 val url = if (website.startsWith("http")) website else "https://$website"
                                 InfoChip(
-                                    icon = { Icon(Icons.Rounded.Language, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(13.dp)) },
+                                    icon = { Icon(AppIcons.Globe, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(13.dp)) },
                                     text = website,
                                     tint = BitOSColors.textSecondary,
                                     onClick = {
@@ -525,6 +576,9 @@ fun AuthorProfileSheetHost(
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
     // Note zap from a profile card (web PostCard zap parity).
     var zapNoteTarget by remember { mutableStateOf<FeedNote?>(null) }
+    // Report user (kind-1984, p-tag only — full-page ⋯ menu parity).
+    var showReportDialog by remember { mutableStateOf(false) }
+    var reportReason by remember { mutableStateOf("") }
     val zapState by homeViewModel.zapState.collectAsStateWithLifecycle()
     val identityState by identityViewModel.state.collectAsStateWithLifecycle()
     val publisherState by notePublisher.state.collectAsStateWithLifecycle()
@@ -550,6 +604,49 @@ fun AuthorProfileSheetHost(
             },
             likedIds = localActions.liked,
             onClose = onClose,
+            showModeration = identityState.account?.pubkeyHex != authorPubkey,
+            isMuted = homeViewModel.isMuted(authorPubkey),
+            onToggleMute = { homeViewModel.toggleMute(authorPubkey) },
+            onReport = { showReportDialog = true },
+        )
+    }
+
+    if (showReportDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showReportDialog = false; reportReason = "" },
+            title = { Text("Report this user") },
+            text = {
+                Column {
+                    Text("The report is published as a kind-1984 event.", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+                    Spacer(Modifier.height(8.dp))
+                    space.bitos.app.ui.components.BitosTextField(
+                        value = reportReason,
+                        onValueChange = { reportReason = it.take(140) },
+                        placeholder = "Reason (spam, harassment…)",
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    val reason = reportReason.trim()
+                    showReportDialog = false
+                    reportReason = ""
+                    if (reason.isNotEmpty()) {
+                        notePublisher.publishReport(
+                            targetEventId = null,
+                            targetPubkey = authorPubkey,
+                            reason = reason,
+                            signerProvider = { identityViewModel.createSigner() },
+                            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                        )
+                    }
+                }) { Text("Report", color = BitOSColors.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showReportDialog = false; reportReason = "" }) {
+                    Text("Cancel", color = BitOSColors.textSecondary)
+                }
+            },
         )
     }
 
@@ -762,12 +859,12 @@ private fun AuthorNoteCard(
                 )
                 if (note.video != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(imageVector = Icons.Rounded.PlayCircle, contentDescription = null, tint = BitOSColors.accent, modifier = Modifier.size(12.dp))
+                        Icon(imageVector = AppIcons.PlayCircle, contentDescription = null, tint = BitOSColors.accent, modifier = Modifier.size(12.dp))
                         Text("Video", style = MaterialTheme.typography.labelSmall, color = BitOSColors.accent)
                     }
                 } else if (note.mediaUrls.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(Icons.Rounded.Photo, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(12.dp))
+                        Icon(AppIcons.Photo, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(12.dp))
                         Text("${note.mediaUrls.size}", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
                     }
                 }

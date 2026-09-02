@@ -66,8 +66,10 @@ struct ComposerScreen: View {
     @State private var gifSheet = false
     @State private var urlAlert = false
     @State private var urlField = ""
-    @State private var pickerItem: PhotosPickerItem?
+    @State private var pickerItems: [PhotosPickerItem] = []
     @State private var suggestions: [MentionPick] = []
+    /// Keyboard-selected row in the mention panel (↑↓ + ↵, hardware keys).
+    @State private var mentionIndex = 0
     @State private var showDiscardConfirm = false
     @State private var restoredDraft = false
 
@@ -130,14 +132,18 @@ struct ComposerScreen: View {
             }
         }
         .preferredColorScheme(BitOSTheme.preferredScheme)
-        .onChange(of: pickerItem) { _, item in
-            guard let item else { return }
+        .onChange(of: pickerItems) { _, items in
+            guard !items.isEmpty else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   canAddImage, let mime = item.supportedContentTypes.first?.preferredMIMEType {
-                    pickedImages.append(PickedImage(data: data, mimeType: mime))
+                for item in items {
+                    // The 4-slot cap applies across the whole selection batch.
+                    guard canAddImage else { break }
+                    if let data = try? await item.loadTransferable(type: Data.self),
+                       let mime = item.supportedContentTypes.first?.preferredMIMEType {
+                        pickedImages.append(PickedImage(data: data, mimeType: mime))
+                    }
                 }
-                pickerItem = nil
+                pickerItems = []
             }
         }
         .onChange(of: text) { _, _ in
@@ -226,8 +232,31 @@ struct ComposerScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
                     authorHeader
-                    ComposerTextEditor(text: $text, cursor: $cursor, focused: $focused, pendingEdit: pendingEdit)
-                        .frame(minHeight: 110)
+                    ComposerTextEditor(
+                        text: $text,
+                        cursor: $cursor,
+                        focused: $focused,
+                        pendingEdit: pendingEdit,
+                        handleKey: { key in
+                            // ↑↓/↵/⎋ drive the mention panel while it is open;
+                            // unhandled keys fall through to normal typing.
+                            guard !suggestions.isEmpty else { return false }
+                            switch key.input {
+                            case UIKeyCommand.inputUpArrow:
+                                moveMentionSelection(-1)
+                            case UIKeyCommand.inputDownArrow:
+                                moveMentionSelection(1)
+                            case "\r", "\n":
+                                acceptMentionSelection()
+                            case UIKeyCommand.inputEscape:
+                                dismissMentionPanel()
+                            default:
+                                return false
+                            }
+                            return true
+                        }
+                    )
+                    .frame(minHeight: 110)
                         .overlay(alignment: .topLeading) {
                             if text.isEmpty {
                                 Text("Post a note…")
@@ -305,7 +334,7 @@ struct ComposerScreen: View {
 
     private var mentionSuggestions: some View {
         VStack(spacing: 0) {
-            ForEach(suggestions) { suggestion in
+            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
                 Button {
                     pickMention(suggestion)
                 } label: {
@@ -324,6 +353,7 @@ struct ComposerScreen: View {
                     }
                     .padding(.horizontal, BitOSTheme.Spacing.md)
                     .padding(.vertical, 6)
+                    .background(index == mentionIndex ? BitOSTheme.accent.opacity(0.12) : .clear)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Mention \(suggestion.name)")
@@ -470,8 +500,18 @@ struct ComposerScreen: View {
         .padding(.vertical, BitOSTheme.Spacing.sm)
         .background(BitOSTheme.surface)
         .overlay(alignment: .top) { Divider().background(BitOSTheme.divider) }
-        .photosPicker(isPresented: $pickerPrompt, selection: $pickerItem, matching: .images)
-        .photosPicker(isPresented: $videoPickerPrompt, selection: $pickerItem, matching: .videos)
+        .photosPicker(
+            isPresented: $pickerPrompt,
+            selection: $pickerItems,
+            maxSelectionCount: max(0, 4 - mediaCount),
+            matching: .images
+        )
+        .photosPicker(
+            isPresented: $videoPickerPrompt,
+            selection: $pickerItems,
+            maxSelectionCount: max(0, 4 - mediaCount),
+            matching: .videos
+        )
     }
 
     @State private var pickerPrompt = false
@@ -586,6 +626,7 @@ struct ComposerScreen: View {
         let atCursor = Int32(min(max(cursor, 0), utf16Length))
         guard focused, bridge.composerIsComposingMention(text: text, cursor: atCursor) else {
             if !suggestions.isEmpty { suggestions = [] }
+            mentionIndex = 0
             return
         }
         let query = bridge.composerMentionQuery(text: text, cursor: atCursor)
@@ -612,6 +653,7 @@ struct ComposerScreen: View {
             let picture = (obj["picture"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             return MentionPick(name: name, pubkey: pubkey, npub: npub, picture: picture)
         }
+        mentionIndex = min(mentionIndex, max(suggestions.count - 1, 0))
     }
 
     /// Replace the `@query` in front of the caret with `@Name ` and track
@@ -632,6 +674,25 @@ struct ComposerScreen: View {
         applyProgrammaticEdit(next, selection: at.location + replacement.length)
         trackedMentions.append((name: suggestion.name, npub: suggestion.npub))
         suggestions = []
+        mentionIndex = 0
+    }
+
+    /// Hardware-keyboard navigation over the suggestion panel (↑↓ move,
+    /// ↵ accepts, ⎋ dismisses the panel). Touch users keep tap-to-pick.
+    func moveMentionSelection(_ delta: Int) {
+        guard !suggestions.isEmpty else { return }
+        mentionIndex = (mentionIndex + delta + suggestions.count) % suggestions.count
+    }
+
+    func acceptMentionSelection() {
+        guard suggestions.indices.contains(mentionIndex) else { return }
+        pickMention(suggestions[mentionIndex])
+    }
+
+    func dismissMentionPanel() {
+        guard !suggestions.isEmpty else { return }
+        suggestions = []
+        mentionIndex = 0
     }
 
     /// Apply a text change driven from outside the field (mention pick,

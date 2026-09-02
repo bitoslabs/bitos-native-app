@@ -734,6 +734,9 @@ struct HomeView: View {
                                 refOpenTarget = raw
                                 store.openNoteReference(raw: raw)
                             },
+                            // Mention taps open the mentioned user's sheet,
+                            // not the note author's.
+                            onOpenMentionProfile: { authorTarget = $0 },
                             onOpenExternalLink: { externalLink = $0 },
                             // APP-008 poll voting.
                             pollTally: store.pollTallies[note.id],
@@ -897,8 +900,9 @@ struct HomeView: View {
             onZap: { zapTarget = note },
             onAuthor: { authorTarget = note.pubkey },
             onMore: { point in presentMoreMenu(for: note, at: point) },
-            onOpenExternalLink: { externalLink = $0 }
-        )
+            onOpenExternalLink: { externalLink = $0 },
+            onOpenMentionProfile: { authorTarget = $0 }
+            )
     }
 }
 
@@ -1145,6 +1149,8 @@ private struct NoteCardRow: View {
     let onMore: (CGPoint) -> Void
     /** note1/nevent1/naddr1 tap → in-place thread open. */
     var onOpenNoteRef: ((String) -> Void)? = nil
+    /** Profile-mention tap → the mentioned user's profile (not the author). */
+    var onOpenMentionProfile: ((String) -> Void)? = nil
     /** External-link tap → confirm sheet (owned by the parent). */
     var onOpenExternalLink: (String) -> Void = { _ in }
     /** APP-008 poll voting (wired by the owning screen). */
@@ -1205,7 +1211,7 @@ private struct NoteCardRow: View {
                 // lines; mention names resolve; note refs open in-place.
                 ExpandableRichText(
                     json: richJson,
-                    onOpenProfile: { _ in onAuthor() },
+                    onOpenProfile: { onOpenMentionProfile?($0) },
                     resolveMentionName: { hex in
                         profiles[hex]?.bestDisplayName
                     },
@@ -1291,6 +1297,8 @@ private struct FeedPage: View {
     var onOpenExternalLink: (String) -> Void = { _ in }
     /// note1/nevent1/naddr1 tap → in-place thread open.
     var onOpenNoteRef: (String) -> Void = { _ in }
+    /// Profile-mention tap → the mentioned user's profile (not the author).
+    var onOpenMentionProfile: ((String) -> Void)? = nil
 
     var body: some View {
         if let video = note.video {
@@ -1306,7 +1314,8 @@ private struct FeedPage: View {
                          richJson: richJson,
                          onLike: onLike, onBookmark: onBookmark,
                          onComment: onComment, onRepost: onRepost, onFollow: onFollow, onZap: onZap, onAuthor: onAuthor,
-                         onOpenExternalLink: onOpenExternalLink)
+                         onOpenExternalLink: onOpenExternalLink,
+                         onOpenMentionProfile: onOpenMentionProfile)
         }
     }
 }
@@ -1565,6 +1574,8 @@ private struct TextNotePage: View {
     let onAuthor: () -> Void
     /// APP-005: external links get the confirm sheet.
     var onOpenExternalLink: (String) -> Void = { _ in }
+    /// Profile-mention tap → the mentioned user's profile (not the author).
+    var onOpenMentionProfile: ((String) -> Void)? = nil
     @State private var revealed = false
     @State private var lightboxUrl: String?
 
@@ -1605,7 +1616,7 @@ private struct TextNotePage: View {
                     // the confirm sheet.
                     RichTextView(
                         json: richJson,
-                        onOpenProfile: { _ in onAuthor() },
+                        onOpenProfile: { onOpenMentionProfile?($0) },
                         onOpenHashtag: nil,
                         hiddenMediaUrls: Set(note.mediaUrls),
                         onOpenLink: { onOpenExternalLink($0) }

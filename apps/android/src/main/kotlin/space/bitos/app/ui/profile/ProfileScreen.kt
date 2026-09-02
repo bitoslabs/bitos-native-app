@@ -108,6 +108,8 @@ fun ProfileScreen(
     /** Web ProfileBitzGrid parity: opens the author-scoped reels player
      *  at the tapped tile (one shared player, context-aware data). */
     onOpenBitzPlayer: (pubkey: String, noteId: String) -> Unit = { _, _ -> },
+    /** Profile-mention tap in a card body → the mentioned user's page. */
+    onOpenMentionProfile: (String) -> Unit = {},
     profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
 ) {
     var showSettings by remember { mutableStateOf(false) }
@@ -542,6 +544,7 @@ fun ProfileScreen(
                             onVotePoll = { optionIndex -> homeViewModel.votePoll(note, optionIndex) },
                             onOpenExternalLink = { externalLink = it },
                             onOpenNoteRef = { noteRefTarget = it },
+                            onOpenMentionProfile = onOpenMentionProfile,
                         )
                     }
                 }

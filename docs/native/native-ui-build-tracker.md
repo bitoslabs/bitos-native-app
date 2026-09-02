@@ -369,6 +369,90 @@ push toggles), relays live status dots, zap sats display.**
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-02 — Comment reply bar: Solar tokens unified with the composer
+  + text-insert parity (user request; SOC-002/APP-008, both platforms).
+  (1) ICONS: the reply bar's action row used different icons than the
+  composer toolbar for identical actions — Android painted Material
+  glyphs (PhotoLibrary/Gif/Public/QrCode2) where the composer paints
+  Solar assets, and iOS used `globe` for the URL action and `qrCode` for
+  PoW where the composer uses `link`/`shieldCheck`. New `SolarFeedIcon`
+  entries (Gallery/VideoCamera/LinkCircle/Film/Chart/ShieldCheck/
+  EyeClosed/Hashtag/Emoji) now back BOTH the Android composer toolbar
+  (was raw `painterResource(R.drawable.solar_*)` — bypassed the token
+  layer) and the reply bar; iOS reply bar moved onto the composer's
+  `link`/`shieldCheck` tokens. PoW audited: present and gated to the
+  kind-1 reply path on both platforms — no functional gap. (2) MISSING
+  FEATURES vs the composer: hashtag + quick-emoji inserts were
+  composer-only; the reply bar gained both (shared `ComposerRules
+  insertHashtag/insertEmoji` / bridge `composerInsert*`; iOS reuses the
+  composer's `composerEmojis()` grid sheet). Inserts land at the end of
+  the reply — the pill field has no cursor tracking. (3) TEST
+  HARDENING: `FakeRelayTransport.sent` (FeedRepository/NotePublisher
+  tests) was a plain ArrayList appended by repository coroutines while
+  tests iterated it — intermittent ConcurrentModificationException
+  observed once in the full suite; now a CopyOnWriteArrayList
+  (snapshot iterators). Verified: full Android suite green twice
+  consecutively; whole-app Swift 6 typecheck clean.
+
+- 2026-09-02 — Comment thread sheet: rich bodies + media + icon tokens
+  (user request; SOC-002/APP-009, both platforms). (1) FUNCTIONAL: the
+  comment list rendered plain `Text` — NIP-27 entities in comments were
+  inert and attached media (gallery/GIF/URL attachments the reply bar
+  itself produces) were invisible. Root card + reply rows now render the
+  shared NIP-27 rich body (mentions resolve to @display-name and tap →
+  the author profile sheet; external links → the confirm sheet, never an
+  unattended browser) with bare media links hidden from the text and
+  rendered as `MediaRow`/`MediaGrid` tiles → zoomable lightbox
+  (feed-card parity, honoring the media-preview setting on iOS).
+  (2) ICON TOKENS: iOS root card's delete was raw `trash` and its ⋯ a
+  literal text glyph — now `AppIcons.delete`/`AppIcons.more` (Solar);
+  the reply-bar GIF button dropped its text glyph for the composer's
+  `AppIcons.gifFilm` Solar token; the orphan indicator moved onto a new
+  `AppIcons.branch` token; Android's root-card ⋯ text glyph →
+  `AppIcons.More`. Verified: full Android unit-test suite green;
+  whole-app Swift 6 typecheck clean.
+
+- 2026-09-02 — Author profile sheet: design-system icons + missing
+  moderation actions (user request; APP-005/APP-013, both platforms).
+  (1) ICON TOKENS: the sheet bypassed the `AppIcons` facade with raw
+  platform icons — Android used `Icons.Rounded.CheckCircle/ContentCopy/
+  Language/Photo/PlayCircle` directly and iOS rendered raw SF Symbols
+  (`bolt.fill` via `Image(systemName:)`, `globe`, `play.circle.fill`,
+  `photo`), skipping the bundled Solar assets. All routed through the
+  token layer now: new `CheckCircle`/`PlayCircle`/`Link` tokens on
+  Android `AppIcons` and a `playCircle` token on iOS (backed by
+  `SolarPlayCircleLinear`); the feed card's NIP-05 badge moved onto the
+  same token. (2) FUNCTIONAL PARITY WITH THE FULL PROFILE PAGE: the
+  sheet had no ⋯ actions — both platforms gained the banner ⋯ menu with
+  copy profile link (njump.me/npub) · copy npub · copy lightning, then
+  mute/unmute author + report user (destructive, kind-1984 with reason
+  dialog; hidden on your own profile) — identical entry set and
+  semantics to the full pages' ProfileActionMenu menus. Verified: full
+  Android unit-test suite green; whole-app Swift 6 typecheck clean.
+
+- 2026-09-02 — Mention tap routing + Android mention-name fetch (user
+  request; APP-005). (1) MENTION TAP OPENS THE MENTIONED USER (was a
+  known simplification in the 2026-08-29 entry): profile-mention taps
+  inside note bodies discarded the entity hex and opened the note
+  author's profile. Renderers already delivered the hex — the card layer
+  dropped it. Both platforms gained an `onOpenMentionProfile` seam:
+  Android `FeedNoteCard` → `NotesList`/FeedScreen (author bottom sheet),
+  `AuthorProfileScreen` (full page via `onOpenAuthor`), `ProfileScreen`
+  own page → `BitOSApp` `authorPageTarget`; iOS `NoteCardRow` +
+  pager `TextNotePage`/`FeedPage` → `authorTarget` sheet, and the same
+  fix mirrored to `BitzView` (Android Bitz already routed the hex
+  correctly). (2) ANDROID MENTION-NAME FETCH (dead code revived): the
+  2026-08-29 entry claimed both repositories auto-request mentioned
+  pubkeys' kind-0 — iOS `FeedStore` did, but Android
+  `FeedRepository.requestMentionProfiles` had zero callers. `absorbNote`
+  now tokenizes content through the shared `Nip27` and enqueues PROFILE
+  entities (batched ≤48, deduped by `requestedProfiles`). Covered by a
+  new adapter test `mentionedProfilesAreRequestedWhenANoteAbsorbs`
+  (publish → relay echo → absorb → asserts the batched kind-0 REQ
+  carries the mentioned hex). Verified: full Android unit-test suite
+  green; whole-app Swift 6 typecheck clean (no simulator runtimes
+  installed on this machine — iOS unit tests not run).
+
 - 2026-08-31 — Brand wordmark refresh (user-supplied masters
   `docs/logo-black.png` light / `docs/logo-white.png` dark). Assets:
   regenerated BOTH platforms from the masters with a shared geometry

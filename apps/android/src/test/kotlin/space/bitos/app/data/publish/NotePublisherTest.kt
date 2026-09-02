@@ -196,7 +196,9 @@ private class FakeRelayTransport(private val relay: RelayUrl) : RelayTransport {
     private val mutableFrames = MutableSharedFlow<RelayFrame>(replay = 8, extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     override val state: StateFlow<RelayConnectionState> = mutableState
     override val frames: SharedFlow<RelayFrame> = mutableFrames
-    val sent = mutableListOf<String>()
+    // Repository coroutines append while tests iterate — snapshot iterator
+    // prevents intermittent ConcurrentModificationException.
+    val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     override fun connect() {
         mutableState.value = RelayConnectionState.CONNECTED

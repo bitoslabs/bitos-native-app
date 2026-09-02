@@ -28,7 +28,6 @@
 		A00000000000000000000114 /* IdentityKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000214 /* IdentityKeychain.swift */; };
 		A00000000000000000000115 /* IdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000215 /* IdentityStore.swift */; };
 		A00000000000000000000116 /* NotePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000216 /* NotePublisher.swift */; };
-		A00000000000000000000117 /* ComposerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000217 /* ComposerSheet.swift */; };
 		A00000000000000000000118 /* CommentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000218 /* CommentSheet.swift */; };
 		A00000000000000000000119 /* ZapSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000219 /* ZapSheet.swift */; };
 		A0000000000000000000011A /* BlossomUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000021A /* BlossomUploader.swift */; };
@@ -131,7 +130,6 @@
 		A00000000000000000000214 /* IdentityKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform/Identity/IdentityKeychain.swift; sourceTree = "<group>"; };
 		A00000000000000000000215 /* IdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform/Identity/IdentityStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000216 /* NotePublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform/Publish/NotePublisher.swift; sourceTree = "<group>"; };
-		A00000000000000000000217 /* ComposerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/ComposerSheet.swift; sourceTree = "<group>"; };
 		A00000000000000000000218 /* CommentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/CommentSheet.swift; sourceTree = "<group>"; };
 		A00000000000000000000219 /* ZapSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Home/ZapSheet.swift; sourceTree = "<group>"; };
 		A0000000000000000000021A /* BlossomUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform/Media/BlossomUploader.swift; sourceTree = "<group>"; };

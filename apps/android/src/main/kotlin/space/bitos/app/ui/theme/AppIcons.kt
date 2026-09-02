@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
@@ -31,7 +32,9 @@ import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.People
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
@@ -76,6 +79,7 @@ object AppIcons {
     // ── Actions (Flutter AppIcons parity) ────────────────────────────
     val More = Icons.Rounded.MoreHoriz          // Solar: menuDots
     val Check = Icons.Rounded.Check
+    val CheckCircle = Icons.Rounded.CheckCircle // Solar: checkCircle (verified badge)
     val Close = Icons.Rounded.Close             // Solar: closeCircle
     val Copy = Icons.Rounded.ContentCopy        // Solar: copy
     val Delete = Icons.Rounded.Delete           // Solar: trashBinMinimalistic
@@ -124,8 +128,10 @@ object AppIcons {
     val Photo = Icons.Rounded.PhotoLibrary
     val Video = Icons.Rounded.Videocam
     val Play = Icons.Rounded.PlayArrow
+    val PlayCircle = Icons.Rounded.PlayCircle   // Solar: playCircle (video badge)
     val Gif = Icons.Rounded.Gif                       // GIF picker (legacy parity)
     val BrokenImage = Icons.Rounded.BrokenImage       // failed media tile
+    val Link = Icons.Rounded.Link                     // Solar: linkCircle (profile link)
 
     /** Convenience for components taking optional leading icons. */
     val none: ImageVector? = null

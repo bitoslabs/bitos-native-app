@@ -19,6 +19,18 @@ enum class SolarFeedIcon(@DrawableRes val drawableRes: Int) {
     Zap(R.drawable.solar_bolt_linear),
     More(R.drawable.solar_menu_dots_linear),
     Send(R.drawable.solar_plain_linear),
+
+    // Composer toolbar (web Composer Solar Linear order — one token per
+    // action so the composer and the reply bar always paint the same icon).
+    Gallery(R.drawable.solar_gallery_linear),
+    VideoCamera(R.drawable.solar_video_linear),
+    LinkCircle(R.drawable.solar_link_circle_linear),
+    Film(R.drawable.solar_film_linear),
+    Chart(R.drawable.solar_chart_linear),
+    ShieldCheck(R.drawable.solar_shield_check_linear),
+    EyeClosed(R.drawable.solar_eye_closed_linear),
+    Hashtag(R.drawable.solar_hashtag_linear),
+    Emoji(R.drawable.solar_emoji_linear),
 }
 
 @Composable

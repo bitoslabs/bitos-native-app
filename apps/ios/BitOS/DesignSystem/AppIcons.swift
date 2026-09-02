@@ -53,7 +53,7 @@ enum AppIcons {
         case gifFilm: Image("SolarFilmLinear")
         case link: Image("SolarLinkCircleLinear")
         case home: Image("SolarHomeLinear")
-        case bitz: Image("SolarPlayCircleLinear")
+        case bitz, playCircle: Image("SolarPlayCircleLinear")
         case inbox: Image("SolarBellLinear")
         case chat: Image("SolarChatRoundLinear")
         case globe: Image("SolarGlobalLinear")
@@ -144,9 +144,11 @@ enum AppIcons {
     static let photo = "photo.on.rectangle"
     static let video = "video.fill"
     static let play = "play.fill"
+    static let playCircle = "play.circle.fill"   // Solar: playCircle (video badge)
     static let pause = "pause.fill"
     static let brokenImage = "photo.badge.exclamationmark"  // failed media tile
     static let info = "info.circle"                          // picker footer
+    static let branch = "arrow.triangle.branch"              // orphan reply indicator
 
     // ── Bitz player controls (spec §3.7) ─────────────────────────────
     static let soundOn = "speaker.wave.2.fill"        // unmuted state

@@ -475,7 +475,7 @@ fun BitOSApp(
                                 sensitiveShowByDefault = sensitiveShowByDefault,
                                 onOpenAuthorProfile = { authorPageTarget = it },
                             )
-                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note })
+                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note }, onOpenMentionProfile = { authorPageTarget = it })
                         }
                     }
                 }

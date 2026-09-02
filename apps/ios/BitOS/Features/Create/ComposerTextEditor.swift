@@ -25,13 +25,19 @@ struct ComposerTextEditor: UIViewRepresentable {
     @Binding var cursor: Int
     @Binding var focused: Bool
     var pendingEdit: ComposerTextEdit?
+    /// Hardware-keyboard interception (↑↓/↵/⎋ over the mention panel).
+    /// Return true from the closure to consume the press.
+    var handleKey: ((ComposerKeyEvent) -> Bool)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = KeyInterceptingTextView()
+        view.keyHandler = { [weak coordinator = context.coordinator] key in
+            coordinator?.parent.handleKey?(key) ?? false
+        }
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.font = .systemFont(ofSize: 16)
@@ -85,5 +91,31 @@ struct ComposerTextEditor: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             parent.focused = false
         }
+    }
+}
+
+/// Minimal key event value (input string only — arrows, "\r", escape).
+struct ComposerKeyEvent {
+    let input: String
+}
+
+/// UITextView subclass that lets the composer consume hardware-key presses
+/// (full-size or software hardware keyboards) before the text engine sees
+/// them — used for the ↑↓/↵/⎋ mention-panel navigation.
+final class KeyInterceptingTextView: UITextView {
+    var keyHandler: ((ComposerKeyEvent) -> Bool)?
+
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(handleKeyCommand(_:))),
+            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(handleKeyCommand(_:))),
+            UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleKeyCommand(_:))),
+            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(handleKeyCommand(_:))),
+        ]
+    }
+
+    @objc private func handleKeyCommand(_ sender: UIKeyCommand) {
+        guard let keyHandler, let input = sender.input else { return }
+        _ = keyHandler(ComposerKeyEvent(input: input))
     }
 }

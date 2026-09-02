@@ -35,6 +35,11 @@ struct CommentSheet: View {
     @State private var awaitingReply = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var pickerPrompt = false
+    /** Text-insert helpers (composer toolbar parity). */
+    @State private var emojiSheet = false
+    /** Rich comment bodies: media tile tap → lightbox; link tap → confirm. */
+    @State private var lightboxUrl: String?
+    @State private var externalLink: String?
 
     private let bridge = BusinessCoreBridge()
     private let uploader = BlossomUploader()
@@ -109,6 +114,12 @@ struct CommentSheet: View {
             )
             .presentationDetents([.large, .medium])
         }
+        // Emoji insert (composer toolbar parity): the shared quick-emoji
+        // set, appended at the end of the reply (no cursor tracking here).
+        .sheet(isPresented: $emojiSheet) {
+            emojiSheetContent
+                .presentationDetents([.medium])
+        }
         .sheet(isPresented: $powSheet) {
             powSheetContent
                 .presentationDetents([.medium, .large])
@@ -171,6 +182,27 @@ struct CommentSheet: View {
         } message: {
             Text("The deletion publishes to your relays and cannot be undone.")
         }
+        // Rich-body media tiles: zoomable lightbox (feed-card parity).
+        .fullScreenCover(item: Binding(
+            get: { lightboxUrl.map { LightboxTarget(url: $0) } },
+            set: { lightboxUrl = $0?.url }
+        )) { target in
+            MediaLightbox(url: target.url, onClose: { lightboxUrl = nil })
+        }
+        // External links in comment bodies: confirm first (never unattended).
+        .sheet(isPresented: Binding(
+            get: { externalLink != nil },
+            set: { if !$0 { externalLink = nil } }
+        )) {
+            if let externalLink {
+                ExternalLinkConfirmSheet(url: externalLink)
+            }
+        }
+    }
+
+    private struct LightboxTarget: Identifiable {
+        let url: String
+        var id: String { url }
     }
 
     private struct ProfileTarget: Identifiable {
@@ -209,6 +241,12 @@ struct CommentSheet: View {
                         isLiked: store.localActions.liked.contains(note.id),
                         isBookmarked: store.bookmarkedIds.contains(note.id)
                             || store.localActions.bookmarked.contains(note.id),
+                        richJson: store.richTokens(for: note.content),
+                        resolveMentionName: { store.profiles[$0]?.bestDisplayName },
+                        onOpenMentionProfile: { profileTarget = $0 },
+                        onOpenExternalLink: { externalLink = $0 },
+                        onOpenMedia: { lightboxUrl = $0 },
+                        mediaPreview: settings.state.mediaPreview,
                         onLike: { like(note) },
                         onRepost: { repost(note) },
                         onBookmark: { toggleBookmark(note) },
@@ -232,6 +270,12 @@ struct CommentSheet: View {
                                 orphan: item.orphan,
                                 tally: store.tallies[reply.id],
                                 isLiked: store.localActions.liked.contains(reply.id),
+                                richJson: store.richTokens(for: reply.content),
+                                resolveMentionName: { store.profiles[$0]?.bestDisplayName },
+                                onOpenMentionProfile: { profileTarget = $0 },
+                                onOpenExternalLink: { externalLink = $0 },
+                                onOpenMedia: { lightboxUrl = $0 },
+                                mediaPreview: settings.state.mediaPreview,
                                 onLike: { like(reply) },
                                 onZap: { openZap(reply) },
                                 onOpenProfile: { profileTarget = reply.pubkey },
@@ -347,19 +391,22 @@ struct CommentSheet: View {
             AttachmentPreviewRow(urls: attachments) { index in
                 attachments.remove(at: index)
             }
-            // Options row: gallery · GIF · media URL · PoW (legacy order).
-            // NIP-22 comment mode: PoW rides only the kind-1 reply path.
+            // Options row — the same Solar tokens as the composer toolbar:
+            // gallery · GIF · URL · PoW · hashtag · emoji (legacy reply
+            // order, PoW only on the kind-1 reply path).
             HStack(spacing: BitOSTheme.Spacing.xs) {
                 optionButton(AppIcons.photo, "Attach from gallery", enabled: canAddAttachment) { pickerPrompt = true }
-                optionGlyphButton("GIF", "Add GIF", enabled: canAddAttachment) { gifSheet = true }
-                optionButton(AppIcons.globe, "Add media URL", enabled: canAddAttachment) { urlAlert = true }
+                optionButton(AppIcons.gifFilm, "Add GIF", enabled: canAddAttachment) { gifSheet = true }
+                optionButton(AppIcons.link, "Add media URL", enabled: canAddAttachment) { urlAlert = true }
                 if !commentMode {
                     if powOutcome != nil || powTarget > 0 {
-                        optionButton(AppIcons.qrCode, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
+                        optionButton(AppIcons.shieldCheck, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
                     } else {
-                        optionButton(AppIcons.qrCode, "Proof of work") { powSheet = true }
+                        optionButton(AppIcons.shieldCheck, "Proof of work") { powSheet = true }
                     }
                 }
+                optionButton(AppIcons.hashtag, "Insert hashtag") { insertHashtag() }
+                optionButton(AppIcons.emoji, "Insert emoji") { emojiSheet = true }
                 Spacer(minLength: 0)
             }
             HStack(spacing: BitOSTheme.Spacing.sm) {
@@ -416,21 +463,46 @@ struct CommentSheet: View {
         .accessibilityLabel(label)
     }
 
-    /// GIF has no SF Symbol; the legacy app renders a text glyph.
-    private func optionGlyphButton(_ glyph: String, _ label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(glyph)
-                .font(.system(size: 12, weight: .heavy))
-                .foregroundStyle(enabled ? BitOSTheme.textSecondary : BitOSTheme.textTertiary.opacity(0.4))
-                .frame(height: 40)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .accessibilityLabel(label)
-    }
-
     private func targetName(_ target: FeedNote) -> String {
         store.profiles[target.pubkey]?.bestDisplayName ?? FeedFormat.shortPubkey(target.pubkey)
+    }
+
+    // MARK: - Text-insert helpers (composer toolbar parity)
+
+    /// No cursor tracking in the pill field — inserts land at the end.
+    private func insertHashtag() {
+        if let map = bridge.composerInsertHashtag(text: text, cursor: Int32(text.count)) as? [String: Any],
+           let next = map["text"] as? String {
+            text = next
+        }
+    }
+
+    private var emojiSheetContent: some View {
+        let emojis = bridge.composerEmojis() as? [String] ?? []
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Insert emoji")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(BitOSTheme.textPrimary)
+                .padding(.horizontal, BitOSTheme.Spacing.screen)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: BitOSTheme.Spacing.sm) {
+                ForEach(emojis, id: \.self) { emoji in
+                    Button {
+                        if let map = bridge.composerInsertEmoji(text: text, cursor: Int32(text.count), emoji: emoji) as? [String: Any],
+                           let next = map["text"] as? String {
+                            text = next
+                        }
+                        emojiSheet = false
+                    } label: {
+                        Text(emoji)
+                            .font(.system(size: 22))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Insert \(emoji)")
+                }
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.bottom, BitOSTheme.Spacing.xl)
+        }
     }
 
     /// Attachments land in the content (web parity, shared rule).
@@ -524,6 +596,13 @@ private struct ThreadRootCard: View {
     let tally: NoteTallyMirror?
     let isLiked: Bool
     let isBookmarked: Bool
+    /** Rich body (NIP-27 tokens): mentions/links tappable, media as tiles. */
+    var richJson: String = "[]"
+    var resolveMentionName: ((String) -> String?)? = nil
+    var onOpenMentionProfile: ((String) -> Void)? = nil
+    var onOpenExternalLink: ((String) -> Void)? = nil
+    var onOpenMedia: ((String) -> Void)? = nil
+    var mediaPreview: Bool = true
     let onLike: () -> Void
     let onRepost: () -> Void
     let onBookmark: () -> Void
@@ -561,9 +640,19 @@ private struct ThreadRootCard: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open author profile")
             }
-            Text(note.content)
-                .font(.system(size: 14))
-                .foregroundStyle(BitOSTheme.textPrimary)
+            // Rich body: NIP-27 entities tappable; bare media links render
+            // as tiles below and disappear from the text (feed-card parity).
+            RichTextView(
+                json: richJson,
+                onOpenProfile: { onOpenMentionProfile?($0) },
+                onOpenHashtag: nil,
+                hiddenMediaUrls: Set(note.mediaUrls),
+                resolveMentionName: resolveMentionName,
+                onOpenLink: { onOpenExternalLink?($0) }
+            )
+            if mediaPreview, !note.mediaUrls.isEmpty {
+                MediaGrid(urls: note.mediaUrls) { onOpenMedia?($0) }
+            }
             HStack(spacing: BitOSTheme.Spacing.base) {
                 threadAction(
                     isLiked ? AppIcons.heartFill : AppIcons.heart,
@@ -582,7 +671,7 @@ private struct ThreadRootCard: View {
                 )
                 if let onDelete {
                     Button(action: onDelete) {
-                        Image(systemName: "trash")
+                        AppIcons.image(for: AppIcons.delete)
                             .font(.system(size: 14))
                             .foregroundStyle(BitOSTheme.error)
                     }
@@ -593,8 +682,8 @@ private struct ThreadRootCard: View {
                 Button {
                     showRaw = true
                 } label: {
-                    Text("⋯")
-                        .font(.system(size: 16, weight: .bold))
+                    AppIcons.image(for: AppIcons.more)
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
                 .accessibilityLabel("Raw note details")
@@ -685,6 +774,13 @@ private struct ReplyRow: View {
     var orphan: Bool = false
     var tally: NoteTallyMirror? = nil
     var isLiked: Bool = false
+    /** Rich body (NIP-27 tokens): mentions/links tappable, media as tiles. */
+    var richJson: String = "[]"
+    var resolveMentionName: ((String) -> String?)? = nil
+    var onOpenMentionProfile: ((String) -> Void)? = nil
+    var onOpenExternalLink: ((String) -> Void)? = nil
+    var onOpenMedia: ((String) -> Void)? = nil
+    var mediaPreview: Bool = true
     var onLike: (() -> Void)? = nil
     var onZap: (() -> Void)? = nil
     var onOpenProfile: (() -> Void)? = nil
@@ -732,7 +828,7 @@ private struct ReplyRow: View {
                                 .foregroundStyle(BitOSTheme.textPrimary)
                                 .lineLimit(1)
                             if orphan {
-                                Image(systemName: "arrow.triangle.branch")
+                                AppIcons.image(for: AppIcons.branch)
                                     .font(.system(size: 9))
                                     .foregroundStyle(BitOSTheme.textTertiary)
                             }
@@ -744,9 +840,21 @@ private struct ReplyRow: View {
                     .buttonStyle(.plain)
                     .disabled(onOpenProfile == nil)
                     .accessibilityLabel("Open author profile")
-                    Text(reply.content)
-                        .font(depth == 0 ? .subheadline : .footnote)
-                        .foregroundStyle(BitOSTheme.textPrimary)
+                    // Rich body: NIP-27 entities tappable; bare media links
+                    // render as tiles below (feed-card parity).
+                    RichTextView(
+                        json: richJson,
+                        onOpenProfile: { onOpenMentionProfile?($0) },
+                        onOpenHashtag: nil,
+                        color: BitOSTheme.textPrimary,
+                        hiddenMediaUrls: Set(reply.mediaUrls),
+                        resolveMentionName: resolveMentionName,
+                        onOpenLink: { onOpenExternalLink?($0) }
+                    )
+                    .font(depth == 0 ? .subheadline : .footnote)
+                    if mediaPreview, !reply.mediaUrls.isEmpty {
+                        MediaGrid(urls: reply.mediaUrls) { onOpenMedia?($0) }
+                    }
                     HStack(spacing: BitOSTheme.Spacing.base) {
                         if let onLike {
                             commentAction(

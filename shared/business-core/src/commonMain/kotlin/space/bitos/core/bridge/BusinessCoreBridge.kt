@@ -2802,23 +2802,35 @@ class BusinessCoreBridge {
         return if (trimmed.startsWith("npub1")) space.bitos.core.identity.NostrKeyCodec.parseNpub(trimmed) else null
     }
 
-    /** REQ for one author's profile + notes. First page includes kind-0 and
-     *  is bounded by [limit]; follow-up pages drop kind-0 and page backward
-     *  from [untilSeconds] (the caller dedupes by event id). Limit coerces
-     *  into the 1..100 window so the REQ stays size-bounded. */
+    /** REQ for one author's profile + notes. First page includes kind-0;
+     *  follow-up pages drop kind-0 and page backward from [untilSeconds]
+     *  (the caller dedupes by event id). Media and text kinds are SPLIT
+     *  into two filters (web `loadReels` parity: Nostr `limit` applies per
+     *  relay per filter, so one combined filter would spend the whole
+     *  window on text) and the media window is queried deep because
+     *  dedicated video kinds are ~100% renderable bitz. Limits coerce
+     *  into the 1..500 window so the REQ stays size-bounded. */
     fun authorRequest(
         subscriptionId: String,
         authorPubkey: String,
-        limit: Int = 20,
+        mediaLimit: Int = 60,
+        textLimit: Int = 150,
         untilSeconds: Long? = null,
     ): String {
-        val bounded = limit.coerceIn(1, 100)
-        val filter = if (untilSeconds == null) {
-            """{"kinds":[0,1,21,22],"authors":["$authorPubkey"],"limit":$bounded}"""
+        val boundedMedia = mediaLimit.coerceIn(1, 500)
+        val boundedText = textLimit.coerceIn(1, 500)
+        val profileFilter = if (untilSeconds == null) {
+            listOf("""{"kinds":[0],"authors":["$authorPubkey"],"limit":1}""")
         } else {
-            """{"kinds":[1,21,22],"authors":["$authorPubkey"],"until":$untilSeconds,"limit":$bounded}"""
+            emptyList()
         }
-        return NostrEventCodec.encodeRequest(subscriptionId, filter)
+        val filters = profileFilter + listOf(
+            """{"kinds":[20,21,22,34235,34236],"authors":["$authorPubkey"],"limit":$boundedMedia""" +
+                (untilSeconds?.let { ",\"until\":$it" } ?: "") + "}",
+            """{"kinds":[1],"authors":["$authorPubkey"],"limit":$boundedText""" +
+                (untilSeconds?.let { ",\"until\":$it" } ?: "") + "}",
+        )
+        return NostrEventCodec.encodeRequest(subscriptionId, filters)
     }
 
     /** Composes the unsigned kind-0 profile event and returns its id. */

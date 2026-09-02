@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -84,6 +85,9 @@ fun CommentContent(
     // Own-note deletion: rows hide locally once the kind-5 is dispatched.
     val deletedIds = remember { mutableStateOf(setOf<String>()) }
     var deleteConfirm by remember { mutableStateOf<FeedNote?>(null) }
+    // Rich comment bodies: media tile tap → lightbox; link tap → confirm.
+    var lightboxUrl by remember { mutableStateOf<String?>(null) }
+    var externalLink by remember { mutableStateOf<String?>(null) }
     val comments = feedState.comments[note.id].orEmpty().filter { it.id !in deletedIds.value }
     // APP-009 X-style threading (shared ThreadAssembly): top-level +
     // flattened descendants behind depth indents.
@@ -100,6 +104,7 @@ fun CommentContent(
     var showGif by remember { mutableStateOf(false) }
     var showUrlDialog by remember { mutableStateOf(false) }
     var showPow by remember { mutableStateOf(false) }
+    var showEmoji by remember { mutableStateOf(false) }
     var powTarget by remember { mutableStateOf(0) }
     var powOutcome by remember { mutableStateOf<space.bitos.app.ui.components.PowOutcome?>(null) }
     var awaitingReply by remember { mutableStateOf(false) }
@@ -192,6 +197,10 @@ fun CommentContent(
                     tally = tally,
                     isLiked = note.id in actions.liked,
                     isBookmarked = note.id in feedState.bookmarkedIds || note.id in actions.bookmarked,
+                    resolveMentionName = { hex -> feedState.profiles[hex]?.bestDisplayName },
+                    onOpenMentionProfile = onOpenAuthor,
+                    onOpenExternalLink = { externalLink = it },
+                    onOpenMedia = { lightboxUrl = it },
                     onLike = { onLike(note) },
                     onRepost = { onRepost(note) },
                     onBookmark = { onBookmark(note.id) },
@@ -210,6 +219,10 @@ fun CommentContent(
                         orphan = item.orphan,
                         tally = feedState.tallies[reply.id],
                         isLiked = reply.id in actions.liked,
+                        resolveMentionName = { hex -> feedState.profiles[hex]?.bestDisplayName },
+                        onOpenMentionProfile = onOpenAuthor,
+                        onOpenExternalLink = { externalLink = it },
+                        onOpenMedia = { lightboxUrl = it },
                         onLike = { onLike(reply) },
                         onZap = { onZap(reply) },
                         onOpenAuthor = { onOpenAuthor(reply.pubkey) },
@@ -265,6 +278,11 @@ fun CommentContent(
                 onGif = { showGif = true },
                 onUrl = { showUrlDialog = true },
                 onPow = { showPow = true },
+                onHashtag = {
+                    // No cursor tracking in the pill field — insert at the end.
+                    text = space.bitos.core.publish.ComposerRules.insertHashtag(text, text.length).first
+                },
+                onEmoji = { showEmoji = true },
                 onSend = {
                     if (!sending && (text.isNotBlank() || attachments.isNotEmpty())) {
                         awaitingReply = true
@@ -276,6 +294,82 @@ fun CommentContent(
                     }
                 },
             )
+        }
+    }
+
+    // Media tile lightbox (feed-card parity): zoomable fullscreen viewer.
+    lightboxUrl?.let { url ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { lightboxUrl = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            space.bitos.app.ui.components.MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
+        }
+    }
+
+    // External links in comment bodies: confirm first (never unattended —
+    // the browser only opens on an explicit Open).
+    externalLink?.let { url ->
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { externalLink = null }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = BitOSSpacing.screen).padding(bottom = BitOSSpacing.lg)) {
+                Text("Open external link?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+                Spacer(Modifier.height(BitOSSpacing.sm))
+                Text(
+                    url,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = BitOSColors.textSecondary,
+                    maxLines = 3,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("This link leaves BitOS.", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+                Spacer(Modifier.height(BitOSSpacing.md))
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                            }
+                            externalLink = null
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = BitOSColors.primary,
+                            contentColor = androidx.compose.ui.graphics.Color(0xFF0A0A0F),
+                        ),
+                    ) { Text("Open", fontWeight = androidx.compose.ui.text.font.FontWeight.W600) }
+                    androidx.compose.material3.OutlinedButton(onClick = { externalLink = null }) {
+                        Text("Cancel", color = BitOSColors.primary)
+                    }
+                }
+            }
+        }
+    }
+
+    // Emoji insert (composer toolbar parity): the shared quick-emoji set,
+    // appended at the end of the reply (the pill field has no cursor tracking).
+    if (showEmoji) {
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showEmoji = false }) {
+            Column(Modifier.padding(bottom = BitOSSpacing.xl)) {
+                Text(
+                    "Insert emoji",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = BitOSSpacing.screen),
+                )
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(8),
+                    modifier = Modifier.padding(horizontal = BitOSSpacing.base).height(220.dp),
+                ) {
+                    gridItems(space.bitos.core.publish.ComposerRules.COMPOSER_EMOJIS) { emoji ->
+                        androidx.compose.material3.IconButton(onClick = {
+                            text = space.bitos.core.publish.ComposerRules
+                                .insertEmoji(text, text.length, emoji).first
+                            showEmoji = false
+                        }) {
+                            Text(emoji, style = MaterialTheme.typography.headlineSmall)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -388,6 +482,9 @@ private fun ReplyBar(
     onGif: () -> Unit,
     onUrl: () -> Unit,
     onPow: () -> Unit,
+    /** Text-insert helpers (composer toolbar parity). */
+    onHashtag: () -> Unit = {},
+    onEmoji: () -> Unit = {},
     onSend: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
@@ -418,23 +515,27 @@ private fun ReplyBar(
             )
         }
         space.bitos.app.ui.components.AttachmentPreviewRow(urls = attachments, onRemove = onRemoveAttachment)
-        // Options row: gallery · GIF · media URL · PoW (legacy order).
+        // Options row — the same Solar tokens as the composer toolbar:
+        // gallery · GIF · URL · PoW · hashtag · emoji (legacy reply order,
+        // PoW only on the kind-1 reply path).
         Row(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OptionButton(space.bitos.app.ui.theme.AppIcons.Photo, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
-            OptionButton(space.bitos.app.ui.theme.AppIcons.Gif, "Add GIF", enabled = canAdd, onClick = onGif)
-            OptionButton(space.bitos.app.ui.theme.AppIcons.Globe, "Add media URL", enabled = canAdd, onClick = onUrl)
+            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Gallery, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
+            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Film, "Add GIF", enabled = canAdd, onClick = onGif)
+            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.LinkCircle, "Add media URL", enabled = canAdd, onClick = onUrl)
             if (powAvailable) {
                 OptionButton(
-                    space.bitos.app.ui.theme.AppIcons.QrCode,
+                    space.bitos.app.ui.theme.SolarFeedIcon.ShieldCheck,
                     "Proof of work",
                     text = powLabel,
                     active = powActive,
                     onClick = onPow,
                 )
             }
+            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Hashtag, "Insert hashtag", onClick = onHashtag)
+            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Emoji, "Insert emoji", onClick = onEmoji)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Surface(
@@ -486,7 +587,7 @@ private fun ReplyBar(
 
 @Composable
 private fun OptionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: space.bitos.app.ui.theme.SolarFeedIcon,
     label: String,
     text: String? = null,
     enabled: Boolean = true,
@@ -499,7 +600,7 @@ private fun OptionButton(
             .size(width = if (text != null) 72.dp else 40.dp, height = 40.dp)
             .clickable(enabled = enabled, onClickLabel = label) { onClick() },
     ) {
-        Icon(
+        space.bitos.app.ui.theme.SolarFeedIconImage(
             icon,
             contentDescription = null,
             tint = when {
@@ -534,6 +635,11 @@ private fun RootCard(
     tally: space.bitos.core.feed.NoteTally?,
     isLiked: Boolean,
     isBookmarked: Boolean,
+    /** Rich body (NIP-27 tokens): mentions/links tappable, media as tiles. */
+    resolveMentionName: (String) -> String? = { null },
+    onOpenMentionProfile: (String) -> Unit = {},
+    onOpenExternalLink: (String) -> Unit = {},
+    onOpenMedia: (String) -> Unit = {},
     onLike: () -> Unit,
     onRepost: () -> Unit,
     onBookmark: () -> Unit,
@@ -617,7 +723,18 @@ private fun RootCard(
                 }
             }
             Spacer(Modifier.height(BitOSSpacing.sm))
-            Text(note.content, style = MaterialTheme.typography.bodyMedium)
+            // Rich body: NIP-27 entities tappable; bare media links render
+            // as tiles below and disappear from the text (feed-card parity).
+            space.bitos.app.ui.components.RichText(
+                tokens = remember(note.content) { space.bitos.core.nostr.Nip27.tokenize(note.content) },
+                hiddenMediaUrls = remember(note.mediaUrls) { note.mediaUrls.toSet() },
+                resolveMentionName = resolveMentionName,
+                onOpenProfile = onOpenMentionProfile,
+                onOpenExternalLink = onOpenExternalLink,
+            )
+            if (note.mediaUrls.isNotEmpty()) {
+                space.bitos.app.ui.components.MediaRow(urls = note.mediaUrls, onOpen = onOpenMedia)
+            }
             Spacer(Modifier.height(BitOSSpacing.md))
             // Legacy _ThreadActionRow parity: Solar icon + bold count.
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -664,8 +781,13 @@ private fun RootCard(
                         )
                     }
                 }
-                androidx.compose.material3.TextButton(onClick = { showRaw = true }) {
-                    Text("⋯", color = BitOSColors.textSecondary)
+                androidx.compose.material3.IconButton(onClick = { showRaw = true }) {
+                    Icon(
+                        space.bitos.app.ui.theme.AppIcons.More,
+                        contentDescription = "Raw note details",
+                        tint = BitOSColors.textSecondary,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }
@@ -724,6 +846,11 @@ private fun ReplyRow(
     orphan: Boolean,
     tally: space.bitos.core.feed.NoteTally? = null,
     isLiked: Boolean = false,
+    /** Rich body (NIP-27 tokens): mentions/links tappable, media as tiles. */
+    resolveMentionName: (String) -> String? = { null },
+    onOpenMentionProfile: (String) -> Unit = {},
+    onOpenExternalLink: (String) -> Unit = {},
+    onOpenMedia: (String) -> Unit = {},
     onLike: () -> Unit = {},
     onZap: () -> Unit = {},
     onOpenAuthor: () -> Unit = {},
@@ -777,7 +904,18 @@ private fun ReplyRow(
                 )
             }
             Spacer(Modifier.height(2.dp))
-            Text(reply.content, style = MaterialTheme.typography.bodyMedium)
+            // Rich body: NIP-27 entities tappable; bare media links render
+            // as tiles below (feed-card parity).
+            space.bitos.app.ui.components.RichText(
+                tokens = remember(reply.content) { space.bitos.core.nostr.Nip27.tokenize(reply.content) },
+                hiddenMediaUrls = remember(reply.mediaUrls) { reply.mediaUrls.toSet() },
+                resolveMentionName = resolveMentionName,
+                onOpenProfile = onOpenMentionProfile,
+                onOpenExternalLink = onOpenExternalLink,
+            )
+            if (reply.mediaUrls.isNotEmpty()) {
+                space.bitos.app.ui.components.MediaRow(urls = reply.mediaUrls, onOpen = onOpenMedia)
+            }
             if (orphan) {
                 Text(
                     "Reply above unavailable",

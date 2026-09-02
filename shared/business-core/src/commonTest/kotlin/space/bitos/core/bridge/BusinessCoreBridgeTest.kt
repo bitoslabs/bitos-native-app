@@ -112,19 +112,32 @@ class BusinessCoreBridgeTest {
     @Test
     fun authorRequestPagesBackwardAndStaysBounded() {
         val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
-        // First page: profile + notes kinds, default 20-item window.
+        // First page: separate profile (limit 1), deep media and shallow
+        // text filters (web loadReels parity — Nostr limit is per relay per
+        // filter, so splitting maximizes the renderable yield per request).
         val first = bridge.authorRequest("bitos-author", author)
-        assertTrue(first.contains("\"kinds\":[0,1,21,22]"), first)
-        assertTrue(first.contains("\"limit\":20"), first)
+        assertTrue(first.contains("\"kinds\":[0],\"authors\":[\"$author\"],\"limit\":1"), first)
+        assertTrue(first.contains("\"kinds\":[20,21,22,34235,34236],\"authors\":[\"$author\"],\"limit\":60"), first)
+        assertTrue(first.contains("\"kinds\":[1],\"authors\":[\"$author\"],\"limit\":150"), first)
         assertFalse(first.contains("\"until\""), first)
-        // Follow-up page: notes only, `until` cursor, small bounded window.
-        val page = bridge.authorRequest("bitos-author-2", author, limit = 5, untilSeconds = 1_710_000_000)
-        assertTrue(page.contains("\"kinds\":[1,21,22]"), page)
+        // Follow-up page: notes only, `until` cursor on both filters.
+        val page = bridge.authorRequest(
+            "bitos-author-2", author,
+            mediaLimit = 60, textLimit = 150, untilSeconds = 1_710_000_000,
+        )
+        assertFalse(page.contains("\"kinds\":[0]"), page)
+        assertTrue(page.contains("\"kinds\":[20,21,22,34235,34236]"), page)
+        assertTrue(page.contains("\"kinds\":[1]"), page)
         assertTrue(page.contains("\"until\":1710000000"), page)
-        assertTrue(page.contains("\"limit\":5"), page)
-        // The limit is coerced into the 1..100 window either way.
-        assertTrue(bridge.authorRequest("s3", author, limit = 9_999).contains("\"limit\":100"))
-        assertTrue(bridge.authorRequest("s4", author, limit = 0).contains("\"limit\":1"))
+        // Both limits coerce into the 1..500 window either way.
+        assertTrue(
+            bridge.authorRequest("s3", author, mediaLimit = 9_999, textLimit = 9_999)
+                .contains("\"limit\":500"),
+        )
+        assertTrue(
+            bridge.authorRequest("s4", author, mediaLimit = 0, textLimit = -5)
+                .contains("\"limit\":1"),
+        )
     }
 
     @Test

@@ -2,6 +2,7 @@ package space.bitos.app.data.feed
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,6 +11,7 @@ import space.bitos.app.data.relay.RelayPool
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
+import space.bitos.core.model.RelayUrl
 import space.bitos.core.nostr.EventHasher
 import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
@@ -27,10 +29,11 @@ data class AuthorUiState(
 
 /**
  * Author profile repository: targeted profile + notes REQ for one pubkey,
- * verified fan-in, bounded window. Notes load five at a time — the first
- * page arrives with the profile, older pages page backward
- * (`until` = oldest loaded note) on demand. One instance at a time (the
- * open sheet/page).
+ * verified fan-in, bounded window. Pages settle on ALL-RELAY EOSE (falls
+ * back to a [PAGE_MAX_WAIT_MS] deadline — a dead relay cannot stall the
+ * page behind its EOSE, web `loadReels` parity) and every page's REQ is
+ * CLOSED on completion so overlapping subscriptions never re-stream old
+ * windows. One instance at a time (the open sheet/page).
  */
 class AuthorRepository(
     private val scope: CoroutineScope,
@@ -44,12 +47,27 @@ class AuthorRepository(
     private var collectJob: Job? = null
     private var page = 0
 
+    /** One page batch: settles when every expected relay sent EOSE. */
+    private data class PageBatch(
+        val subId: String,
+        val expectedRelays: Set<RelayUrl>,
+        val startedAtCount: Int,
+        val eoseRelays: MutableSet<RelayUrl> = linkedSetOf(),
+        var timeoutJob: Job? = null,
+    )
+
+    private var activePage: PageBatch? = null
+
     private val mutableState = MutableStateFlow(AuthorUiState())
     val state: StateFlow<AuthorUiState> = mutableState.asStateFlow()
 
     init {
         collectJob = scope.launch {
             pool.frames.collect { frame ->
+                NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
+                    recordEose(subId, frame.relay)
+                    return@collect
+                }
                 val event = runCatching {
                     NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
                 }.getOrNull() ?: return@collect
@@ -85,12 +103,14 @@ class AuthorRepository(
         profile = null
         profileAt = Long.MIN_VALUE
         page = 0
+        closeActivePage()
         mutableState.value = AuthorUiState(pubkey = authorPubkey, isLoading = true)
-        subscribe()
+        requestPage(untilSeconds = null)
     }
 
     fun close() {
         pubkey = null
+        closeActivePage()
         mutableState.value = AuthorUiState()
     }
 
@@ -99,7 +119,7 @@ class AuthorRepository(
         mutableState.value = mutableState.value.copy(isFollowing = following)
     }
 
-    /** Next older page (first PAGE_SIZE load with the profile, the rest on demand). */
+    /** Next older page (`until` = oldest loaded note) on demand. */
     fun loadMoreNotes() {
         val target = pubkey ?: return
         val state = mutableState.value
@@ -107,41 +127,65 @@ class AuthorRepository(
         mutableState.value = state.copy(isLoadingMore = true)
         page += 1
         val until = notes.values.minOf { it.createdAt }
-        val before = notes.size
-        val request = space.bitos.core.bridge.BusinessCoreBridge().authorRequest(
-            subscriptionId = "bitos-author-$page",
-            authorPubkey = target,
-            limit = PAGE_SIZE,
-            untilSeconds = until,
-        )
-        scope.launch {
-            pool.broadcast(request)
-            // Settle: a short page means the author's history ended.
-            kotlinx.coroutines.delay(3_000)
-            if (pubkey == target) {
-                mutableState.value = mutableState.value.copy(
-                    isLoadingMore = false,
-                    canLoadMore = (notes.size - before) >= PAGE_SIZE,
-                )
-            }
-        }
+        requestPage(untilSeconds = until)
     }
 
-    private fun subscribe() {
+    private fun requestPage(untilSeconds: Long?) {
         val target = pubkey ?: return
-        val request = space.bitos.core.bridge.BusinessCoreBridge().authorRequest(
-            subscriptionId = "bitos-author",
-            authorPubkey = target,
-            limit = PAGE_SIZE,
+        val subId = if (untilSeconds == null) "bitos-author" else "bitos-author-$page"
+        closeActivePage()
+        val batch = PageBatch(
+            subId = subId,
+            expectedRelays = pool.connectedRelays(),
+            startedAtCount = notes.size,
         )
-        scope.launch {
-            pool.broadcast(request)
-            // Settle: mark not-loading after a window even without results.
-            kotlinx.coroutines.delay(3_000)
-            if (mutableState.value.isLoading) {
-                mutableState.value = mutableState.value.copy(isLoading = false)
-            }
+        activePage = batch
+        val request = space.bitos.core.bridge.BusinessCoreBridge().authorRequest(
+            subscriptionId = subId,
+            authorPubkey = target,
+            untilSeconds = untilSeconds,
+        )
+        batch.timeoutJob = scope.launch {
+            delay(PAGE_MAX_WAIT_MS)
+            completePage(subId, timedOut = true)
         }
+        // Synchronous on purpose: broadcast() is non-suspending, so the
+        // CLOSE of the previous page (closeActivePage above) is already
+        // on the wire before this REQ reuses its subscription id space.
+        pool.broadcast(request)
+    }
+
+    private fun recordEose(subscriptionId: String, relay: RelayUrl) {
+        val complete = synchronized(this) {
+            val batch = activePage?.takeIf { it.subId == subscriptionId } ?: return
+            batch.eoseRelays += relay
+            batch.expectedRelays.isNotEmpty() && batch.eoseRelays.containsAll(batch.expectedRelays)
+        }
+        if (complete) completePage(subscriptionId, timedOut = false)
+    }
+
+    /** Settles one page: CLOSE the REQ, then judge the short-page rule. */
+    private fun completePage(subscriptionId: String, timedOut: Boolean) {
+        val batch = synchronized(this) {
+            activePage?.takeIf { it.subId == subscriptionId }?.also { activePage = null }
+        } ?: return
+        batch.timeoutJob?.cancel()
+        pool.broadcast(NostrEventCodec.encodeClose(batch.subId))
+        val fresh = notes.size - batch.startedAtCount
+        mutableState.value = mutableState.value.copy(
+            isLoading = false,
+            isLoadingMore = false,
+            // A full EOSE short page means the author's history ended; a
+            // deadline page stays retryable (a slow relay is not proof of
+            // exhaustion — same rule as the feed's older-walk).
+            canLoadMore = if (timedOut) true else fresh >= FRESH_PAGE_TARGET,
+        )
+    }
+
+    private fun closeActivePage() {
+        val batch = synchronized(this) { activePage?.also { activePage = null } } ?: return
+        batch.timeoutJob?.cancel()
+        pool.broadcast(NostrEventCodec.encodeClose(batch.subId))
     }
 
     private fun publishState() {
@@ -157,6 +201,10 @@ class AuthorRepository(
     }
 
     private companion object {
-        const val PAGE_SIZE = 5
+        /** Hard page deadline (web REELS_PAGE_MAX_WAIT_MS parity). */
+        const val PAGE_MAX_WAIT_MS = 4_000L
+
+        /** A page carrying this many NEW notes keeps `canLoadMore` true. */
+        const val FRESH_PAGE_TARGET = 5
     }
 }

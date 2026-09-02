@@ -3,8 +3,10 @@ import Foundation
 import Observation
 
 /// Author profile state: targeted profile + notes REQ for one pubkey.
-/// Notes load five at a time — the first page arrives with the profile,
-/// older pages page backward (`until` = oldest loaded note) on demand.
+/// Pages settle on ALL-RELAY EOSE (falling back to a 4 s deadline so a
+/// dead relay cannot stall the page — web `loadReels` parity) and every
+/// page's REQ is CLOSED on completion so overlapping subscriptions never
+/// re-stream old windows.
 @MainActor
 @Observable
 final class AuthorStore {
@@ -16,7 +18,14 @@ final class AuthorStore {
     private(set) var canLoadMore = true
     private(set) var isLoadingMore = false
 
-    static let pageSize = 5
+    /// A page carrying this many NEW notes keeps `canLoadMore` true.
+    static let freshPageTarget = 5
+    /// Hard page deadline (web REELS_PAGE_MAX_WAIT_MS parity).
+    static let pageMaxWait: Duration = .seconds(4)
+    /// Web loadReels parity: deep media window, shallow text window
+    /// (Nostr `limit` is per relay per filter).
+    static let mediaPageLimit = 60
+    static let textPageLimit = 150
 
     private let pool: RelayPool
     private let bridge: BusinessCoreBridge
@@ -24,6 +33,17 @@ final class AuthorStore {
     private var seen = Set<String>()
     private var page = 0
     private var framesTask: Task<Void, Never>?
+
+    /// One page batch: settles when every expected relay sent EOSE.
+    private struct PageBatch {
+        let subId: String
+        let expectedRelays: Set<RelayURL>
+        let startedAtCount: Int
+        var eoseRelays: Set<RelayURL> = []
+        var timeoutTask: Task<Void, Never>?
+    }
+
+    private var activePage: PageBatch?
 
     init(pool: RelayPool, client: any BusinessCoreClient, bridge: BusinessCoreBridge = BusinessCoreBridge()) {
         self.pool = pool
@@ -54,56 +74,91 @@ final class AuthorStore {
         canLoadMore = true
         isLoadingMore = false
         page = 0
+        closeActivePage()
 
         Task {
             await pool.start()
             start()
-            if let request = (bridge.authorRequest(
-                subscriptionId: "bitos-author",
-                authorPubkey: authorPubkey,
-                limit: Int32(Self.pageSize),
-                untilSeconds: nil
-            ) as String?) {
-                await pool.broadcast(request)
-            }
-            // Settle: not-loading after a window even without results.
-            try? await Task.sleep(for: .seconds(3))
-            if isLoading, pubkey == authorPubkey {
-                isLoading = false
-            }
+            await requestPage(untilSeconds: nil)
         }
     }
 
-    /// Next older page (first 5 load with the profile; the rest on demand).
+    /// Next older page (`until` = oldest loaded note) on demand.
     func loadMoreNotes() {
-        guard let target = pubkey, canLoadMore, !isLoadingMore, !notes.isEmpty else { return }
+        guard pubkey != nil, canLoadMore, !isLoadingMore, !notes.isEmpty else { return }
         isLoadingMore = true
         page += 1
         let until = notes.map(\.createdAt).min() ?? Int64(Date.now.timeIntervalSince1970)
-        let before = notes.count
-        Task {
-            await pool.start()
-            start()
-            if let request = (bridge.authorRequest(
-                subscriptionId: "bitos-author-\(page)",
-                authorPubkey: target,
-                limit: Int32(Self.pageSize),
-                // Kotlin Long? boxes as KotlinLong across the bridge.
-                untilSeconds: KotlinLong(value: until)
-            ) as String?) {
-                await pool.broadcast(request)
-            }
-            // Settle: a short page means the author's history ended.
-            try? await Task.sleep(for: .seconds(3))
-            guard pubkey == target else { return }
-            isLoadingMore = false
-            if notes.count - before < Self.pageSize {
-                canLoadMore = false
-            }
+        Task { await requestPage(untilSeconds: until) }
+    }
+
+    private func requestPage(untilSeconds: Int64?) async {
+        guard let target = pubkey else { return }
+        let subId = untilSeconds == nil ? "bitos-author" : "bitos-author-\(page)"
+        closeActivePage()
+        var batch = PageBatch(
+            subId: subId,
+            expectedRelays: await pool.connectedRelays(),
+            startedAtCount: notes.count
+        )
+        batch.timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.pageMaxWait)
+            guard !Task.isCancelled else { return }
+            self?.completePage(subId: subId, timedOut: true)
+        }
+        activePage = batch
+        if let request = (bridge.authorRequest(
+            subscriptionId: subId,
+            authorPubkey: target,
+            mediaLimit: Int32(Self.mediaPageLimit),
+            textLimit: Int32(Self.textPageLimit),
+            untilSeconds: untilSeconds.map { KotlinLong(value: $0) }
+        ) as String?) {
+            await pool.broadcast(request)
         }
     }
 
+    /// Head EOSE → connected; page EOSE → settle when all relays answered.
+    private func absorbEose(_ frame: RelayFrame) {
+        guard let subId = client.relayEoseSubscriptionId(message: frame.message),
+              subId == activePage?.subId else { return }
+        activePage?.eoseRelays.insert(frame.relay)
+        guard let batch = activePage,
+              !batch.expectedRelays.isEmpty,
+              batch.expectedRelays.isSubset(of: batch.eoseRelays) else { return }
+        completePage(subId: subId, timedOut: false)
+    }
+
+    /// Settles one page: CLOSE the REQ, then judge the short-page rule.
+    private func completePage(subId: String, timedOut: Bool) {
+        guard let batch = activePage, batch.subId == subId else { return }
+        batch.timeoutTask?.cancel()
+        activePage = nil
+        Task { [pool, client] in await pool.broadcast(client.close(subscriptionId: subId)) }
+        let fresh = notes.count - batch.startedAtCount
+        isLoading = false
+        isLoadingMore = false
+        // A full EOSE short page means the author's history ended; a
+        // deadline page stays retryable (a slow relay is not proof of
+        // exhaustion — same rule as the feed's older-walk).
+        if !timedOut, fresh < Self.freshPageTarget {
+            canLoadMore = false
+        }
+    }
+
+    private func closeActivePage() {
+        guard let batch = activePage else { return }
+        batch.timeoutTask?.cancel()
+        activePage = nil
+        let subId = batch.subId
+        Task { [pool, client] in await pool.broadcast(client.close(subscriptionId: subId)) }
+    }
+
     func absorb(_ frame: RelayFrame) {
+        if client.relayEoseSubscriptionId(message: frame.message) != nil {
+            absorbEose(frame)
+            return
+        }
         guard let target = pubkey,
               let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
               event.pubkey == target else { return }
@@ -128,5 +183,6 @@ final class AuthorStore {
         isLoading = true
         canLoadMore = true
         isLoadingMore = false
+        closeActivePage()
     }
 }

@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -119,6 +117,8 @@ fun FeedNoteCard(
     onOpenExternalLink: (String) -> Unit = {},
     /** note1/nevent1/naddr1 tap → in-place thread open. */
     onOpenNoteRef: (String) -> Unit = {},
+    /** Profile-mention tap → the mentioned user's profile (not the author). */
+    onOpenMentionProfile: (String) -> Unit = {},
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
     compact: Boolean = false,
@@ -176,7 +176,7 @@ fun FeedNoteCard(
                     )
                     if (!profile?.nip05.isNullOrBlank()) {
                         Icon(
-                            Icons.Rounded.CheckCircle,
+                            AppIcons.CheckCircle,
                             contentDescription = "NIP-05 identity claim",
                             tint = BitOSColors.primary,
                             modifier = Modifier.padding(start = 4.dp).size(13.dp),
@@ -229,7 +229,7 @@ fun FeedNoteCard(
                 onOpenExternalLink = onOpenExternalLink,
                 maxLines = if (expanded) Int.MAX_VALUE else NOTE_COLLAPSE_LINES,
                 onOverflow = { canExpand = it },
-                onOpenProfile = { onAuthor() },
+                onOpenProfile = onOpenMentionProfile,
             )
             if (canExpand || expanded) {
                 TextButton(

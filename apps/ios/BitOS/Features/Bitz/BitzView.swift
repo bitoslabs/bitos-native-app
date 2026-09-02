@@ -637,6 +637,7 @@ struct BitzView: View {
                         onAuthor: { authorTarget = note.pubkey },
                         onMore: { point in presentMoreMenu(for: note, at: point) },
                         onOpenExternalLink: { externalLink = $0 },
+                        onOpenMentionProfile: { authorTarget = $0 },
                         onSwipe: { left in
                             // Swipe right on For-you settled page → creator full profile
                             // (TikTok pattern). Other modes use the standard mode cycle.
@@ -1336,6 +1337,8 @@ private struct BitzVideoPage: View {
     let onMore: (CGPoint) -> Void
     /** External-link tap → confirm sheet (owned by the parent). */
     var onOpenExternalLink: (String) -> Void = { _ in }
+    /** Profile-mention tap → the mentioned user's profile (not the author). */
+    var onOpenMentionProfile: ((String) -> Void)? = nil
     /** Horizontal swipe on the media: `true` = leftward (advance). */
     var onSwipe: (Bool) -> Void = { _ in }
     /** NIP-27 token JSON for the rich caption (shared tokenizer). */
@@ -1524,7 +1527,7 @@ private struct BitzVideoPage: View {
             // bare media links render as tiles and disappear from the body.
             RichTextView(
                 json: richJson,
-                onOpenProfile: { _ in onAuthor() },
+                onOpenProfile: { onOpenMentionProfile?($0) },
                 color: .white,
                 lineLimit: 3,
                 hiddenMediaUrls: Set(note.mediaUrls),
