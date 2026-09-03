@@ -37,11 +37,15 @@ final class SharedTemplateStore {
     /// Starts collecting frames (idempotent) and issues the REQ once.
     func start() {
         guard framesTask == nil else { return }
-        framesTask = Task { [weak self] in
-            let stream = await self?.pool.frames() ?? AsyncStream { $0.finish() }
-            for await frame in stream {
-                guard let self else { return }
-                self.absorb(frame)
+        Task { [weak self, pool, client] in
+            let stream = await pool.frames()
+            guard let self, !Task.isCancelled else { return }
+            self.framesTask = FrameIngest.pump(
+                stream: stream,
+                isAlive: { [weak self] in self != nil },
+                ingest: Self.templateIngest(client)
+            ) { [weak self] row in
+                await self?.upsert(row)
             }
         }
         guard !requested else { return }
@@ -54,20 +58,25 @@ final class SharedTemplateStore {
         }
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
-              event.kind == 30078,
-              let dTag = event.tags.first(where: { $0.first == "d" })?.dropFirst().first,
-              dTag.hasPrefix("com.bitos.bitz:template:") else { return }
-        guard let tagsData = try? JSONSerialization.data(withJSONObject: event.tags),
-              let tagsJson = String(data: tagsData, encoding: .utf8) else { return }
-        let summary = client.memeSharedTemplateSummary(tagsJson: tagsJson, content: event.content)
-        guard !summary.isEmpty,
-              let data = summary.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = root["id"] as? String, !id.isEmpty else { return }
-        upsert(
-            Row(
+    /// Protocol gate + template extraction in one off-main step: decode,
+    /// d-tag filter, summary bridge call and row construction all run on the
+    /// ingest task; the main actor only upserts finished rows.
+    private nonisolated static func templateIngest(
+        _ client: FrameworkBusinessCoreClient
+    ) -> @Sendable (RelayFrame) -> Row? {
+        { frame in
+            guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
+                  event.kind == 30078,
+                  let dTag = event.tags.first(where: { $0.first == "d" })?.dropFirst().first,
+                  dTag.hasPrefix("com.bitos.bitz:template:") else { return nil }
+            guard let tagsData = try? JSONSerialization.data(withJSONObject: event.tags),
+                  let tagsJson = String(data: tagsData, encoding: .utf8) else { return nil }
+            let summary = client.memeSharedTemplateSummary(tagsJson: tagsJson, content: event.content)
+            guard !summary.isEmpty,
+                  let data = summary.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = root["id"] as? String, !id.isEmpty else { return nil }
+            return Row(
                 id: id,
                 label: (root["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id,
                 emoji: (root["emoji"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "🖼",
@@ -77,7 +86,7 @@ final class SharedTemplateStore {
                 tagsJson: tagsJson,
                 content: event.content
             )
-        )
+        }
     }
 
     /// Newest-wins per template id; rail-capped (24), newest-first.

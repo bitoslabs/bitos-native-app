@@ -147,11 +147,14 @@ object NostrEventCodec {
 
     /**
      * Direct-mapped outcome slots: power-of-two capacity, last-writer-wins
-     * eviction on hash collision. Bounded memory (~2 MiB worst case);
+     * eviction on hash collision. Bounded memory (~1 MiB worst case);
      * safe under concurrent verifiers on JVM and Kotlin/Native because
-     * published arrays are immutable after assignment.
+     * published arrays are immutable after assignment. 1024 slots still
+     * covers a full relay burst with fan-out dedupe headroom while keeping
+     * the copy-on-write publication cheap: one slot-array copy per cache
+     * miss (~8 KB at this capacity, vs ~64 KB at 8192).
      */
-    private const val SLOT_COUNT = 8_192 // power of two
+    private const val SLOT_COUNT = 1_024 // power of two
     private const val SLOT_MASK = SLOT_COUNT - 1
     private var outcomeSlots = arrayOfNulls<VerifiedOutcome>(SLOT_COUNT)
 
@@ -190,6 +193,38 @@ object NostrEventCodec {
         if (array.size != 3 || array[0].jsonPrimitive.content != "EVENT") throw Rejected("not an EVENT message")
         val event = array[2].jsonObject
         return decode(hasher, event, source)
+    }
+
+    /** One relay EVENT frame decoded in a single JSON pass. */
+    class DecodedRelayEvent(
+        val event: NostrEvent,
+        /** Delivery subscription id; null when absent or oversized. */
+        val subscriptionId: String?,
+    )
+
+    /**
+     * Single-pass variant of [decodeRelayEvent] that also recovers the
+     * delivery subscription id. The relay-burst hot path used to parse every
+     * frame twice — once via [relayEventSubscriptionId] for the id, once via
+     * [decodeRelayEvent] for the event (performance audit §2.5). Same trust
+     * gate and [Rejected] contract as [decodeRelayEvent]; non-EVENT frames
+     * (EOSE/NOTICE) throw `not an EVENT message` exactly as before.
+     */
+    fun decodeRelayEventFrame(hasher: EventHasher, message: String, source: RelayUrl?): DecodedRelayEvent {
+        if (message.length > NostrLimits.MAX_EVENT_BYTES) throw Rejected("event exceeds size bound")
+        val element = try {
+            json.parseToJsonElement(message)
+        } catch (_: Exception) {
+            throw Rejected("message is not valid JSON")
+        }
+        val array = element as? JsonArray ?: throw Rejected("relay message is not an array")
+        if (array.size != 3 || array[0].jsonPrimitive.content != "EVENT") throw Rejected("not an EVENT message")
+        val subscriptionId = (array[1] as? JsonPrimitive)
+            ?.takeIf { it.isString }
+            ?.content
+            ?.takeIf { it.length <= NostrLimits.MAX_SUBSCRIPTION_ID_LENGTH }
+        val event = decode(hasher, array[2].jsonObject, source)
+        return DecodedRelayEvent(event, subscriptionId)
     }
 
     /**

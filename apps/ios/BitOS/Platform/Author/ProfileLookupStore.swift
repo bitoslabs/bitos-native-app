@@ -28,19 +28,24 @@ final class ProfileLookupStore {
 
     func start() {
         guard framesTask == nil else { return }
-        framesTask = Task { [weak self] in
-            let stream = await self?.pool.frames() ?? AsyncStream { $0.finish() }
-            for await frame in stream {
-                guard let self else { return }
-                self.absorb(frame)
+        Task { [weak self, pool, client] in
+            let stream = await pool.frames()
+            guard let self, !Task.isCancelled else { return }
+            self.framesTask = FrameIngest.pump(
+                stream: stream,
+                isAlive: { [weak self] in self != nil },
+                ingest: FrameIngest.verifiedGate(client)
+            ) { [weak self] gated in
+                await self?.absorb(gated)
             }
         }
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let decoded = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
-              decoded.kind == 0,
-              wanted.contains(decoded.pubkey) else { return }
+    private func absorb(_ gated: GatedFrame) {
+        guard case .event(let gatedEvent) = gated,
+              gatedEvent.event.kind == 0,
+              wanted.contains(gatedEvent.event.pubkey) else { return }
+        let decoded = gatedEvent.event
         let known = seenAt[decoded.pubkey] ?? Int64.min
         if decoded.createdAt < known { return }
         guard let metadata = client.profile(from: decoded) else { return }

@@ -89,25 +89,34 @@ final class StoriesStore {
             }
         }
         let stream = await pool.frames()
-        watchTask = Task { [weak self] in
-            for await frame in stream {
-                guard let self, !Task.isCancelled else { return }
-                self.absorb(frame)
-            }
+        guard !Task.isCancelled else { return }
+        let boxedBridge = StatelessBridge(bridge: bridge)
+        watchTask = FrameIngest.pump(
+            stream: stream,
+            isAlive: { [weak self] in self != nil },
+            ingest: Self.storyIngest(boxedBridge)
+        ) { [weak self] slide in
+            await self?.absorbSlide(slide)
         }
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        let now = Int64(Date.now.timeIntervalSince1970)
-        // Stories
-        if let slide = bridge.storyFromFrame(message: frame.message, relayUrl: frame.relay.rawValue, nowSeconds: now) as? [String: Any] {
-            guard let id = slide["id"] as? String,
+    /// Story extraction — runs OFF the main actor: the bridge verifies the
+    /// frame and projects the slide dictionary; the pump hops the typed
+    /// mirror to absorption.
+    private nonisolated static func storyIngest(
+        _ boxedBridge: StatelessBridge
+    ) -> @Sendable (RelayFrame) -> StorySlideMirror? {
+        { frame in
+            let now = Int64(Date.now.timeIntervalSince1970)
+            guard let slide = boxedBridge.bridge.storyFromFrame(
+                message: frame.message, relayUrl: frame.relay.rawValue, nowSeconds: now
+            ) as? [String: Any],
+                  let id = slide["id"] as? String,
                   let pubkey = slide["pubkey"] as? String,
                   let content = slide["content"] as? String,
                   let createdAt = (slide["createdAt"] as? NSNumber)?.int64Value,
-                  let expiresAt = (slide["expiresAt"] as? NSNumber)?.int64Value else { return }
-            if deletedIds.contains(id) { return }
-            let mirror = StorySlideMirror(
+                  let expiresAt = (slide["expiresAt"] as? NSNumber)?.int64Value else { return nil }
+            return StorySlideMirror(
                 id: id, pubkey: pubkey, content: content,
                 createdAt: createdAt, expiresAt: expiresAt,
                 d: (slide["d"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -115,9 +124,13 @@ final class StoriesStore {
                 gradient: (slide["gradient"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 pow: (slide["pow"] as? NSNumber).flatMap { $0.intValue > 0 ? $0.intValue : nil }
             )
-            slidesById[id] = mirror
-            rebuild()
         }
+    }
+
+    private func absorbSlide(_ mirror: StorySlideMirror) {
+        if deletedIds.contains(mirror.id) { return }
+        slidesById[mirror.id] = mirror
+        rebuild()
     }
 
     private func rebuild() {

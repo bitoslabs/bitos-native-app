@@ -281,20 +281,23 @@ class FeedRepository(
                     recordHeadEose(subId, frame.relay)
                     return@collect
                 }
-                val relaySubscriptionId = NostrEventCodec.relayEventSubscriptionId(frame.message)
                 // Phase 0 trace: the frame trust gate (decode + ID hash +
                 // BIP-340 verify) — pure CPU, non-suspending (PerfTrace
-                // contract; matches the iOS `relay.decode` signpost).
-                val event = space.bitos.app.diagnostics.PerfTrace.section(
+                // contract; matches the iOS `relay.decode` signpost). The
+                // frame is parsed ONCE: the decode also recovers the delivery
+                // subscription id (audit §2.5 double-parse fix).
+                val gated = space.bitos.app.diagnostics.PerfTrace.section(
                     space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
                 ) {
                     runCatching {
-                        val decoded = NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
+                        val decoded = NostrEventCodec.decodeRelayEventFrame(hasher, frame.message, frame.relay)
                         // Non-negotiable principle 2: verify ID AND signature before
                         // projection; unverified events never reach display state.
-                        if (NostrEventCodec.verifySignature(hasher, decoded)) decoded else null
+                        if (NostrEventCodec.verifySignature(hasher, decoded.event)) decoded else null
                     }.getOrNull()
                 } ?: return@collect
+                val event = gated.event
+                val relaySubscriptionId = gated.subscriptionId
                 when {
                     event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
                     event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
@@ -770,7 +773,10 @@ class FeedRepository(
     private fun mergeTally(target: String, kind: Int, amountMillisats: Long?) {
         talliesBuffer[target] = space.bitos.core.feed.NoteTallies.merge(talliesBuffer[target], kind, amountMillisats)
         space.bitos.core.feed.NoteTallies.evict(tallyTargets, target)
-        publishState()
+        // Coalesced like every other arrival path: kind-7/6 frames are the
+        // highest-volume live traffic, and an uncoalesced full projection
+        // per reaction stalled bursts (audit R3 residue).
+        requestPublish()
     }
 
     /** Loads the reply thread for one note (NIP-01 tagged #e filter). */

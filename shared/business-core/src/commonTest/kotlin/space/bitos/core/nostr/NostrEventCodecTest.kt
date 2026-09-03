@@ -1,6 +1,7 @@
 package space.bitos.core.nostr
 
 import space.bitos.core.model.EventId
+import space.bitos.core.model.NostrLimits
 import space.bitos.core.model.Pubkey
 import space.bitos.core.model.RelayUrl
 import kotlin.test.Test
@@ -166,6 +167,42 @@ class NostrEventCodecTest {
         assertNull(NostrEventCodec.relayEventSubscriptionId("""["NOTICE","bitos-older-7"]"""))
         assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT",7,{}]"""))
         assertNull(NostrEventCodec.relayEventSubscriptionId("""["EVENT","${"x".repeat(129)}",{}]"""))
+    }
+
+    @Test
+    fun decodesRelayEventFrameInOnePass() {
+        val relay = RelayUrl.parse("wss://relay.damus.io")!!
+        val decoded = NostrEventCodec.decodeRelayEventFrame(hasher, VALID_SIGNED_FRAME, relay)
+        assertEquals("sub1", decoded.subscriptionId)
+        assertTrue(NostrEventCodec.verifyId(hasher, decoded.event))
+        assertTrue(NostrEventCodec.verifySignature(hasher, decoded.event))
+        assertEquals(relay, decoded.event.receivedFromRelay)
+    }
+
+    @Test
+    fun decodeRelayEventFrameSharesDecodeRelayEventContract() {
+        val relay = RelayUrl.parse("wss://relay.damus.io")!!
+        // Non-EVENT frames throw exactly like decodeRelayEvent.
+        assertFailsWith<NostrEventCodec.Rejected> {
+            NostrEventCodec.decodeRelayEventFrame(hasher, """["EOSE","sub1"]""", relay)
+        }
+        assertFailsWith<NostrEventCodec.Rejected> {
+            NostrEventCodec.decodeRelayEventFrame(hasher, """{"not":"an array"}""", relay)
+        }
+        assertFailsWith<NostrEventCodec.Rejected> {
+            NostrEventCodec.decodeRelayEventFrame(hasher, VALID_SIGNED_FRAME.take(40), relay)
+        }
+        // Oversized frames throw before any parsing.
+        assertFailsWith<NostrEventCodec.Rejected> {
+            NostrEventCodec.decodeRelayEventFrame(hasher, "x".repeat(NostrLimits.MAX_EVENT_BYTES + 1), relay)
+        }
+        // Subscription id bounds mirror relayEventSubscriptionId exactly:
+        // a non-string id parses the event but carries no subscription id.
+        val signedEventJson = VALID_SIGNED_FRAME.substringAfter(",", "").substringAfter(",", "")
+        val numericSubId = """["EVENT",7,$signedEventJson"""
+        val bounded = NostrEventCodec.decodeRelayEventFrame(hasher, numericSubId, relay)
+        assertNull(bounded.subscriptionId)
+        assertTrue(NostrEventCodec.verifyId(hasher, bounded.event))
     }
 
     @Test

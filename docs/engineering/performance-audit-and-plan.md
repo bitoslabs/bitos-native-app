@@ -46,11 +46,18 @@
 > | Android AUTO rendition bucket uses logical display height instead of a fixed 1920 target (High/Low semantics unchanged) | ✅ done |
 > | UX U2–U10 checklist | ✅ closed (U10 = splash already off + skeletons honor reduce-motion) |
 > | First device captures (fill the baseline table) | ⬜ open — needs physical devices |
+> | R3 residue: Android `mergeTally` (kind-7 reactions / kind-6 reposts) publishes through the coalescer instead of a synchronous full projection per frame | ✅ done (2026-09) |
+> | §2.5 double-parse: shared codec `decodeRelayEventFrame` (Kotlin) + bridge `decodeEventWithSubscriptionId` recover the delivery subscription id in the SAME pass as decode; the Android feed collector uses it | ✅ done (2026-09) |
+> | §3.1 off-main ingest extended to EVERY iOS frame store via `FrameIngest.pump` + the one-parse `BusinessCoreClient.decodeVerifiedEventFrame` seam: Author, Search, ProfileLookup, Stories, HashtagFollows, Dm, Inbox, NotePublisher, SharedTemplate. The DM store's NIP-44 unwrap and Inbox's per-frame `extractNotification` now run off-main (DmStore keeps a thread-safe secret cache; never logged). `FeedStore.ingest` prebuilds the subscription id + persist tags JSON so main-actor absorption performs no protocol bridge work per frame | ✅ done (2026-09) |
+> | §4 Compose: Home hold/reveal via `snapshotFlow` (no per-scroll-frame `LaunchedEffect` restart), full-screen posters via plain `AsyncImage` (subcomposition only where the grid spinner needs a slot), pager pages take narrow state slices (profiles / following / bookmarkedIds) so tally-only publishes skip visible video pages | ✅ done (2026-09) |
+> | Verify-once outcome cache slots 8192 → 1024 (copy-on-write publication now copies ~8 KB per miss instead of ~64 KB) | ✅ done (2026-09) |
 >
-> Verification: `:shared:business-core:macosArm64Test` (445 tests),
-> `:apps:android:testDebugUnitTest` (75 tests) + `assembleDebug`, iOS target
-> type-checked under Swift 6 / strict concurrency (no simulator runtime on
-> this machine — run `BitOSTests` on a simulator before merging). Known
+> Verification (2026-09 perf residue pass): `:shared:business-core:macosArm64Test`
+> (598 tests, incl. the new single-pass `decodeRelayEventFrame` contract
+> tests), `:apps:android:testDebugUnitTest` + `assembleDebug` paths compiled
+> clean; iOS target type-checked under Swift 6 / strict concurrency against
+> the rebuilt BusinessCore XCFramework (no simulator runtime on this machine
+> — run `BitOSTests` on a simulator before merging). Known
 > flake to watch: `NotePublisherTest.surfacesRejectionReasons` failed once
 > under forced full-suite rerun under load; passes isolated and in normal
 > full runs — same transient-size-vs-stable-state fragility class as the

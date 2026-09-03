@@ -105,20 +105,53 @@ class BusinessCoreBridge {
         return try {
             val event = NostrEventCodec.decodeRelayEvent(Sha256EventHasher, message, relay)
             if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
-            Event(
-                id = event.id.value,
-                pubkey = event.pubkey.value,
-                createdAt = event.createdAt,
-                kind = event.kind,
-                tags = event.tags,
-                content = event.content,
-                relayUrl = relay.value,
-                signature = event.signature ?: return null,
+            bridgeEvent(event, relay)
+        } catch (_: NostrEventCodec.Rejected) {
+            null
+        }
+    }
+
+    /** One relay EVENT frame: verified event + the subscription id that delivered it. */
+    class DecodedEventFrame(
+        val event: Event,
+        val subscriptionId: String?,
+    )
+
+    /**
+     * Single-parse variant of [decodeEvent] that also recovers the delivery
+     * subscription id — the burst hot path previously paid two full JSON
+     * parses per frame (id recovery + decode; performance audit §2.5). Same
+     * trust gate and null contract as [decodeEvent]; EOSE/NOTICE frames
+     * return null.
+     */
+    fun decodeEventWithSubscriptionId(message: String, relayUrl: String?): DecodedEventFrame? {
+        if (message.length > space.bitos.core.model.NostrLimits.MAX_EVENT_BYTES) return null
+        val relay = relayUrl?.let { RelayUrl.parse(it) } ?: return null
+        return try {
+            val decoded = NostrEventCodec.decodeRelayEventFrame(Sha256EventHasher, message, relay)
+            val event = decoded.event
+            if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
+            val bridged = bridgeEvent(event, relay) ?: return null
+            DecodedEventFrame(
+                event = bridged,
+                subscriptionId = decoded.subscriptionId,
             )
         } catch (_: NostrEventCodec.Rejected) {
             null
         }
     }
+
+    private fun bridgeEvent(event: space.bitos.core.model.NostrEvent, relay: RelayUrl): Event? =
+        Event(
+            id = event.id.value,
+            pubkey = event.pubkey.value,
+            createdAt = event.createdAt,
+            kind = event.kind,
+            tags = event.tags,
+            content = event.content,
+            relayUrl = relay.value,
+            signature = event.signature ?: return null,
+        )
 
     /** EVENT subscription id, used to keep explicitly requested older pages out of the live-arrival hold. */
     fun relayEventSubscriptionId(message: String): String? =

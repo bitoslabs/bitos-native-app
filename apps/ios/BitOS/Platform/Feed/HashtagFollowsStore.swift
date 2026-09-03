@@ -14,6 +14,7 @@ final class HashtagFollowsStore {
     private(set) var hashtags: Set<String> = []
 
     private let pool: RelayPool
+    private let bridge = BusinessCoreBridge()
     private var accountPubkey: String?
     private var headAt: Int64 = Int64.min
     private var framesTask: Task<Void, Never>?
@@ -23,13 +24,36 @@ final class HashtagFollowsStore {
         self.pool = pool
     }
 
+    /// Sendable mirror of [accountPubkey]: the off-main ingest reads the
+    /// live account without touching main-actor state (the bridge verifies
+    /// signature, kind, d coordinate and author inside the extraction).
+    private final class AccountBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        func set(_ pubkey: String?) { lock.lock(); value = pubkey; lock.unlock() }
+        func get() -> String? { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    private let accountBox = AccountBox()
+
+    /// Newest-wins payload extracted off the main actor.
+    private struct InterestHead: Sendable {
+        let hashtags: [String]
+        let createdAt: Int64
+    }
+
     func start() {
         guard framesTask == nil else { return }
-        framesTask = Task { [weak self] in
-            let stream = await self?.pool.frames() ?? AsyncStream { $0.finish() }
-            for await frame in stream {
-                guard let self else { return }
-                self.absorb(frame)
+        let boxedBridge = StatelessBridge(bridge: bridge)
+        Task { [weak self, pool] in
+            let stream = await pool.frames()
+            guard let self, !Task.isCancelled else { return }
+            self.framesTask = FrameIngest.pump(
+                stream: stream,
+                isAlive: { [weak self] in self != nil },
+                ingest: Self.headIngest(boxedBridge, accountBox: self.accountBox)
+            ) { [weak self] head in
+                await self?.absorbHead(head)
             }
         }
     }
@@ -37,6 +61,7 @@ final class HashtagFollowsStore {
     /// Account lifecycle: re-opens the interest-set head REQ.
     func setAccount(_ pubkey: String?) {
         accountPubkey = pubkey
+        accountBox.set(pubkey)
         headAt = Int64.min
         requested = false
         hashtags = []
@@ -67,29 +92,37 @@ final class HashtagFollowsStore {
         Task {
             await pool.start()
             start()
-            if let request = (BusinessCoreBridge().interestSetRequest(
+            if let request = (bridge.interestSetRequest(
                 subscriptionId: "bitos-interest",
-                accountPubkey: accountPubkey
+                accountPubkey: accountPubkey ?? ""
             ) as String?) {
                 await pool.broadcast(request)
             }
         }
     }
 
-    private let bridge = BusinessCoreBridge()
+    /// Interest-set head extraction — runs OFF the main actor; the bridge
+    /// verifies signature, kind, d coordinate and author inside the call.
+    private nonisolated static func headIngest(
+        _ boxedBridge: StatelessBridge,
+        accountBox: AccountBox
+    ) -> @Sendable (RelayFrame) -> InterestHead? {
+        { frame in
+            guard let account = accountBox.get(),
+                  let hashtags = boxedBridge.bridge.interestSetHashtags(
+                      message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
+                  ) as? [String],
+                  let eventAt = (boxedBridge.bridge.interestSetCreatedAt(
+                      message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
+                  ) as KotlinLong?)?.int64Value else { return nil }
+            return InterestHead(hashtags: hashtags, createdAt: Int64(eventAt))
+        }
+    }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let accountPubkey else { return }
-        // The bridge verifies signature, kind, d coordinate and author.
-        guard let hashtags = bridge.interestSetHashtags(
-            message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: accountPubkey
-        ) as? [String] else { return }
-        // Replaceable head: only accept frames newer than the current head.
-        // Kotlin Long? crosses the bridge as KotlinLong? — unwrap via intValue.
-        guard let eventAt = (bridge.interestSetCreatedAt(
-            message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: accountPubkey
-        ) as KotlinLong?)?.int64Value, eventAt > headAt else { return }
-        headAt = Int64(eventAt)
-        self.hashtags = Set(hashtags)
+    /// Replaceable head: only accept heads newer than the current one.
+    private func absorbHead(_ head: InterestHead) {
+        guard head.createdAt > headAt else { return }
+        headAt = head.createdAt
+        hashtags = Set(head.hashtags)
     }
 }

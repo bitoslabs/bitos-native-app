@@ -43,11 +43,12 @@ final class SearchStore {
         Task {
             await pool.start()
             let stream = await pool.frames()
-            watchTask = Task { [weak self] in
-                for await frame in stream {
-                    guard let self, !Task.isCancelled else { return }
-                    self.absorb(frame)
-                }
+            watchTask = FrameIngest.pump(
+                stream: stream,
+                isAlive: { [weak self] in self != nil },
+                ingest: FrameIngest.verifiedGate(client)
+            ) { [weak self] gated in
+                await self?.absorb(gated)
             }
         }
     }
@@ -120,8 +121,9 @@ final class SearchStore {
         }
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue) else { return }
+    private func absorb(_ gated: GatedFrame) {
+        guard case .event(let gatedEvent) = gated else { return }
+        let event = gatedEvent.event
         if client.isProfileKind(event.kind) {
             if let metadata = client.profile(from: event) {
                 profiles[metadata.pubkey] = metadata

@@ -19,6 +19,20 @@ struct VerifiedEvent: Sendable, Equatable {
     let signature: String
 }
 
+/// A verified event plus the subscription id that delivered it — both
+/// recovered from ONE frame parse (shared codec; audit §2.5 double-parse fix).
+struct VerifiedEventFrame: Sendable {
+    let event: VerifiedEvent
+    let subscriptionId: String?
+}
+
+/// One relay frame after the off-main protocol gate (audit R1/R2): EVENT
+/// frames carry a fully verified event, EOSE frames carry their completion id.
+enum GatedFrame: Sendable {
+    case event(VerifiedEventFrame)
+    case eose(subscriptionId: String, relay: RelayURL)
+}
+
 /// Normalized feed note (mirror of `BusinessCoreBridge.Note`).
 struct FeedNote: Sendable, Equatable, Identifiable {
     let id: String
@@ -107,6 +121,9 @@ protocol BusinessCoreClient: Sendable {
     /// Returns nil for malformed frames, size-bound violations, ID hash
     /// mismatches and unsigned events.
     func decodeVerifiedEvent(message: String, relay: String?) -> VerifiedEvent?
+    /// Single-parse variant: the verified event plus the delivery
+    /// subscription id. Nil for EOSE/NOTICE/malformed frames.
+    func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame?
     /// Bounded NIP-01 EOSE subscription id; nil for every other frame.
     func relayEoseSubscriptionId(message: String) -> String?
 
@@ -246,6 +263,72 @@ protocol BusinessCoreClient: Sendable {
     func memeSfxWavBase64(_ sfxId: String, gain: Double) -> String
 }
 
+extension BusinessCoreClient {
+    /// Default two-step gate for clients without the one-parse seam (test
+    /// fixtures): decode first, then scan the subscription id.
+    func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame? {
+        guard let event = decodeVerifiedEvent(message: message, relay: relay) else { return nil }
+        return VerifiedEventFrame(event: event, subscriptionId: Self.eventSubscriptionId(in: message))
+    }
+
+    private static func eventSubscriptionId(in message: String) -> String? {
+        guard let data = message.data(using: .utf8),
+              let frame = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              frame.count == 3,
+              frame[0] as? String == "EVENT" else { return nil }
+        return frame[1] as? String
+    }
+}
+
+// MARK: - Off-main frame ingest (performance audit R1/R2)
+
+/// `BusinessCoreBridge` is stateless (see `FrameworkBusinessCoreClient`);
+/// this wrapper carries that guarantee across isolation domains so off-main
+/// ingest helpers may call bridge protocol rules directly.
+struct StatelessBridge: @unchecked Sendable {
+    let bridge: BusinessCoreBridge
+}
+
+enum FrameIngest {
+    /// Drives one frame stream on a background task. [ingest] runs the
+    /// protocol gate OFF the main actor (JSON parse + ID hash + BIP-340 are
+    /// the burst hot path); [handle] hops each gated value back to the
+    /// store's main-actor absorption. One sequential task preserves frame
+    /// order. The loop ends on stream finish, task cancellation (AsyncStream
+    /// is cancellation-responsive), or when [isAlive] turns false.
+    static func pump<T: Sendable>(
+        stream: AsyncStream<RelayFrame>,
+        isAlive: @escaping @Sendable () -> Bool,
+        ingest: @escaping @Sendable (RelayFrame) -> T?,
+        handle: @escaping @Sendable (T) async -> Void
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .userInitiated) {
+            for await frame in stream {
+                guard !Task.isCancelled, isAlive() else { return }
+                guard let value = ingest(frame) else { continue }
+                await handle(value)
+            }
+        }
+    }
+
+    /// The standard protocol gate shared by the frame stores: EVENT frames
+    /// verify once (single parse), EOSE subscription ids pass through, junk
+    /// drops. Runs off the main actor inside [pump].
+    static func verifiedGate(
+        _ client: any BusinessCoreClient
+    ) -> @Sendable (RelayFrame) -> GatedFrame? {
+        { frame in
+            if let gated = client.decodeVerifiedEventFrame(message: frame.message, relay: frame.relay.rawValue) {
+                return .event(gated)
+            }
+            if let subId = client.relayEoseSubscriptionId(message: frame.message) {
+                return .eose(subscriptionId: subId, relay: frame.relay)
+            }
+            return nil
+        }
+    }
+}
+
 /// Production client backed by the BusinessCore XCFramework.
 ///
 /// `BusinessCoreBridge` is stateless; `@unchecked Sendable` is limited to
@@ -256,7 +339,16 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func decodeVerifiedEvent(message: String, relay: String?) -> VerifiedEvent? {
         guard let event = bridge.decodeEvent(message: message, relayUrl: relay) else { return nil }
-        return VerifiedEvent(
+        return makeVerifiedEvent(event)
+    }
+
+    func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame? {
+        guard let decoded = bridge.decodeEventWithSubscriptionId(message: message, relayUrl: relay) else { return nil }
+        return VerifiedEventFrame(event: makeVerifiedEvent(decoded.event), subscriptionId: decoded.subscriptionId)
+    }
+
+    private func makeVerifiedEvent(_ event: BusinessCoreBridge.Event) -> VerifiedEvent {
+        VerifiedEvent(
             id: event.id,
             pubkey: event.pubkey,
             createdAt: event.createdAt,

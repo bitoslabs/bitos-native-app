@@ -423,11 +423,14 @@ final class InboxStore {
         await pool.start()
         sendHeadRequests()
         let stream = await pool.frames()
-        watchTask = Task { [weak self] in
-            for await frame in stream {
-                guard let self, !Task.isCancelled else { return }
-                self.absorb(frame)
-            }
+        guard !Task.isCancelled, let account = accountPubkey else { return }
+        let boxedBridge = StatelessBridge(bridge: bridge)
+        watchTask = FrameIngest.pump(
+            stream: stream,
+            isAlive: { [weak self] in self != nil },
+            ingest: Self.notificationIngest(boxedBridge, account: account)
+        ) { [weak self] frame in
+            await self?.absorb(frame)
         }
     }
 
@@ -458,33 +461,100 @@ final class InboxStore {
         }
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let account = accountPubkey else { return }
-        absorbEose(frame)
-        absorbBlockList(frame, account: account)
+    /// Sendable outcome of the off-main notification frame gate.
+    private struct InboxFrame: Sendable {
+        struct Row: Sendable {
+            let id: String
+            let authorPubkey: String
+            let kindOrdinal: Int
+            let targetEventId: String?
+            let summary: String
+            let createdAt: Int64
+            let amountMsat: Int64
+        }
+        struct BlockHead: Sendable {
+            let createdAt: Int64
+            let pubkeys: [String]
+        }
+        let relay: RelayURL
+        /// Raw frame kept for the main-actor origin fetches (mention/reply
+        /// previews) — they are gated on main-actor state and stay there.
+        let message: String
+        let eoseSubId: String?
+        let notification: Row?
+        let blockHead: BlockHead?
+    }
+
+    /// EOSE/notification/block-head extraction — runs OFF the main actor.
+    /// `extractNotification` parses EVERY relay frame and used to run on the
+    /// main actor per frame (audit §3.1); the pump hops the typed rows back.
+    private nonisolated static func notificationIngest(
+        _ boxedBridge: StatelessBridge,
+        account: String
+    ) -> @Sendable (RelayFrame) -> InboxFrame? {
+        { frame in
+            let eoseSubId = boxedBridge.bridge.relayEoseSubscriptionId(message: frame.message) as String?
+            let blockHead: InboxFrame.BlockHead?
+            if let list = boxedBridge.bridge.blockListFromFrame(
+                message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
+            ) as? [String: Any] {
+                blockHead = InboxFrame.BlockHead(
+                    createdAt: Self.int64(list["createdAt"]),
+                    pubkeys: (list["pubkeys"] as? [String]) ?? []
+                )
+            } else {
+                blockHead = nil
+            }
+            var row: InboxFrame.Row?
+            if let notification = boxedBridge.bridge.extractNotification(
+                message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
+            ) as? [String: Any] {
+                let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) }
+                row = InboxFrame.Row(
+                    id: (notification["id"] as? String) ?? UUID().uuidString,
+                    authorPubkey: (notification["authorPubkey"] as? String) ?? "",
+                    kindOrdinal: kind?.ordinal ?? NotificationKind.mention.ordinal,
+                    targetEventId: (notification["targetEventId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                    summary: (notification["summary"] as? String) ?? "",
+                    createdAt: Self.int64(notification["createdAt"]),
+                    amountMsat: Self.int64(notification["amountMsat"])
+                )
+            }
+            if eoseSubId == nil, row == nil, blockHead == nil { return nil }
+            return InboxFrame(
+                relay: frame.relay,
+                message: frame.message,
+                eoseSubId: eoseSubId,
+                notification: row,
+                blockHead: blockHead
+            )
+        }
+    }
+
+    private func absorb(_ frame: InboxFrame) {
+        guard accountPubkey != nil else { return }
+        absorbEose(subscriptionId: frame.eoseSubId, relay: frame.relay)
+        if let head = frame.blockHead {
+            absorbBlockHead(head)
+        }
         absorbOrigin(frame)
-        guard let notification = bridge.extractNotification(
-            message: frame.message,
-            relayUrl: frame.relay.rawValue,
-            accountPubkey: account
-        ) as? [String: Any] else {
+        guard let row = frame.notification else {
             loaded = true
             return
         }
-        let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) } ?? .mention
+        let kind = NotificationKind(ordinal: row.kindOrdinal) ?? .mention
         // Per-type mutes never reach items or counts.
         if mutedKinds.contains(kind) { return }
         // Blocked authors never reach items or counts.
-        if blockedPubkeys.contains((notification["authorPubkey"] as? String) ?? "") { return }
-        let amountRaw = Self.int64(notification["amountMsat"])
+        if blockedPubkeys.contains(row.authorPubkey) { return }
         let item = NotificationItem(
-            id: (notification["id"] as? String) ?? UUID().uuidString,
-            authorPubkey: (notification["authorPubkey"] as? String) ?? "",
+            id: row.id,
+            authorPubkey: row.authorPubkey,
             kind: kind,
-            targetEventId: (notification["targetEventId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-            summary: (notification["summary"] as? String) ?? "",
-            createdAt: Self.int64(notification["createdAt"]),
-            amountMsat: amountRaw >= 0 ? amountRaw : nil
+            targetEventId: row.targetEventId,
+            summary: row.summary,
+            createdAt: row.createdAt,
+            amountMsat: row.amountMsat >= 0 ? row.amountMsat : nil
         )
         guard !seen.contains(item.id) else { return }
         // Republished kind-3 lists collapse per author (shared rule).
@@ -511,10 +581,10 @@ final class InboxStore {
     }
 
     /// Head EOSE → connected; page EOSE → close the batch when all relays answered.
-    private func absorbEose(_ frame: RelayFrame) {
-        guard let subId = bridge.relayEoseSubscriptionId(message: frame.message) as String? else { return }
+    private func absorbEose(subscriptionId: String?, relay: RelayURL) {
+        guard let subId = subscriptionId else { return }
         if subId == activePage?.subId {
-            activePage?.eoseRelays.insert(frame.relay)
+            activePage?.eoseRelays.insert(relay)
             if let batch = activePage, !batch.expectedRelays.isEmpty, batch.expectedRelays.isSubset(of: batch.eoseRelays) {
                 completePage(subId: subId)
             }
@@ -528,16 +598,10 @@ final class InboxStore {
 
     /// APP-012 blocked-author filter: newest verified kind-10004 head wins;
     /// arriving heads also evict already-collected rows.
-    private func absorbBlockList(_ frame: RelayFrame, account: String) {
-        guard let list = bridge.blockListFromFrame(
-            message: frame.message,
-            relayUrl: frame.relay.rawValue,
-            accountPubkey: account
-        ) as? [String: Any] else { return }
-        let createdAt = Self.int64(list["createdAt"])
-        guard createdAt >= (blockHeadAt ?? Int64.min) else { return }
-        blockHeadAt = createdAt
-        let next = Set((list["pubkeys"] as? [String]) ?? [])
+    private func absorbBlockHead(_ head: InboxFrame.BlockHead) {
+        guard head.createdAt >= (blockHeadAt ?? Int64.min) else { return }
+        blockHeadAt = head.createdAt
+        let next = Set(head.pubkeys)
         guard next != blockedPubkeys else { return }
         blockedPubkeys = next
         let evicted = items.filter { next.contains($0.authorPubkey) }
@@ -546,14 +610,15 @@ final class InboxStore {
     }
 
     /// Kotlin Long boxes as KotlinLong across the bridge; be tolerant.
-    private static func int64(_ value: Any?) -> Int64 {
+    /// `nonisolated`: the off-main ingest uses it while boxing typed rows.
+    nonisolated private static func int64(_ value: Any?) -> Int64 {
         if let long = value as? KotlinLong { return long.int64Value }
         if let int = value as? KotlinInt { return Int64(int.intValue) }
         if let number = value as? NSNumber { return number.int64Value }
         return 0
     }
 
-    private func absorbOrigin(_ frame: RelayFrame) {
+    private func absorbOrigin(_ frame: InboxFrame) {
         let loadingIds = origins.filter { $0.value == .loading }.map(\.key)
         guard !loadingIds.isEmpty else { return }
         guard let decoded = Self.decodeOriginNote(

@@ -59,7 +59,7 @@ final class DmStore {
         // Account switch: everything account-scoped resets, including the
         // cached secret (it belongs to the previous account).
         accountPubkey = pubkey
-        cachedSecret = nil
+        secretCache.reset()
         requested = false
         conversations = []
         previews = [:]
@@ -188,42 +188,99 @@ final class DmStore {
             }
         }
         let stream = await pool.frames()
-        watchTask = Task { [weak self] in
-            for await frame in stream {
-                guard let self, !Task.isCancelled else { return }
-                self.absorb(frame)
-            }
+        guard !Task.isCancelled else { return }
+        let boxedBridge = StatelessBridge(bridge: bridge)
+        watchTask = FrameIngest.pump(
+            stream: stream,
+            isAlive: { [weak self] in self != nil },
+            ingest: Self.dmIngest(boxedBridge, secretCache: secretCache)
+        ) { [weak self] frame in
+            await self?.absorb(frame)
         }
     }
 
-    private var cachedSecret: String?
+    /// Thread-safe secret cache shared by the off-main unwrap path and
+    /// main-actor senders. The secret is never logged or serialized.
+    private final class LockedSecret: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        func getOrSet(_ resolve: () -> String?) -> String {
+            lock.lock()
+            defer { lock.unlock() }
+            if let value { return value }
+            let fresh = resolve() ?? ""
+            value = fresh
+            return fresh
+        }
+        func reset() { lock.lock(); value = nil; lock.unlock() }
+    }
+
+    private let secretCache = LockedSecret()
+
+    /// Active-slot Keychain resolution, cached in [secretCache]. Safe to call
+    /// from the off-main ingest (UserDefaults + Keychain are thread-safe).
+    private nonisolated static func resolveSecret(_ cache: LockedSecret) -> String {
+        cache.getOrSet {
+            // Legacy multi-account gap: resolve by ACTIVE registry pointer —
+            // the legacy single-secret slot only matches the original install key.
+            let active = UserDefaults(suiteName: "bitos.accounts")?.string(forKey: "active_pubkey")
+            return active.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) }
+                ?? IdentityKeychain.loadSecret()
+        }
+    }
+
     private func secretProviderSync() -> String {
-        if let cachedSecret { return cachedSecret }
-        // Legacy multi-account gap: resolve by ACTIVE registry pointer — the
-        // legacy single-secret slot only matches the original install key.
-        let active = UserDefaults(suiteName: "bitos.accounts")?.string(forKey: "active_pubkey")
-        cachedSecret = active.flatMap { IdentityKeychain.loadSecret(slotPubkey: $0) }
-            ?? IdentityKeychain.loadSecret()
-        return cachedSecret ?? ""
+        Self.resolveSecret(secretCache)
     }
 
-    private func absorb(_ frame: RelayFrame) {
-        guard let account = accountPubkey else { return }
-        // Relay OK receipt: any pending wrap accepted → delivered tick.
-        if let accepted = bridge.parseOkAccepted(message: frame.message) as? Bool,
-           accepted,
-           let wrapId = bridge.okEventId(message: frame.message) as String? {
-            absorbOk(wrapId: wrapId)
-            return
+    /// Sendable outcome of the off-main DM frame gate.
+    private enum DmFrame: Sendable {
+        /// Relay OK receipt for one of our wraps.
+        case accepted(wrapId: String)
+        /// Unwrapped NIP-17 rumor; [peer] is nil when the wrap names none.
+        case rumor(id: String, author: String, peer: String?, content: String, createdAt: Int64)
+    }
+
+    /// OK parse + NIP-44 unwrap — runs OFF the main actor (the unwrap is
+    /// real crypto per frame; audit §3.1).
+    private nonisolated static func dmIngest(
+        _ boxedBridge: StatelessBridge,
+        secretCache: LockedSecret
+    ) -> @Sendable (RelayFrame) -> DmFrame? {
+        { frame in
+            // Relay OK receipt: any pending wrap accepted → delivered tick.
+            if let accepted = boxedBridge.bridge.parseOkAccepted(message: frame.message) as? Bool,
+               accepted,
+               let wrapId = boxedBridge.bridge.okEventId(message: frame.message) as String? {
+                return .accepted(wrapId: wrapId)
+            }
+            guard let map = boxedBridge.bridge.secureDmUnwrap(
+                message: frame.message,
+                relayUrl: frame.relay.rawValue,
+                myPrivateKeyHex: resolveSecret(secretCache)
+            ) as? [String: Any],
+                  let id = map["id"] as? String,
+                  let author = map["author"] as? String,
+                  let content = map["content"] as? String,
+                  let createdAt = (map["createdAt"] as? NSNumber)?.int64Value else { return nil }
+            return .rumor(
+                id: id,
+                author: author,
+                peer: map["peer"] as? String,
+                content: content,
+                createdAt: createdAt
+            )
         }
-        guard let map = bridge.secureDmUnwrap(message: frame.message, relayUrl: frame.relay.rawValue, myPrivateKeyHex: secretProviderSync()) as? [String: Any] else { return }
-        // Map: {id, author, peer, content, createdAt}
-        guard let id = map["id"] as? String,
-              let author = map["author"] as? String,
-              let content = map["content"] as? String,
-              let createdAt = (map["createdAt"] as? NSNumber)?.int64Value else { return }
-        let peer = (map["peer"] as? String) ?? account
-        appendMessage(id: id, author: author, peer: peer, content: content, createdAt: createdAt)
+    }
+
+    private func absorb(_ frame: DmFrame) {
+        guard accountPubkey != nil else { return }
+        switch frame {
+        case .accepted(let wrapId):
+            absorbOk(wrapId: wrapId)
+        case .rumor(let id, let author, let peer, let content, let createdAt):
+            appendMessage(id: id, author: author, peer: peer ?? accountPubkey ?? "", content: content, createdAt: createdAt)
+        }
     }
 
     private func absorbOk(wrapId: String) {

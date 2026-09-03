@@ -658,11 +658,13 @@ final class NotePublisher {
         receipts = writeUrls.map { PublishReceipt(relayHost: $0.host) }
 
         let stream = await pool.frames()
-        watchTask = Task { [weak self] in
-            for await frame in stream {
-                guard let self, !Task.isCancelled else { return }
-                self.absorbFrame(frame)
-            }
+        let boxedBridge = StatelessBridge(bridge: bridge)
+        watchTask = FrameIngest.pump(
+            stream: stream,
+            isAlive: { [weak self] in self != nil },
+            ingest: Self.receiptIngest(boxedBridge)
+        ) { [weak self] receipt in
+            await self?.absorbReceipt(receipt)
         }
 
         await pool.broadcast(frame, to: writeUrls)
@@ -696,13 +698,36 @@ final class NotePublisher {
         }
     }
 
-    private func absorbFrame(_ frame: RelayFrame) {
-        guard bridge.okEventId(message: frame.message) == inFlightId else { return }
-        let accepted = (bridge.parseOkAccepted(message: frame.message) as? Bool) ?? false
-        let detail = bridge.okDetail(message: frame.message) as String?
-        if let index = receipts.firstIndex(where: { $0.relayHost == frame.relay.host }) {
-            receipts[index].accepted = accepted
-            receipts[index].detail = detail
+    /// Sendable relay-OK receipt extracted off the main actor.
+    private struct OkReceipt: Sendable {
+        let eventId: String
+        let accepted: Bool
+        let detail: String?
+        let relayHost: String
+    }
+
+    /// Relay OK parse — runs OFF the main actor; every frame while a publish
+    /// is in flight pays three JSON scans (id/accepted/detail) that used to
+    /// sit on the main actor (audit §3.1).
+    private nonisolated static func receiptIngest(
+        _ boxedBridge: StatelessBridge
+    ) -> @Sendable (RelayFrame) -> OkReceipt? {
+        { frame in
+            guard let eventId = boxedBridge.bridge.okEventId(message: frame.message) as String? else { return nil }
+            return OkReceipt(
+                eventId: eventId,
+                accepted: (boxedBridge.bridge.parseOkAccepted(message: frame.message) as? Bool) ?? false,
+                detail: boxedBridge.bridge.okDetail(message: frame.message) as String?,
+                relayHost: frame.relay.host
+            )
+        }
+    }
+
+    private func absorbReceipt(_ receipt: OkReceipt) {
+        guard receipt.eventId == inFlightId else { return }
+        if let index = receipts.firstIndex(where: { $0.relayHost == receipt.relayHost }) {
+            receipts[index].accepted = receipt.accepted
+            receipts[index].detail = receipt.detail
         }
     }
 

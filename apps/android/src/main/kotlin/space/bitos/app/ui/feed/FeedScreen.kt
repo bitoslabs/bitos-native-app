@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,6 +96,7 @@ import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.designsystem.AppSkeletonRow
 import space.bitos.core.feed.FeedFilter
 import space.bitos.core.feed.BitzTimelinePolicy
+import space.bitos.core.model.ProfileMetadata
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarFeedIcon
@@ -217,19 +219,18 @@ fun FeedScreen(
     }
     // APP-004: arrivals are held while the user is scrolled into the ACTIVE
     // surface (list first row / pager page 0 = top); at top auto-reveals.
-    LaunchedEffect(
-        videoOnly,
-        pagerState.settledPage,
-        listState.firstVisibleItemIndex,
-        listState.firstVisibleItemScrollOffset,
-    ) {
-        viewModel.holdNewNotes(
-            if (videoOnly) {
-                pagerState.settledPage != 0
-            } else {
-                listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0
-            },
-        )
+    // snapshotFlow re-emits only when the derived at-top value CHANGES —
+    // keying the effect on the raw scroll offset relaunched a coroutine on
+    // every scroll frame (audit §4 recomposition churn).
+    LaunchedEffect(videoOnly) {
+        if (videoOnly) {
+            snapshotFlow { pagerState.settledPage == 0 }
+                .collect { atTop -> viewModel.holdNewNotes(!atTop) }
+        } else {
+            snapshotFlow {
+                listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            }.collect { atTop -> viewModel.holdNewNotes(!atTop) }
+        }
     }
     // APP-004 pagination: near the end of the active surface, fetch one
     // older page (the repository guards in-flight + exhausted requests).
@@ -300,7 +301,14 @@ fun FeedScreen(
                         )
                         else -> if (videoOnly) VerticalPager(state = pagerState) { page ->
                             FeedPage(
-                                note = feedNotes[page], state = state, actions = actions, pool = pool,
+                                note = feedNotes[page],
+                                // Narrow slices, not the whole FeedUiState: a
+                                // tally/relay-health-only publish must not
+                                // recompose visible video pages (audit §4).
+                                profiles = state.profiles,
+                                following = state.following,
+                                bookmarkedIds = state.bookmarkedIds,
+                                actions = actions, pool = pool,
                                 player = playerBindings[feedNotes[page].id],
                                 onLike = viewModel::toggleLike, onBookmark = viewModel::toggleBookmark,
                                 onComment = { showCommentsFor = it }, onRepost = viewModel::repost,
@@ -646,7 +654,9 @@ fun FeedScreen(
 @Composable
 private fun FeedPage(
     note: FeedNote,
-    state: FeedUiState,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
+    bookmarkedIds: Set<String>,
     actions: LocalActions,
     pool: VideoPlayerPool,
     player: androidx.media3.exoplayer.ExoPlayer?,
@@ -673,13 +683,13 @@ private fun FeedPage(
 ) {
     if (note.video != null) {
         VideoNotePage(
-            note, state, actions, pool, player, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor,
+            note, profiles, following, bookmarkedIds, actions, pool, player, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor,
             isMuted, onMuteToggle, onReport,
             authorDemoted, tagDemoted, interactionAuthorName,
             onNotInterested, onHideNote, onToggleAuthorDemotion, onToggleTagDemotion, onOpenAttachment,
         )
     } else {
-        TextNotePage(note, state, actions, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor)
+        TextNotePage(note, profiles, bookmarkedIds, actions, onLike, onBookmark, onComment, onRepost, onFollow, onZap, onAuthor)
     }
 }
 
@@ -704,7 +714,9 @@ private fun autoplayAllowed(
 @Composable
 private fun VideoNotePage(
     note: FeedNote,
-    state: FeedUiState,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
+    bookmarkedIds: Set<String>,
     actions: LocalActions,
     pool: VideoPlayerPool,
     player: androidx.media3.exoplayer.ExoPlayer?,
@@ -754,11 +766,11 @@ private fun VideoNotePage(
                 .fillMaxSize()
                 .clickable(onClickLabel = "Pause or resume playback") { pool.togglePlay(note.id) },
         )
-        CaptionOverlay(note, state, onFollow, onAuthor, Modifier.align(Alignment.BottomStart).fillMaxWidth())
+        CaptionOverlay(note, profiles, following, onFollow, onAuthor, Modifier.align(Alignment.BottomStart).fillMaxWidth())
         VideoActionRail(
             note = note,
             isLiked = note.id in actions.liked,
-            isBookmarked = note.id in state.bookmarkedIds || note.id in actions.bookmarked,
+            isBookmarked = note.id in bookmarkedIds || note.id in actions.bookmarked,
             onLike = onLike,
             onBookmark = onBookmark,
             onComment = onComment,
@@ -782,8 +794,15 @@ private fun VideoNotePage(
 }
 
 @Composable
-private fun CaptionOverlay(note: FeedNote, state: FeedUiState, onFollow: (String) -> Unit, onAuthor: (String) -> Unit, modifier: Modifier) {
-    val profile = state.profiles[note.pubkey]
+private fun CaptionOverlay(
+    note: FeedNote,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
+    onFollow: (String) -> Unit,
+    onAuthor: (String) -> Unit,
+    modifier: Modifier,
+) {
+    val profile = profiles[note.pubkey]
     Column(
         modifier = modifier
             .background(
@@ -814,7 +833,7 @@ private fun CaptionOverlay(note: FeedNote, state: FeedUiState, onFollow: (String
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
             FollowChip(
-                isFollowing = note.pubkey in state.following,
+                isFollowing = note.pubkey in following,
                 onToggle = { onFollow(note.pubkey) },
             )
         }
@@ -1105,7 +1124,8 @@ private fun RailButton(icon: SolarFeedIcon, label: String, tint: Color, onClick:
 @Composable
 private fun TextNotePage(
     note: FeedNote,
-    state: FeedUiState,
+    profiles: Map<String, ProfileMetadata>,
+    bookmarkedIds: Set<String>,
     actions: LocalActions,
     onLike: (space.bitos.core.feed.FeedNote) -> Unit,
     onBookmark: (String) -> Unit,
@@ -1115,7 +1135,7 @@ private fun TextNotePage(
     onZap: (space.bitos.core.feed.FeedNote) -> Unit,
     onAuthor: (String) -> Unit,
 ) {
-    val profile = state.profiles[note.pubkey]
+    val profile = profiles[note.pubkey]
     Box(Modifier.fillMaxSize().background(BitOSColors.background).padding(BitOSSpacing.screen)) {
         Column(Modifier.align(Alignment.TopStart).padding(top = BitOSSpacing.xl)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1186,9 +1206,9 @@ private fun TextNotePage(
                 tint = if (note.id in actions.liked) BitOSColors.like else BitOSColors.textSecondary,
             ) { onLike(note) }
             RailButton(
-                icon = if (note.id in state.bookmarkedIds || note.id in actions.bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
-                label = if (note.id in state.bookmarkedIds || note.id in actions.bookmarked) "Remove bookmark" else "Bookmark",
-                tint = if (note.id in state.bookmarkedIds || note.id in actions.bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary,
+                icon = if (note.id in bookmarkedIds || note.id in actions.bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+                label = if (note.id in bookmarkedIds || note.id in actions.bookmarked) "Remove bookmark" else "Bookmark",
+                tint = if (note.id in bookmarkedIds || note.id in actions.bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary,
             ) { onBookmark(note.id) }
         }
     }
@@ -1216,13 +1236,16 @@ fun PosterImage(
         Brush.linearGradient(listOf(backgroundColor, backgroundColor))
     })) {
         if (url != null) {
-            coil.compose.SubcomposeAsyncImage(
-                model = url,
-                contentDescription = null,
-                contentScale = contentScale,
-                modifier = Modifier.fillMaxSize(),
-                loading = {
-                    if (showLoadingProgress) {
+            if (showLoadingProgress) {
+                // Grid tiles want a per-tile loading slot; SubcomposeAsyncImage
+                // pays a subcomposition per instance, so full-screen posters
+                // (no slot needed) take the plain AsyncImage path below.
+                coil.compose.SubcomposeAsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(
                                 color = BitOSColors.textTertiary,
@@ -1230,10 +1253,8 @@ fun PosterImage(
                                 modifier = Modifier.size(22.dp),
                             )
                         }
-                    }
-                },
-                error = {
-                    if (showLoadingProgress) {
+                    },
+                    error = {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
                                 AppIcons.Play,
@@ -1242,9 +1263,16 @@ fun PosterImage(
                                 modifier = Modifier.size(30.dp),
                             )
                         }
-                    }
-                },
-            )
+                    },
+                )
+            } else {
+                coil.compose.AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }

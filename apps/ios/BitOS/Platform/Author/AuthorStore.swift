@@ -53,13 +53,19 @@ final class AuthorStore {
 
     /// Subscribes this store to the relay fan-out. Must run once before any
     /// `open`; without it the REQ leaves but verified frames never arrive.
+    /// Frames pass the protocol gate OFF the main actor (shared ingest pump);
+    /// only verified events and EOSE ids hop to absorption.
     func start() {
         guard framesTask == nil else { return }
-        framesTask = Task { [weak self] in
-            let stream = await self?.pool.frames() ?? AsyncStream { $0.finish() }
-            for await frame in stream {
-                guard let self else { return }
-                self.absorb(frame)
+        Task { [weak self, pool, client] in
+            let stream = await pool.frames()
+            guard let self, !Task.isCancelled else { return }
+            self.framesTask = FrameIngest.pump(
+                stream: stream,
+                isAlive: { [weak self] in self != nil },
+                ingest: FrameIngest.verifiedGate(client)
+            ) { [weak self] gated in
+                await self?.absorb(gated)
             }
         }
     }
@@ -119,10 +125,9 @@ final class AuthorStore {
     }
 
     /// Head EOSE → connected; page EOSE → settle when all relays answered.
-    private func absorbEose(_ frame: RelayFrame) {
-        guard let subId = client.relayEoseSubscriptionId(message: frame.message),
-              subId == activePage?.subId else { return }
-        activePage?.eoseRelays.insert(frame.relay)
+    private func absorbEose(subscriptionId subId: String, relay: RelayURL) {
+        guard subId == activePage?.subId else { return }
+        activePage?.eoseRelays.insert(relay)
         guard let batch = activePage,
               !batch.expectedRelays.isEmpty,
               batch.expectedRelays.isSubset(of: batch.eoseRelays) else { return }
@@ -154,25 +159,26 @@ final class AuthorStore {
         Task { [pool, client] in await pool.broadcast(client.close(subscriptionId: subId)) }
     }
 
-    func absorb(_ frame: RelayFrame) {
-        if client.relayEoseSubscriptionId(message: frame.message) != nil {
-            absorbEose(frame)
-            return
-        }
-        guard let target = pubkey,
-              let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
-              event.pubkey == target else { return }
-        if client.isProfileKind(event.kind) {
-            if let metadata = client.profile(from: event) {
-                profile = metadata
+    func absorb(_ gated: GatedFrame) {
+        switch gated {
+        case .eose(let subId, let relay):
+            absorbEose(subscriptionId: subId, relay: relay)
+        case .event(let gatedEvent):
+            guard let target = pubkey,
+                  gatedEvent.event.pubkey == target else { return }
+            let event = gatedEvent.event
+            if client.isProfileKind(event.kind) {
+                if let metadata = client.profile(from: event) {
+                    profile = metadata
+                    isLoading = false
+                }
+            } else if client.isFeedKind(event.kind) {
+                guard !seen.contains(event.id) else { return }
+                seen.insert(event.id)
+                notes.append(client.feedNote(from: event))
+                notes.sort { $0.createdAt > $1.createdAt }
                 isLoading = false
             }
-        } else if client.isFeedKind(event.kind) {
-            guard !seen.contains(event.id) else { return }
-            seen.insert(event.id)
-            notes.append(client.feedNote(from: event))
-            notes.sort { $0.createdAt > $1.createdAt }
-            isLoading = false
         }
     }
 

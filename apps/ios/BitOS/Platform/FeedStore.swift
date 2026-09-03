@@ -564,25 +564,32 @@ final class FeedStore {
     // publish synchronously through publishState().
 
     /// One relay frame after the protocol trust gate, decoded off-main.
+    /// EVENT frames carry the delivery subscription id and — for kinds that
+    /// persist — the prebuilt tags JSON, so main-actor absorption performs
+    /// no protocol bridge work at all (audit §3.1).
     private enum IngestedFrame {
         case eose(subscriptionId: String)
-        case event(VerifiedEvent)
+        case event(VerifiedEventFrame, tagsJson: String?)
         case ignored
     }
 
-    /// Protocol gate for one frame: EOSE ids pass through; EVENT frames
-    /// must decode and pass ID + BIP-340 verification (shared core, whose
-    /// outcome cache dedupes verification across every store).
+    /// Protocol gate for one frame: EVENT frames must decode and pass ID +
+    /// BIP-340 verification (shared core, whose outcome cache dedupes the
+    /// other frame collectors), EOSE ids pass through. Everything — one
+    /// frame parse, tags JSON for persistable kinds — runs OFF the main
+    /// actor; absorption only receives verified values.
     private nonisolated static func ingest(_ frame: RelayFrame, client: any BusinessCoreClient) -> IngestedFrame {
+        let signpost = Perf.signposter.beginInterval(Perf.Interval.relayDecode)
+        defer { Perf.signposter.endInterval(Perf.Interval.relayDecode, signpost) }
+        if let gated = client.decodeVerifiedEventFrame(message: frame.message, relay: frame.relay.rawValue) {
+            // Phase 0 signpost: the frame trust gate (JSON + SHA-256 ID +
+            // BIP-340) off the main actor. Counters only — never content.
+            let persists = client.isFeedKind(gated.event.kind) || client.isProfileKind(gated.event.kind)
+            return .event(gated, tagsJson: persists ? client.tagsToJson(gated.event.tags) : nil)
+        }
         if let subId = client.relayEoseSubscriptionId(message: frame.message) {
             return .eose(subscriptionId: subId)
         }
-        // Phase 0 signpost: the frame trust gate (JSON + SHA-256 ID +
-        // BIP-340) off the main actor. Counters only — never content.
-        let signpost = Perf.signposter.beginInterval(Perf.Interval.relayDecode)
-        let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue)
-        Perf.signposter.endInterval(Perf.Interval.relayDecode, signpost)
-        if let event { return .event(event) }
         return .ignored
     }
 
@@ -594,12 +601,13 @@ final class FeedStore {
             return
         case .ignored:
             return
-        case .event(let event):
-            absorbVerified(event, frame: frame)
+        case .event(let gated, let tagsJson):
+            absorbVerified(gated, tagsJson: tagsJson, frame: frame)
         }
     }
 
-    private func absorbVerified(_ event: VerifiedEvent, frame: RelayFrame) {
+    private func absorbVerified(_ gated: VerifiedEventFrame, tagsJson: String?, frame: RelayFrame) {
+        let event = gated.event
         // Older-page feed frames publish once per completed walk (batch
         // parity with Flutter appending the whole EOSE page at once); late
         // frames after the walk ended and every other kind still publish.
@@ -654,7 +662,7 @@ final class FeedStore {
             absorbProfile(event)
             // DAT-003: kind-0 heads persist so the You page (and every
             // author card) hydrates from cache on the next cold start.
-            persist(event)
+            persist(event, tagsJson: tagsJson)
         } else if event.kind == 1111 {
             // NIP-22 comments (ADR-003): kind-1111 projects into the comment
             // thread only — never the feed windows.
@@ -673,13 +681,15 @@ final class FeedStore {
             // (shared latest-vote-per-pubkey rule).
             absorbPollVote(event)
         } else if client.isFeedKind(event.kind) {
-            let subscriptionId = bridgeFacade().relayEventSubscriptionId(message: frame.message)
+            // The subscription id rode the ingest parse — no second JSON
+            // pass on the main actor (audit §2.5).
+            let subscriptionId = gated.subscriptionId
             let fromOlderPage = subscriptionId?
                 .hasPrefix("bitos-older-") == true
             let note = client.feedNote(from: event)
             recordOlderEvent(subscriptionId: subscriptionId, event: event, note: note)
-            absorbNote(event, fromOlderPage: fromOlderPage)
-            persist(event)
+            absorbNote(event, note: note, fromOlderPage: fromOlderPage)
+            persist(event, tagsJson: tagsJson)
             // Relay PAGE boundaries own the publishes: older-page frames
             // publish once per completed walk; the INITIAL head page holds
             // its frames until the page EOSE / snapshot deadline (batch
@@ -692,8 +702,7 @@ final class FeedStore {
         if !suppressPublish { schedulePublish() }
     }
 
-    private func absorbNote(_ event: VerifiedEvent, fromOlderPage: Bool = false) {
-        let note = client.feedNote(from: event)
+    private func absorbNote(_ event: VerifiedEvent, note: FeedNote, fromOlderPage: Bool) {
         if !knownNoteIds.contains(note.id) {
             knownNoteIds.insert(note.id)
             if !fromOlderPage {
@@ -1608,9 +1617,10 @@ final class FeedStore {
     /// keeping relay bursts off the per-event fsync path (audit R6).
     private var pendingPersist: [StoredEvent] = []
 
-    private func persist(_ event: VerifiedEvent) {
-        guard eventStore != nil else { return }
-        let tagsJson = client.tagsToJson(event.tags)
+    private func persist(_ event: VerifiedEvent, tagsJson: String?) {
+        guard eventStore != nil, let tagsJson else { return }
+        // tagsJson is prebuilt in the off-main ingest — the main actor only
+        // boxes the stored row (audit §3.1).
         let stored = StoredEvent(
             id: event.id, pubkey: event.pubkey, createdAt: event.createdAt,
             kind: event.kind, tagsJson: tagsJson, content: event.content,
