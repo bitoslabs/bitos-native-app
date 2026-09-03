@@ -1,0 +1,18 @@
+{
+  "pubkey": "1111111111111111111111111111111111111111111111111111111111111111",
+  "created_at": 0,
+  "kind": 20,
+  "content": "when the fee market loops forever #bitcoin",
+  "tags": [
+    ["t", "bitcoin"],
+    ["alt", "when the fee market loops forever #bitcoin"],
+    [
+      "imeta",
+      "url https://media.example/meme.gif",
+      "m image/gif",
+      "x dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size 242424",
+      "dim 608x608"
+    ]
+  ]
+}

@@ -4,15 +4,22 @@
   "kind": 22,
   "content": "A BitOS interoperability fixture https://media.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4",
   "tags": [
-    ["title", "Fixture"],
-    ["alt", "A test pattern used for protocol verification"],
+    [
+      "title",
+      "Fixture"
+    ],
+    [
+      "alt",
+      "A test pattern used for protocol verification"
+    ],
     [
       "imeta",
       "url https://media.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4",
       "m video/mp4",
       "x aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "dim 1080x1920",
-      "duration 10"
+      "duration 10",
+      "thumb https://media.example/9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f.jpg"
     ]
   ]
 }

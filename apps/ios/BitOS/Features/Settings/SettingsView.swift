@@ -403,7 +403,7 @@ private struct AlgorithmSection: View {
             if algorithm.surfaces[surface]?.enabled == true {
                 Section {
                     let preset = algorithm.detectPreset(surface: surface)
-                    HStack(spacing: 8) {
+                    FlowLayout(spacing: 8) {
                         ForEach([("LATEST", "Latest"), ("BALANCED", "Balanced"), ("TRENDING", "Trending"), ("TRUSTED", "Trusted")], id: \.0) { id, label in
                             presetPill(label, id: id, active: preset == id) {
                                 algorithm.setPreset(surface: surface, preset: id)
@@ -1074,7 +1074,7 @@ private struct RelaysSection: View {
                 let suggestions = ["wss://nostr-01.yakihonne.com", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"]
                     .filter { url in !relays.relays.contains { $0.url == url } }
                 if !suggestions.isEmpty {
-                    HStack(spacing: 6) {
+                    FlowLayout(spacing: 6) {
                         ForEach(suggestions, id: \.self) { url in
                             Button {
                                 addInput = url
@@ -1447,38 +1447,20 @@ private struct AboutSection: View {
     }
 }
 
-/// Wrapping monospace chips (legacy NIP badge parity).
+/// Wrapping monospace chips (legacy NIP badge parity) — width-aware flow,
+/// never a fixed column count.
 private struct FlowChips: View {
     let items: [String]
 
-    private let rows: [[String]]
-    init(items: [String]) {
-        var built: [[String]] = []
-        var current: [String] = []
-        for item in items {
-            current.append(item)
-            if current.count == 5 {
-                built.append(current)
-                current = []
-            }
-        }
-        if !current.isEmpty { built.append(current) }
-        rows = built
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 6) {
-                    ForEach(row, id: \.self) { item in
-                        Text(item)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(BitOSTheme.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(BitOSTheme.surfaceOverlay.opacity(0.5), in: Capsule())
-                    }
-                }
+        FlowLayout(spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                Text(item)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(BitOSTheme.surfaceOverlay.opacity(0.5), in: Capsule())
             }
         }
         .padding(.vertical, 4)

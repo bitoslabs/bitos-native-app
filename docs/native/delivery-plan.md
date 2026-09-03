@@ -161,6 +161,36 @@
   MediaMetadata). iOS BlossomUploader mirrors the Android flow with the
   same hash-mismatch blocking rule.
 
+- 2026-09-03 — PUB media post-details parity (reference app-04
+  scr-details): kind-22 import path gains alt text (NIP-31, caption
+  fallback), NIP-36 content-warning + reason, caption counter and
+  caption-hashtag t-tags — shared `composeMediaNote` + bridge defaulted
+  params (common-tested), both native publishers and publish sheets
+  thread them; meme-path semantics, now uniform across every media lane.
+
+- 2026-09-03 — CAP-002 record-screen chrome to the reference UX
+  (`docs/ui/app-app-04-create-camera-editor.html`): rule-of-thirds grid
+  guides, blinking REC badge with mono clock, right-edge lens zoom rail
+  (.5×/1×/2× via cameraControl/videoZoomFactor), torch toggle,
+  off/3s/10s self-timer with countdown overlay, session takes strip
+  (real poster-frame thumbnails, per-take delete, dashed "+", N takes ·
+  MM:SS summary, tap-to-review → trim preview), 76 dp record button whose
+  red core morphs to a stop square, Import/MEM side buttons wired to the
+  library sheet and expert editor, Flip/Edit takes/3:00-cap bottom row
+  (cap + low-disk reserve enforced: auto-stop at 180 s, iOS
+  minFreeDiskSpaceLimit), permission-declined state with system-settings
+  deep link. MEM handoff: ALL takes seed the meme editor — N ≥ 2
+  merge into one clip first (Media3 Transformer Composition /
+  AVMutableComposition passthrough, "Combining N takes…" overlay,
+  failure falls back to the newest take), then the MST-030 trim
+  pipeline + MST-018 slot autosave persist it (studio drafts, not the
+  OS gallery). Chrome icons resolve through the Solar
+  facade (flashlightOn/stopwatch/clockCircle/cameraRotate vendored CC-BY
+  vectors, iOS AppIcons tokens + Android SolarCaptureIcon; plain-X close
+  and 3×3 grid stay native per icon-system.md convention rule).
+  Deviations from the mock by design: no speed chip (mock-only control),
+  no mic meter (no audio track in the capture pipeline yet).
+
 - 2026-08-27 — CAP-001/002 foundation: camera screens on both apps
   (CameraX Recorder / AVCaptureMovieFileOutput) feeding the tested publish
   pipeline; Create tab Record/Import fast paths now action; shared

@@ -194,6 +194,13 @@ data class UploadedMedia(
     val width: Int? = null,
     val height: Int? = null,
     val durationMs: Long? = null,
+    /**
+     * Poster/cover frame URL (plan §3.4, MST-032): a JPEG uploaded
+     * separately and referenced as the imeta `thumb` so clients show the
+     * creator-selected cover before decoding the clip. Same URL policy
+     * as [url]; null = no cover.
+     */
+    val thumbUrl: String? = null,
 ) {
     init {
         // HTTPS in production; loopback HTTP is allowed for the local dev stack.
@@ -208,6 +215,13 @@ data class UploadedMedia(
         width?.let { require(it in 1..100_000) }
         height?.let { require(it in 1..100_000) }
         durationMs?.let { require(it in 1..24L * 60 * 60 * 1000) }
+        thumbUrl?.let { thumb ->
+            require(
+                thumb.startsWith("https://") ||
+                    thumb.startsWith("http://127.0.0.1:") || thumb.startsWith("http://localhost:")
+            ) { "Cover thumbs require HTTPS" }
+            require(thumb.length <= 2048)
+        }
     }
 
     /** NIP-92 imeta field list for this descriptor. */
@@ -218,5 +232,6 @@ data class UploadedMedia(
         add("size $sizeBytes")
         if (width != null && height != null) add("dim ${width}x${height}")
         if (durationMs != null) add("duration ${durationMs / 1000}")
+        thumbUrl?.let { add("thumb $it") }
     }
 }

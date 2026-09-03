@@ -51,6 +51,8 @@ struct HomeView: View {
     @State private var commentTarget: FeedNote?
     @State private var zapTarget: FeedNote?
     @State private var showMediaImport = false
+    /** Create hub (record/import/studio) from the app-bar camera. */
+    @State private var showCreateHub = false
     @State private var authorTarget: String?
     @State private var menu: AppMenuPresentation?
     /** Legacy-parity ⋯ overflow → bottom sheet (filter stays a popover). */
@@ -380,6 +382,17 @@ struct HomeView: View {
                     .frame(width: 34, height: 34)
             }
             .accessibilityLabel("Open hub")
+            // Create hub (Android app-bar camera parity): record/import and
+            // the studio entry points behind one surface.
+            Button {
+                showCreateHub = true
+            } label: {
+                AppIcons.image(for: AppIcons.camera)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Create")
             Button {
                 showMediaImport = true
             } label: {
@@ -552,6 +565,13 @@ struct HomeView: View {
                 ImportMediaSheet(onClose: { showMediaImport = false })
                     .environment(identity)
                     .presentationDetents([.medium, .large])
+            }
+            // Create hub from the app-bar camera (BitzView presentation parity).
+            .fullScreenCover(isPresented: $showCreateHub) {
+                CreateView()
+                    .environment(environment)
+                    .environment(identity)
+                    .preferredColorScheme(BitOSTheme.preferredScheme)
             }
             .appMenuHost($menu)
             .sheet(item: $zapTarget) { target in

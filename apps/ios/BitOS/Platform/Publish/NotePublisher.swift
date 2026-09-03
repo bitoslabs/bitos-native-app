@@ -475,6 +475,8 @@ final class NotePublisher {
     /// Kind-22 media note from a verified upload (PUB media path).
     func publishMediaNote(
         caption: String,
+        altText: String = "",
+        contentWarningReason: String? = nil,
         url: String, hash: String, mime: String, size: Int,
         width: Int? = nil, height: Int? = nil, durationMs: Int64? = nil
     ) async {
@@ -490,14 +492,101 @@ final class NotePublisher {
                   authorPubkey: account.pubkeyHex, caption: caption,
                   url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
                   width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
-                  nowSeconds: now
+                  nowSeconds: now, altText: altText, contentWarningReason: contentWarningReason
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.mediaNotePublishMessage(
                   authorPubkey: account.pubkeyHex, caption: caption,
                   url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
                   width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
-                  createdAtSeconds: now, signatureHex: signature
+                  createdAtSeconds: now, signatureHex: signature,
+                  altText: altText, contentWarningReason: contentWarningReason
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Kind-20 picture meme from a verified upload (MST-017): web tag
+    /// order (t-tags, alt, imeta, CW) → sign → receipt machine. The media
+    /// MUST come from a hash-verified Blossom upload (same contract as the
+    /// kind-22 path).
+    func publishMemePictureNote(
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String, hash: String, size: Int,
+        width: Int, height: Int,
+        remixTagsJson: String = ""
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeMemePictureEventId(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  url: url, sha256Hex: hash, mimeType: "image/png",
+                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                  nowSeconds: now, extraTagsJson: remixTagsJson
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.memePicturePublishMessage(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  url: url, sha256Hex: hash, mimeType: "image/png",
+                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                  createdAtSeconds: now, signatureHex: signature,
+                  extraTagsJson: remixTagsJson
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// Video meme from a verified upload (MST-034): kind 22 portrait /
+    /// 21 landscape through the receipt machine.
+    func publishMemeVideoNote(
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String, hash: String, size: Int,
+        width: Int, height: Int, durationMs: Int64,
+        thumbUrl: String? = nil
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let portrait = height >= width
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeMemeVideoEventId(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  portrait: portrait,
+                  url: url, sha256Hex: hash, mimeType: "video/mp4",
+                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                  durationMs: durationMs, nowSeconds: now,
+                  thumbUrl: thumbUrl
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.memeVideoPublishMessage(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  portrait: portrait,
+                  url: url, sha256Hex: hash, mimeType: "video/mp4",
+                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                  durationMs: durationMs, createdAtSeconds: now, signatureHex: signature,
+                  thumbUrl: thumbUrl
               ) else {
             result = .invalid
             return

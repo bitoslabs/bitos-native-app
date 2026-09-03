@@ -141,6 +141,47 @@ class NotePublisherTest {
     }
 
     @Test
+    fun publishesKind20PictureMemeWithWebTagOrder() = runBlocking {
+        // MST-017: kind-20 meme — t-tags, alt fallback, imeta, CW last;
+        // the frame parses back as picture media (feed reconciliation).
+        val signer = DeterministicTestSigner("0000000000000000000000000000000000000000000000000000000000000001")
+        val media = space.bitos.core.model.UploadedMedia(
+            url = "https://cdn.example/meme.png",
+            sha256Hex = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a",
+            mimeType = "image/png",
+            sizeBytes = 424_242,
+            width = 608,
+            height = 1080,
+        )
+        publisher.publishMemePictureNote(
+            "when the fee market opens #bitcoin", "", "flashing imagery",
+            media, { signer }, listOf(relay),
+        )
+        withTimeout(20_000) { publisher.state.first { it.inFlightId != null } }
+        withTimeout(20_000) {
+            while (transport.sent.none { it.startsWith("""["EVENT",""" ) }) delay(10)
+        }
+        val frame = transport.sent.single { it.startsWith("""["EVENT",""" ) }
+        val decoded = NostrEventCodec.decodeClientEventFrame(Sha256EventHasher, frame, relay)
+        assertEquals(20, decoded.kind)
+        assertEquals("when the fee market opens #bitcoin", decoded.content)
+        assertEquals(listOf("t", "bitcoin"), decoded.tags.first())
+        // Alt falls back to the caption (NIP-31, screen readers).
+        assertTrue(decoded.tags.any { it == listOf("alt", "when the fee market opens #bitcoin") })
+        val imeta = decoded.tags.first { it.first() == "imeta" }
+        assertTrue(imeta.any { it == "url https://cdn.example/meme.png" })
+        assertTrue(imeta.any { it == "x 10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a" })
+        // CW rides last (web tag order).
+        assertEquals(listOf("content-warning", "flashing imagery"), decoded.tags.last())
+        // Picture memes reconcile through the imeta (the video extractor
+        // `MediaMetadata.fromEvent` is the kind-21/22 path, not this one).
+
+        transport.emit("""["OK","${decoded.id.value}",true,""]""")
+        val done = withTimeout(20_000) { publisher.state.first { it.result == PublishResult.PUBLISHED } }
+        assertTrue(done.receipts.any { it.accepted == true })
+    }
+
+    @Test
     fun signerRefusalNeverSends() = runBlocking {
         val refusing = object : space.bitos.core.identity.IdentitySigner {
             override fun signerKind() = space.bitos.core.identity.SignerKind.LOCAL_KEY

@@ -716,6 +716,33 @@ choice tiles + permission rows):
 
 ### 3.19 APP-019 — Studio & Meme Studio (V1 quick editor; V2 full suite)
 
+**Record screen** (camera capture, reference `docs/ui/app-app-04-create-camera-editor.html`):
+- [x] Full-bleed preview + rule-of-thirds grid toggle
+- [x] Top bar: ✕ close (discard confirm when takes pending) · torch · grid ·
+      off/3s/10s self-timer
+- [x] REC badge: blinking dot + mono elapsed clock
+- [x] Right-edge lens rail .5×/1×/2× (clamped to device zoom bounds)
+- [x] Takes strip: poster-frame thumbnails · per-take ✕ · dashed "+" ·
+      "N takes · MM:SS" · tap → trim preview (Retake discards, Use hands
+      off to the publish pipeline)
+- [x] Capture row: Import (library sheet) · 76dp record button with morphing
+      red core · MEM (expert editor seeded with ALL takes — N ≥ 2 merge into
+      one clip first: Media3 Transformer / AVMutableComposition passthrough,
+      progress overlay, failure falls back to the newest take; video mode
+      via the MST-030 trim pipeline; the editor's slot autosave keeps it as
+      a studio draft, not the OS gallery)
+- [x] Bottom row: Flip · Edit takes · 3:00 cap — cap enforced (auto-stop;
+      iOS 1.2 GB low-disk reserve)
+- [x] Permission-declined state: system-settings deep link · import instead ·
+      retry (camera only ever asked here, never at launch)
+- [x] Post-details on the publish sheet (reference scr-details): caption
+      counter · alt text (NIP-31, caption fallback — required-by-policy
+      hint) · content warning + reason (NIP-36) · caption hashtags →
+      t-tags — uniform with the meme lanes (shared composeMediaNote,
+      common-tested)
+- [ ] Speed chip · mic meter — deferred pending audio capture support
+- [ ] Multi-take merge into one clip — needs media-core (V1.x)
+
 **Studio home** (Create tab):
 - [ ] "Start something new" cards: Bitz (camera) · Meme · templates
 - [ ] Continue-creating slots (≤6 WIP, label + destination chip, one-tap
@@ -736,8 +763,9 @@ choice tiles + permission rows):
 - [ ] Video timeline: per-overlay SFX cues (+presets) · audio preview ·
       voice-over record · soundtrack import
 - [ ] Publish page: preview + caption row · tags section · settings
-      (visibility, cover strip, cover frame) → publish as kind-1 note with
-      media (or kind 22 video)
+      (visibility, cover strip, cover frame) → publish picture/GIF memes as
+      kind 20 (NIP-68, web parity) · video as kind 22 portrait / 21
+      landscape · explicit Note destination → kind 1 (plan §3.4)
 
 **Full studio (V2 — web suite, `delivery-plan.md` EDT/MEM epics)**: layers
 (image/sticker/SVG icon/Iconify search/Nostr emoji packs 30030/Bitz Buddy/
@@ -816,7 +844,8 @@ tags, content, sig — canonical `serializeForId`), `NostrFilter`
 | `Identity/AccountSummary` | sk/pk hex (secret in secure storage only), npub, profile |
 | `CallSignal` | callId, type (offer/answer/ice/end/log/state), kind (voice/video), from, groupId?, sdp/candidate/outcome |
 | `StorySlide/StoryAuthor` | kind 30315 + NIP-40 24 h TTL; ≤12/author; seen-set persisted |
-| `MemeProject` (v1) | `com.bitos.bitz.meme` — mediaKind, overlays ≤12 (≤300 chars, size 0.03–0.22, 4 fonts, palette), canvas (aspect/fit/bg/resolution), sfxCues ≤16, image overlays (normalized 0–1 coords, motion), zoom/speed/fx windows, look id; ms time units; unknown fields ignored |
+| `MemeProject` (v1, local store) | native working wire (`studio/MemeProject.kt`): mode, assets, overlays ≤48 (px @1080, scale/rot, colorIndex, outline), trim, frame delay, cw/alt/tags; autosave only |
+| `MemeWireDocument` (web `com.bitos.bitz.meme` v1) | interop wire for remix payloads/templates/fixtures (`meme-studio-plan.md` §3.1): mediaKind, overlays ≤12 (≤300 chars, size 0.03–0.22 of stage height, caps/stroke/bar, ms visibility windows, fx), sfxCues ≤16, caption ≤1000, lookId; ms time units; unknown fields ignored |
 | `AlgorithmPreferences` | per-surface config, signal defs + weights, presets, freshness |
 | `ZapEntry` | direction, sats (bolt11 msat), peer, comment, noteId?, timestamp |
 

@@ -1,0 +1,19 @@
+{
+  "pubkey": "1111111111111111111111111111111111111111111111111111111111111111",
+  "created_at": 0,
+  "kind": 20,
+  "content": "when the fee market opens #bitcoin",
+  "tags": [
+    ["t", "bitcoin"],
+    ["alt", "when the fee market opens #bitcoin"],
+    [
+      "imeta",
+      "url https://media.example/meme.png",
+      "m image/png",
+      "x cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size 424242",
+      "dim 608x1080"
+    ],
+    ["content-warning", "flashing imagery"]
+  ]
+}

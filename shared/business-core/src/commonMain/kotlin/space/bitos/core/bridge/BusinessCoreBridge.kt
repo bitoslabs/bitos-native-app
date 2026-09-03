@@ -1459,6 +1459,735 @@ class BusinessCoreBridge {
         )
     }
 
+    // ── APP-019 studio seams (plan MST-005): the Swift editor works on the
+    // project wire without leaking Kotlin types. Corrupt wires → "".
+
+    /** Decode + clamp + re-encode a meme project wire; "" when corrupt. */
+    fun memeProjectNormalize(projectJson: String): String =
+        space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+            ?.let(space.bitos.core.studio.MemeProjectContract::encode) ?: ""
+
+    // ── M5 timeline seams: the shared clip list rules for both platforms'
+    // multi-clip editors (clips JSON = the wire's `clips` rows). ─────────
+
+    /**
+     * Replaces a VIDEO project's timeline clips from a clips JSON array
+     * (`[{"id":…,"start":ms,"end":ms,"vol":f?,"look":id?}]`), bounded and
+     * clamped by the contract; the first clip's window mirrors into the
+     * legacy trim fields. Non-video project or corrupt input → "".
+     */
+    fun memeTimelineSyncClips(projectJson: String, clipsJson: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        if (project.mode != space.bitos.core.studio.MemeMode.VIDEO) return ""
+        val clips = space.bitos.core.studio.MemeProjectContract.decodeClipsJson(clipsJson) ?: return ""
+        val first = clips.firstOrNull()
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            project.copy(
+                clips = clips,
+                trimStartMs = first?.startMs ?: 0L,
+                trimEndMs = first?.endMs ?: 0L,
+            ),
+        )
+    }
+
+    /**
+     * Timeline output duration in ms — Σ(window ÷ clamped project speed)
+     * over the clip list (empty list → 0). Corrupt project → −1.
+     */
+    fun memeTimelineDurationMs(projectJson: String): Long {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return -1L
+        if (project.mode != space.bitos.core.studio.MemeMode.VIDEO) return 0L
+        val rate = space.bitos.core.studio.MemeProjectContract.clampSpeed(project.speed)
+        return project.clips.sumOf { clip ->
+            (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / rate).toLong()
+        }
+    }
+
+    /** Apply one MemeCommand wire to the project wire; an undecodable
+     * command is a no-op (the editor never hard-fails on a bad tap).
+     * "" only when the project wire itself is corrupt. */
+    fun memeApplyCommand(projectJson: String, commandJson: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val command = space.bitos.core.studio.MemeCommandCodec.decode(commandJson)
+            ?: return space.bitos.core.studio.MemeProjectContract.encode(project)
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeRules.apply(project, command),
+        )
+    }
+
+    /** Top-most overlay id at the normalized point ("" = no hit). */
+    fun memeHitTest(projectJson: String, x: Float, y: Float): String =
+        space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+            ?.let { space.bitos.core.studio.MemeRules.hitTest(it, x, y) }?.id ?: ""
+
+    /** Caption palette (16 ARGB entries) as uppercase zero-padded 6-hex RGB
+     * rows, index-ordered — the Swift text sheet paints swatches from these. */
+    fun memePalette(): List<String> =
+        space.bitos.core.studio.MemeRules.PALETTE.map { color ->
+            (color.toInt() and 0xFFFFFF).toString(16).uppercase().padStart(6, '0')
+        }
+
+    /**
+     * Deterministic default overlay for the project (staggered placement,
+     * unique id — shared `MemeRules.defaultOverlay`) as an overlay JSON
+     * object ready to embed in an `{"op":"add"}` command; "" when the
+     * project wire is corrupt or the kind is unknown.
+     */
+    fun memeDefaultOverlay(projectJson: String, kind: String, text: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val overlayKind = space.bitos.core.studio.MemeOverlayKind.entries
+            .firstOrNull { it.name.equals(kind, ignoreCase = true) } ?: return ""
+        val overlay = space.bitos.core.studio.MemeRules.defaultOverlay(project, overlayKind, text)
+        return space.bitos.core.studio.MemeProjectContract.overlayJson(overlay).toString()
+    }
+
+    /**
+     * Estimated overlay bounds on the normalized canvas (shared
+     * `MemeRules.estimateBounds`) as `"width|height"`, feeding the Swift
+     * selection chrome and delete handle; "" when project/id is unknown.
+     */
+    fun memeBounds(projectJson: String, overlayId: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val overlay = project.overlays.firstOrNull { it.id == overlayId } ?: return ""
+        val (width, height) = space.bitos.core.studio.MemeRules.estimateBounds(overlay)
+        return "$width|$height"
+    }
+
+    /**
+     * Composite paint state of one overlay at media time (plan MST-044
+     * close-out): the shared fx math with the half-open visibility window
+     * folded into alpha (0 outside). `"scale|rot|dx|dy|alpha"`; a negative
+     * [atMs] = poster (identity, always visible); "" when project/id is
+     * unknown. The Swift stage preview and the export keyframe sampling
+     * BOTH run through here — no display-side mirror of `MemeFxRules`.
+     */
+    fun memeFxTransformAt(projectJson: String, overlayId: String, atMs: Long): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val overlay = project.overlays.firstOrNull { it.id == overlayId } ?: return ""
+        if (atMs < 0) return "1.0|0.0|0.0|0.0|1.0"
+        val t = space.bitos.core.studio.MemeFxRules.transformAt(overlay, atMs)
+        val alpha = if (space.bitos.core.studio.MemeFxRules.visibleAt(overlay, atMs)) t.alpha else 0f
+        return "${t.scale}|${t.rotateRad}|${t.dx}|${t.dy}|$alpha"
+    }
+
+    /**
+     * The full SFX cue mix over an export window as a base64 WAV (shared
+     * `SfxSynth.renderCueTrack` — deterministic, 44.1 kHz stereo, master
+     * gain 0.5); "" when the project has no audible cues in the window.
+     * [durationMs] is the OUTPUT duration; a rate ≠ 1 maps the cue times
+     * into that timeline first (`SfxSynth.cuesInOutputTimeline`). The iOS
+     * exporter burns this as its second composition audio track (Android
+     * mixes the same PCM through Media3 sequences).
+     */
+    fun memeSfxTrackWavBase64(projectJson: String, durationMs: Long, rate: Float = 1f): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val outputCues = space.bitos.core.studio.SfxSynth.cuesInOutputTimeline(project.sfxCues, rate)
+        if (!space.bitos.core.studio.SfxSynth.hasAudibleCues(outputCues, durationMs)) return ""
+        val pcm = space.bitos.core.studio.SfxSynth.pcm16Le(
+            space.bitos.core.studio.SfxSynth.renderCueTrack(outputCues, durationMs),
+        )
+        return kotlin.io.encoding.Base64.Default.encode(space.bitos.core.studio.SfxSynth.wav(pcm))
+    }
+
+    // ── APP-019 meme wire document (plan MST-019): the `com.bitos.bitz.meme`
+    // v1 interop wire. Foreign schema ids/versions → ""; parse never throws.
+
+    /** Tolerant parse + canonical re-encode (passthrough preserved). */
+    fun memeWireNormalize(wireJson: String, nowMs: Long): String =
+        space.bitos.core.studio.MemeWireCodec.normalize(wireJson, nowMs) ?: ""
+
+    /** Wire document → local project wire (styles, stickers, windows, fx). */
+    fun memeWireToLocal(wireJson: String): String =
+        space.bitos.core.studio.MemeWireCodec.decode(wireJson, nowMs = 0L)
+            ?.let { space.bitos.core.studio.MemeProjectContract.encode(space.bitos.core.studio.MemeWireConvert.wireToLocal(it)) }
+            ?: ""
+
+    /** Local project wire → wire document JSON (blank overlays drop). */
+    fun localToMemeWire(projectJson: String, nowMs: Long): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        return space.bitos.core.studio.MemeWireCodec.encode(
+            space.bitos.core.studio.MemeWireConvert.localToWire(project, nowMs),
+        )
+    }
+
+
+    /** Composes the unsigned video meme (kind 22 portrait / 21 landscape,
+     * MST-034) and returns its id. */
+    fun composeMemeVideoEventId(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        durationMs: Long,
+        nowSeconds: Long,
+        thumbUrl: String? = null,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(
+                url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs, thumbUrl,
+            )
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeMemeVideoNote(authorPubkey, caption, altText, contentWarningReason, portrait, media)
+            ?.idHex
+    }
+
+    /** The ["EVENT", …] frame for the signed video meme, or null. */
+    fun memeVideoPublishMessage(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        durationMs: Long,
+        createdAtSeconds: Long,
+        signatureHex: String,
+        thumbUrl: String? = null,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(
+                url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs, thumbUrl,
+            )
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeMemeVideoNote(
+            authorPubkey, caption, altText, contentWarningReason, portrait, media,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
+     * MST-042 remix tags for a meme publish: `["remix", id, relays…]` +
+     * `["meme", <compact payload ≤700 via the ladder>]` + `["p", author]`
+     * (+ optional `license`/`attribution`), as TagsCodec JSON from the
+     * project wire; "" when the wire is corrupt. Media-only degradations
+     * still return remix/p (the layout payload alone is dropped).
+     */
+    fun memeRemixTagsFor(
+        projectJson: String,
+        sourceEventId: String,
+        sourcePubkey: String,
+        relaysJson: String,
+        license: String,
+        attribution: String,
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val document = space.bitos.core.studio.MemeWireConvert.localToWire(
+            project, nowMs = 0L,
+        )
+        val degraded = space.bitos.core.studio.MemeRemix.encodeDegraded(document)
+        val relays = try {
+            kotlinx.serialization.json.Json.parseToJsonElement(relaysJson).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                .take(space.bitos.core.feed.RemixRules.MAX_RELAY_HINTS)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val tags = space.bitos.core.feed.RemixRules.tagsFor(sourceEventId, sourcePubkey, relays).toMutableList()
+        degraded.payload?.let { payload -> tags += listOf("meme", payload) }
+        if (license.isNotBlank() && license in space.bitos.core.feed.RemixRules.LICENSES) {
+            tags += listOf("license", license)
+        }
+        if (attribution.isNotBlank()) {
+            tags += space.bitos.core.feed.RemixRules.attributionTag(attribution)
+        }
+        return kotlinx.serialization.json.buildJsonArray {
+            tags.forEach { tag -> add(kotlinx.serialization.json.buildJsonArray { tag.forEach(::add) }) }
+        }.toString()
+    }
+
+    // ── M2 GIF planning seams: iOS rasters/encodes natively (plan §4.2 —
+    // CGImageSource decode + CGImageDestination encode) but the TIMING and
+    // ladder rules stay single-sourced in the shared planner.
+
+    /**
+     * Export-plan steps for a frame list: `{"steps":[{"atSec","delayMs"}],
+     * "durationSec","capped"}` from per-frame holds (ms). Null pin = auto.
+     */
+    fun memeGifPlan(delaysMsJson: String, pinnedSec: Double): String {
+        val delays = try {
+            Json.parseToJsonElement(delaysMsJson).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val timings = run {
+            var at = 0.0
+            delays.map { delay ->
+                val clamped = delay.coerceIn(20, 1000)
+                val row = space.bitos.core.studio.GifExportPlan.FrameTiming(
+                    atSec = at, durationSec = clamped / 1000.0,
+                )
+                at += clamped / 1000.0
+                row
+            }
+        }
+        val pin = if (pinnedSec.isFinite() && pinnedSec > 0) pinnedSec else null
+        val plan = space.bitos.core.studio.GifExportPlan.plan(timings, pin)
+        return buildJsonObject {
+            put("durationSec", plan.durationSec)
+            put("capped", plan.capped)
+            put("steps", buildJsonArray {
+                plan.steps.forEach { step ->
+                    add(
+                        buildJsonObject {
+                            put("atSec", step.atSec)
+                            put("delayMs", step.delayMs)
+                        },
+                    )
+                }
+            })
+        }.toString()
+    }
+
+    /** Ladder canvas for step `step` as `"width|height"`; "" past the cap. */
+    fun memeGifLadderCanvas(width: Int, height: Int, step: Int): String {
+        val canvas = space.bitos.core.studio.GifExportPlan.SizeLadder.canvasFor(width, height, step)
+        return canvas?.let { (w, h) -> "$w|$h" } ?: ""
+    }
+
+    /**
+     * APP-019 export envelope (plan MST-016): the evened output canvas for
+     * the source dims plus the target-px paint rows for the Swift
+     * rasterizer as `{"width":…,"height":…,"items":[…]}`; "" when the
+     * project wire is corrupt.
+     */
+    fun memeExportPlan(projectJson: String, sourceWidth: Int, sourceHeight: Int): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        return space.bitos.core.studio.MemeExportRules.exportEnvelope(project, sourceWidth, sourceHeight)
+    }
+
+    /** Sticker packs (web `stickers.ts` port) as
+     * `[{"id":…,"label":…,"stickers":[…]}]` JSON for the sheet. */
+    fun memeStickerPacks(): String = buildJsonArray {
+        space.bitos.core.studio.StickerCatalog.PACKS.forEach { pack ->
+            add(buildJsonObject {
+                put("id", pack.id)
+                put("label", pack.label)
+                put("stickers", buildJsonArray { pack.stickers.forEach(::add) })
+            })
+        }
+    }.toString()
+
+    // ── APP-019 mass production (plan M4 wave 5 / MST-048): the Swift
+    // Create hub drives the same batch document through four JSON seams.
+    // Corrupt wires → "" (the hub never hard-fails on a bad tap).
+
+    /** Fresh batch document (canonical starter project + recipe). */
+    fun massBatchNew(name: String, nowMs: Long): String {
+        val document = space.bitos.core.studio.MassBatchDocument(
+            batchId = "mb-" + nowMs.toString(36),
+            name = name.take(80).ifBlank { "Untitled batch" },
+            recipe = space.bitos.core.studio.MassBatch.defaultRecipe(
+                space.bitos.core.studio.MassBatch.starterProject(),
+            ),
+            rows = emptyList(),
+            createdAtMs = nowMs,
+            updatedAtMs = nowMs,
+        )
+        return space.bitos.core.studio.MassBatchCodec.encode(document)
+    }
+
+    /**
+     * One mutation on the batch wire. Ops (JSON):
+     * `addRow` · `removeRow{row}` · `setValue{row,slot,value}` ·
+     * `setAsset{row,slot,file?}` · `editRecipe{naming?,caption?}` (forks
+     * once rows exist) · `approve{row,approve,nowMs}` ·
+     * `approveAll{nowMs,readable[]}` · `withRender{row,posterName,posterHash}`
+     * · `withPublish{row,state,failure?,event?}`. Unknown ops → the wire
+     * unchanged; corrupt wire → "".
+     */
+    fun massBatchOp(docJson: String, opJson: String): String {
+        val document = space.bitos.core.studio.MassBatchCodec.decode(docJson) ?: return ""
+        val op = try {
+            Json.parseToJsonElement(opJson).jsonObject
+        } catch (_: Exception) {
+            return space.bitos.core.studio.MassBatchCodec.encode(document)
+        }
+        val kind = (op["op"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return docJson
+        val rowId = (op["row"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        val next: space.bitos.core.studio.MassBatchDocument = when (kind) {
+            "addRow" -> {
+                val max = document.rows.maxOfOrNull { row ->
+                    row.id.removePrefix("r").takeWhile(Char::isDigit).toIntOrNull() ?: 0
+                } ?: 0
+                document.copy(rows = document.rows + space.bitos.core.studio.MassRow("r${max + 1}"))
+            }
+            "removeRow" -> document.copy(rows = document.rows.filterNot { it.id == rowId })
+            "setValue" -> {
+                val slotId = (op["slot"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return docJson
+                val value = (op["value"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: ""
+                document.copy(
+                    rows = document.rows.map { row ->
+                        if (row.id == rowId) row.copy(values = row.values + (slotId to value.take(300))) else row
+                    },
+                )
+            }
+            "setAsset" -> {
+                val slotId = (op["slot"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return docJson
+                val file = (op["file"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    ?.takeIf { it.isNotBlank() && !it.startsWith("/") && !it.contains("..") }
+                document.copy(
+                    rows = document.rows.map { row ->
+                        if (row.id != rowId) {
+                            row
+                        } else if (file != null) {
+                            row.copy(assetFiles = row.assetFiles + (slotId to file))
+                        } else {
+                            row.copy(assetFiles = row.assetFiles - slotId)
+                        }
+                    },
+                )
+            }
+            "editRecipe" -> {
+                var recipe = document.recipe
+                (op["naming"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.let {
+                    recipe = recipe.copy(naming = it.take(64).ifBlank { "memes_{i}" })
+                }
+                (op["caption"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.let {
+                    recipe = recipe.copy(caption = it.take(1000))
+                }
+                if (document.rows.isEmpty()) document.copy(recipe = recipe)
+                else space.bitos.core.studio.MassBatchRules.forkRecipe(document, recipe)
+            }
+            "approve" -> {
+                val approve = (op["approve"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+                val nowMs = (op["nowMs"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+                    ?: 0L
+                val index = document.rows.indexOfFirst { it.id == rowId }
+                if (index < 0 || rowId == null) {
+                    document
+                } else {
+                    val row = document.rows[index]
+                    val variant = space.bitos.core.studio.MassBatchRules.resolveVariant(
+                        document.recipe, row, index + 1,
+                    )
+                    val hash = if (approve) {
+                        space.bitos.core.studio.MassBatchRules.contentHash(document.recipe.version, row, variant.project)
+                    } else {
+                        null
+                    }
+                    document.copy(
+                        states = space.bitos.core.studio.MassBatchRules.withApproval(
+                            document.states, rowId, hash,
+                            document.states[rowId]?.posterHash, nowMs,
+                        ),
+                    )
+                }
+            }
+            "approveAll" -> {
+                val nowMs = (op["nowMs"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+                    ?: 0L
+                val readable = readableSet(op)
+                val validations = space.bitos.core.studio.MassBatchRules.validateAll(
+                    document.recipe, document.rows, { readable.contains(it) },
+                )
+                var states = document.states
+                document.rows.withIndex().forEach { (index, row) ->
+                    if (validations[row.id]?.queueable == true) {
+                        val variant = space.bitos.core.studio.MassBatchRules.resolveVariant(
+                            document.recipe, row, index + 1,
+                        )
+                        val hash = space.bitos.core.studio.MassBatchRules.contentHash(
+                            document.recipe.version, row, variant.project,
+                        )
+                        val state = states[row.id]
+                        if (state == null ||
+                            !space.bitos.core.studio.MassBatchRules.approvalValid(state, hash, state.posterHash)
+                        ) {
+                            states = space.bitos.core.studio.MassBatchRules.withApproval(
+                                states, row.id, hash, states[row.id]?.posterHash, nowMs,
+                            )
+                        }
+                    }
+                }
+                document.copy(states = states)
+            }
+            "withRender" -> {
+                val posterName = (op["posterName"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return docJson
+                val posterHash = (op["posterHash"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: ""
+                document.copy(
+                    states = space.bitos.core.studio.MassBatchRules.withRender(
+                        document.states, rowId ?: "", posterName, posterHash,
+                    ),
+                )
+            }
+            "withPublish" -> {
+                val stateName = (op["state"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return docJson
+                val state = space.bitos.core.studio.MassPublishState.entries
+                    .firstOrNull { it.name.equals(stateName, ignoreCase = true) } ?: return docJson
+                val failure = (op["failure"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                document.copy(
+                    states = space.bitos.core.studio.MassBatchRules.withPublishState(
+                        document.states, rowId ?: "", state, failure = failure,
+                    ),
+                )
+            }
+            else -> return docJson
+        }
+        return space.bitos.core.studio.MassBatchCodec.encode(next)
+    }
+
+    /**
+     * Everything the UI renders, in one call: per-row severity/notes/
+     * approval/publish/poster plus resolved names & captions, counts and
+     * the approved queue size. `readableJson` = `["file",…]` of stored
+     * row-asset files that actually resolve on disk.
+     */
+    fun massBatchPlan(docJson: String, readableJson: String): String {
+        val document = space.bitos.core.studio.MassBatchCodec.decode(docJson) ?: return ""
+        val readable = try {
+            Json.parseToJsonElement(readableJson).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                .toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+        val validations = space.bitos.core.studio.MassBatchRules.validateAll(
+            document.recipe, document.rows, { readable.contains(it) },
+        )
+        var ok = 0; var warn = 0; var blocked = 0
+        validations.values.forEach {
+            when (it.severity) {
+                space.bitos.core.studio.MassBatchRules.Severity.OK -> ok++
+                space.bitos.core.studio.MassBatchRules.Severity.WARN -> warn++
+                space.bitos.core.studio.MassBatchRules.Severity.BLOCKER -> blocked++
+            }
+        }
+        return buildJsonObject {
+            put("name", document.name)
+            put("recipeVersion", document.recipe.version)
+            put("frozen", document.rows.isNotEmpty())
+            put("naming", document.recipe.naming)
+            put("caption", document.recipe.caption)
+            put("cw", document.recipe.contentWarningReason ?: "")
+            put("slots", buildJsonArray {
+                document.recipe.slots.forEach { slot ->
+                    add(buildJsonObject {
+                        put("id", slot.id)
+                        put("name", slot.name)
+                        put("type", slot.type.name.lowercase())
+                        put("required", slot.required)
+                        if (slot.enumValues.isNotEmpty()) {
+                            put("enum", buildJsonArray { slot.enumValues.forEach(::add) })
+                        }
+                    })
+                }
+            })
+            put("rows", buildJsonArray {
+                document.rows.withIndex().forEach { (index, row) ->
+                    val variant = space.bitos.core.studio.MassBatchRules.resolveVariant(
+                        document.recipe, row, index + 1,
+                    )
+                    val hash = space.bitos.core.studio.MassBatchRules.contentHash(
+                        document.recipe.version, row, variant.project,
+                    )
+                    val state = document.states[row.id]
+                    val validation = validations[row.id]
+                    add(buildJsonObject {
+                        put("id", row.id)
+                        put("index", index + 1)
+                        put("values", buildJsonObject {
+                            row.values.forEach { (key, value) -> put(key, value) }
+                        })
+                        put("assets", buildJsonObject {
+                            row.assetFiles.forEach { (key, file) -> put(key, file) }
+                        })
+                        put("severity", (validation?.severity ?: space.bitos.core.studio.MassBatchRules.Severity.OK).name.lowercase())
+                        put("notes", buildJsonArray {
+                            (validation?.notes ?: emptyList()).forEach { note -> add(note.message) }
+                        })
+                        put("approved", state?.let {
+                            space.bitos.core.studio.MassBatchRules.approvalValid(it, hash, it.posterHash)
+                        } ?: false)
+                        put("publish", (state?.publish ?: space.bitos.core.studio.MassPublishState.WAITING).name.lowercase())
+                        state?.publishedEventId?.let { put("event", it) }
+                        state?.posterName?.let { put("poster", it) }
+                        put("name", variant.name)
+                        put("caption", variant.caption)
+                        // Resolved variant for rendering/publishing (iOS).
+                        put("projectJson", space.bitos.core.studio.MemeProjectContract.encode(variant.project))
+                        put("assetMap", buildJsonObject {
+                            variant.assetOverrides.forEach { (key, file) -> put(key, file) }
+                        })
+                    })
+                }
+            })
+            put("counts", buildJsonObject {
+                put("ok", ok); put("warn", warn); put("blocked", blocked)
+            })
+            put("queueCount", space.bitos.core.studio.MassBatchRules.queue(document, validations).size)
+        }.toString()
+    }
+
+    /** CSV import: `{"doc":…,"notes":[…]}`; junk CSV → notes-only result. */
+    fun massBatchImportCsv(docJson: String, csv: String): String {
+        val document = space.bitos.core.studio.MassBatchCodec.decode(docJson) ?: return ""
+        val imported = space.bitos.core.studio.MassBatchRules.importCsv(csv, document.recipe)
+        var counter = document.rows.maxOfOrNull { row ->
+            row.id.removePrefix("r").takeWhile(Char::isDigit).toIntOrNull() ?: 0
+        } ?: 0
+        val rows = imported.rows.map { row -> counter += 1; row.copy(id = "r$counter") }
+        val next = if (rows.isEmpty()) {
+            document
+        } else if (document.rows.isEmpty()) {
+            space.bitos.core.studio.MassBatchRules.forkRecipe(document, document.recipe).copy(rows = rows)
+        } else {
+            document.copy(rows = document.rows + rows)
+        }
+        return buildJsonObject {
+            put("doc", space.bitos.core.studio.MassBatchCodec.encode(next))
+            put("notes", buildJsonArray { imported.notes.forEach(::add) })
+        }.toString()
+    }
+
+    private fun readableSet(op: kotlinx.serialization.json.JsonObject): Set<String> = try {
+        (op["readable"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            ?.toSet() ?: emptySet()
+    } catch (_: Exception) {
+        emptySet()
+    }
+
+    // ── APP-019 looks (plan MST-043, web `look.ts` port): 8 grades whose
+    // CSS chains are composed into one 4×5 color matrix both rasterizers
+    // apply natively (preview == export; the grade touches media only).
+
+    // ── APP-019 built-in templates (plan MST-040 / wave 1 rail).
+
+    /** Pack catalog `[{"id","label","emoji"}]` (id order). */
+    fun memeTemplates(): String = buildJsonArray {
+        space.bitos.core.studio.MemeTemplates.PACK.forEach { template ->
+            add(buildJsonObject {
+                put("id", template.id)
+                put("label", template.label)
+                put("emoji", template.emoji)
+            })
+        }
+    }.toString()
+
+    /** Kind-30078 shared-template summary row; "" when the shape is foreign. */
+    fun memeSharedTemplateSummary(tagsJson: String, content: String): String {
+        val template = decodeSharedTemplate(tagsJson, content) ?: return ""
+        return buildJsonObject {
+            put("id", template.id)
+            put("label", template.label)
+            put("emoji", template.emoji)
+            put("priceSats", template.priceSats)
+            put("category", template.category)
+        }.toString()
+    }
+
+    /** Apply a shared template onto a project wire (fresh-id clone). */
+    fun memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val template = decodeSharedTemplate(tagsJson, content) ?: return ""
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeTemplateContract.apply(project, template),
+        )
+    }
+
+    private fun decodeSharedTemplate(tagsJson: String, content: String): space.bitos.core.studio.MemeTemplateContract.SharedTemplate? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        return space.bitos.core.studio.MemeTemplateContract.parse(tags, content)
+    }
+
+    /** Apply a template onto a project wire (fresh-id clone); "" corrupt. */
+    fun memeApplyTemplate(projectJson: String, templateId: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeTemplates.apply(project, templateId),
+        )
+    }
+
+    // ── APP-019 synth SFX (plan MST-041 / §3.6): 31 recipes as data, a
+    // pure-Kotlin renderer + WAV writer; previews play per platform.
+
+    /** Catalog `[{"id","label","sfx":[…]}]` (5 buckets, 31 sounds). */
+    fun memeSfxCatalog(): String = buildJsonArray {
+        space.bitos.core.studio.SfxSynth.BUCKETS.forEach { bucket ->
+            add(buildJsonObject {
+                put("id", bucket.id)
+                put("label", bucket.label)
+                put("sfx", buildJsonArray { bucket.sfx.forEach(::add) })
+            })
+        }
+    }.toString()
+
+    /** Rendered preview as a base64 WAV (mono 16-bit 44.1 kHz); "" junk id. */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    fun memeSfxWavBase64(sfxId: String, gain: Double): String {
+        val recipe = space.bitos.core.studio.SfxSynth.recipeOf(sfxId) ?: return ""
+        val pcm = space.bitos.core.studio.SfxSynth.renderPcm(recipe, gain)
+        val wav = space.bitos.core.studio.SfxSynth.wav(space.bitos.core.studio.SfxSynth.pcm16Le(pcm))
+        return kotlin.io.encoding.Base64.Default.encode(wav)
+    }
+
+    // ── APP-019 video cut policy (MST-030/MST-034 revision): long clips
+    // are CUT with a message, never rejected — shared rules, both apps.
+
+    /** Pick-time cap: `{"startMs","endMs","cut","message","attempts"}`. */
+    fun memeVideoCutFor(durationMs: Long): String {
+        val cut = space.bitos.core.studio.MemeVideoCutRules.cutForDuration(durationMs)
+        return buildJsonObject {
+            put("startMs", cut.startMs)
+            put("endMs", cut.endMs)
+            put("cut", cut.cut)
+            put("message", cut.message ?: "")
+            put("attempts", space.bitos.core.studio.MemeVideoCutRules.MAX_CUT_ATTEMPTS)
+        }.toString()
+    }
+
+    /** Export ladder step: `{"endMs"}` (0 = cannot shrink further). */
+    fun memeVideoCutForSize(currentMs: Long, sizeBytes: Long, maxBytes: Long): String {
+        val cut = space.bitos.core.studio.MemeVideoCutRules.nextCutForSize(currentMs, sizeBytes, maxBytes)
+        return buildJsonObject {
+            put("endMs", cut?.endMs ?: 0L)
+            put("message", cut?.message ?: "")
+        }.toString()
+    }
+
+    /** Look catalog `[{"id","label","css"}]` (id order, `none` first). */
+    fun memeLooks(): String = buildJsonArray {
+        space.bitos.core.studio.MemeLooks.ALL.forEach { look ->
+            add(buildJsonObject {
+                put("id", look.id)
+                put("label", look.label)
+                put("css", look.css)
+            })
+        }
+    }.toString()
+
+    /**
+     * The composed 4×5 matrix for a look id as a flat 20-float JSON array
+     * (identity for none/unknown) plus `"blur"` px — the Swift rasterizer
+     * feeds CIColorMatrix with the same values Android uses.
+     */
+    fun memeLookMatrix(lookId: String?): String = buildJsonObject {
+        val look = space.bitos.core.studio.MemeLooks.lookOf(lookId)
+        put("matrix", buildJsonArray {
+            space.bitos.core.studio.MemeLooks.matrix(look).forEach { value -> add(value) }
+        })
+        put("blur", look.blurPx)
+    }.toString()
+
     /**
      * APP-008 poll tags for the composer (validated 2–6/280/80 legacy
      * bounds) as TagsCodec JSON incl. hashtag t-tags from the question;
@@ -2516,6 +3245,8 @@ class BusinessCoreBridge {
         height: Long,
         durationMs: Long,
         nowSeconds: Long,
+        altText: String = "",
+        contentWarningReason: String? = null,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs)
@@ -2523,7 +3254,7 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
-        return composer.composeMediaNote(authorPubkey, caption, media)?.idHex
+        return composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason)?.idHex
     }
 
     /** The ["EVENT", {...}] frame for the signed kind-22 media note, or null. */
@@ -2539,6 +3270,8 @@ class BusinessCoreBridge {
         durationMs: Long,
         createdAtSeconds: Long,
         signatureHex: String,
+        altText: String = "",
+        contentWarningReason: String? = null,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs)
@@ -2546,7 +3279,64 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
-        val unsigned = composer.composeMediaNote(authorPubkey, caption, media) ?: return null
+        val unsigned = composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** Composes the unsigned kind-20 picture meme and returns its id (MST-017). */
+    fun composeMemePictureEventId(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        nowSeconds: Long,
+        extraTagsJson: String = "",
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        return composer.composeMemePictureNote(
+            authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+        )
+            ?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-20 picture meme, or null. */
+    fun memePicturePublishMessage(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        createdAtSeconds: Long,
+        signatureHex: String,
+        extraTagsJson: String = "",
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        val unsigned = composer.composeMemePictureNote(
+            authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+        ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
 

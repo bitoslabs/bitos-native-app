@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "id": "mb-hostile",
+  "name": "batch",
+  "createdAt": 1,
+  "updatedAt": 2,
+  "recipe": {
+    "version": 99,
+    "slots": [
+      { "id": "name", "name": "name", "type": "hologram", "required": true },
+      { "id": "sats", "name": "sats", "type": "number", "min": 5, "max": 1 }
+    ],
+    "project": { "v": 1, "mode": "image", "overlays": [], "tags": [] },
+    "naming": "///***///",
+    "caption": ""
+  },
+  "rows": [
+    { "id": "r1", "values": { "name": 42, "sats": "many" }, "assets": { "img": "../../escape.png" } },
+    { "id": "", "values": {} }
+  ],
+  "states": {
+    "r1": { "render": "hologramming", "publish": "singing", "poster": "/etc/passwd" }
+  }
+}

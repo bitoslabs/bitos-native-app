@@ -1,0 +1,51 @@
+{
+  "schema": "com.bitos.bitz.meme",
+  "version": 1,
+  "overlays": [
+    {
+      "id": "t1",
+      "text": "WHEN THE FEE MARKET OPENS",
+      "x": 0.5,
+      "y": 0.18,
+      "size": 0.09,
+      "color": "#ffffff",
+      "font": "impact",
+      "caps": true,
+      "stroke": true,
+      "bar": false,
+      "fx": "pop"
+    },
+    {
+      "id": "t2",
+      "text": "wen laser eyes",
+      "x": 0.31,
+      "y": 0.77,
+      "size": 0.11,
+      "color": "#22d3ee",
+      "font": "mono",
+      "caps": false,
+      "stroke": true,
+      "bar": true,
+      "startMs": 250,
+      "endMs": 9000,
+      "fx": "spin"
+    },
+    {
+      "id": "s1",
+      "text": "🚀",
+      "x": 0.85,
+      "y": 0.15,
+      "size": 0.18,
+      "color": "#ffffff",
+      "font": "sans",
+      "caps": false,
+      "stroke": false,
+      "bar": false,
+      "fx": "spin"
+    }
+  ],
+  "caption": "First cross-client meme — renders identically from the wire on web and native",
+  "mediaKind": "image",
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000
+}

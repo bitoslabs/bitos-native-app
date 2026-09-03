@@ -1,0 +1,69 @@
+{
+  "v": 1,
+  "id": "mb-1a2b3c",
+  "name": "Zap Receipt Meme",
+  "createdAt": 1710000000000,
+  "updatedAt": 1710000600000,
+  "recipe": {
+    "version": 3,
+    "slots": [
+      { "id": "name", "name": "name", "type": "short_text", "required": true, "maxLen": 24 },
+      { "id": "sats", "name": "sats", "type": "number", "required": true, "min": 0, "max": 1000000 },
+      { "id": "bg", "name": "bg", "type": "color" },
+      { "id": "img", "name": "img", "type": "image_asset", "asset": "a1" }
+    ],
+    "project": {
+      "v": 1,
+      "mode": "image",
+      "assets": [{ "id": "a1", "kind": "image" }],
+      "overlays": [
+        {
+          "id": "o1", "kind": "text", "text": "zap {name}", "font": "impact",
+          "size": 64, "color": 0, "outline": 3, "shadow": false,
+          "x": 0.5, "y": 0.14, "scale": 1.0, "rot": 0.0
+        },
+        {
+          "id": "o2", "kind": "text", "text": "{sats} sats", "font": "impact",
+          "size": 64, "color": 0, "outline": 3, "shadow": false,
+          "x": 0.5, "y": 0.86, "scale": 1.0, "rot": 0.0
+        }
+      ],
+      "cw": "",
+      "alt": "",
+      "tags": []
+    },
+    "naming": "zap_{name}_{i}",
+    "caption": "receipt for {name}",
+    "alt": "",
+    "cw": ""
+  },
+  "rows": [
+    {
+      "id": "r1",
+      "values": { "name": "satoshi_v", "sats": "21", "bg": "#F7931A" },
+      "assets": { "img": "r1-img.img" }
+    },
+    {
+      "id": "r2",
+      "values": { "name": "llady", "sats": "100" },
+      "assets": { "img": "r2-img.img" }
+    }
+  ],
+  "states": {
+    "r1": {
+      "render": "rendered",
+      "poster": "poster-r1.jpg",
+      "posterHash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "approvedHash": "1122334455667788112233445566778811223344556677881122334455667788",
+      "approvedAt": 1710000300000,
+      "publish": "published",
+      "event": "note1examplepublished"
+    },
+    "r2": {
+      "render": "rendered",
+      "poster": "poster-r2.jpg",
+      "posterHash": "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978",
+      "publish": "waiting"
+    }
+  }
+}

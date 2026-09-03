@@ -150,8 +150,11 @@ final class FeedStore {
     // (replyCount, assembled) per rootId — skips bridge when thread size unchanged.
     private var assembledThreadsCache: [String: (Int, [ThreadDisplayItem])] = [:]
 
+    // `interaction` takes no default value: a default-expression would be
+    // evaluated in a nonisolated context (Swift 6) and InteractionProfileStore
+    // is main-actor isolated. The single call site passes it explicitly.
     init(pool: RelayPool, client: any BusinessCoreClient, eventStore: EventStore? = nil,
-         interaction: InteractionProfileStore = InteractionProfileStore()) {
+         interaction: InteractionProfileStore) {
         muted = Set(UserDefaults.standard.stringArray(forKey: "bitos_mutes") ?? [])
         self.pool = pool
         self.client = client

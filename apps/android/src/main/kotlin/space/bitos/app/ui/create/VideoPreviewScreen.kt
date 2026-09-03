@@ -43,7 +43,8 @@ import space.bitos.app.ui.theme.BitOSSpacing
  * Recorded-take preview with trim (CAP-003/004): playback + start/end trim
  * sliders + export via Media3 Transformer. "Use this" exports the trimmed
  * clip (or the original when untrimmed) and hands the bytes to the publish
- * pipeline unchanged.
+ * pipeline unchanged. Playback always uses a cache-file URI: encoding a
+ * camera-original clip as a Base64 data URI duplicates it in the app heap.
  */
 @Composable
 fun VideoPreviewScreen(
@@ -53,10 +54,17 @@ fun VideoPreviewScreen(
     onRetake: () -> Unit,
 ) {
     val context = LocalContext.current
+    // Media3 reads the source from disk. A data: URI needs a Base64 string
+    // (~4/3 the source size) in addition to the already-held byte array and
+    // crashes on normal camera clips under Android's heap limit.
+    val sourceFile = remember(bytes) {
+        java.io.File(context.cacheDir, "bitos-preview-${System.nanoTime()}.mp4").apply {
+            writeBytes(bytes)
+        }
+    }
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
-            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-            setMediaItem(MediaItem.fromUri("data:$mimeType;base64,$base64"))
+            setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(sourceFile)))
             repeatMode = Player.REPEAT_MODE_ONE
             prepare()
             playWhenReady = true
@@ -71,8 +79,11 @@ fun VideoPreviewScreen(
     var exportError by remember { mutableStateOf<String?>(null) }
 
     // Read duration once the player is prepared.
-    DisposableEffect(player) {
-        onDispose { player.release() }
+    DisposableEffect(player, sourceFile) {
+        onDispose {
+            player.release()
+            sourceFile.delete()
+        }
     }
     androidx.compose.runtime.LaunchedEffect(player) {
         // Wait for the duration to become available.
@@ -167,12 +178,9 @@ fun VideoPreviewScreen(
                                 exporting = true
                                 exportError = null
                                 // Export the trimmed clip via Transformer.
-                                val inputUri = android.net.Uri.parse(
-                                    "data:$mimeType;base64,${android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)}",
-                                )
                                 val output = java.io.File(context.cacheDir, "bitos-trim-${System.currentTimeMillis()}.mp4")
                                 val mediaItem = MediaItem.Builder()
-                                    .setUri(inputUri)
+                                    .setUri(android.net.Uri.fromFile(sourceFile))
                                     .setClippingConfiguration(
                                         MediaItem.ClippingConfiguration.Builder()
                                             .setStartPositionMs(trimStartMs)

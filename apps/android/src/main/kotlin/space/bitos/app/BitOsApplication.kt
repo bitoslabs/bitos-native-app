@@ -45,6 +45,9 @@ class BitOsApplication : Application() {
         )
     }
 
+    /** Pool access for read-only stores (shared templates, APP-019 wave 3). */
+    val memeTemplatePool: RelayPool get() = relayPool
+
     private val relayPool: RelayPool by lazy {
         RelayPool(
             scope = applicationScope,

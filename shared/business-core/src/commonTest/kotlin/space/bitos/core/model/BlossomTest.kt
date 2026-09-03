@@ -84,6 +84,8 @@ class BlossomTest {
         assertEquals("my first video", note.content)
         assertEquals(
             listOf(
+                // Post-details floor: alt falls back to the caption.
+                listOf("alt", "my first video"),
                 listOf(
                     "imeta",
                     "url https://cdn.example/v.mp4",
@@ -95,6 +97,23 @@ class BlossomTest {
                 ),
             ),
             note.tags,
+        )
+        // Post-details fields ride the same kind-22 wire: explicit alt wins,
+        // caption hashtags become t-tags, NIP-36 reason gates playback.
+        val detailed = composer.composeMediaNote(
+            author, "#lightning walk #node", media,
+            altText = "Timelapse of a channel opening",
+            contentWarningReason = "Flashing imagery",
+        )!!
+        assertEquals(
+            listOf(
+                listOf("t", "lightning"),
+                listOf("t", "node"),
+                listOf("alt", "Timelapse of a channel opening"),
+                listOf("imeta", "url https://cdn.example/v.mp4", "m video/mp4", "x $hash", "size 999999", "dim 1080x1920", "duration 4"),
+                listOf("content-warning", "Flashing imagery"),
+            ),
+            detailed.tags,
         )
         // Round trip: the published frame parses back with the same media.
         val frame = composer.publishMessage(note, "bb".repeat(64))!!
@@ -109,9 +128,111 @@ class BlossomTest {
     }
 
     @Test
+    fun composesKind20PictureMemeWithWebTagOrder() {
+        // MST-017: web feed.postBitz picture path parity — t-tags, alt
+        // (explicit wins, else caption ≤200), imeta superset, CW last.
+        val media = UploadedMedia(
+            url = "https://cdn.example/meme.png",
+            sha256Hex = hash,
+            mimeType = "image/png",
+            sizeBytes = 424_242,
+            width = 608,
+            height = 1080,
+        )
+        val note = composer.composeMemePictureNote(
+            authorPubkey = author,
+            caption = "when the fee market opens #bitcoin",
+            altText = "",
+            contentWarningReason = null,
+            media = media,
+        )!!
+        assertEquals(NostrKinds.PICTURE, note.kind)
+        assertEquals("when the fee market opens #bitcoin", note.content)
+        assertEquals(
+            listOf(
+                listOf("t", "bitcoin"),
+                listOf("alt", "when the fee market opens #bitcoin"),
+                listOf(
+                    "imeta",
+                    "url https://cdn.example/meme.png",
+                    "m image/png",
+                    "x $hash",
+                    "size 424242",
+                    "dim 608x1080",
+                ),
+            ),
+            note.tags,
+        )
+
+        // Explicit alt wins over the caption and truncates at 200; CW rides
+        // last; caption truncates at the 1000 meme hard cap; hostile pubkey
+        // is rejected.
+        val cw = composer.composeMemePictureNote(
+            author, "gm", "a".repeat(250), "flashing imagery", media,
+        )!!
+        assertEquals(listOf("alt", "a".repeat(200)), cw.tags[0])
+        assertEquals(listOf("content-warning", "flashing imagery"), cw.tags.last())
+        assertNull(
+            composer.composeMemePictureNote("nothex", "gm", "", null, media),
+        )
+        val longCaption = composer.composeMemePictureNote(
+            author, "x".repeat(2_000), "", null, media,
+        )!!
+        assertEquals(1_000, longCaption.content.length)
+    }
+
+    @Test
+    fun composesVideoMemeWithOrientationKinds() {
+        // MST-034: portrait → kind 22, landscape → kind 21; imeta carries
+        // duration seconds; tag order matches the picture path.
+        val portrait = UploadedMedia(
+            url = "https://cdn.example/m.mp4",
+            sha256Hex = hash,
+            mimeType = "video/mp4",
+            sizeBytes = 2_000_000,
+            width = 608,
+            height = 1080,
+            durationMs = 4_200,
+        )
+        val note = composer.composeMemeVideoNote(
+            author, "gm #bitz", "", null, portrait = true, media = portrait,
+        )!!
+        assertEquals(NostrKinds.SHORT_VIDEO, note.kind)
+        val imeta = note.tags.last { it.first() == "imeta" }
+        assertTrue(imeta.any { it == "duration 4" }, imeta.toString())
+
+        // MST-032: the separately-uploaded cover rides as imeta `thumb`.
+        val withCover = composer.composeMemeVideoNote(
+            author, "gm", "", null, portrait = true,
+            media = portrait.copy(thumbUrl = "https://cdn.example/cover.jpg"),
+        )!!
+        assertTrue(
+            withCover.tags.any { tag -> tag.first() == "imeta" && "thumb https://cdn.example/cover.jpg" in tag },
+        )
+
+        val landscape = composer.composeMemeVideoNote(
+            author, "gm", "wide shot", "flashing imagery",
+            portrait = false, media = portrait.copy(width = 1080, height = 608),
+        )!!
+        assertEquals(NostrKinds.NORMAL_VIDEO, landscape.kind)
+        assertEquals(listOf("alt", "wide shot"), landscape.tags[0])
+        assertEquals(
+            listOf("content-warning", "flashing imagery"),
+            landscape.tags.last(),
+        )
+    }
+
+    @Test
     fun uploadedMediaValidatesBounds() {
         assertFails {
             UploadedMedia("http://insecure/v.mp4", hash, "video/mp4", 100)
+        }
+        // Cover thumbs follow the same HTTPS policy.
+        assertFails {
+            UploadedMedia(
+                "https://cdn.example/v.mp4", hash, "video/mp4", 100,
+                thumbUrl = "http://insecure/cover.jpg",
+            )
         }
         assertFails {
             UploadedMedia("https://cdn.example/v.mp4", "short", "video/mp4", 100)

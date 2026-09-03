@@ -322,20 +322,96 @@ class NoteComposer(
         )
     }
 
-    /** Kind-22 video note with caption + NIP-92 imeta descriptor. */
+    /**
+     * Kind-22 video note with caption + NIP-92 imeta descriptor. Post-
+     * details parity with the meme paths: caption hashtags become t-tags,
+     * alt falls back to the caption when the publisher left it blank
+     * (NIP-31 accessibility floor), and a non-blank reason gates playback
+     * behind NIP-36 `content-warning`.
+     */
     fun composeMediaNote(
         authorPubkey: String,
         caption: String,
         media: space.bitos.core.model.UploadedMedia,
+        altText: String = "",
+        contentWarningReason: String? = null,
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val trimmed = caption.trim().take(MAX_NOTE_LENGTH)
-        return compose(
-            authorPubkey,
-            NostrKinds.VIDEO,
-            listOf(listOf("imeta") + media.imetaFields()),
-            trimmed,
-        )
+        val tags = mutableListOf<List<String>>()
+        tags += ComposerRules.deriveTags(trimmed).filter { it.firstOrNull() == "t" }
+        val alt = altText.ifBlank { trimmed }.trim().take(200)
+        if (alt.isNotEmpty()) tags += listOf("alt", alt)
+        tags += listOf(listOf("imeta") + media.imetaFields())
+        contentWarningReason?.takeIf { it.isNotBlank() }?.let { reason ->
+            tags += listOf("content-warning", reason.trim().take(120))
+        }
+        return compose(authorPubkey, NostrKinds.VIDEO, tags, trimmed)
+    }
+
+    /**
+     * Video meme (plan MST-034; web `feed.postBitz` video kinds): portrait
+     * renders publish as kind 22 (NIP-71 short-form), landscape as kind 21
+     * — the orientation comes from the EXPORTED frame (height ≥ width ⇒
+     * portrait), matching what clients actually play. Tag order matches
+     * the picture path; the imeta gains `duration` (seconds) via
+     * [space.bitos.core.model.UploadedMedia.imetaFields].
+     */
+    fun composeMemeVideoNote(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>> = emptyList(),
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val kind = if (portrait) NostrKinds.SHORT_VIDEO else NostrKinds.NORMAL_VIDEO
+        val trimmedCaption = caption.trim().take(space.bitos.core.studio.MemeWire.MAX_CAPTION)
+        val tags = mutableListOf<List<String>>()
+        tags += ComposerRules.deriveTags(trimmedCaption).filter { it.firstOrNull() == "t" }
+        tags += extraTags
+        val alt = altText.ifBlank { trimmedCaption }.trim().take(200)
+        if (alt.isNotEmpty()) tags += listOf("alt", alt)
+        tags += listOf(listOf("imeta") + media.imetaFields())
+        contentWarningReason?.takeIf { it.isNotBlank() }?.let { reason ->
+            tags += listOf("content-warning", reason.trim().take(120))
+        }
+        return compose(authorPubkey, kind, tags, trimmedCaption)
+    }
+
+    /**
+     * Kind-20 picture meme (plan MST-017; web `feed.postBitz` picture path
+     * parity). Tag order per web: caption hashtag t-tags, NIP-31 `alt`
+     * (explicit alt, or the caption's first 200 chars — pushed only when
+     * non-empty), `imeta` (url m x size dim — the plan §3.4 superset of the
+     * web fields; `x` is the verified Blossom hash), then NIP-36
+     * `content-warning` last when sensitive. Caption caps: the meme SOFT
+     * 300 is a UI counter concern; the HARD cap truncates at 1000 (wire
+     * parity — a single kind-1 destination is NOT this path).
+     */
+    fun composeMemePictureNote(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>> = emptyList(),
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val trimmedCaption = caption.trim().take(space.bitos.core.studio.MemeWire.MAX_CAPTION)
+        val tags = mutableListOf<List<String>>()
+        tags += ComposerRules.deriveTags(trimmedCaption).filter { it.firstOrNull() == "t" }
+        // Web `postBitz` order: extra tags (remix lineage) ride BEFORE alt.
+        tags += extraTags
+        val alt = altText.ifBlank { trimmedCaption }.trim().take(200)
+        if (alt.isNotEmpty()) tags += listOf("alt", alt)
+        tags += listOf(listOf("imeta") + media.imetaFields())
+        contentWarningReason?.takeIf { it.isNotBlank() }?.let { reason ->
+            tags += listOf("content-warning", reason.trim().take(120))
+        }
+        return compose(authorPubkey, NostrKinds.PICTURE, tags, trimmedCaption)
     }
 
     /** Builds the unsigned kind-0 profile metadata event from bounded fields. */

@@ -4,9 +4,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.HowToVote
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.People
 import androidx.compose.material.icons.rounded.Person
@@ -40,6 +44,9 @@ import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -122,6 +129,15 @@ object AppIcons {
     val Chat = Icons.Rounded.ChatBubble
     val Globe = Icons.Rounded.Public            // Solar: global
     val Logout = Icons.Rounded.ExitToApp
+
+    // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
+    val MusicNote = Icons.Rounded.MusicNote     // Solar: music (sound library)
+    val Remix = Icons.Rounded.AutoFixHigh       // Solar: magicWand (studio remix)
+    val Undo = Icons.AutoMirrored.Rounded.Undo  // Solar: undo (editor history)
+    val Redo = Icons.AutoMirrored.Rounded.Redo  // Solar: undoRight (suite dock)
+    val Download = Icons.Rounded.Download       // Solar: save (editor export)
+    val Scissors = Icons.Rounded.ContentCut     // V2 suite: Trim tool chip
+    val Speed = Icons.Rounded.Speed             // V2 suite: Speed tool chip
 
     // ── Media ────────────────────────────────────────────────────────
     val Camera = Icons.Rounded.CameraAlt

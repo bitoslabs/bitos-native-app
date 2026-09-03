@@ -630,7 +630,9 @@ fun FeedScreen(
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showImportMedia = false }) {
             ImportMediaContent(
                 state = mediaState,
-                onPublish = { mediaPublishViewModel.publish(it) },
+                onPublish = { caption, altText, contentWarning ->
+                    mediaPublishViewModel.publish(caption, altText, contentWarning)
+                },
                 onPick = { uri, _ -> mediaPublishViewModel.mediaPicked(uri) },
                 onCancel = {
                     mediaPublishViewModel.cancel()

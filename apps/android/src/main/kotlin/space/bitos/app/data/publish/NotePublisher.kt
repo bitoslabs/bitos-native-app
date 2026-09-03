@@ -368,6 +368,8 @@ class NotePublisher(
         media: space.bitos.core.model.UploadedMedia,
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
+        altText: String = "",
+        contentWarningReason: String? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
@@ -375,11 +377,75 @@ class NotePublisher(
                 mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
                 return@launch
             }
-            val note = composer.composeMediaNote(signer.publicKeyHex(), caption, media)
+            val note = composer.composeMediaNote(
+                signer.publicKeyHex(), caption, media, altText, contentWarningReason,
+            )
                 ?: run {
                     mutableState.value = PublishUiState(result = PublishResult.INVALID)
                     return@launch
                 }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
+     * Video meme from a verified upload (MST-034): kind 22 portrait / 21
+     * landscape through the same receipt machine. Media MUST come from a
+     * hash-verified upload (same contract as the other media paths).
+     */
+    fun publishMemeVideoNote(
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        media: space.bitos.core.model.UploadedMedia,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+        extraTags: List<List<String>> = emptyList(),
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeMemeVideoNote(
+                signer.publicKeyHex(), caption, altText, contentWarningReason, portrait, media, extraTags,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
+     * Kind-20 picture meme from a verified upload (MST-017): web tag order
+     * (t-tags, alt, imeta, CW) → sign → receipt machine. The media MUST
+     * come from a hash-verified Blossom upload — the uploader enforces that
+     * before this is reachable (same contract as the kind-22 path).
+     */
+    fun publishMemePictureNote(
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        media: space.bitos.core.model.UploadedMedia,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+        extraTags: List<List<String>> = emptyList(),
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeMemePictureNote(
+                signer.publicKeyHex(), caption, altText, contentWarningReason, media, extraTags,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
             publishUnsigned(note, signer, writeRelays)
         }
     }

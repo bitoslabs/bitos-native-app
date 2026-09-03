@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 
 package space.bitos.app.ui.settings
 
@@ -9,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -497,7 +501,10 @@ private fun AlgorithmDetail(
 
     DetailCard("Surfaces") {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 for (s in space.bitos.core.feed.AlgorithmSurface.entries) {
                     val selected = s == surface
                     Text(
@@ -532,7 +539,10 @@ private fun AlgorithmDetail(
     if (setting.enabled) {
         DetailCard("Preset") {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     for ((id, label) in listOf(
                         space.bitos.core.feed.AlgorithmPresetId.LATEST to "Latest",
                         space.bitos.core.feed.AlgorithmPresetId.BALANCED to "Balanced",
@@ -884,22 +894,21 @@ private fun AboutDetail(store: SettingsStore) {
     }
 
     DetailCard("Supported NIPs") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-            for (row in facts.SUPPORTED_NIPS.chunked(5)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (nip in row) {
-                        Text(
-                            "NIP-${if (nip < 10) "0$nip" else "$nip"}",
-                            fontSize = 10.sp, fontFamily = FontFamily.Monospace,
-                            color = BitOSColors.textSecondary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (nip in facts.SUPPORTED_NIPS) {
+                Text(
+                    "NIP-${if (nip < 10) "0$nip" else "$nip"}",
+                    fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                    color = BitOSColors.textSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(BitOSColors.surfaceOverlay.copy(alpha = 0.5f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
             }
         }
     }
@@ -1190,7 +1199,11 @@ private fun RelaysDetail(
             val suggestions = listOf("wss://nostr-01.yakihonne.com", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol")
                 .filterNot { url -> entries.any { it.url.value == url } }
             if (suggestions.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
                     for (url in suggestions) {
                         Text(
                             url.removePrefix("wss://").removePrefix("relay."),
@@ -1543,7 +1556,10 @@ private fun OptionRow(
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Text(title, fontSize = 13.sp, color = BitOSColors.textSecondary)
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             for ((wire, label) in options) {
                 val isSelected = wire == selected
                 Text(
@@ -1571,7 +1587,10 @@ private fun ZapAmountRow(amount: Int, onChange: (Int) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Text("Default zap: $amount sats", fontSize = 15.sp, color = BitOSColors.textPrimary)
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             for (preset in presets) {
                 val isSelected = preset == amount
                 Text(

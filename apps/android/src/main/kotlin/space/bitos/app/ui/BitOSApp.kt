@@ -253,8 +253,10 @@ fun BitOSApp(
             containerColor = BitOSColors.background,
             bottomBar = {
                 // APP-008: the composer is a full page (legacy CreateView
-                // parity) — the tab bar never renders under it.
-                if (!showCreateNote) {
+                // parity) — the tab bar never renders under it. The Create
+                // hub (camera · meme studio · mass production) is equally
+                // immersive, so the bar hides there too.
+                if (!showCreateNote && !showCreateHub) {
                 NavigationBar(containerColor = BitOSColors.surface) {
                     TopLevelDestination.entries.filterNot { it == TopLevelDestination.DISCOVER }.forEach { item ->
                         val badge = when {

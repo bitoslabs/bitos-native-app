@@ -28,6 +28,13 @@ enum AppIcons {
         case repost: Image("SolarRepeatLinear")
         case zap: Image("SolarBoltLinear")
         case more: Image("SolarMenuDotsLinear")
+        case textStyle: Image("SolarTextLinear")
+        case sticker: Image("SolarEmojiFunnyCircleLinear")
+        case looks: Image("SolarPaletteLinear")
+        case sfx: Image("SolarSoundwaveLinear")
+        case musicNote: Image("SolarMusicNoteLinear")
+        case warningTriangle: Image("SolarDangerTriangleLinear")
+        case undo: Image("SolarUndoLeftRoundLinear")
         case check: Image("SolarCheckCircleLinear")
         case checkCircle: Image("SolarCheckCircleLinear")
         case close: Image("SolarCloseCircleLinear")
@@ -63,6 +70,11 @@ enum AppIcons {
         case video: Image("SolarVideoCameraLinear")
         case play: Image("SolarPlayLinear")
         case pause: Image("SolarPauseLinear")
+        // Camera capture chrome (spec §3.19 record screen).
+        case torch: Image("SolarFlashlightOnLinear")
+        case timer: Image("SolarStopwatchLinear")
+        case clockCircle: Image("SolarClockCircleLinear")
+        case cameraRotate: Image("SolarCameraRotateLinear")
         // Settings-only semantic tokens.
         case "hand.raised.fill", "shield.lefthalf.filled": Image("SolarShieldLinear")
         case "paintpalette.fill": Image("SolarPaletteLinear")
@@ -95,6 +107,16 @@ enum AppIcons {
     static let send = "paperplane.fill"               // Solar: plain
     static let pen = "pencil"                         // compose / new note
     static let refresh = "arrow.clockwise"            // Solar: refresh
+    static let undo = "arrow.uturn.backward"          // Solar: undo (editor history)
+    static let save = "square.and.arrow.down"         // Solar: save (editor export to Photos)
+    // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
+    static let musicNote = "musicNote"             // Solar: music (sound library)
+    static let remix = "sparkles"                  // Solar: magicWand (studio remix)
+    static let textStyle = "textStyle"             // Solar: text (meme caption tool)
+    static let sticker = "sticker"                 // Solar: emojiFunnyCircle (sticker tool)
+    static let looks = "looks"                     // Solar: palette (color grade tool)
+    static let sfx = "sfx"                         // Solar: soundwave (SFX tool)
+    static let warningTriangle = "warningTriangle" // Solar: dangerTriangle (variant warnings)
     static let add = "plus"                           // Solar: addCircle
     static let search = "magnifyingglass"
     static let filter = "line.3.horizontal.decrease"  // feed content filter
@@ -154,4 +176,13 @@ enum AppIcons {
     static let soundOn = "speaker.wave.2.fill"        // unmuted state
     static let back10 = "gobackward.10"               // −10 s seek pill
     static let forward10 = "goforward.10"             // +10 s seek pill
+
+    // ── Camera capture chrome (spec §3.19 record screen) ─────────────
+    static let torch = "torch"               // Solar: flashlightOn (torch toggle)
+    static let timer = "timer"               // Solar: stopwatch (self-timer chip)
+    static let clockCircle = "clockCircle"   // Solar: clockCircle (duration cap)
+    static let cameraRotate = "cameraRotate" // Solar: cameraRotate (flip lens)
+    // Solar Linear has no 3×3 grid glyph; native square.grid.3x3 by the
+    // icon-system.md platform-convention rule.
+    static let gridGuides = "square.grid.3x3"
 }

@@ -67,7 +67,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
 | APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero (npub copy + identity-QR dialog) + multi-account switch row + Following/Relays stat tiles + live tile groups (Discover, Lightning, Profile, Zap wallet APP-014, Settings, Saved APP-015) + About/Privacy/Terms meta rows; remains: Communities/Meme tiles (W3/W4) |
 | APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), i18n strings (APP-024) |
-| APP-019 | Studio §3.19 | W4 | ◐ | ◐ | ◐ | camera/trim/publish live (CAP/PUB); editor W4 |
+| APP-019 | Studio §3.19 | W4 | ✅ | ✅ | ✅ | **M1 COMPLETE (2026-09-02)**: image editor end-to-end both platforms — editing core (tray/gestures/text+sticker/coalesced undo), wire codec `com.bitos.bitz.meme` v1 (interop gate), 1080 raster export → Photos, kind-20 publish (CW/alt/imeta, verify-before-sign), autosave + ≤6 continuation slots; camera/trim/publish live (CAP/PUB); remain: GIF mode (M2), video mode (M3), V2 suite |
 | APP-020 | Static pages §3.20 | W1 | ✅ | ✅ | ✅ | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens |
 | APP-021 | Trending sounds §3.21 | W3 | ☐ | ☐ | ☐ | needs shared-sounds (kind 30078) |
 | APP-022 | Component library §4 | W1 | ◐ | ◐ | n/a | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain |
@@ -322,11 +322,34 @@ push toggles), relays live status dots, zap sats display.**
 
 ### APP-019 — Studio (spec §3.19) — W4 quick, V2 full
 
+Full system plan: `docs/native/meme-studio-plan.md` (M0–M4 task IDs MST-xxx
+below map to that plan; EDT/MEM epic rows stay the source of truth for the
+V2 suite).
+
 - [x] Camera capture + preview + trim + media publish (W0, CAP/PUB epics)
-- [ ] Studio home: start-new cards, ≤6 resume slots, templates grid
-- [ ] Quick editor: tray/multi-import, stage + text overlays (drag/scale/rotate), text sheet (fonts/palette/outline/shadow), undo, export local
-- [ ] Publish page: preview, tags, cover strip/settings
-- [ ] W4+: bitz composer; timeline/SFX/voice-over; V2 full suite (EDT/MEM)
+- [x] M0 MST-001..005 — shared `studio/` schema v1 + rules + publish contract (common tests), hub enable/disable + Solar tokens, iOS Home camera entry, bridge surface. Done: `MemeProject`/Contract + `MemeCommandCodec` (20+ hostile-clamp/round-trip tests), `MemeRules` (overlay CRUD/hit-test/coalesced undo), `StudioPublishContract` (verify-before-sign enforced structurally); bridge `memeProjectNormalize/memeApplyCommand/memeHitTest`; hub rows honest (Soon chips + Solar/AppIcons tokens, iOS app-bar camera opens the hub). Quick MEM row flips on with M1.
+- [◐] M1 MST-010..015 (wave 1, editing core — DONE 2026-09-02) — image editing loop live on BOTH platforms minus export/publish/persistence: Quick MEM row opens the editor (Android `ui/create/meme/MemeEditorScreen` + `MemeEditorState`, iOS `MemeEditorView` + `MemeEditorStore`); shared `StickerCatalog` (web `stickers.ts` port: 6 packs × 8, recents ≤16); multi-pick ≤9 tray (Photo Picker / PhotosPicker) with active-asset switching; stage with tap-select via shared hit-test, one-finger drag / pinch / twist, delete handle + dashed selection bounds (shared `estimateBounds` via bridge `memeBounds`); text sheet (4 font-slot pills, 16-swatch palette, size + outline sliders, shadow toggle — live through `MemeCommand.UpdateOverlay`, which now carries `size`); coalesced undo (a gesture = ONE net step; style bursts merge in a 300 ms window; bounded 60; cancel-gesture restores). Bridge grew `memePalette/memeDefaultOverlay/memeBounds/memeStickerPacks` (+ contract tests both lanes). Deferred within M1: URL import; MST-016 export; MST-017 publish (kind 20); MST-018 autosave slots — session-only editor until MST-018, guarded by the ✕/back discard confirm.
+- [x] M1 MST-019 (wave 2, interop gate — DONE 2026-09-02) — meme wire document `com.bitos.bitz.meme` v1: shared `MemeWireDocument.kt` = `MemeWire` constants (web `schema.ts` verbatim: ≤12 overlays / 300 chars / size fraction 0.03–0.22 def 0.09 / 7-hex palette / fx+look+SFX id sets) + `MemeWireCodec` (tolerant decode, canonical encode, `normalize`; foreign schema/version rejected; `updatedAt` re-stamped via injected `nowMs`; **passthrough preservation** — unknown root/overlay/cue fields survive a native round-trip, strictly safer than web's drop) + `MemeWireConvert` (wire ⇄ local: fraction ⇄ 1080-px sizes, nearest-match colors both directions, `stroke` ⇔ `outline>0`, caps/bar defaults ride null-local, emoji-only+stroke-free+no-caps → STICKER, windows + fx carried; local-only scale/rot/shadow/sticker ride overlay passthrough so native wire round-trips are lossless and web parsers still accept the doc); local `MemeOverlay` gained `caps/bar/startMs/endMs/fx` (optional, wire-faithful) and text cap 200→300; bridge `memeWireNormalize/memeWireToLocal/localToMemeWire` (+ iOS client seams and `testMemeWireDocumentSeams`); fixture `contracts/meme/wire-document-v1.json` inlined in `MemeWireCodecTest` (web `schema.test.ts` ported branch-for-branch: defaults, junk-row drops, clamps, truthiness, window clears, count caps, [start,end) visibility, cue clamp/drop, conversions, round-trips). MEM-001 gate open: native can now import/export web payloads ahead of MST-017 publish.
+- [x] M1 MST-016 (wave 3, export — DONE 2026-09-02) — raster export → device save on BOTH platforms. SHARED `MemeExportRules`: `outputSize` = web `render.ts targetSize` port (long edge 1080, never upscales, evened dims ≥2, degenerate → 1080×1920) + `exportPlan` = pure target-px draw commands (the `caps` uppercase transform — web `displayText`, min-10-px font floor — web `max(10, size × referenceHeight)`, outline at ×2 stroke scale, local `scale` honored so exports match the edited stage, multiline split) — 5 common golden tests pin exact px. Bridge `memeExportPlan(projectJson, sourceWidth, sourceHeight)` returns the envelope `{"width","height","items":[…]}` so the size math stays single-sourced (+ iOS client seam + `testMemeExportEnvelopeSeam`). ANDROID `ui/create/meme/MemeRaster.kt`: sampled decode → android.graphics off-screen render (font-slot typefaces incl. sans-serif-black, stroke-behind-fill outline, setShadowLayer shadow, per-line centered rotation) → MediaStore PNG at `Pictures/BitOS` (IS_PENDING round-trip, failed writes clean up the row; minSdk 29 = modern API only). IOS `MemeRaster` in MemeEditorView.swift: UIGraphicsImageRenderer(scale 1) over the bridge envelope (NSAttributedString negative-stroke outline + NSShadow) → `PHPhotoLibrary` add-only save (permission already in Info.plist), render on a detached task. Both editors gained a Save tool with busy/status states. WYSIWYG FIX: the font reference is canvas HEIGHT (web truth found in `paintOverlay` — supersedes the plan's earlier "×1080-wide" wording per the doc's own web-wins rule); stage previews re-based to height/1080 on both platforms. Honest gate: bitmap golden-HASH tests need a device rasterizer (no Robolectric/instrumented infra in this repo) — plan geometry is golden-tested in common; pixel hashing rides manual QA.
+- [x] M1 MST-017 (wave 4, publish — DONE 2026-09-02) — picture memes publish as kind 20 end-to-end on BOTH platforms. SHARED: `NoteComposer.composeMemePictureNote` — web `feed.postBitz` picture-path parity: caption hashtag t-tags → NIP-31 `alt` (explicit alt wins, else caption's first 200 chars; pushed only when non-empty) → `imeta` (url m x size dim — the §3.4 superset; `x` = the verified Blossom hash) → NIP-36 `content-warning` LAST when sensitive; caption hard-caps at 1000 (meme wire parity; the kind-1 Note destination is a different path). BRIDGE: `composeMemePictureEventId` + `memePicturePublishMessage` (the kind-22 pair's pattern) + bridge test. ANDROID: `NotePublisher.publishMemePictureNote` through the existing receipt machine; `MediaPublishViewModel.publishMemePicture` (render → hash-verified Blossom upload → kind-20, own `MemePublishPhase` lane so the import path is untouched); editor gains a Post button + publish sheet (caption + soft-300 counter, derived hashtag chips, CW toggle+reason, alt field, phases, verify-before-sign footnote). IOS: `NotePublisher.publishMemePictureNote` (sign-locally → `memePicturePublishMessage` → send); editor Post + `MemePublishSheet` (same fields/phases). TESTS: `BlossomTest.composesKind20PictureMemeWithWebTagOrder` (exact tag list, alt fallback/truncation, CW last, 1000 cap, hostile pubkey), bridge pair test, Android repo `publishesKind20PictureMemeWithWebTagOrder` (signed frame decodes as kind 20 with the web tag order + imeta + relay-OK receipt — nothing signs before the hash-verified upload by uploader contract, BlossomUploaderTest). Fixture `contracts/nostr/kind-20-unsigned.json`. PoW on memes intentionally deferred to the composer PoW lane.
+- [x] M1 MST-018 (wave 5, durability — DONE 2026-09-02) — **M1 COMPLETE**. Autosave + ≤6 continuation slots on BOTH platforms: SHARED `MemeSlots` — `MemeSlotCodec` (slot file = `{v,id,updatedAt,assets[{id,file,aspect}],project<wire>}`; index file most-recent-first; lenient decode: corrupt/oversized → empty, absolute/traversal asset+poster paths rejected) + `MemeSlotRules` (front-insert, id-bump, LRU eviction returning evicted ids, ≤6 label ≤40 from first overlay text, relative time) + 5 common tests. ANDROID `ui/create/meme/MemeProjectStore` — `filesDir/studio/slots/<id>/` with slot.json + copied-in assets (CAP-005: transient picker URIs never persist; copy idempotent) + poster.jpg (~256 px JPEG ≤192 KB); bitmap/resolver edges injected so the store round-trips on plain JVM (5 store tests: relaunch-restore, idempotent copy, 7-slots-evict-oldest, delete, corrupt-degrade). Editor: debounced 500 ms autosave after every committed edit/asset change; resume seeds project + tray from the slot files; publish DONE and discard-confirm delete the slot; hub "Continue creating" rows (poster, label, time, Resume, ✕). Also FIXED a wave-1 latent bug: `MemeEditorState` was plain Kotlin so drags/adds never recomposed the stage — it now carries a Compose `revision` bumped at every mutation. IOS `MemeProjectStore` (Application Support/studio, same layout + semantics, registered in pbxproj) + the same editor lifecycle (`.task(id:)` debounce keyed on the store revision, onAppear resume seeding, publish/discard clear) + `SlotRow` hub section. Honest gate: process-kill recovery is contract-tested at the store level (relaunch-restore battery); on-device kill/relaunch QA rides the manual matrix.
+- [ ] M2 MST-020..023 — GIF mode: frame tray/reorder, loop preview, encoder + size ladder, kind-20 publish
+- [x] M2 MST-020..023 (COMPLETE 2026-09-02 — wave M2a shared engine + Android, wave M2b iOS) — SHARED pure GIF engine, common-tested: `GifEncoder` (web `gif-encode.ts` port — LZW cadence, median-cut 5-bit histogram, local tables, NETSCAPE loop, 2cs floor; deterministic bytes), `GifDecoder` (web fallback parser port — disposal 2/3, interlace, transparency, sub-2cs→100ms; junk→null), `GifExportPlan` (cadence/20ms-floor/≤360/pin-trims + 8MB→halve ladder) — 16 tests incl. the encoder⇄decoder round-trip golden. ANDROID: GIF mode live (chip switch w/ confirm, frame tray ≤60 with long-press-drag reorder + delay slider, looping stage preview, Save `.gif` w/ ladder status, publish kind-20 `m image/gif` via the same verify-before-sign machine, frames persist in slots + resume). Wave M2b: iOS GIF mode live (CGImageSource decode w/ cumulative composite — disposal-2 ghosting accepted V1 caveat; CGImageDestination encode; shared planner via bridge `memeGifPlan`/`memeGifLadderCanvas`; chip/tray onDrag-onDrop reorder/delay slider/loop preview/Save/Publish `m image/gif`; frames persist in slots). Fixtures `kind-20-gif-unsigned.json`. REMAINS: on-device QA.
+- [◐] M3 (wave M3a — shared rules + Android video DONE 2026-09-02): `composeMemeVideoNote` (kind 22 portrait / 21 landscape, duration imeta; tests + bridge pair); Android: video chip + trim handoff through VideoPreviewScreen + ExoPlayer stage w/ overlays + scrub + Transformer burn-in export (full-frame overlay bitmap, OverlayEffect) + Save-to-Movies + kind-21/22 publish + slot persist/resume. Wave M3b: iOS video mode live — AVAsset probe (rotation-aware), AVComposition+CoreAnimationTool burn-in (full-frame shared-envelope layer), AVKit stage w/ overlays+scrub, trim handoff through VideoPreviewScreen, Save-to-Photos video, kind-21/22 publish via the M3a bridge pair, slot persist/resume (raw data asset). Wave M3c: MST-032 cover capture DONE — UploadedMedia.thumbUrl (imeta `thumb`, validated; tests + kind-22 fixture), capture-at-playhead + separate upload + "Set cover/Cover ✓" chip both platforms, publish carries it; cover is session-only in V1. MST-035 QA = MANUAL PENDING (checklist: 60 s bound, call interruption, background, low storage, thermal, kill mid-export).
+- [ ] (old line kept) M3 details: clip/record handoff + trim reuse, overlay burn-in, cover-frame capture, kind-22/21 publish by orientation, QA matrix (CAP-009 reuse)
+- [◐] M4 MST-040..049 — Studio home (resume slots, templates), sound seed + synth SFX pack (APP-021), looks/fx, shared templates + marketplace (MEM-004), remix payload (`com.bitos.bitz.meme` v1), shared sounds, batch queue, opt-in AI suggestions
+  - [x] Video cut-policy revision (2026-09-02): long clips are CUT with an "over the size limit — trimmed to Ns" message instead of rejected — shared `MemeVideoCutRules` (60 s pick cap + proportional export-size ladder, 5 s floor, ≤3 retries; `MemeVideoCutTest`), trim-honoring exports (Media3 clipping / AVComposition range), publish ladders, cut-accurate kind-22 duration imeta, Android fresh-pick probe fix.
+  - [◐] MST-045 shared-template relay fetch LIVE ON BOTH PLATFORMS (2026-09-03): Android `SharedTemplateStore` + hub "Shared templates" rail (⚡sats chips) + seeded editor; iOS `SharedTemplateStore` (@MainActor/@Observable; verified kind-30078 frames → bridge summary, newest-wins ≤24) + CreateView rail + MemeEditorView shared seed via `memeApplySharedTemplate`; new file registered in project.pbxproj. Remaining: publish-your-own write path, zap unlock ledger (MST-046), icon-allowlist sync with web, iOS type-check on a simulator runtime.
+  - [◐] MST-045 shared-template RELAY FETCH LIVE ON ANDROID (2026-09-03): `SharedTemplateStore` (kind-30078 REQ limit 200 → signature-verified events → contract summary via the bridge seam; newest-wins per template id, ≤24 rail rows, hostile shapes drop) + hub "Shared templates" section (⚡sats chip on priced cards) → editor seeds through `memeApplySharedTemplate`; iOS client seams landed (fetch/rail next). Remaining: iOS fetch+rail, publish-your-own write path, zap unlock ledger (MST-046), icon-allowlist sync with web.
+  - [◐] MST-045 shared-template READ PATH (2026-09-02, wave 3 start): shared `MemeTemplateContract` (kind-30078 `com.bitos.bitz:template:*` parse — v2 fields + v1 degrade-to-free, price tiers {21,100,500}/junk→free, 10 categories, 8-icon allowlist, wire-overlay → local conversion with hostile tolerance incl. converter-crash guards; `MemeTemplateContractTest` battery) + bridge seams `memeSharedTemplateSummary`/`memeApplySharedTemplate` (apply = fresh-id clone). Remaining: relay fetch feeding the hub rail, publish-your-own (write path), zap unlock ledger (MST-046).
+  - [◐] MST-042 remix publish wiring (2026-09-02): "Remix of" + author fields + `source → you` chips in both publish sheets; tags via the tested `memeRemixTagsFor` seam (Android both lanes; Kotlin picture composer seams + iOS publisher carry `extraTagsJson`/`remixTagsJson`; bridge test pins the id change). Remaining V1.x: RemixChainDialog from the feed rail, Remix target-picker entry.
+  - [x] MST-040 templates rail (2026-09-02, wave 1 complete): shared `MemeTemplates` (6-template built-in pack, apply = fresh-id overlay clone keeping assets/grade; test) + bridge seams `memeTemplates`/`memeApplyTemplate`; horizontal Templates rail on both Create hubs → editor opens seeded. Marketplace/shared kind-30078 cards stay wave 3.
+  - [◐] MST-044 fx core (2026-09-02): shared `MemeFxRules` (web fx.ts math: pop/fade entries, shake/spin loops, [start,end) windows; `MemeFxRulesTest`) + `UpdateOverlay` fx/window fields through command+codec+coalescing; both video stages apply transforms + hide out-of-window overlays at the playhead. Both text sheets ship motion chips + Start/End window fields (2026-09-02; iOS via `MemeOverlayUi` fx/window fields — WAVE 2 complete at committed scope). Remaining (V1.x): export burn-in (animated layers), GIF-stage time, iOS `MemeFxBridge` → bridge seam.
+  - [◐] MST-041 SFX (2026-09-02): shared `SfxSynth` (31 recipes + WebAudio-envelope PCM renderer + WAV writer + `MemeSfxCue` wire/commands + `renderCueTrack` mixer; `SfxSynthTest`) · Android 🔊 sheet (AudioTrack preview, playhead cues, scrub markers) + cue burn-in via a second Media3 sequence · iOS 🔊 sheet (AVAudioPlayer previews via base64 WAV seam, playhead cues, scrub markers). Remaining: iOS export audio track, sound-on-static image→video, APP-021 seed.
+  - [x] Mockup UX-parity pass (2026-09-02, app-15 scr-quick + app-04 scr-review): selection corner dots + stage "drag · scale · rotate" chip both platforms; publish-sheet preflight checklist (kind label, alt, CW) both platforms. iOS visual check pending simulator runtime.
+  - [x] MST-043 looks (2026-09-02, M4 wave 2 start): shared `MemeLooks` (8 web grades → CSS-spec 4×5 color-matrix engine, unknown→none) + `lookId` on the project wire + undoable `SetLook` + bridge seams `memeLooks`/`memeLookMatrix`; Android raster burn-in + WYSIWYG stage filter + ✨ sheet; iOS CIColorMatrix export + grade-cached stage + ✨ sheet; `MemeLooksTest` reference-pixel battery green. Also: scr-home batch-queue bar on both Create hubs (variants · published · awaiting + progress). Remaining wave 2: MST-041 SFX pack, MST-044 fx/timed overlays.
+  - [x] MST-048 mass production V1 (2026-09-02): shared `MassBatch`/`MassBatchRules` (typed slots, mockup severity contract, `{slot}`/`{i}` resolution, content+poster approval hashes, recipe fork-on-edit, stable per-event publish queue w/ crash recovery, bounded CSV) + 12 common tests + `contracts/mass/batch-v1{,-hostile}.json` pinned in tests + bridge seams `massBatchNew/Op/Plan/ImportCsv`. Per product decision the flow lives INSIDE the Create hubs (no separate mass screens): Android `CreateScreen.kt` (scr-home "Start something new" tiles: Bitz/Meme/Batch + `MassBatchFiles`/`MassBatchUi` + kind-20 queue via `publishMemePicture(onResult:)`), iOS `CreateView.swift` (`MassBatchFlow` + per-event Blossom upload → `publishMemePictureNote`). iOS type-check pending a simulator runtime (syntax-parse + API-signature audit done); batch V1 = image memes (video/GIF batch + covers ride later waves).
+- [ ] W4+/V2: bitz composer; expert timeline/SFX/voice-over (EDT-005..009); full suite (EDT/MEM)
 
 ### APP-020 — Static pages (spec §3.20)
 
@@ -368,6 +391,724 @@ push toggles), relays live status dots, zap sats display.**
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-09-03 — Studio Draw pen wave (APP-019 EDT-008 slice; the scr-suite
+  chip row is now 6/7 live — only Sound remains "soon"): **pen strokes on
+  the stage, burned under the captions in every export path.** Shared
+  (common-tested): `MemeStroke` (normalized polyline, palette color,
+  width as a canvas-height fraction), project `drawStrokes` on the local
+  wire (`"draw"` rows, budget-capped decode), `MemeCommand`
+  AddStroke/RemoveStroke/ClearDrawing + codec ops (stroke-add /
+  stroke-del / draw-clear), and web `drawing.ts` bounds enforced in
+  apply: ≤1,500 pts/stroke, 12,000 pts/project, over-budget adds evict
+  the OLDEST ink. `MemeExportRules.drawingPlan` (canvas-px polylines) +
+  envelope `"strokes"` rows. Tests: rules budget/eviction + codec
+  round-trip, contract round-trip + hostile flood (budget caps decode),
+  plan geometry + envelope. Android: draw mode on the stage (pen tool in
+  the tools row AND the suite Draw chip), a capture layer centered on
+  the measured media rect (strokes normalize exactly like the export
+  canvas — WYSIWYG), pen controls (8 palette dots, 3 widths, undo-
+  stroke, clear, done), and `MemeRaster.drawStrokes` wired into image
+  render, GIF frames and the per-frame video CanvasOverlay (ink under
+  overlays everywhere). iOS: store stroke ops (undoable) + wire-parsed
+  strokes, `MemeRaster.paintStrokes`, static ink CALayer under the video
+  overlay tree (+ fast path + GIF frames + stills), aspect-fitted
+  DrawLayerIos capture overlay with live-stroke preview, and the same
+  pen controls. Solar pen icon (`solar_pen_linear`) added to
+  SolarStudioIcons. Verification: shared + Android suites green; iOS
+  parse green (type-check still gated on a simulator runtime). Device
+  QA: finger-drawing smoothness/stroke caps, ink in exported PNG/GIF/
+  MP4, budget eviction UX at 12 k points.
+
+- 2026-09-03 — Post-details fields on the media publish sheet (user
+  "next step"; reference app-04 scr-details). The kind-22 import path now
+  collects what the meme paths already did: caption counter, **alt text**
+  (NIP-31; falls back to the caption when left blank — accessibility
+  floor, common-tested), and a **content warning** gate + reason
+  (Flashing imagery / Sensitive topic / Loud audio → NIP-36
+  `content-warning`). Shared: `composeMediaNote` gained defaulted
+  `altText`/`contentWarningReason` + caption-hashtag t-tags (fixture
+  updated in BlossomTest); bridge `composeMediaNoteEventId`/
+  `mediaNotePublishMessage` + both native publishers thread them through
+  (defaults keep old call sites source-compatible). Android
+  ImportMediaContent + iOS ImportMediaSheet grew the fields; publish
+  enables when caption OR alt is present. Also unblocked the tree: fixed
+  6 mechanical errors in the concurrent session's in-flight
+  MemeEditorView (non-optional bridge return, VideoStageIos arg order,
+  `BitOSTheme.text`→`textPrimary`, SuiteTrackLane labels, LooksSheet
+  body split, `lookId` nonisolated), restored the dropped `AppIcons.save`
+  token, fixed their `charset("ASCII")` test slip, and RELINKED the stale
+  universal-sim BusinessCore framework (the suite-port symbols were
+  missing from the Sep-2 binary). Verified: shared macosArm64Test green,
+  Android compile + publish/create/theme tests green, iOS whole-module
+  typecheck green except one remaining expression-budget timeout inside
+  SuiteDockView — the region the concurrent session is editing live
+  (Trim/Speed chips gained actions minutes ago), deliberately left to
+  them.
+
+- 2026-09-03 — Studio Trim + Speed wave (APP-019; two more scr-suite tool
+  chips go live — Draw and Sound remain "soon"): **in-suite trim editing
+  and whole-clip playback rate (0.5–2×, web speed-track bounds), with
+  every timing consequence handled.** Shared (common-tested): project
+  `speed` field (video-only wire `"speed"` written only when ≠ 1, clamped
+  0.5–2, junk → 1), `MemeCommand.SetSpeed` + codec op `speed`, and
+  `SfxSynth.cuesInOutputTimeline` (cue media times ÷ rate — the mix
+  lives on the output timeline); the `memeSfxTrackWavBase64` seam grew a
+  rate param. Tests: contract speed round-trip/clamps, SetSpeed clamp +
+  codec round-trip, cue mapping (2× halves offsets, 0.5× stretches, junk
+  → source). Android: `state.setSpeed` (undoable), the exporter applies
+  `EditedMediaItem.setSpeed(SpeedProvider)` (Sonic resamples audio+video;
+  pitch shifts — V1 accepted and labeled), the timed overlay maps output
+  time → media time (× rate + trim start), the cue mix + publish
+  durationMs are effective (media ÷ rate), and Trim/Speed sheets (window
+  sliders with the effective length said out loud; rate chips with
+  output-length preview) replace the dead chips. iOS: store
+  `setSpeed`/`setTrim` + wire-parsed speed/trim, exporter
+  `scaleTimeRange` on both tracks (keep ÷ rate) with the instruction
+  window + SFX insert + keyframe sampler all on the output timeline
+  (sampler maps media = output × rate + trim start), publish duration
+  effective, and the same Trim/Speed sheets. Remaining V1 caveat
+  (documented in the sheets): audio pitch follows the clip. Verification:
+  shared + Android suites green; iOS parse green (type-check still gated
+  on a simulator runtime). Device QA: 0.5×/2× exports (frame pacing,
+  pitch), trim+speed combined, cue timing under rate.
+
+- 2026-09-03 — Studio export WYSIWYG wave (APP-019; closes the MST-044
+  export item + the last open MST-041 slice): **overlay timing windows
+  and fx now burn into the exported video exactly as the suite timeline
+  previews them, and iOS exports carry the SFX cue mix.** Shared:
+  `MemeExportRules.paintPlanAt` — the per-frame paint plan (geometry +
+  `MemeFxRules.transformAt` + half-open window drop; poster = identity),
+  common-tested (window edges, entry/overshoot sampling, image layers);
+  bridge seams `memeFxTransformAt` (`scale|rot|dx|dy|alpha` with the
+  window folded into alpha; negative time = poster — non-null Long for
+  clean Swift interop) and `memeSfxTrackWavBase64` (the deterministic
+  cue-track mix as a WAV) with a bridge battery. Android: the exporter's
+  static full-frame bitmap is replaced by a Media3 `CanvasOverlay`
+  repainting `paintPlanAt` per frame (output presentation time shifted
+  back into media time by the trim start — the clipping runs before
+  effects), with the raster's draw path gaining the fx frame transform
+  (pivot at the moved item center) + alpha. iOS: per-overlay tight
+  CALayers (content measured by a new `MemeRaster.contentSize`, anchored
+  at the overlay center so transforms pivot like the stage) whose
+  transform/opacity keyframes are SAMPLED from the seam at ~30 ms steps
+  — deterministic, no Swift easing math; purely static projects keep the
+  single flattened layer (fast path unchanged); the SFX mix rides as a
+  second composition audio track with an explicit AVMutableAudioMix
+  (Android already mixed it via Media3 sequences). ALSO: the iOS
+  `MemeFxBridge` mirror of the fx math is DELETED — stage previews and
+  export sampling both read `memeFxTransformAt` (the plan's requested
+  close-out), and the per-layer path fixes iOS ignoring overlay rotation
+  in static export. Verification: shared common tests + Android
+  compile/unit tests green; iOS parse green (type-check still gated on a
+  simulator runtime). Manual QA (device matrix): animated export
+  frame-accuracy, keyframe sample density on long clips, SFX mix levels.
+
+- 2026-09-03 — Settings chip rows now wrap (user report: option chips in
+  the Lightning & Zaps / Algorithm & Feed / Language & Region sections
+  ran off-screen instead of flowing to a second line). Root cause: every
+  pill group sat in a plain non-wrapping container. Android
+  `SettingsScreen`: `OptionRow` (theme/text-size/timeline/freshness/
+  autoplay/quality/playback-rate/language/date-format/privacy selectors),
+  `ZapAmountRow` presets, algorithm surfaces + preset pills, relay
+  suggestion chips and the About NIP badges (was a fixed
+  `chunked(5)` grid) all render in `FlowRow` — the same
+  `ExperimentalLayoutApi` pattern ProfileScreen/AuthorProfileSheet
+  already use; chip styling, spacing and selection visuals unchanged.
+  iOS `SettingsView`: the algorithm preset pills, relay suggestion chips
+  and `FlowChips` (About NIPs — the name promised wrapping but the body
+  chunked fixed rows of 5) now use the shared `FlowLayout` from
+  ProfileView; the three user-named sections are pickers/steppers on iOS
+  and never had the bug, the fix there covers the pill rows that did.
+  No shared/business change (view-layer only). Verified: Android
+  compileDebugKotlin + shared androidHost & android unit tests green,
+  iOS whole-module Swift 6 strict-concurrency typecheck exit 0 (only
+  pre-existing FeedStore warnings).
+
+- 2026-09-03 — CAP→MEM now merges ALL takes (user report: "when you
+  click MEM all takes should go to the studio"). The handoff no longer
+  carries only the newest take: with N ≥ 2 takes the record screen
+  concatenates the whole strip (take order) into one clip before seeding
+  the editor — Android `TakeMerger` (Media3 Transformer
+  `Composition`/`EditedMediaItemSequence`, listener-await, ≤256 MB
+  source cap) and iOS `CameraScreen.mergeTakes`
+  (`AVMutableComposition` + passthrough export, no re-encode for
+  same-codec camera clips). A "Combining N takes…" progress overlay
+  covers the transcode; a failed merge falls back to the newest take
+  with a hint instead of dead-ending. The "only the newest continues"
+  confirm dialog is gone (nothing is discarded anymore); single take
+  still passes straight through. Verified: Android compileDebugKotlin +
+  create/theme unit tests green (the earlier MemeEditorStateTest
+  failure was the concurrent session's in-flight state/test mismatch,
+  resolved by them — failures=0 now); iOS: my touched files typecheck
+  clean in isolation and the FeedStore.swift main-actor error is fixed
+  (dead `InteractionProfileStore()` default-value expression removed —
+  Swift 6 evaluates default values nonisolated; the sole call site
+  passes it explicitly). The whole-module typecheck is currently red
+  only in MemeEditorView.swift, the concurrent session's in-flight
+  suite port (coverSet/AppIcons.save/lookId sites), untouched here.
+  Also confirmed the Bitz §3.7 record entry exists on both platforms
+  (top-bar camera → Create hub) — the new record screen is reachable
+  from Bitz, not just Create.
+
+- 2026-09-03 — Studio V2-suite wave (APP-019, pulls forward the first
+  `scr-suite` slice of plan V2/EDT-005..009): **video-mode source insert
+  + expert timeline dock, both platforms.** Shared core (common-tested):
+  `MemeOverlayKind.IMAGE` with an `assetId` reference riding the LOCAL
+  project wire only (`"kind":"image"` + `"asset"`; `localToWire` drops
+  layers — web `image-overlay.ts` parity, they persist via slots and burn
+  into exports); `MemeProjectContract.maxAssets(VIDEO)` 1 → 7 (1 clip +
+  `MAX_IMAGE_LAYERS = 6` imported sources); `MemeRules` IMAGE defaults
+  (size 192 ≈ 18% stage height, square hit box); `MemeExportRules` plan
+  items carry `image`/`asset` geometry (fontSizePx = target height,
+  aspect kept by the rasterizer) and the bridge envelope gains
+  `"image":true`/`"asset"` rows. Tests: +4 batteries (rules defaults,
+  contract round-trip + video cap, wire drops layers but the local store
+  keeps them, export plan/envelope geometry). Android: `layerPicker`
+  insert (image/GIF → asset + IMAGE overlay; GIFs paint their first
+  frame — V1 semantics, labeled in the sheet), `VideoSourceTray` (clip
+  tile → replace via trim handoff, layer thumbs, insert tile),
+  `OverlayNode` IMAGE branch (AsyncImage, aspect-kept, WYSIWYG with the
+  raster), `MemeRaster.drawImageItem` + `MemeVideoExport` asset resolver
+  (all three export/publish call sites), layers resume from slots, and
+  **`SuiteDock`** (scr-suite): video/overlays/audio/sfx track lanes with
+  real data (overlay visibility windows, cue ticks), scrubbable playhead
+  via a registered `VideoTransport`, mono time + `cue N/16` readout,
+  tool chips (Layers/Looks/SFX live; Draw/Trim/Sound/Speed honest
+  "soon"), undo + **redo** (`MemeEditorState` redo branch, symmetric
+  snapshots, cleared by any new edit — test), Preview/Export. ALSO
+  FIXED: the video stage never passed `MemeFxRules.transformAt` into
+  `OverlayNode` (fx was wired but inert on Android) and the video publish
+  guard early-returned on `activeAsset == null` (video mode has no
+  tray asset — publish button was a no-op). iOS: same feature set —
+  store redo history + `addImageOverlay`/`select(id:)`/`layerImages`,
+  mode switches drop IMAGE layers (their sources are session-bound),
+  video asset cap 6 with `activeAsset` untouched (Looks stays
+  image-mode), `OverlayUiView` IMAGE branch, `MemeRaster.paintImage`,
+  `MemeVideoExportIos.export(images:)`, `VideoStageIos`
+  `layerImages`/`showScrub`/`VideoTransportIos`, `SuiteDockView` +
+  `LayersSheetView`, tray insert + layer resume. Known V1 bounds
+  (documented in code): video-in-video PiP and animated GIF layers ride
+  later waves; layer timing windows render on the timeline but exports
+  still burn the full-frame overlay (pre-existing V1 export semantic).
+  Android compile + unit tests (state 10/10) + aapt2 green; shared
+  common tests green (rules 12 / contract 8 / wire 21 / export 7); iOS
+  syntax-parse green (type-check still gated on a simulator runtime).
+
+- 2026-09-03 — CAP→MEM handoff (user follow-up: "MEM drops the takes").
+  The record screen's MEM button previously opened the editor empty and
+  the session takes died with the camera. Now the latest take flows into
+  the meme editor as the video-mode source on both platforms:
+  `CameraScreen.onOpenMeme` carries `(bytes, mime) | null`, Create hub
+  holds it as `memeSeed`, and `MemeEditorScreen(videoSeed=…)` /
+  `MemeEditorView(videoSeed:)` switch a fresh project to video mode and
+  feed the take through the exact MST-030 pipeline a picked clip uses
+  (trim screen → `setVideoClip`/`videoBytes` + probe + cut-to-60 s) —
+  from that moment the editor's MST-018 slot autosave persists it as a
+  studio draft (deliberately NOT the OS photo gallery: unpublished media
+  stays in the project library). With several takes, a confirm states
+  that only the newest continues (single-clip video mode in V1); one
+  take continues straight through; zero opens the editor empty. Verified:
+  Android compileDebugKotlin green (after the concurrent session's
+  MemeEditorScreen suite-dock additions landed), iOS whole-module
+  typecheck green except the known in-flight FeedStore.swift. Still
+  deferred: multi-take merge into one clip (media-core).
+
+- 2026-09-03 — Record screen rebuilt to the app-04 Honeycomb reference
+  (APP-019 / CAP-002 / APP-022 icon layer; user ask). Both camera
+  surfaces (`CameraScreen.kt` / `CameraScreen.swift`) now carry the
+  reference chrome over the unchanged thin capture contract
+  ((bytes, mime) → publish pipeline): rule-of-thirds grid (toggle),
+  blinking REC badge with mono elapsed clock, right-edge .5×/1×/2× lens
+  rail (CameraX setZoomRatio / videoZoomFactor, clamped to device
+  bounds), torch toggle (hidden when no flash unit), off/3s/10s
+  self-timer with full-screen countdown, session takes strip (real
+  poster-frame thumbnails via MediaMetadataRetriever /
+  AVAssetImageGenerator, per-take ✕ delete, dashed "+", "N takes ·
+  MM:SS", tap tile → existing trim preview; Retake discards that take,
+  Use hands off), 76dp record button with morphing red core,
+  gradient Import + MEM side buttons (wired: CreateScreen/CreateView now
+  close the camera into the import sheet / expert editor), Flip /
+  Edit takes / 3:00-cap bottom row with real enforcement (auto-stop at
+  180 s; iOS minFreeDiskSpaceLimit 1.2 GB low-storage reserve), X with
+  discard-takes confirm, and the permission-declined layout (plate,
+  system-settings deep link, library-instead, retry). Buffers bounded:
+  ≤5 pending takes / 96 MB session / per-take Blossom 64 MB cap.
+  Icons: vendored 4 new Solar Linear vectors (flashlightOn, stopwatch,
+  clockCircle, cameraRotate + camera for Android) — iOS AppIcons capture
+  tokens, Android new `SolarCaptureIcon` facade mirroring SolarFeedIcon;
+  plain-X close and the 3×3 grid toggle keep native renderers (no Solar
+  glyph; icon-system.md convention rule). Mock-only controls deliberately
+  not shipped: speed chip, mic meter (no audio track in the pipeline),
+  settings gear. Found+fixed: working-tree `project.pbxproj` was corrupt
+  (one malformed PBXBuildFile line from in-flight meme work merged two
+  entries; SharedTemplateStore 15D missing from Sources) — repaired
+  without touching the other session's intent. Verified: Android
+  `:apps:android:compileDebugKotlin` green; iOS whole-module swiftc
+  typecheck green except the pre-existing in-flight FeedStore.swift
+  error (untouched). Next: record → Quick-Bitz-style editor handoff for
+  take sequences (multi-take merge needs media-core), audio capture
+  decision before any mic meter.
+
+- 2026-09-03 — Studio Solar icon pass (APP-019 / APP-022 icon layer):
+  every emoji/text-glyph chrome icon on the studio surfaces now paints a
+  reviewed bundled Solar vector, matching the app-15 Honeycomb reference
+  and the icon-system policy (tokens per platform, no raw glyphs as
+  chrome). Vendored from the official Solar set (Iconify mirror; same
+  CC-BY 4.0 source already attributed in THIRD_PARTY_NOTICES.md — no
+  license change): iOS imagesets `SolarTextLinear`,
+  `SolarSoundwaveLinear`, `SolarUndoLeftRoundLinear`,
+  `SolarDangerTriangleLinear`, `SolarMusicNoteLinear`; Android drawables
+  `solar_text/soundwave/undo_left_round/danger_triangle/palette/music_
+  note/magic_wand_linear` (palette + magic wand port the exact in-repo
+  iOS SVGs so both platforms paint identical glyphs). New token
+  surfaces: iOS AppIcons gained `textStyle/sticker/looks/sfx/musicNote/
+  warningTriangle` (+ `undo` now resolves to Solar instead of SF);
+  Android gained `SolarStudioIcons.kt` (Settings/Gallery/VideoCamera/
+  Bolt/Text/Sticker/Palette/Soundwave/UndoLeft/DangerTriangle/MusicNote/
+  MagicWand) mirroring iOS one-for-one. Call-site swaps both platforms:
+  scr-home start tiles (🎥🖼⚙️ → video/gallery/settings), batch-queue
+  bar (⚙️ → hex-plate settings glyph — reusing the iOS `HexIcon` design
+  system component; Android gained the matching flat-top `HexPlateShape`),
+  editor tools row ("Aa/☺/✨/🔊" → Solar text/emoji/palette/soundwave
+  circles), delete-handle ✕, SFX sheet ▶/＋ buttons, mass-flow badges
+  (recipe 🔒, "image ✓ (replace)", review "!", "published ✓" → icons),
+  quick actions music/remix. Mockup-parity additions: template rails now
+  render the scr-home gradient covers (honeycomb.css `grad-lightning/
+  mine/node` + a story violet — stable by rail position, same ladder on
+  both platforms) with the zap-priced sats chip (bolt icon + amber,
+  "⚡" text glyph dropped). Sticker-grid emoji and template pack emoji
+  stay by design (content, not chrome — the mockup itself uses emoji
+  there). Android `compileDebugKotlin` + unit-test compile green; iOS
+  syntax-parse green for the three touched files (full type-check still
+  gated on a simulator runtime — same as M3c).
+
+- 2026-09-02 — Meme Studio M4 wave a: the remix wire (APP-019 MST-042
+  shared core). The READ side already existed (APP-007's `RemixRules` —
+  sourceOf incl. legacy bitz:edge, license vocabulary + advisory gate,
+  `RemixChain` 32-deep cycle-guarded walk; FeedNote carries
+  `remixOfEventId`/`license`), so this wave built the WRITE side:
+  (1) SHARED `core/studio/MemeRemix.kt` — the compact `meme` tag codec
+  (v/o/c/l keys, round-2 coordinates, defaults omitted: impact/white/
+  caps/stroke/bar; tolerant decode with the 12-overlay cap, hostile
+  colors → `#ffffff` (web cleanColor — caught by the battery), x/y
+  clamped 0..1 (web normalizeOverlay — also caught), cues normalized
+  through the MST-019 rules) and the §3.3 degradation ladder:
+  layout+cues → layout → media-only, never a raw slice (web truncates
+  today; the plan's ladder is the rule). Future web keys (g/z/f/s —
+  image layers, zoom/fx/speed tracks) ride VERBATIM through a native
+  decode→encode round-trip, so a native remix never drops the author's
+  V2 tracks — pinned by a test with a web-shaped payload. (2)
+  COMPOSERS: `composeMemePictureNote`/`composeMemeVideoNote` grew
+  `extraTags`, spliced BEFORE `alt` per web `postBitz` order. (3)
+  BRIDGE: `memeRemixTagsFor(projectJson, sourceEventId, sourcePubkey,
+  relaysJson, license, attribution)` — project wire → localToWire →
+  ladder → `["remix", id, ≤3 relays]` + `["meme", payload?]` +
+  `["p", author]` (+ license/attribution when valid) as TagsCodec JSON
+  (+ bridge test: relay cap, all tag shapes, corrupt → ""). (4)
+  ANDROID: `publishMemePictureNote`/`publishMemeVideoNote` accept
+  `extraTags`; the VM lane parses `remixTagsJson` (TagsCodec) end to
+  end. Two test-authoring bugs caught by the battery (the `"o":` false
+  positive on the overlays array key; a mis-tuned ladder fixture that
+  skipped straight to media-only) — the codec itself needed the two
+  parity fixes above. Verified: full shared lane green, full Android
+  suite green. NEXT (wave M4b — the UI reach): FeedNote projection
+  carries the meme payload; feed/Bitz ⋯ menu gains "Remix meme"
+  (license-gated advisory); the editor seeds overlays from a decoded
+  payload with the source attached and publishes with the tags; the
+  RemixChain dialog (RemixChain.walk already exists).
+
+- 2026-09-02 — Meme Studio M3 wave c: cover frames (APP-019 MST-032) —
+  **M3 code-complete** (video memes: trim → stage → cover → burn-in →
+  kind-21/22 on both platforms). (1) SHARED: `UploadedMedia.thumbUrl`
+  — optional, same HTTPS/loopback policy as the media URL (≤2048),
+  emitted as the imeta `thumb` field by `imetaFields()` for EVERY
+  composer (picture/video media paths); the video bridge pair grew the
+  param (default null keeps old callers valid); `BlossomTest` asserts
+  the thumb rides in the video meme imeta AND that an insecure thumb
+  rejects the descriptor; fixture `kind-22-unsigned.json` now carries a
+  thumb. (2) BOTH PLATFORMS: a "Set cover / Cover ✓" chip in the video
+  stage's scrub row captures the frame AT THE PLAYHEAD (Android:
+  MediaMetadataRetriever closest-sync, JPEG 85; iOS: AVAssetImageGenerator
+  with the upright transform, ≤1080) and uploads it SEPARATELY through
+  the hash-verified Blossom path (image/jpeg) — §3.4's "poster uploaded
+  once separately" rule — with the publish flow attaching the URL.
+  Cover picks are session-only in V1 (the project wire has no thumb
+  field; a relaunch re-picks — documented). (3) MST-035 remains the
+  manual device gate (no simulator runtimes on this machine): 60 s
+  bound, call interruption mid-export, backgrounding, low storage,
+  thermal, process-kill mid-export — checklist pinned in this tracker
+  row. Verified: full shared lane green (thumb battery), full Android
+  suite green, whole-app Swift 6 typecheck clean (relinked). NEXT: M4
+  polish per plan order — MST-040 studio home (resume slots exist;
+  templates grid), MST-041 sound seed, MST-042 remix lineage.
+
+- 2026-09-02 — Meme Studio M3 wave b: iOS video mode (APP-019
+  MST-030/031/033/034 on iOS — video memes now work end to end on BOTH
+  platforms). (1) IOS EXPORT (MST-033): `MemeVideoExportIos` — AVAsset
+  probe (duration + naturalSize×preferredTransform → rotation-aware
+  upright dims), AVMutableComposition (video+audio) + pass-through
+  AVMutableVideoComposition at the upright render size whose Core
+  Animation tool composites ONE full-frame CALayer rendered from the
+  shared `memeExportPlan` envelope (the same geometry the stage paints —
+  WYSIWYG), AVAssetExportSession (HighestQuality → MP4) with temp-file
+  cleanup; session clip bytes live at a temp URL (AVFoundation needs a
+  file). (2) IOS STAGE (MST-031): `VideoStageIos` — AVKit VideoPlayer
+  with the meme overlays on top at any playhead, play/pause + scrub
+  slider, tap-through hit-test selection. (3) EDITOR: the Video chip
+  goes live on iOS (confirm-on-media switch, overlays survive via the
+  wire transplant); picking (.videos) loads bounded bytes, probes, caps
+  at 60 s, and hands through the EXISTING VideoPreviewScreen trim screen
+  whose "use" output feeds the stage (MST-030 reuse — same contract as
+  Android, zero new trim code); Save lands the burned MP4 in Photos
+  (add-only, video resource); Publish rides the unchanged
+  hash-verify-before-sign machine as video/mp4 →
+  `NotePublisher.publishMemeVideoNote` (kind 22 portrait / 21 landscape
+  + duration imeta, through the M3a bridge pair). (4) SLOTS: the clip
+  persists as a raw data asset (`v1`/asset-v1.mp4 — the store's manifest
+  grew a dataAssets lane) and resume re-probes it back into the session.
+  Fixed during wiring: stale framework slice (bridge pair landed after
+  the last relink), and the stage's overlay/delete views needed internal
+  visibility from the editor file. Verified: full shared lane green,
+  full Android suite green, whole-app Swift 6 typecheck clean
+  (relinked), tests parse clean. REMAINS (wave M3c): MST-032 cover-frame
+  capture with the separate poster upload (imeta `thumb` — needs a
+  `thumb` slot on UploadedMedia + fixture), MST-035 QA matrix
+  (long-clip, interruption, low storage, process-kill mid-export).
+
+- 2026-09-02 — Meme Studio M3 wave a: shared video rules + Android video
+  mode (APP-019 MST-030/031/033/034 on Android; both-platform kind
+  rules). (1) SHARED: `composeMemeVideoNote` — portrait (height ≥ width
+  of the EXPORTED frame) publishes kind 22, landscape kind 21 (web
+  `postBitz` parity), tag order identical to the picture path (t-tags,
+  alt ≤200 fallback, imeta now carrying `duration` seconds, CW last);
+  orientation battery in `BlossomTest`; bridge pair
+  `composeMemeVideoEventId`/`memeVideoPublishMessage` (iOS consumes with
+  M3b). (2) ANDROID EDITOR: the Video chip goes live (confirm-on-media
+  mode switch, overlays survive); picking (VideoOnly, probe via
+  MediaMetadataRetriever — dims/rotation/duration, ≤60 s bound, ≤64 MB
+  read) hands the clip through the EXISTING VideoPreviewScreen trim
+  screen whose "use this" output feeds the meme stage unchanged (MST-030
+  reuse, zero new trim code); `VideoStage` composes an ExoPlayer surface
+  (data-uri transport like the trim screen) with the meme overlays drawn
+  on top at any playhead + play/pause + scrub slider (MST-031; V1 burns
+  overlays across the full clip). (3) EXPORT (MST-033): the overlay
+  composition renders ONCE as a full-frame transparent bitmap using the
+  shared MemeExportRules geometry (WYSIWYG with the stage) and burns via
+  Media3 Transformer OverlayEffect/BitmapOverlay — one pass, static
+  overlay, completion poll with a 120 s deadline; temp files cleaned in
+  a finally. Save lands MP4 in Movies/BitOS (new `saveVideoFile`,
+  pending-flag round-trip). (4) PUBLISH (MST-034): exported MP4 →
+  hash-verified Blossom upload (video/mp4) → kind 22/21 by orientation
+  with duration+dim imeta through the unchanged receipt machine
+  (`NotePublisher.publishMemeVideoNote` + a `publishMemeVideo` VM lane);
+  clips persist in continuation slots (`mem:v1` asset bytes) and resume
+  re-probes the saved file. Fixed during wiring: media3 1.10 API surface
+  (Effects two-arg, single-arg BitmapOverlay), retriever/MediaItem URI
+  forms, branch-type unification in the publish render. Verified: full
+  shared lane green, full Android suite green. REMAINS (wave M3b): iOS
+  video mode (AVPlayer stage + AVVideoComposition burn-in through the
+  new bridge pair), MST-032 cover-frame capture + separate poster
+  upload, the MST-035 QA matrix (long-clip, interruption, low storage,
+  process-kill mid-export).
+
+- 2026-09-02 — Meme Studio M2 wave b: iOS GIF mode — **M2 COMPLETE**
+  (APP-019 MST-020..023; both platforms now do GIF memes end to end).
+  (1) BRIDGE: `memeGifPlan(delaysMsJson, pinnedSec)` +
+  `memeGifLadderCanvas(w,h,step)` — the SHARED planner (20 ms floor,
+  ≤360 guard, clamp 20..1000, halve ladder) drives the iOS encoder so
+  timing stays single-sourced across three implementations (+ common
+  bridge test incl. hostile holds and the 360-cap flag).
+  (2) IOS DECODE: `GifFrameSourceIos` — CGImageSource with per-frame
+  delays (kCGImagePropertyGIFUnclampedDelayTime preferred, DelayTime
+  fallback), cumulative compositing onto a persistent canvas, holds
+  clamped to the 20 ms floor with sub-2cs → 100 ms. Honest V1 caveat:
+  CGImageSource does not expose disposal, so disposal-2 partial-frame
+  sources can ghost (the Android/web shared decoder handles them
+  exactly; most meme GIFs are full-frame).
+  (3) IOS ENCODE: `MemeGifExportIos` — shared plan steps → per-frame
+  UIGraphicsImageRenderer composition (overlays burned in through the
+  existing row painter, now shared) → CGImageDestination GIF89a with
+  per-step delays → the 8 MB halve ladder (≤3 steps) re-rendering at
+  each candidate canvas. (4) EDITOR: GIF chip live on iOS (confirm when
+  media exists; overlays survive the switch via a wire transplant),
+  frame tray ≤60 with onDrag/onDrop reorder + delay slider (20–1000 ms,
+  0 = source holds), looping stage preview (task keyed on a preview
+  tick), Save → `.gif` into Photos (ladder/cap status), Publish →
+  kind-20 with imeta `m image/gif` (the publish flow parameterized by
+  mime; upload still hash-verifies before anything signs); GIF frames
+  persist in continuation slots and re-seed the tray on resume (holds
+  collapse to uniform 100 ms in V1). (5) FIXTURE:
+  `contracts/nostr/kind-20-gif-unsigned.json`. Fixed during wiring: a
+  @ViewBuilder tray-branch brace imbalance and a Task.detached closure
+  form (both caught by parse/typecheck). Verified: full shared lane
+  green (new bridge test), full Android suite green, whole-app Swift 6
+  typecheck clean (framework relinked). Next: M3 video mode
+  (MST-030..035) or the M4 polish set per plan order.
+
+- 2026-09-02 — Meme Studio M2 wave a: shared GIF engine + Android GIF
+  mode (APP-019 MST-020..023 partial; UI per the docs/ui app-15 layout —
+  GIF is the same editor with the mode chip + frame tray). (1) SHARED
+  pure GIF engine, all common-tested: `GifEncoder.kt` — verbatim port of
+  web `gif-encode.ts` (same LZW code-size cadence + 4096 reset, median
+  cut over a 5-bit/channel histogram with pixel-weighted longest-axis
+  splits, per-frame LOCAL color tables, NETSCAPE2.0 loop-forever,
+  centisecond delays with Math.round parity + 2cs floor); deterministic
+  by construction — a golden test pins re-encode byte-equality.
+  `GifDecoder.kt` — port of the web fallback parser (GCE delay/disposal/
+  transparency, disposal 2 restore-to-background + 3 restore-previous,
+  4-pass interlace, LZW inflate with truncated-stream guard, sub-2cs →
+  100 ms browser heuristic); tolerant decode — junk/truncated → null.
+  `GifExportPlan.kt` — planner port (source-frame cadence tiled under a
+  pin, 20 ms floor boundary collapse, ≤360 guard flagged, stills export
+  one 100 ms frame) + the ≤8 MB → halve-long-edge ladder (≤3 steps).
+  16 common tests incl. the ENCODER⇄DECODER ROUND-TRIP golden (MST-022's
+  smoke test runs on every push, no device needed). (2) ANDROID: frame
+  decode rides the SHARED decoder (no platform API is frame-accurate for
+  GIF — ImageDecoder exposes no per-frame control), ≤60 frames bounded,
+  stills land as 100 ms frames; `MemeGifExport` = planner → per-frame
+  raster with overlays burned in (new `MemeRaster.renderFrameRgba`) →
+  shared encoder → ladder; editor GIF mode: chip switch (confirm when
+  the project has media; overlays survive), frame tray with long-press-
+  drag reorder + uniform delay slider (20–1000 ms, 0 = source delays),
+  looping stage preview at each frame's hold, Save → `.gif` in
+  MediaStore via `saveMediaFile` (bytes verbatim; ladder/cap status
+  surfaced), Publish → kind-20 with imeta `m image/gif` through the
+  unchanged verify-before-sign machine (`publishMemePicture` grew a
+  mimeType param); GIF frames persist in continuation slots (PNG bytes
+  via a mem: opener; resume restores the tray — per-frame holds collapse
+  to uniform 100 ms in V1, documented). (3) Also fixed while wiring:
+  GIF-mode nullability in the stage branch and a duplicated-block
+  accident from scripted editing (caught by compile, repaired cleanly).
+  Verified: full shared lane green (16 new GIF tests), full Android
+  suite green. REMAINS (wave M2b): iOS GIF mode — CGImageSource decode
+  + CGImageDestination encode (per plan §4.2 the iOS encoder is
+  platform; the shared planner still drives timing) + the same tray/
+  preview/publish UI; `image/gif` kind-20 fixture; on-device QA of
+  reorder gestures + ladder behavior.
+
+- 2026-09-02 — Meme Studio M1 wave 5: autosave + continuation slots —
+  **M1 COMPLETE** (APP-019 MST-018, both platforms; the Quick MEM image
+  editor is now durable end to end: import → edit → save/publish, crash
+  safe). (1) SHARED `core/studio/MemeSlots.kt`: the slot wire (`slot.json`
+  = `{v,id,updatedAt,assets[{id,file,aspect}],project<MemeProject wire>}`)
+  + the hub index wire, both lenient (corrupt/oversized → empty; absolute
+  paths and `..` traversal refs rejected — a broken store never blocks
+  creating); `MemeSlotRules` owns the policy: most-recent-first, re-save
+  bumps, LRU eviction past 6 RETURNS the evicted ids so stores delete
+  their files, hub label (first overlay text ≤40), relative time —
+  5 common tests. (2) ANDROID `MemeProjectStore`: `filesDir/studio/
+  slots/<id>/` with copied-in assets (CAP-005 — transient picker URIs
+  never persist; the copy is idempotent by stable file name), poster.jpg
+  (~256 px JPEG, ≤192 KB per the web constants), index.json; bitmap +
+  resolver edges are injected interfaces so the whole store round-trips
+  on plain JVM against a temp dir — 5 tests: relaunch-restore of the
+  exact project, copy idempotency, 7-saves-evict-the-oldest, explicit
+  delete, corrupt-degrade + fresh-save-after-corruption. Editor wiring:
+  debounced 500 ms autosave after every committed edit/asset change
+  (EDT-002), resume seeds the project + tray from slot files, publish
+  DONE and discard-confirm clear the slot, hub "Continue creating" rows
+  (poster/label/time/Resume/✕, ≤6 badge). (3) FIXED a wave-1 latent
+  UI bug: `MemeEditorState` was plain Kotlin — drags, adds and undo
+  mutated state nothing observed, so the stage would never have
+  redrawn; it now carries a Compose `revision` bumped at every mutation
+  point (commit/gesture/undo/selection) — unit tests unchanged + green.
+  (4) IOS `MemeProjectStore` (Application Support/studio — same layout
+  and semantics, poster via scaled UIGraphicsImageRenderer; pbxproj
+  registered) + the same editor lifecycle (`restore()` seeds the wire;
+  `.task(id:)` autosave keyed on the @Observable revision; onAppear
+  seeds the tray from slot files; publish/discard clear the slot) +
+  `SlotRow` hub section. Honest gate: process-kill recovery is proven
+  at the store level (fresh store over the same dir restores the exact
+  project); on-device kill/relaunch QA rides the manual matrix with the
+  rest of MST-035. Verified: full shared lane green, full Android suite
+  green (95 tests in the meme packages), whole-app Swift 6 typecheck
+  clean. M1 closed: waves 1–5 (editing core, wire codec interop gate,
+  export, kind-20 publish, durability) all shipped. Next: M2 GIF mode
+  (MST-020..023) or M3 video per the plan order.
+
+- 2026-09-02 — Meme Studio M1 wave 4: kind-20 publish (APP-019 MST-017,
+  both platforms; import → caption → **Post** now works end to end).
+  (1) SHARED: `NoteComposer.composeMemePictureNote` ports the web
+  `feed.postBitz` picture path tag order exactly — caption hashtag
+  t-tags (deduped via ComposerRules), NIP-31 `alt` (explicit alt wins,
+  else the caption's first 200 chars, only when non-empty), `imeta`
+  (url m x size dim — the plan §3.4 superset of the web fields, `x` =
+  the verified Blossom hash), then NIP-36 `content-warning` last; the
+  caption hard-caps at 1000 (meme wire parity — the kind-1 Note
+  destination stays a separate path). (2) BRIDGE: the kind-22 pair's
+  pattern — `composeMemePictureEventId` + `memePicturePublishMessage` —
+  hostile media (non-https) returns null, never a half-built event.
+  (3) ANDROID: `NotePublisher.publishMemePictureNote` rides the existing
+  compose→sign→receipt machine; `MediaPublishViewModel.publishMemePicture`
+  owns a dedicated `MemePublishPhase` lane (render PNG → hash-verified
+  Blossom upload → kind-20) so the import path state is untouched; the
+  editor gained a Post button + publish sheet (caption with the soft-300
+  counter, derived hashtag chips, CW toggle+reason, alt field, upload/
+  publish phases, and the verify-before-sign footnote).
+  (4) IOS: `NotePublisher.publishMemePictureNote` (sign-locally →
+  frame → send) + `MemePublishSheet` with the same fields and phases;
+  the editor wires Post through the store's publish task (render →
+  upload → publish, dims from the shared export envelope).
+  (5) TESTS + FIXTURE: `BlossomTest.composesKind20PictureMemeWithWebTagOrder`
+  pins the exact tag list (alt fallback + 200 truncation, CW last,
+  1000-char cap, hostile pubkey → null); bridge pair test; Android repo
+  `publishesKind20PictureMemeWithWebTagOrder` asserts the SIGNED frame
+  decodes as kind 20 with the web tag order + imeta and lands a relay-OK
+  receipt — signing-before-upload-verify is prevented structurally (the
+  uploader's hash gate, locked by BlossomUploaderTest). Protocol fixture
+  `contracts/nostr/kind-20-unsigned.json`. One wrong assumption caught
+  in review: picture memes do NOT reconcile through
+  `MediaMetadata.fromEvent` (that's the kind-21/22 video extractor) —
+  they ride the imeta/image path; the test asserts accordingly. PoW on
+  memes deliberately deferred to the composer PoW lane. Verified: full
+  shared lane green, full Android suite green, whole-app Swift 6
+  typecheck clean (framework relinked). Next: MST-018 autosave slots +
+  "Continue creating" (the last M1 item).
+
+- 2026-09-02 — Meme Studio M1 wave 3: raster export → device save (APP-019
+  MST-016, both platforms). (1) SHARED `MemeExportRules`: `outputSize` is
+  the web `render.ts targetSize` port (1080 long-edge cap, no upscale,
+  evened dims ≥ 2, degenerate source → 1080×1920 portrait) and
+  `exportPlan` produces pure target-px draw commands — applying the web
+  `displayText` caps transform (default uppercase), the `max(10, size ×
+  referenceHeight)` font floor, outline at the ×2 stroke scale and the
+  local pinch `scale` so exports match the edited stage; 5 common golden
+  tests pin exact pixel values (the geometry half of the golden contract;
+  bitmap hashing needs a device rasterizer — none in this repo's JVM or
+  instrumented infra, noted in the tracker row). (2) BRIDGE/iOS SEAM:
+  `memeExportPlan(projectJson, sourceWidth, sourceHeight)` returns the
+  envelope `{"width","height","items":[…]}` so the size math stays
+  single-sourced in shared; Swift client protocol/framework/fixture +
+  `testMemeExportEnvelopeSeam`. (3) ANDROID `MemeRaster.kt`: sampled
+  decode near the long edge → android.graphics off-screen render
+  (sans-serif-black for the impact slot, stroke-behind-fill outline,
+  setShadowLayer shadow, multiline centered under rotation) → MediaStore
+  PNG `Pictures/BitOS` with the IS_PENDING round-trip and failed-write
+  cleanup (minSdk 29 = modern API only). (4) IOS `MemeRaster`:
+  UIGraphicsImageRenderer(scale 1) painting the envelope rows via
+  NSAttributedString (negative strokeWidth = stroke under fill, NSShadow)
+  → PHPhotoLibrary add-only save (`NSPhotoLibraryAddUsageDescription`
+  already shipped); render runs detached, save is async. (5) EDITORS:
+  Save tool button + busy/saved/failed status on both platforms.
+  (6) WYSIWYG FIX: the plan doc's "×1080-wide" size wording was wrong per
+  the web truth (`paintOverlay`: px = size × canvas HEIGHT) — the doc's
+  own web-wins rule applies; stage previews re-based to height/1080 on
+  both platforms so preview ⇄ export agree. Verified: full shared lane
+  green (macosArm64), full Android unit suite green, whole-app Swift 6
+  typecheck clean (framework slice relinked). Next: MST-017 publish page
+  (kind-20 + imeta through the verify-before-sign machine), MST-018
+  autosave slots.
+
+- 2026-09-02 — Meme Studio M1 wave 2: meme wire document codec (APP-019
+  MST-019, MEM-001 interop gate; shared + bridge + iOS seams). (1) SHARED
+  `core/studio/MemeWireDocument.kt`: `MemeWire` constants ported verbatim
+  from web `schema.ts` (schema id/version, ≤12 overlays, ≤300-char text,
+  size fraction 0.03–0.22 default 0.09, 7-hex palette, font/fx/look id
+  sets, 31 SFX recipe ids + `custom` sentinel, caption ≤1000, cues ≤16);
+  `MemeWireCodec` — tolerant decode (coerce/clamp/drop, never throw;
+  foreign schema ids and version ≠ 1 rejected; `updatedAt` re-stamped via
+  injected `nowMs` so tests stay deterministic; deterministic generated
+  ids `o-n`/`c-n` with in-document collision guards), canonical encode
+  and a `normalize` (decode→encode) — with PASSTHROUGH preservation of
+  unknown root/overlay/cue fields, one notch safer than web (which drops
+  them), so future-web data survives a native round-trip;
+  `MemeWireConvert` — wire ⇄ local per plan §3.2: size fraction ⇄ 1080-px
+  reference (0.09 → 97 px; the tighter web 0.03 floor wins on export),
+  nearest-match color mapping both directions (RGB distance, ties →
+  lowest; §8 open decision isolated in two functions), `stroke` ⇔
+  `outline > 0` (2 px default), caps/bar defaults ride null-local so
+  round-trips never flip a default, visibility windows and fx carried,
+  emoji-only + stroke-free + no-caps rows import as STICKER overlays, and
+  local-only styling (scale/rot/shadow/sticker) rides overlay passthrough
+  — web parsers ignore those fields, native round-trips are lossless.
+  (2) LOCAL STORE: `MemeOverlay` gained optional `caps/bar/startMs/endMs/fx`
+  (encode-when-set keeps M0 wires loadable; nonsense windows normalize to
+  always-visible on decode) and MAX_TEXT_LENGTH 200 → 300 (web parity).
+  (3) BRIDGE + iOS: `memeWireNormalize(wireJson, nowMs)` /
+  `memeWireToLocal(wireJson)` / `localToMemeWire(projectJson, nowMs)` on
+  the bridge, the Swift client protocol/framework/fixture, and
+  `testMemeWireDocumentSeams`; Android consumes shared directly.
+  (4) FIXTURES: `contracts/meme/wire-document-v1.json` (3-overlay golden:
+  classic impact caption, windowed+fx text, rocket sticker) inlined into
+  `MemeWireCodecTest`, which ports web `schema.test.ts` branch-for-branch
+  (defaults, junk-row drops, position/size clamps, 300-cap truncation,
+  color regex with case preservation, `!!value` truthiness incl. the
+  `"nope" → true` case, negative/non-finite/inverted window clears,
+  count caps, [start,end) visibility semantics incl. open-ended windows,
+  cue clamp/drop rules, conversions + native round-trips) — 13 common
+  tests. Verified: full shared lane green (macosArm64), full Android
+  unit suite green, whole-app Swift 6 typecheck clean (framework
+  simulator slice relinked; iOS unit tests still not runnable on this
+  machine — the new XCTest parses clean and awaits a runtime). Next:
+  MST-016 raster export → device save, MST-017 kind-20 publish, MST-018
+  autosave slots.
+
+- 2026-09-02 — Meme Studio M1 wave 1: Quick MEM image editing core
+  (APP-019 MST-010..015, both platforms; execution note added to
+  `meme-studio-plan.md` §M1 — mockup→component map + wave order, web
+  truth respected). (1) SHARED: `StickerCatalog` (web `stickers.ts`
+  port, pack-for-pack: 6×8, bounded deduped recents ≤16, emoji-only
+  gate); `MemeCommand.UpdateOverlay` gained `size` (the text-sheet size
+  slider was otherwise unreachable through the command model) — apply/
+  coalesce/codec + `updateClampsStyleSizeBothWays` common test; bridge
+  seams `memePalette` (16 hex rows), `memeDefaultOverlay` (add-ready
+  overlay JSON), `memeBounds` (selection-chrome bounds), `memeStickerPacks`
+  (+ `memePaletteDefaultOverlayAndStickerPacksSeams` bridge test).
+  (2) ANDROID: `MemeEditorState` (project + bounded undo stack of
+  `(project-before, command)`; gestures apply live and push ONE net
+  `UpdateOverlay` at gesture end, style bursts coalesce via
+  `MemeRules.coalesce` in 300 ms, cancel-gesture restores — 8 unit
+  tests incl. cap/dedup assets, hit-test select, undo bounds) +
+  `MemeEditorScreen` (chrome with ✕ discard-confirm · mode chips · undo;
+  empty-canvas CTA; stage = single gesture target mapping drag/pinch/
+  twist → commands with tap = shared hit-test and a rotation-ignored
+  delete handle; tray ≤9 via Photo Picker with active tile; text sheet
+  with font-slot pills/palette/size+outline sliders/shadow; sticker
+  sheet with pack chips + recents). Quick MEM hub row enabled → editor.
+  (3) iOS: client protocol/framework/fixture gained the same studio
+  seams; `MemeEditorStore` (@Observable; wire-in/wire-out through the
+  client, snapshot history, incremental gesture deltas, 300 ms style
+  coalescing) + `MemeEditorView` (same layout; UILabel attributed-text
+  outline via negative strokeWidth = web stroke look; MagnifyGesture +
+  RotateGesture + DragGesture(minimumDistance: 0) with tap-vs-move
+  disambiguation; PhotosPicker ≤9; text/sticker sheets); Quick MEM row
+  enabled; AppIcons gained `undo` tokens both platforms. Verified:
+  full Android unit suite green; full shared common lane green
+  (macosArm64); whole-app Swift 6 typecheck clean (framework simulator
+  slice relinked so the typecheck sees the new seams; iOS unit tests
+  still not runnable — no simulator runtime on this machine; the new
+  `testMemeStudioSeams`/`testMemeEditorStoreEditingLoop` XCTest cases
+  parse clean and await the runtime). Next: MST-019 wire codec (interop
+  gate), MST-016 export, MST-017 kind-20 publish, MST-018 autosave.
+
+- 2026-09-02 — Meme Studio M0: shared foundations + hub honesty (plan
+  `docs/native/meme-studio-plan.md`; APP-019 MST-001..005, both platforms).
+  (1) SHARED `core/studio/`: `MemeProject` schema v1 (versioned,
+  size-bounded, mode-dependent asset caps 9/60/1, normalized canvas coords
+  so projects load on both platforms) + `MemeProjectContract`
+  encode/decode with hostile-clamp battery; `MemeRules` — 16-color web
+  palette, font slots, deterministic overlay CRUD/hit-test (top-most,
+  rotation-ignored estimate), `MemeCommand` undo model with drag
+  coalescing (EDT-004); `MemeCommandCodec` JSON wire; 
+  `StudioPublishContract` render→upload→verify→sign→publish machine where
+  signing is structurally unreachable without a verified upload (safety
+  rule enforced by the state machine, not by caller discipline).
+  (2) BRIDGE: `memeProjectNormalize/memeApplyCommand/memeHitTest` — the
+  Swift editor (M1) works on the wire without leaking Kotlin types;
+  undecodable commands are no-ops, corrupt projects normalize to "".
+  (3) HUB UX: the five Create-hub rows no longer lie — Quick MEM/Use a
+  sound/Remix render dimmed with "Soon" chips instead of dead-looking
+  taps; icons moved onto the token layer (Android SolarFeedIcon
+  VideoCamera/Gallery/Emoji + new AppIcons MusicNote/Remix; iOS
+  AppIcons camera/photo/emoji/sparkles — was raw SF Symbols); the iOS
+  Home app bar gains the camera button opening the Create hub
+  (Android parity — iOS previously had no Home→Create path).
+  Quick MEM activates with M1. Verified: business-core common tests
+  green on macosArm64 (956, incl. new studio/bridge suites; the
+  iosSimulatorArm64 target cannot run on this machine — no simulator
+  runtime); full Android unit-test suite green; whole-app Swift 6
+  typecheck clean.
 
 - 2026-09-02 — Comment reply bar: Solar tokens unified with the composer
   + text-insert parity (user request; SOC-002/APP-008, both platforms).

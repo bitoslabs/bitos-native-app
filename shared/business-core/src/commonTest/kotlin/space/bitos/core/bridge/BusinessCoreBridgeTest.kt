@@ -2,6 +2,8 @@ package space.bitos.core.bridge
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -426,6 +428,411 @@ class BusinessCoreBridgeTest {
         val root = bridge.commentsRootRequest("s2", target)
         assertTrue(root.contains("\"kinds\":[1111]"), root)
         assertTrue(root.contains("\"#E\":[\"$target\"]"), root)
+    }
+
+    @Test
+    fun memeTimelineSeamsSyncClipsAndMeasureDuration() {
+        val project = bridge.memeProjectNormalize(
+            """{"v":1,"mode":"video","assets":[{"id":"v1","kind":"video"}],"overlays":[]}""",
+        )
+        assertTrue(project.isNotEmpty())
+
+        // Sync: two clips land in order, bounded + clamped, the first
+        // window mirrors into the legacy trim fields.
+        val synced = bridge.memeTimelineSyncClips(
+            project,
+            """[{"id":"v1","start":0,"end":10000},
+                {"id":"v2","start":500,"end":9000,"vol":0,"look":"sepia"}]""",
+        )
+        assertTrue(synced.contains("\"clips\""), synced)
+        val roundTrip = bridge.memeProjectNormalize(synced)
+        assertEquals(synced, roundTrip, "clips survive a normalize round-trip")
+        assertTrue(synced.contains("\"trim\":[0,10000]"), synced)
+        assertEquals(18_500L, bridge.memeTimelineDurationMs(synced))
+
+        // Speed divides the whole timeline: 2× halves the output duration.
+        val fast = bridge.memeApplyCommand(synced, """{"op":"speed","rate":2}""")
+        assertEquals(9_250L, bridge.memeTimelineDurationMs(fast))
+
+        // Hostile clip rows drop; degenerate windows never sync.
+        val hostile = bridge.memeTimelineSyncClips(
+            project,
+            """[{"start":0,"end":10},{"id":"v1","start":900,"end":900},
+                {"id":"v2","start":100,"end":200}]""",
+        )
+        assertTrue(hostile.contains("\"clips\":[{\"id\":\"v2\""), hostile)
+        assertFalse(hostile.contains("\"id\":\"v1\",\"start\""), hostile)
+
+        // Guards: non-video project, corrupt clips, corrupt project.
+        val image = bridge.memeProjectNormalize("""{"v":1,"mode":"image","assets":[],"overlays":[]}""")
+        assertEquals("", bridge.memeTimelineSyncClips(image, """[{"id":"v1","start":0,"end":10}]"""))
+        assertEquals("", bridge.memeTimelineSyncClips(project, "not json"))
+        assertEquals(-1L, bridge.memeTimelineDurationMs("not json"))
+        assertEquals(0L, bridge.memeTimelineDurationMs(image))
+    }
+
+    @Test
+    fun memeSeamsNormalizeApplyAndHitTestOnTheProjectWire() {
+        // Normalize: hostile values clamp through the shared contract.
+        val normalized = bridge.memeProjectNormalize(
+            """{"v":1,"mode":"image","assets":[],"overlays":[
+               {"id":"o1","kind":"text","text":"gm","font":"impact","size":48,
+                "color":0,"outline":2,"shadow":false,"x":0.5,"y":0.5,
+                "scale":1,"rot":0}]}""",
+        )
+        assertTrue(normalized.contains("\"mode\":\"image\""), normalized)
+
+        // Corrupt wires normalize to "" (an empty project on the caller side).
+        assertEquals("", bridge.memeProjectNormalize("not json"))
+        assertEquals("", bridge.memeApplyCommand("not json", """{"op":"remove","id":"o1"}"""))
+
+        // Apply: update lands; unknown op / unknown overlay are no-ops
+        // (the normalized project comes back unchanged).
+        val updated = bridge.memeApplyCommand(
+            normalized,
+            """{"op":"update","id":"o1","x":0.9,"y":0.1}""",
+        )
+        assertTrue(updated.contains("\"x\":0.9"), updated)
+        assertEquals(normalized, bridge.memeApplyCommand(normalized, """{"op":"nope"}"""))
+        assertEquals(
+            normalized,
+            bridge.memeApplyCommand(normalized, """{"op":"update","id":"ghost","x":0.1}"""),
+        )
+
+        // Hit test: inside the overlay hits it, outside misses.
+        assertEquals("o1", bridge.memeHitTest(normalized, 0.5f, 0.5f))
+        assertEquals("", bridge.memeHitTest(normalized, 0.99f, 0.99f))
+    }
+
+    @Test
+    fun memePaletteDefaultOverlayAndStickerPacksSeams() {
+        // Palette: 16 rows, 6-hex, index-ordered (index 0 = web white).
+        val palette = bridge.memePalette()
+        assertEquals(16, palette.size)
+        assertEquals("FFFFFF", palette.first())
+        palette.forEach { row -> assertEquals(6, row.length, row) }
+
+        // Default overlay: deterministic placement + unique id, add-ready.
+        val project = """{"v":1,"mode":"image","assets":[{"id":"a1","kind":"image"}],"overlays":[]}"""
+        val overlayJson = bridge.memeDefaultOverlay(project, "text", "gm")
+        assertTrue(overlayJson.contains("\"id\":\"o1\""), overlayJson)
+        assertTrue(overlayJson.contains("\"kind\":\"text\""), overlayJson)
+        // First overlay staggers to 0.5 − 0.08 (deterministic placement).
+        assertTrue(overlayJson.contains("\"x\":0.42"), overlayJson)
+        // The produced overlay round-trips through an add command.
+        val added = bridge.memeApplyCommand(
+            project,
+            """{"op":"add","overlay":$overlayJson}""",
+        )
+        assertTrue(added.contains("\"text\":\"gm\""), added)
+        // Bounds feed the selection chrome: "width|height" on the canvas.
+        assertTrue(bridge.memeBounds(added, "o1").matches(Regex("0\\.\\d+\\|0\\.\\d+")), bridge.memeBounds(added, "o1"))
+        assertEquals("", bridge.memeBounds(added, "ghost"))
+        // Unknown kind / corrupt project → "" (never a half-built overlay).
+        assertEquals("", bridge.memeDefaultOverlay(project, "nope", "gm"))
+        assertEquals("", bridge.memeDefaultOverlay("junk", "text", "gm"))
+
+        // Sticker packs ride to Swift verbatim (web stickers.ts port).
+        val packs = bridge.memeStickerPacks()
+        assertTrue(packs.contains("\"id\":\"crypto\""), packs)
+        assertTrue(packs.contains("₿"), packs)
+    }
+
+    @Test
+    fun memeFxTransformAndCueTrackSeamsFeedTimedExports() {
+        var project = """{"v":1,"mode":"video","assets":[],"overlays":[]}"""
+        project = bridge.memeApplyCommand(
+            project,
+            """{"op":"add","overlay":{"id":"fx1","kind":"text","text":"pop","font":"impact",
+                 "size":48,"color":0,"outline":2,"shadow":false,"x":0.5,"y":0.5,
+                 "scale":1,"rot":0,"startMs":1000,"endMs":4000,"fx":"pop"}}""",
+        )
+        project = bridge.memeApplyCommand(
+            project,
+            """{"op":"cue-add","cue":{"id":"c1","sfx":"lightning-zap","at":500,"g":1}}""",
+        )
+
+        // Outside the window: the window folds into alpha 0.
+        val before = bridge.memeFxTransformAt(project, "fx1", 0)
+        assertTrue(before.endsWith("|0.0"), before)
+        // Mid-entry (200 ms in): pop overshoots past 1 (easeOutBack), visible.
+        val mid = bridge.memeFxTransformAt(project, "fx1", 1200)
+        val midParts = mid.split("|")
+        assertTrue(kotlin.math.abs(midParts[0].toFloat() - 1f) > 0.001f, mid)
+        assertEquals(1f, midParts[4].toFloat())
+        // Past the 380 ms entry: identity, still visible.
+        val settled = bridge.memeFxTransformAt(project, "fx1", 2000).split("|")
+        assertEquals(1f, settled[0].toFloat(), 0.001f)
+        assertEquals(1f, settled[4].toFloat())
+        // Poster (negative time): identity, untransformed.
+        assertEquals("1.0|0.0|0.0|0.0|1.0", bridge.memeFxTransformAt(project, "fx1", -1))
+        // Unknown id / corrupt project → "".
+        assertEquals("", bridge.memeFxTransformAt(project, "ghost", 0))
+        assertEquals("", bridge.memeFxTransformAt("junk", "fx1", 0))
+
+        // Cue track: audible in-window → base64 WAV with a RIFF header;
+        // empty when no cue lands inside the window or the wire is junk.
+        val wavB64 = bridge.memeSfxTrackWavBase64(project, 2000)
+        assertTrue(wavB64.isNotEmpty())
+        val wav = kotlin.io.encoding.Base64.Default.decode(wavB64)
+        val header = wav.copyOf(4).decodeToString()
+        assertEquals("RIFF", header)
+        assertEquals("", bridge.memeSfxTrackWavBase64(project, 0), "the 500 ms cue is outside a 0 ms window")
+        assertEquals("", bridge.memeSfxTrackWavBase64("junk", 2000))
+    }
+
+    @Test
+    fun memeWireSeamsRoundTripTheInteropDocument() {
+        val wire = """{"schema":"com.bitos.bitz.meme","version":1,
+               "overlays":[{"id":"t1","text":"wen moon","x":0.2,"y":0.8,
+                 "size":0.09,"color":"#fde047","font":"impact",
+                 "startMs":250,"endMs":9000,"fx":"pop","futureField":7}]}"""
+        val nowMs = 1_700_000_000_000L
+
+        // Normalize: hostile wire in, canonical web-shaped wire out,
+        // passthrough (futureField) intact, updatedAt re-stamped.
+        val normalized = bridge.memeWireNormalize(wire, nowMs)
+        assertTrue(normalized.contains("\"schema\":\"com.bitos.bitz.meme\""), normalized)
+        assertTrue(normalized.contains("\"futureField\":7"), normalized)
+        assertTrue(normalized.contains("\"updatedAt\":$nowMs"), normalized)
+        assertEquals("", bridge.memeWireNormalize("""{"schema":"com.other.meme"}""", nowMs))
+
+        // Wire → local: fraction size lands in px, window + fx survive.
+        val local = bridge.memeWireToLocal(wire)
+        assertTrue(local.contains("\"v\":1"), local)
+        assertTrue(local.contains("\"size\":97"), local)
+        assertTrue(local.contains("\"startMs\":250"), local)
+        assertTrue(local.contains("\"fx\":\"pop\""), local)
+        assertEquals("", bridge.memeWireToLocal("junk"))
+
+        // Local → wire: the same project exports back into the web shape
+        // (size re-quantizes through the 97 px reference — 0.0898…).
+        val exported = bridge.localToMemeWire(local, nowMs)
+        assertTrue(exported.contains("\"text\":\"wen moon\""), exported)
+        assertTrue(exported.contains("\"size\":0.0898"), exported)
+        assertEquals("", bridge.localToMemeWire("junk", nowMs))
+    }
+
+    @Test
+    fun memeExportPlanSeamFeedsTheRasterizers() {
+        val project = """{"v":1,"mode":"image","assets":[{"id":"a1","kind":"image"}],"overlays":[
+               {"id":"o1","kind":"text","text":"gm","font":"impact","size":108,
+                "color":0,"outline":2,"shadow":false,"x":0.5,"y":0.5,
+                "scale":1,"rot":0}]}"""
+        // Portrait 1080×1920 source → envelope canvas evens to 608×1080
+        // (web targetSize parity) and the plan rides inside.
+        val plan = bridge.memeExportPlan(project, sourceWidth = 1080, sourceHeight = 1920)
+        assertTrue(plan.contains("\"width\":608"), plan)
+        assertTrue(plan.contains("\"height\":1080"), plan)
+        assertTrue(plan.contains("\"text\":\"GM\""), plan)
+        assertTrue(
+            plan.contains("\"fontSize\":108"),
+            "$plan — size × 1080/1080 height reference",
+        )
+        assertTrue(
+            plan.contains("\"outline\":4"),
+            "$plan — 2 px outline paints at stroke scale 2",
+        )
+        assertEquals("", bridge.memeExportPlan("junk", 1080, 1080))
+    }
+
+    @Test
+    fun memePictureSeamsComposeAndFrameTheKind20Event() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val hash = "10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+
+        val eventId = bridge.composeMemePictureEventId(
+            authorPubkey = author,
+            caption = "wen moon #bitcoin",
+            altText = "",
+            contentWarningReason = null,
+            url = "https://cdn.example/meme.png",
+            sha256Hex = hash,
+            mimeType = "image/png",
+            sizeBytes = 424_242,
+            width = 608,
+            height = 1080,
+            nowSeconds = 1_710_000_000,
+        )
+        assertTrue(eventId != null)
+
+        // The signed frame matches the same composition (id + kind 20).
+        val frame = bridge.memePicturePublishMessage(
+            authorPubkey = author,
+            caption = "wen moon #bitcoin",
+            altText = "",
+            contentWarningReason = null,
+            url = "https://cdn.example/meme.png",
+            sha256Hex = hash,
+            mimeType = "image/png",
+            sizeBytes = 424_242,
+            width = 608,
+            height = 1080,
+            createdAtSeconds = 1_710_000_000,
+            signatureHex = "ab".repeat(64),
+        )
+        assertTrue(frame!!.contains("\"kind\":20"), frame)
+        assertTrue(frame.contains("\"imeta\""), frame)
+        assertTrue(frame.contains("m image/png"), frame)
+
+        // Hostile media (non-https) → null, never a half-built event.
+        assertEquals(
+            "",
+            bridge.composeMemePictureEventId(
+                authorPubkey = author, caption = "gm", altText = "", contentWarningReason = null,
+                url = "http://insecure/meme.png", sha256Hex = hash, mimeType = "image/png",
+                sizeBytes = 10, width = 10, height = 10, nowSeconds = 0,
+            ) ?: "",
+        )
+    }
+
+
+    @Test
+    fun memeRemixTagsSeamBuildsTheLineageTags() {
+        val project = """{"v":1,"mode":"image","assets":[],"overlays":[
+               {"id":"o1","kind":"text","text":"wen moon #bitcoin","font":"impact",
+                "size":97,"color":0,"outline":2,"shadow":false,"x":0.31,"y":0.77,
+                "scale":1,"rot":0}]}"""
+        val tags = bridge.memeRemixTagsFor(
+            projectJson = project,
+            sourceEventId = "1".repeat(64),
+            sourcePubkey = "2".repeat(64),
+            relaysJson = """["wss://a.one","wss://b.two","wss://c.three","wss://d.four"]""",
+            license = "CC-BY-4.0",
+            attribution = "the OG memelord",
+        )
+        assertTrue(tags.contains("[\"remix\",\"${"1".repeat(64)}\""), tags)
+        assertTrue(tags.contains("wss://a.one"), tags)
+        assertTrue(!tags.contains("wss://d.four"), "relay hints cap at 3")
+        assertTrue(tags.contains("\"meme\",\""), tags)
+        assertTrue(tags.contains("[\"p\",\"${"2".repeat(64)}\"]"), tags)
+        assertTrue(tags.contains("[\"license\",\"CC-BY-4.0\"]"), tags)
+        assertTrue(tags.contains("remix of the OG memelord"), tags)
+        // Corrupt wire → "".
+        assertEquals("", bridge.memeRemixTagsFor("junk", "1".repeat(64), "2".repeat(64), "[]", "", ""))
+    }
+
+    @Test
+    fun massBatchSeamsDriveTheCreateHubFlow() {
+        // New → starter recipe with the canonical placeholder pair.
+        val fresh = bridge.massBatchNew("Zap batch", nowMs = 1_700_000_000_000)
+        assertTrue(fresh.contains("\"name\":\"sats\""), fresh)
+        assertTrue(fresh.contains("zap {name}"), fresh)
+
+        // addRow + setValue + setAsset → plan reports severity/approval.
+        var doc = bridge.massBatchOp(fresh, """{"op":"addRow"}""")
+        doc = bridge.massBatchOp(doc, """{"op":"setValue","row":"r1","slot":"name","value":"satoshi_v"}""")
+        doc = bridge.massBatchOp(doc, """{"op":"setValue","row":"r1","slot":"sats","value":"1k"}""")
+        doc = bridge.massBatchOp(doc, """{"op":"setAsset","row":"r1","slot":"img","file":"r1-img.img"}""")
+        val plan = bridge.massBatchPlan(doc, """["r1-img.img"]""")
+        assertTrue(plan.contains("\"severity\":\"warn\""), plan) // 1k coerced → warn
+        assertTrue(plan.contains("\"blocked\":0"), plan)
+        assertTrue(plan.contains("\"queueCount\":0"), plan) // not approved yet
+
+        // withRender + approve → queueCount 1; unknown op is a no-op.
+        doc = bridge.massBatchOp(doc, """{"op":"withRender","row":"r1","posterName":"poster-r1.jpg","posterHash":"ph"}""")
+        doc = bridge.massBatchOp(doc, """{"op":"approve","row":"r1","approve":true,"nowMs":10}""")
+        val approvedPlan = bridge.massBatchPlan(doc, """["r1-img.img"]""")
+        assertTrue(approvedPlan.contains("\"queueCount\":1"), approvedPlan)
+        assertTrue(approvedPlan.contains("\"approved\":true"), approvedPlan)
+        assertEquals(doc, bridge.massBatchOp(doc, """{"op":"nonsense"}"""))
+
+        // Recipe edit with rows → fork (version bumps, approvals reset).
+        val forked = bridge.massBatchOp(doc, """{"op":"editRecipe","naming":"v2_{i}"}""")
+        assertTrue(forked.contains("\"version\":2"), forked)
+        assertTrue(bridge.massBatchPlan(forked, "[]").contains("\"queueCount\":0"))
+
+        // withPublish settles the per-event state machine.
+        val published = bridge.massBatchOp(
+            bridge.massBatchOp(forked, """{"op":"addRow"}""")
+                .let { bridge.massBatchOp(it, """{"op":"setValue","row":"r2","slot":"name","value":"x"}""") }
+                .let { bridge.massBatchOp(it, """{"op":"setValue","row":"r2","slot":"sats","value":"2"}""") },
+            """{"op":"withPublish","row":"r2","state":"published"}""",
+        )
+        assertTrue(published.contains("\"publish\":\"published\""), published)
+
+        // CSV import returns the mutated doc + bounded notes.
+        val csv = bridge.massBatchImportCsv(fresh, "Name,Sats\nsatoshi_v,21\nllady,100\n")
+        assertTrue(csv.contains("\"notes\":[") && csv.contains("\"doc\":"), csv)
+        assertTrue(bridge.massBatchImportCsv(fresh, "junk,header\n\n").contains("\"doc\":"))
+
+        // Corrupt wire → "".
+        assertEquals("", bridge.massBatchPlan("junk", "[]"))
+        assertEquals("", bridge.massBatchOp("junk", """{"op":"addRow"}"""))
+    }
+
+    @Test
+    fun memePictureSeamAcceptsRemixExtraTags() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val remixTags = """[["remix","${"b".repeat(64)}"],["p","${"c".repeat(64)}"]]"""
+        val plain = bridge.composeMemePictureEventId(
+            authorPubkey = author, caption = "remix test", altText = "",
+            contentWarningReason = null, url = "https://cdn.example/m.png",
+            sha256Hex = "a".repeat(64), mimeType = "image/png",
+            sizeBytes = 1000L, width = 1080L, height = 1080L, nowSeconds = 100,
+        )
+        val remixed = bridge.composeMemePictureEventId(
+            authorPubkey = author, caption = "remix test", altText = "",
+            contentWarningReason = null, url = "https://cdn.example/m.png",
+            sha256Hex = "a".repeat(64), mimeType = "image/png",
+            sizeBytes = 1000L, width = 1080L, height = 1080L, nowSeconds = 100,
+            extraTagsJson = remixTags,
+        )
+        assertNotNull(plain)
+        assertNotNull(remixed)
+        assertNotEquals(plain, remixed, "lineage tags change the event id")
+        val frame = bridge.memePicturePublishMessage(
+            authorPubkey = author, caption = "remix test", altText = "",
+            contentWarningReason = null, url = "https://cdn.example/m.png",
+            sha256Hex = "a".repeat(64), mimeType = "image/png",
+            sizeBytes = 1000L, width = 1080L, height = 1080L,
+            createdAtSeconds = 100, signatureHex = "d".repeat(128),
+            extraTagsJson = """[["remix","${"b".repeat(64)}"]]""",
+        )
+        assertTrue(frame!!.contains("remix"), frame)
+    }
+    @Test
+    fun memeLookSeamsExposeCatalogAndMatrix() {
+        val catalog = bridge.memeLooks()
+        assertTrue(catalog.contains("\"id\":\"none\""), catalog)
+        assertTrue(catalog.contains("\"id\":\"deepfry\""), catalog)
+        assertTrue(catalog.contains("\"css\":\"grayscale(1) contrast(1.35) brightness(0.92)\""), catalog)
+
+        // Composed matrix as a flat 20-float array; none/unknown → identity.
+        val matrixJson = bridge.memeLookMatrix("noir")
+        assertTrue(matrixJson.contains("\"matrix\":"), matrixJson)
+        assertTrue(matrixJson.contains("\"blur\":0"), matrixJson)
+        val identity = bridge.memeLookMatrix("none")
+        assertTrue(identity.count { it == '1' } >= 4, identity)
+        val dream = bridge.memeLookMatrix("dream")
+        assertTrue(dream.contains("\"blur\":1.2"), dream)
+        assertTrue(bridge.memeLookMatrix("hologram") == identity)
+
+        // SetLook rides the command seam end-to-end.
+        val empty = bridge.memeProjectNormalize("""{"v":1,"mode":"image"}""")
+        val graded = bridge.memeApplyCommand(empty, """{"op":"look","look":"vhs"}""")
+        assertTrue(graded.contains("\"look\":\"vhs\""), graded)
+        assertTrue(bridge.memeApplyCommand(graded, """{"op":"look","look":"none"}""").contains("\"look\"").not())
+    }
+
+    @Test
+    fun memeGifPlanAndLadderSeamsDriveTheIosEncoder() {
+        val planJson = bridge.memeGifPlan("[100,100,200]", pinnedSec = 0.0)
+        assertTrue(planJson.contains("\"capped\":false"), planJson)
+        assertTrue(planJson.contains("\"delayMs\":200"), planJson)
+        assertTrue(planJson.contains("\"durationSec\":0.4"), planJson)
+
+        // Clamps hostile holds (20..1000 ms) and caps at 360 steps.
+        val hostile = bridge.memeGifPlan("[5,9999]", 0.0)
+        assertTrue(hostile.contains("\"delayMs\":20"), hostile)
+        assertTrue(hostile.contains("\"delayMs\":1000"), hostile)
+        val many = (1..400).joinToString(prefix = "[", postfix = "]") { "30" }
+        val capped = bridge.memeGifPlan(many, 0.0)
+        assertTrue(capped.contains("\"capped\":true"), capped)
+
+        assertEquals("1080|608", bridge.memeGifLadderCanvas(1080, 608, 0))
+        assertEquals("540|304", bridge.memeGifLadderCanvas(1080, 608, 1))
+        assertEquals("", bridge.memeGifLadderCanvas(1080, 608, 4))
     }
 
     private companion object {
