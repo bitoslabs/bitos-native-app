@@ -1447,7 +1447,10 @@ private fun BitzVideoPage(
         }
         BitzCaption(
             note = note,
-            state = state,
+            // Narrow slices: tally-only publishes must not repaint the
+            // caption (profile/following content-equal → caption skips).
+            profiles = state.profiles,
+            following = state.following,
             onFollow = onFollow,
             onAuthor = onAuthor,
             onOpenExternalLink = { externalLink = it },
@@ -1587,14 +1590,15 @@ private fun VideoControlsRow(
 @Composable
 private fun BitzCaption(
     note: FeedNote,
-    state: FeedUiState,
+    profiles: Map<String, ProfileMetadata>,
+    following: Set<String>,
     onFollow: (String) -> Unit,
     onAuthor: (String) -> Unit,
     /** External-link tap → confirm sheet (owned by the screen). */
     onOpenExternalLink: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val profile = state.profiles[note.pubkey]
+    val profile = profiles[note.pubkey]
     Column(
         // Clean chrome (user decision 2026-08-29): no black scrim behind
         // the caption — the text stands on the media directly.
@@ -1631,7 +1635,7 @@ private fun BitzCaption(
                 )
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
-            BitzFollowChip(isFollowing = note.pubkey in state.following, onToggle = { onFollow(note.pubkey) })
+            BitzFollowChip(isFollowing = note.pubkey in following, onToggle = { onFollow(note.pubkey) })
         }
         Spacer(Modifier.height(BitOSSpacing.sm))
         note.repostedBy?.let { _ ->
