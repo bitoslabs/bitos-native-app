@@ -92,6 +92,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
@@ -1365,6 +1367,10 @@ private fun BitzVideoPage(
     /** External-link confirm sheet (never opens the browser unattended). */
     var externalLink by remember { mutableStateOf<String?>(null) }
     var durationMs by remember(note.id) { mutableStateOf(0L) }
+    // A PlayerView has no aspect-ratio constraint until Media3 reports the
+    // source dimensions. Keep its first draw behind the fit poster so a
+    // landscape file cannot flash as `cover` during that short interval.
+    var videoSizeKnown by remember(note.id, player) { mutableStateOf(false) }
     val covered = note.contentWarning && !sensitiveShowByDefault && revealed[note.id] != true
 
     if (isSettled) {
@@ -1388,14 +1394,23 @@ private fun BitzVideoPage(
             seekHint = null
         }
     }
+    DisposableEffect(note.id, player) {
+        val activePlayer = player ?: return@DisposableEffect onDispose {}
+        fun hasVideoSize() = activePlayer.videoSize.let { it.width > 0 && it.height > 0 }
+        videoSizeKnown = hasVideoSize()
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoSizeKnown = videoSize.width > 0 && videoSize.height > 0
+            }
+        }
+        activePlayer.addListener(listener)
+        onDispose { activePlayer.removeListener(listener) }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PosterImage(
-            url = note.video!!.posterUrl,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-        )
-        // Preserve the original video frame; unused page space stays black.
+        // The native layer stays behind a single fit poster until it knows
+        // the source size. Sharing ONE poster avoids the extra loader's black
+        // first frame and makes video entry feel like a normal crossfade.
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -1407,6 +1422,17 @@ private fun BitzVideoPage(
             update = { view -> view.player = player },
             modifier = Modifier.fillMaxSize(),
         )
+        AnimatedVisibility(
+            visible = !videoSizeKnown,
+            exit = fadeOut(animationSpec = tween(120)),
+        ) {
+            PosterImage(
+                url = note.video!!.posterUrl,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+                showLoadingProgress = true,
+            )
+        }
         if (!covered) {
             // Gestures (legacy Flutter parity): tap pause/play; double-tap by
             // thirds — left −10 s, center like, right +10 s; long-press = 2×;
