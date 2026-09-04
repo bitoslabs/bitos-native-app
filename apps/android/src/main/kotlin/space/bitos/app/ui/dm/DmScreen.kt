@@ -119,12 +119,9 @@ private fun ConversationList(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(
-                    start = BitOSSpacing.screen,
-                    end = BitOSSpacing.screen,
-                    top = BitOSSpacing.md,
-                    bottom = BitOSSpacing.sm,
-                ),
+                // Matches the Inbox header inside the shared Activity tab
+                // (same gutter, same vertical rhythm on both chips).
+                .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Messages", style = MaterialTheme.typography.headlineMedium)
@@ -227,7 +224,7 @@ private fun ListPlaceholder(message: String) {
     Box(
         Modifier
             .fillMaxSize()
-            .padding(BitOSSpacing.screen),
+            .padding(16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(message, style = MaterialTheme.typography.bodyMedium, color = BitOSColors.textSecondary, textAlign = TextAlign.Center)
@@ -241,12 +238,7 @@ private fun InfoBanner(text: String) {
         color = BitOSColors.surfaceElevated,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                start = BitOSSpacing.screen,
-                end = BitOSSpacing.screen,
-                top = BitOSSpacing.sm,
-                bottom = BitOSSpacing.xs,
-            ),
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
     ) {
         Row(
             Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -277,12 +269,7 @@ private fun ConversationRow(
         Modifier
             .fillMaxWidth()
             .clickable(onClickLabel = "Open chat") { onOpen() }
-            .padding(
-                start = BitOSSpacing.screen,
-                end = BitOSSpacing.screen,
-                top = BitOSSpacing.sm,
-                bottom = BitOSSpacing.sm,
-            ),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {

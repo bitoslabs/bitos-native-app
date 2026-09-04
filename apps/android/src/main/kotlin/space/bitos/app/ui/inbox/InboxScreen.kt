@@ -188,33 +188,38 @@ fun InboxScreen(
     }
 
     Column(Modifier.fillMaxSize().background(BitOSColors.background)) {
-        InboxHeader(
-            mutedKinds = state.mutedKinds,
-            menuExpanded = headerMenu,
-            onToggleMenu = { headerMenu = it },
-            onMarkAllRead = notifications::markAllRead,
-            onOpenSearch = { searchOpen = true },
-            onToggleMute = { kind ->
-                val next = if (kind in state.mutedKinds) state.mutedKinds - kind else state.mutedKinds + kind
-                notifications.setMutedKinds(next)
-            },
-        )
         when {
             !state.hasAccount -> InboxPlaceholder(
                 title = "Activity needs an identity",
                 message = "Create or import a key (You tab) to see replies, mentions, reactions, reposts and zaps addressed to you.",
             )
-            activityTab == "chats" -> {
-                // Prototype parity: the Chats chip hosts NIP-17 DMs inside
-                // Activity; the shell supplies the surface.
-                chats()
-            }
             else -> {
                 // Prototype `activityTab` chips: Activity | Chats (unread).
+                // ALWAYS visible — they are the tab-level navigation inside
+                // Activity and must never disappear into a sub-screen.
                 ActivityTabRow(
                     selected = activityTab,
                     dmUnreadCount = dmUnreadCount,
                     onSelect = { activityTab = it },
+                )
+                if (activityTab == "chats") {
+                    // Chats owns its whole surface below the chips: the
+                    // Messages header/list (with new-chat) and the
+                    // conversation view with its own back chevron.
+                    chats()
+                } else {
+                // Notification-specific header (mark-all-read · search ·
+                // type mutes) renders only on the Activity side.
+                InboxHeader(
+                    mutedKinds = state.mutedKinds,
+                    menuExpanded = headerMenu,
+                    onToggleMenu = { headerMenu = it },
+                    onMarkAllRead = notifications::markAllRead,
+                    onOpenSearch = { searchOpen = true },
+                    onToggleMute = { kind ->
+                        val next = if (kind in state.mutedKinds) state.mutedKinds - kind else state.mutedKinds + kind
+                        notifications.setMutedKinds(next)
+                    },
                 )
                 // APP-012 search row: name/content contains over the shared rule.
                 if (searchOpen || query.isNotEmpty()) {
@@ -262,6 +267,7 @@ fun InboxScreen(
                         onOpenThread = { note -> threadTarget = note },
                         onOpenAuthor = { pubkey -> authorTarget = pubkey },
                     )
+                }
                 }
             }
         }
@@ -350,43 +356,64 @@ private fun InboxHeader(
 }
 
 /** Mock 06 chip row: All (orange) / ⚡ Zaps / ♥ Likes / Follows / Mentions. */
-/** Prototype `activityTab` chips: Activity | Chats (chats merged into this tab). */
+/** Prototype `activityTab` chips: Activity | Chats (chats merged into this tab).
+ *  Spec (docs/ui/prototype + honeycomb.css): row px-16 · pt-8 · pb-10 · gap-8
+ *  with a hairline bottom border; chips are 6×12 full pills, 12sp/600, with a
+ *  13dp leading icon and 1dp border; active = solid accent fill. */
 @Composable
 private fun ActivityTabRow(selected: String, dmUnreadCount: Int, onSelect: (String) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.screen, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-    ) {
-        InboxModeChip(
-            label = "Activity",
-            selected = selected == "notif",
-            modifier = Modifier,
-            onClick = { onSelect("notif") },
-        )
-        InboxModeChip(
-            label = if (dmUnreadCount > 0) "Chats · $dmUnreadCount" else "Chats",
-            selected = selected == "chats",
-            modifier = Modifier,
-            onClick = { onSelect("chats") },
-        )
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            InboxModeChip(
+                icon = AppIcons.Inbox,
+                label = "Activity",
+                selected = selected == "notif",
+                modifier = Modifier,
+                onClick = { onSelect("notif") },
+            )
+            InboxModeChip(
+                icon = AppIcons.Chat,
+                label = if (dmUnreadCount > 0) "Chats · $dmUnreadCount" else "Chats",
+                selected = selected == "chats",
+                modifier = Modifier,
+                onClick = { onSelect("chats") },
+            )
+        }
+        androidx.compose.material3.HorizontalDivider(thickness = 0.5.dp, color = BitOSColors.divider)
     }
 }
 
 @Composable
-private fun InboxModeChip(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun InboxModeChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     androidx.compose.material3.Surface(
         shape = androidx.compose.foundation.shape.RoundedCornerShape(999.dp),
-        color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
+        color = if (selected) BitOSColors.primary else BitOSColors.surface,
         contentColor = if (selected) androidx.compose.ui.graphics.Color(0xFF0A0A0F) else BitOSColors.textSecondary,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) BitOSColors.primary else BitOSColors.border,
+        ),
         modifier = modifier.clickable(onClickLabel = label) { onClick() },
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = BitOSSpacing.md, vertical = 6.dp),
-        )
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
     }
 }
 

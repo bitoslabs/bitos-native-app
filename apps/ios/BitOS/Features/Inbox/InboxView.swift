@@ -108,14 +108,17 @@ struct InboxView: View {
             let sections = displaySections
             let sentZapsEmpty = environment.sentZaps.records.isEmpty
             VStack(spacing: 0) {
-                if let chats {
-                    // Prototype parity: the Chats chip hosts NIP-17 DMs
-                    // inside Activity; the shell supplies the surface.
-                    header
+                // Prototype `activityTab` chips: ALWAYS visible — they are
+                // the tab-level navigation inside Activity and must never
+                // disappear into a sub-screen (back-from-chats bug).
+                ActivityTabRowView(chatsActive: showChats, dmUnreadCount: dmUnreadCount) { showChats = $0 }
+                if showChats, let chats {
+                    // Chats owns its whole surface below the chips: the
+                    // Messages list (own header + new-chat) and the
+                    // conversation view with its own back chevron.
                     chats
                 } else {
                 header
-                ActivityTabRowView(dmUnreadCount: dmUnreadCount) { showChats = $0 }
                 if searchOpen || !query.isEmpty {
                     searchRow
                 }
@@ -204,34 +207,67 @@ struct InboxView: View {
     }
 
     /// Prototype `activityTab` chips: Activity | Chats (merged tab).
+    /// Spec (docs/ui/prototype + honeycomb.css): row px-16 · pt-8 · pb-10 ·
+    /// gap-8 with a hairline bottom border; chips are 6×12 full pills,
+    /// 12pt/600, 13pt leading icon, 1px border; active = solid accent fill.
     private struct ActivityTabRowView: View {
+        let chatsActive: Bool
         let dmUnreadCount: Int
         let onSelect: (Bool) -> Void
 
         var body: some View {
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                chip(label: "Activity", active: true) { onSelect(false) }
-                chip(label: dmUnreadCount > 0 ? "Chats · \(dmUnreadCount)" : "Chats", active: false) { onSelect(true) }
+            VStack(spacing: 0) {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    chip(icon: AppIcons.inbox, label: "Activity", active: !chatsActive) {
+                        onSelect(false)
+                    }
+                    chip(icon: AppIcons.chat, label: chatsLabel, active: chatsActive) {
+                        onSelect(true)
+                    }
+                }
+                .padding(.horizontal, BitOSTheme.Spacing.base)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+                Rectangle()
+                    .fill(BitOSTheme.border)
+                    .frame(height: 0.5)
             }
-            .padding(.horizontal, BitOSTheme.Spacing.base)
-            .padding(.vertical, 6)
         }
 
-        private func chip(label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        private var chatsLabel: String {
+            dmUnreadCount > 0 ? "Chats · \(dmUnreadCount)" : "Chats"
+        }
+
+        private func chip(icon: String, label: String, active: Bool, action: @escaping () -> Void) -> some View {
             Button(action: action) {
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(active ? Color.black.opacity(0.85) : BitOSTheme.textSecondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(
-                        active ? BitOSTheme.accent : BitOSTheme.surface,
-                        in: Capsule()
-                    )
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(active ? Color.black.opacity(0.85) : BitOSTheme.textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Group {
+                        if active {
+                            Capsule().fill(BitOSTheme.accent)
+                        } else {
+                            ZStack {
+                                Capsule().fill(BitOSTheme.surface)
+                                Capsule().strokeBorder(BitOSTheme.border, lineWidth: 1)
+                            }
+                        }
+                    }
+                )
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(label)
         }
     }
+
 
     /// Unified rows: relay groups + APP-014 sent-zap ledger records.
     private var displaySections: [InboxSection] {

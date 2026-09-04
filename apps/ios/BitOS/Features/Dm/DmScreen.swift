@@ -63,6 +63,26 @@ private struct ConversationListView: View {
 
     var body: some View {
         Group {
+            // Matches the Inbox header inside the shared Activity tab (same
+            // gutter, same vertical rhythm on both chips). The nav bar is
+            // hidden there, so the title + new-chat live in this row.
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Text("Chats")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                Spacer()
+                Button {
+                    newChatOpen = true
+                } label: {
+                    AppIcons.image(for: AppIcons.chat)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                .accessibilityLabel("New message")
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
             if !environment.dmStore.hasAccount {
                 placeholder("Chats need an identity (You tab).", symbol: AppIcons.chat)
             } else if environment.dmStore.conversations.isEmpty {

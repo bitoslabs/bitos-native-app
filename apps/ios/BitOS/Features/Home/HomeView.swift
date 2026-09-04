@@ -643,24 +643,8 @@ struct HomeView: View {
                 timelineContent
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            // APP-004: New-note extended FAB (spec §3.4).
-            Button {
-                showComposer = true
-            } label: {
-                HStack(spacing: BitOSTheme.Spacing.sm) {
-                    AppIcons.image(for: AppIcons.pen)
-                    Text("New note")
-                }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(BitOSTheme.background)
-                .padding(.horizontal, BitOSTheme.Spacing.base)
-                .padding(.vertical, 12)
-                .background(Capsule().fill(BitOSTheme.accent))
-            }
-            .padding(BitOSTheme.Spacing.base)
-            .accessibilityLabel("Compose a note")
-        }
+        // Prototype tabdock parity: creation moved to the shell's center ＋
+        // (the Home FAB conflicted with the tab bar and is removed).
     }
 
     /// Timeline states are shared by both tabs; Following is honest about

@@ -79,11 +79,37 @@ struct RootView: View {
     }
 
     /// Prototype tabdock center ＋ — an action slot, not a destination.
+    /// Center action slot: invisible (width-keeping); the visible button
+    /// is the ring-hex overlay. tabSelection still intercepts taps on the
+    /// slot itself and opens the Create sheet — it never selects.
     private var createSlotItem: some View {
         Color.clear
             .tag(AppDestination.createSlot)
-            .tabItem { Label { Text("Create") } icon: { Image(systemName: "plus.circle.fill") } }
+            .tabItem { Label { Text("") } icon: { EmptyView() } }
             .accessibilityLabel("Create")
+    }
+
+    /// Center ＋ in the AVATAR hex idiom (RingHexAvatarView parity): an
+    /// accent hex ring around a surface inner hex, ＋ glyph in accent.
+    private var hexCreateButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showCreateSheet = true
+        } label: {
+            ZStack {
+                HexShape().fill(BitOSTheme.accent)
+                HexShape()
+                    .fill(BitOSTheme.surface)
+                    .padding(2)
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+            .frame(width: 46, height: 46)
+            .shadow(color: BitOSTheme.accent.opacity(0.25), radius: 8, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Create")
     }
 
     /// Activity hosts BOTH inbox chips (prototype parity): notifications
@@ -134,6 +160,12 @@ struct RootView: View {
             }
             .tag(AppDestination.you)
             .tabItem { Label { Text("You") } icon: { AppIcons.image(for: AppIcons.userProfile) } }
+        }
+        .overlay(alignment: .bottom) {
+            // The visible center ＋ rides over the invisible slot, centered
+            // on the ~49pt bar (floats half above its top edge).
+            hexCreateButton
+                .padding(.bottom, 26)
         }
         .tint(BitOSTheme.accent)
         // R10: mark the selected destination as visited (first composition).

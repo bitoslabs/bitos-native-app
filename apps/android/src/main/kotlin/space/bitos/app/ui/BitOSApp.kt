@@ -3,6 +3,7 @@ package space.bitos.app.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
@@ -14,6 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import space.bitos.app.ui.theme.AppIcons
 import androidx.compose.foundation.layout.fillMaxSize
@@ -259,6 +264,7 @@ fun BitOSApp(
             else -> 1f
         }
         val density = androidx.compose.ui.platform.LocalDensity.current
+        val shellHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
         val scaledDensity = androidx.compose.ui.unit.Density(density.density, density.fontScale * fontMultiplier)
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.ui.platform.LocalDensity provides scaledDensity,
@@ -275,6 +281,7 @@ fun BitOSApp(
                 // BOTH inbox surfaces — notifications + chats now that Chats
                 // lives inside Activity.
                 val activityBadgeCount = unreadCount + dmUnreadCount
+                Box {
                 NavigationBar(containerColor = BitOSColors.surface) {
                     // Five slots: Home · Bitz · ＋ · Activity · You. The null
                     // entry renders the center Create button.
@@ -287,27 +294,14 @@ fun BitOSApp(
                     )
                     slots.forEach { item ->
                         if (item == null) {
-                            // Center ＋ (prototype `tab-create`): opens the
-                            // Create sheet — never a destination.
+                            // Center slot: transparent width keeper — the
+                            // visible hex floats ABOVE the bar (prototype
+                            // `tab-create` margin-top:-18px overflow).
                             NavigationBarItem(
                                 selected = false,
                                 onClick = { showCreateSheet = true },
-                                icon = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .background(BitOSColors.primary, androidx.compose.foundation.shape.CircleShape),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            AppIcons.Add,
-                                            contentDescription = "Create",
-                                            tint = androidx.compose.ui.graphics.Color(0xFF0A0A0F),
-                                            modifier = Modifier.size(26.dp),
-                                        )
-                                    }
-                                },
-                                label = { Text("Create") },
+                                icon = { Spacer(Modifier.size(46.dp)) },
+                                label = { Text("") },
                                 colors = NavigationBarItemDefaults.colors(
                                     indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                                     unselectedIconColor = BitOSColors.textSecondary,
@@ -365,6 +359,36 @@ fun BitOSApp(
                             ),
                         )
                     }
+                }
+                // Center ＋: the AVATAR hex idiom (RingHexAvatar parity) —
+                // a primary hex ring around a surface inner hex, ＋ glyph in
+                // primary. The transparent slot below keeps widths equal.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp)
+                        .size(46.dp)
+                        .clip(space.bitos.app.ui.components.HexShape())
+                        .background(BitOSColors.primary)
+                        .clickable(onClickLabel = "Create") { showCreateSheet = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(2.dp)
+                            .clip(space.bitos.app.ui.components.HexShape())
+                            .background(BitOSColors.surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            AppIcons.Add,
+                            contentDescription = null,
+                            tint = BitOSColors.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
                 }
                 }
             },
