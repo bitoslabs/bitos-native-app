@@ -7,32 +7,41 @@ private let topics = ["bitcoin", "lightning", "nostr", "memes", "video"]
 /// resolution + topic chips feeding the same pipeline.
 struct DiscoverView: View {
     @Environment(AppEnvironment.self) private var environment
+    @Environment(IdentityStore.self) private var identity
+    @Environment(SettingsStore.self) private var settings
+
     @State private var input = ""
     // APP-010 results tabs: Posts · People · Hashtags (shared fan-in).
     @State private var tab = 0
+    @FocusState private var searchFocused: Bool
+
+    /// APP-010 fan-in rows derived through the shared bridge rule. Memoized
+    /// in state (Android `remember(results, profiles)` parity): the JSON
+    /// round-trip runs once per data change, never during a body
+    /// evaluation — typing re-renders for free.
+    @State private var peopleRows: [PersonRow] = []
+    @State private var hashtagHits: [HashtagRow] = []
+
+    // Card interaction targets (home parity: search results are real feed
+    // cards, so like/comment/repost/zap/bookmark/author all work here).
+    @State private var authorTarget: String?
+    @State private var zapTarget: FeedNote?
+    @State private var commentTarget: FeedNote?
+    @State private var externalLink: String?
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TextField("Search notes, #hashtags, npub…", text: $input)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
-                    .padding(BitOSTheme.Spacing.screen)
-                    .onChange(of: input) { _, newValue in
-                        environment.searchStore.search(newValue)
-                    }
-
+                searchBar
                 if input.trimmingCharacters(in: .whitespaces).isEmpty {
-                    TopicChips { topic in input = "#\(topic)" }
+                    topicChips { topic in input = "#\(topic)" }
                 } else {
                     VStack(spacing: 0) {
                         tabRow
                         switch tab {
                         case 1: PeopleTab(people: peopleRows)
                         case 2: HashtagsTab(hits: hashtagHits) { input = "#\($0)" }
-                        default: SearchResults
+                        default: postsList
                         }
                     }
                 }
@@ -41,37 +50,282 @@ struct DiscoverView: View {
             .navigationTitle("Discover")
         }
         .preferredColorScheme(BitOSTheme.preferredScheme)
-    }
-
-    private var resultsJson: String {
-        let items: [String] = environment.searchStore.results.map { note in
-            let obj: [String: Any] = ["id": note.id, "pubkey": note.pubkey, "hashtags": note.hashtags]
-            if let data = try? JSONSerialization.data(withJSONObject: obj),
-               let json = String(data: data, encoding: .utf8) {
-                return json
+        // Fan-in rows re-derive when the relay stream or the query changes;
+        // the signature is cheap (ids + profile render fields), the bridge
+        // round-trip it guards is not.
+        .task(id: fanInSignature) {
+            peopleRows = Self.derivePeople(
+                results: environment.searchStore.results,
+                profiles: environment.searchStore.profiles
+            )
+            hashtagHits = Self.deriveHashtags(results: environment.searchStore.results)
+        }
+        .onChange(of: input) { _, newValue in
+            // SearchStore applies the shared 400 ms relay debounce.
+            environment.searchStore.search(newValue)
+        }
+        .sheet(item: Binding(
+            get: { authorTarget.map { AuthorTarget(id: $0) } },
+            set: { authorTarget = $0?.id }
+        )) { target in
+            AuthorProfileSheet(
+                authorPubkey: target.id,
+                onClose: { authorTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $zapTarget) { target in
+            ZapSheet(
+                note: target,
+                profiles: environment.feedStore.profiles,
+                initialAmountSats: settings.state.defaultZapAmount,
+                zapCount: environment.feedStore.zapCounts[target.id] ?? 0,
+                paidRequestIds: environment.feedStore.zapRequestIds[target.id] ?? [],
+                onPaid: { sats, memo in
+                    environment.sentZaps.record(.init(
+                        id: "zap-\(target.id)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                        amountSats: Int64(sats),
+                        recipientPubkey: target.pubkey,
+                        createdAt: Int64(Date.now.timeIntervalSince1970),
+                        targetNoteId: target.id,
+                        memo: memo.isEmpty ? nil : memo
+                    ))
+                },
+                onClose: { zapTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium])
+        }
+        .sheet(item: $commentTarget) { target in
+            CommentSheet(
+                note: target,
+                store: environment.feedStore,
+                publisher: environment.notePublisher,
+                onClose: { commentTarget = nil }
+            )
+            .environment(identity)
+            .presentationDetents([.medium, .large])
+        }
+        // External-link confirm: the browser only opens on an explicit Open.
+        .sheet(isPresented: Binding(
+            get: { externalLink != nil },
+            set: { if !$0 { externalLink = nil } }
+        )) {
+            if let externalLink {
+                ExternalLinkConfirmSheet(url: externalLink)
             }
-            return ""
-        }.filter { !$0.isEmpty }
-        return "[" + items.joined(separator: ",") + "]"
+        }
     }
 
-    private var profilesJson: String {
-        let items: [String] = environment.searchStore.profiles.values.map { profile in
+    // MARK: - Search bar
+
+    private var searchBar: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            BitosSearchField("Search notes, #hashtags, npub…", text: $input, focus: $searchFocused)
+                .onSubmit { searchFocused = false }
+            if isSearchActive {
+                Button("Cancel", action: cancelSearch)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .padding(.vertical, BitOSTheme.Spacing.sm)
+    }
+
+    private var isSearchActive: Bool { searchFocused || !input.isEmpty }
+
+    /// System search-bar cancel: reset the query (which also resets the
+    /// store and streams), drop focus and return to the topic chips.
+    private func cancelSearch() {
+        input = ""
+        searchFocused = false
+        tab = 0
+    }
+
+    // MARK: - Results tabs
+
+    private var tabRow: some View {
+        let tabs: [(String, Int)] = [
+            ("Posts", environment.searchStore.results.count),
+            ("People", peopleRows.count),
+            ("Hashtags", hashtagHits.count),
+        ]
+        return HStack(spacing: BitOSTheme.Spacing.md) {
+            ForEach(Array(tabs.enumerated()), id: \.offset) { index, entry in
+                resultsTab(title: entry.0, count: entry.1, index: index)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.screen)
+        .padding(.vertical, BitOSTheme.Spacing.xs)
+    }
+
+    /// Home `timelineTab` chrome (accent underline + selected trait) so the
+    /// result tabs read as the same system control.
+    private func resultsTab(title: String, count: Int, index: Int) -> some View {
+        let isSelected = tab == index
+        return Button {
+            tab = index
+        } label: {
+            VStack(spacing: 4) {
+                Text("\(title) \(count)")
+                    .font(.system(size: 13, weight: isSelected ? .heavy : .semibold))
+                    .foregroundStyle(isSelected ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                Rectangle()
+                    .fill(isSelected ? BitOSTheme.accent : .clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Posts tab: the resolved npub creator (when any) plus the same feed
+    /// card the home timeline uses — full like/comment/repost/zap/bookmark
+    /// interactions against the shared feed store.
+    private var postsList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if let npub = environment.searchStore.resolvedNpub {
+                    Button {
+                        authorTarget = npub
+                    } label: {
+                        CreatorCard(
+                            pubkey: npub,
+                            profile: environment.searchStore.profiles[npub]
+                                ?? environment.feedStore.profiles[npub]
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open creator profile")
+                    // Inset chip above the full-bleed feed rows.
+                    .padding(.horizontal, BitOSTheme.Spacing.screen)
+                    .padding(.bottom, BitOSTheme.Spacing.sm)
+                }
+                if environment.searchStore.results.isEmpty {
+                    resultsEmptyState
+                }
+                ForEach(environment.searchStore.results) { note in
+                    resultCardRow(note)
+                }
+            }
+            .padding(.top, BitOSTheme.Spacing.sm)
+            .padding(.bottom, BitOSTheme.Spacing.screen)
+        }
+        .scrollDismissesKeyboard(.immediately)
+    }
+
+    /// Debounce-aware empty states: nothing while the 400 ms relay debounce
+    /// settles, spinner once the query is in flight, plate only after the
+    /// search actually came back empty.
+    @ViewBuilder
+    private var resultsEmptyState: some View {
+        if environment.searchStore.isSearching {
+            ProgressView().tint(BitOSTheme.accent).padding(BitOSTheme.Spacing.xl)
+        } else if environment.searchStore.hasSearched {
+            Text("No results. Relays may not support search or the query is too narrow.")
+                .font(.footnote)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .padding(BitOSTheme.Spacing.xl)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    /// Type-checker split: one card per function (§ pagerPage fix class).
+    private func resultCardRow(_ note: FeedNote) -> some View {
+        FeedNoteCard(
+            note: note,
+            profile: environment.feedStore.profiles[note.pubkey],
+            profiles: environment.feedStore.profiles,
+            actions: environment.feedStore.localActions,
+            isBookmarked: environment.feedStore.bookmarkedIds.contains(note.id)
+                || environment.feedStore.localActions.bookmarked.contains(note.id),
+            richJson: environment.feedStore.richTokens(for: note.content),
+            onLike: { like(note) },
+            onBookmark: { toggleBookmark(note) },
+            onComment: { commentTarget = note },
+            onRepost: { repost(note) },
+            onZap: { zapTarget = note },
+            onAuthor: { authorTarget = note.pubkey },
+            // Mention taps open the mentioned user's sheet, not the author's.
+            onOpenMentionProfile: { authorTarget = $0 },
+            onOpenExternalLink: { externalLink = $0 },
+            // APP-008 poll voting.
+            pollTally: environment.feedStore.pollTallies[note.id],
+            canVotePoll: identity.account != nil,
+            onLoadPollVotes: { environment.feedStore.loadPollVotes(targetEventId: note.id) },
+            onVotePoll: { optionIndex in
+                environment.feedStore.applyOptimisticPollVote(pollId: note.id, optionIndex: optionIndex)
+                Task { await environment.notePublisher.publishPollVote(targetEventId: note.id, optionIndex: optionIndex) }
+            }
+        )
+        // Home parity: hairline divider between cards.
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(BitOSTheme.divider)
+                .frame(height: 0.5)
+        }
+    }
+
+    // MARK: - Card actions (home `FeedStore` wiring parity)
+
+    private func like(_ note: FeedNote) {
+        let turningOn = !environment.feedStore.localActions.liked.contains(note.id)
+        environment.feedStore.localActions.toggleLike(note.id)
+        // Signed accounts publish a real kind-7 on like; an unlike deletes
+        // my reaction event (kind-5, web `unlikeNote` parity).
+        guard identity.account != nil else { return }
+        if turningOn {
+            Task { await environment.notePublisher.publishReaction(targetEventId: note.id, targetPubkey: note.pubkey) }
+        } else if let reactionId = environment.feedStore.myReactionEventIds[note.id] {
+            Task { await environment.notePublisher.publishDeletion(targetEventIds: [reactionId]) }
+        }
+    }
+
+    private func toggleBookmark(_ note: FeedNote) {
+        if let updated = environment.feedStore.applyBookmarkChange(eventId: note.id, add: !environment.feedStore.bookmarkedIds.contains(note.id)) {
+            guard identity.account != nil else { return }
+            Task { await environment.notePublisher.publishBookmarkList(eventIds: updated) }
+        } else {
+            environment.feedStore.localActions.toggleBookmark(note.id)
+        }
+    }
+
+    private func repost(_ note: FeedNote) {
+        guard identity.account != nil else { return }
+        Task { await environment.notePublisher.publishRepost(targetEventId: note.id, targetPubkey: note.pubkey) }
+    }
+
+    // MARK: - APP-010 fan-in derivation (memoized)
+
+    /// Data signature guarding the bridge round-trips: result ids plus the
+    /// profile fields the rows render. Cheap to rebuild every render; the
+    /// JSON derivation it gates runs once per actual change.
+    private var fanInSignature: String {
+        let ids = environment.searchStore.results.map(\.id).joined(separator: ",")
+        let profileDigest = environment.searchStore.profiles.values
+            .map { "\($0.pubkey)|\($0.name ?? "")|\($0.displayName ?? "")|\($0.nip05 ?? "")" }
+            .sorted()
+            .joined(separator: ",")
+        return ids + "#" + profileDigest
+    }
+
+    private static func derivePeople(results: [FeedNote], profiles: [String: ProfileMetadata]) -> [PersonRow] {
+        let resultsJson = jsonDump(results.map { note -> [String: Any] in
+            ["id": note.id, "pubkey": note.pubkey, "hashtags": note.hashtags]
+        })
+        let profilesJson = jsonDump(profiles.values.map { profile -> [String: Any] in
             var obj: [String: Any] = ["pubkey": profile.pubkey]
             if let n = profile.name { obj["name"] = n }
             if let d = profile.displayName { obj["displayName"] = d }
             if let p = profile.picture { obj["picture"] = p }
             if let n5 = profile.nip05 { obj["nip05"] = n5 }
-            if let data = try? JSONSerialization.data(withJSONObject: obj),
-               let json = String(data: data, encoding: .utf8) {
-                return json
-            }
-            return ""
-        }.filter { !$0.isEmpty }
-        return "[" + items.joined(separator: ",") + "]"
-    }
-
-    private var peopleRows: [PersonRow] {
+            return obj
+        })
         guard let json = (BusinessCoreBridge().searchPeopleJson(resultsJson: resultsJson, profilesJson: profilesJson) as String?),
               let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
@@ -86,7 +340,10 @@ struct DiscoverView: View {
         }
     }
 
-    private var hashtagHits: [HashtagRow] {
+    private static func deriveHashtags(results: [FeedNote]) -> [HashtagRow] {
+        let resultsJson = jsonDump(results.map { note -> [String: Any] in
+            ["id": note.id, "pubkey": note.pubkey, "hashtags": note.hashtags]
+        })
         guard let json = (BusinessCoreBridge().searchHashtagsJson(resultsJson: resultsJson) as String?),
               let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
@@ -96,48 +353,13 @@ struct DiscoverView: View {
         }
     }
 
-    private var tabRow: some View {
-        let tabs: [(String, Int)] = [
-            ("Posts", environment.searchStore.results.count),
-            ("People", peopleRows.count),
-            ("Hashtags", hashtagHits.count),
-        ]
-        return HStack(spacing: BitOSTheme.Spacing.md) {
-            ForEach(Array(tabs.enumerated()), id: \.offset) { index, entry in
-                Button("\(entry.0) \(entry.1)") { tab = index }
-                    .font(.system(size: 13, weight: tab == index ? .heavy : .semibold))
-                    .foregroundStyle(tab == index ? BitOSTheme.accent : BitOSTheme.textSecondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, BitOSTheme.Spacing.screen)
-        .padding(.vertical, BitOSTheme.Spacing.xs)
+    private static func jsonDump(_ objects: [[String: Any]]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: objects),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
     }
 
-    private var SearchResults: some View {
-        ScrollView {
-            LazyVStack(spacing: BitOSTheme.Spacing.sm) {
-                if let npub = environment.searchStore.resolvedNpub {
-                    CreatorCard(pubkey: npub, profile: environment.searchStore.profiles[npub])
-                }
-                if environment.searchStore.isSearching && environment.searchStore.results.isEmpty {
-                    ProgressView().tint(BitOSTheme.accent).padding(BitOSTheme.Spacing.xl)
-                } else if environment.searchStore.results.isEmpty {
-                    Text("No results. Relays may not support search or the query is too narrow.")
-                        .font(.footnote)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                        .padding(BitOSTheme.Spacing.xl)
-                        .multilineTextAlignment(.center)
-                }
-                ForEach(environment.searchStore.results) { note in
-                    SearchCard(note: note, profile: environment.searchStore.profiles[note.pubkey])
-                }
-            }
-            .padding(BitOSTheme.Spacing.screen)
-        }
-    }
-
-    private func TopicChips(onTopic: @escaping (String) -> Void) -> some View {
+    private func topicChips(onTopic: @escaping (String) -> Void) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
                 Text("Explore topics").font(.headline).padding(.top)
@@ -186,8 +408,11 @@ struct DiscoverView: View {
             }
             .padding(BitOSTheme.Spacing.screen)
         }
+        .scrollDismissesKeyboard(.immediately)
     }
 }
+
+private struct AuthorTarget: Identifiable { let id: String }
 
 private struct CreatorCard: View {
     let pubkey: String
@@ -211,37 +436,6 @@ private struct CreatorCard: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.accentContainer))
     }
 }
-
-private struct SearchCard: View {
-    let note: FeedNote
-    let profile: ProfileMetadata?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                PubkeyAvatarView(pubkey: note.pubkey, size: 28, picture: profile?.picture, label: profile?.bestDisplayName)
-                Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                Text(FeedFormat.timeAgo(createdAt: note.createdAt))
-                    .font(.caption2)
-                    .foregroundStyle(BitOSTheme.textTertiary)
-            }
-            Text(note.content)
-                .font(.subheadline)
-                .foregroundStyle(BitOSTheme.textPrimary)
-                .lineLimit(3)
-            if note.video != nil {
-                Text("🎬 video").font(.caption2).foregroundStyle(Color(red: 0.02, green: 0.71, blue: 0.83))
-            }
-        }
-        .padding(BitOSTheme.Spacing.base)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(BitOSTheme.surface))
-    }
-}
-
 
 // MARK: - APP-010 results tabs
 

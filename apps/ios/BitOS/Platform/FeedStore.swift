@@ -149,6 +149,12 @@ final class FeedStore {
     private var richTokensCache: [String: String] = [:]
     // (replyCount, assembled) per rootId — skips bridge when thread size unchanged.
     private var assembledThreadsCache: [String: (Int, [ThreadDisplayItem])] = [:]
+    /// Verified events per note id (card ⋯ raw-event viewer), bounded to the
+    /// window. `rawEventOrder` preserves insertion order for tail eviction
+    /// (Dictionary alone is unordered). Serialized lazily on open — ingest
+    /// never pays the encoding.
+    private var rawEvents: [String: VerifiedEvent] = [:]
+    private var rawEventOrder: [String] = []
 
     // `interaction` takes no default value: a default-expression would be
     // evaluated in a nonisolated context (Swift 6) and InteractionProfileStore
@@ -709,6 +715,7 @@ final class FeedStore {
             let fromOlderPage = subscriptionId?
                 .hasPrefix("bitos-older-") == true
             let note = client.feedNote(from: event)
+            retainRawEvent(event)
             recordOlderEvent(subscriptionId: subscriptionId, event: event, note: note)
             absorbNote(event, note: note, fromOlderPage: fromOlderPage)
             persist(event, tagsJson: tagsJson)
@@ -1618,8 +1625,25 @@ final class FeedStore {
             absorbProfile(event)
         } else if client.isFeedKind(event.kind) {
             let note = client.feedNote(from: event)
+            retainRawEvent(event)
             window?.insert(note)
             knownNoteIds.insert(note.id)
+        }
+    }
+
+    // MARK: - Raw-event viewer (card ⋯ menu, web "View raw event JSON" parity)
+
+    /// NIP-01 canonical event-object JSON (nil outside the bounded window).
+    func rawEventJson(forNoteId noteId: String) -> String? {
+        guard let event = rawEvents[noteId] else { return nil }
+        return client.eventJson(event)
+    }
+
+    private func retainRawEvent(_ event: VerifiedEvent) {
+        if rawEvents[event.id] == nil { rawEventOrder.append(event.id) }
+        rawEvents[event.id] = event
+        if rawEventOrder.count > Self.rawEventsMax {
+            rawEvents.removeValue(forKey: rawEventOrder.removeFirst())
         }
     }
 
@@ -1691,6 +1715,8 @@ final class FeedStore {
     private static let profileBatchSize = 48
     private static let healthPollInterval: Duration = .seconds(2)
     private static let pendingMax = 50
+    /// Raw-event retention for the card ⋯ viewer (covers the 200-note window).
+    private static let rawEventsMax = 256
     private static let headSnapshotMaxWaitMs = 2_500
 
     /// Trailing head batch tick: late slow-relay frames repaint in

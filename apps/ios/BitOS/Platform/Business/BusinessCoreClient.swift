@@ -158,6 +158,9 @@ protocol BusinessCoreClient: Sendable {
     func bitzWalkPrefetchThreshold() -> Int
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
+    /// NIP-01 canonical event-object JSON (raw-event viewer seam): the
+    /// signed object exactly as the event ID commits to it.
+    func eventJson(_ event: VerifiedEvent) -> String
     func feedRequest(subscriptionId: String) -> String
     func feedRequestSince(subscriptionId: String, since: Int64) -> String
     func profileRequest(subscriptionId: String, authors: [String]) -> String
@@ -520,6 +523,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.feedRequest(subscriptionId: subscriptionId)
     }
 
+    func eventJson(_ event: VerifiedEvent) -> String {
+        bridge.eventJson(event: event.bridgeEvent(bridge: bridge))
+    }
+
     func feedRequestSince(subscriptionId: String, since: Int64) -> String {
         bridge.feedRequestSince(subscriptionId: subscriptionId, since: since)
     }
@@ -864,6 +871,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
                  video: MediaMetadata(url: "", mimeType: nil, posterUrl: nil, width: nil, height: nil, durationSeconds: nil))
     }
     func feedRequest(subscriptionId: String) -> String { "" }
+    func eventJson(_ event: VerifiedEvent) -> String {
+        FrameworkBusinessCoreClient().eventJson(event)
+    }
     func feedRequestSince(subscriptionId: String, since: Int64) -> String { "" }
     func profileRequest(subscriptionId: String, authors: [String]) -> String { "" }
     func close(subscriptionId: String) -> String { "" }

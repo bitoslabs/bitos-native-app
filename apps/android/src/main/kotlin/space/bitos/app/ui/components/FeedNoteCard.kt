@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -119,6 +122,8 @@ fun FeedNoteCard(
     onOpenNoteRef: (String) -> Unit = {},
     /** Profile-mention tap → the mentioned user's profile (not the author). */
     onOpenMentionProfile: (String) -> Unit = {},
+    /** ⋯ raw-event viewer: canonical event JSON provider; null hides the row. */
+    rawEventJson: (() -> String?)? = null,
     sensitiveShowByDefault: Boolean = false,
     mediaPreview: Boolean = true,
     compact: Boolean = false,
@@ -216,6 +221,7 @@ fun FeedNoteCard(
                 onToggleAuthorDemotion = onToggleAuthorDemotion,
                 onToggleTagDemotion = onToggleTagDemotion,
                 onOpenAttachment = onOpenAttachment,
+                rawEventJson = rawEventJson,
             )
         }
         if (note.contentWarning && !revealed && !sensitiveShowByDefault) {
@@ -422,6 +428,8 @@ fun NoteMoreMenuButton(
     onToggleTagDemotion: (String) -> Unit = {},
     /** Opens the first attachment through the external-link confirm gate. */
     onOpenAttachment: (String) -> Unit = {},
+    /** Raw-event viewer: canonical JSON provider; null hides the menu row. */
+    rawEventJson: (() -> String?)? = null,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -429,6 +437,10 @@ fun NoteMoreMenuButton(
         space.bitos.core.identity.NostrKeyCodec.npub(note.pubkey) ?: note.pubkey
     }
     var showSheet by remember { mutableStateOf(false) }
+    var rawEventFor by remember { mutableStateOf<String?>(null) }
+    rawEventFor?.let { raw ->
+        RawEventDialog(json = raw, onDismiss = { rawEventFor = null })
+    }
     androidx.compose.material3.IconButton(
         onClick = { showSheet = true },
         modifier = Modifier.size(36.dp).semantics { contentDescription = "More options" },
@@ -456,6 +468,13 @@ fun NoteMoreMenuButton(
                 AppMenuEntry.Item(AppMenuItem("copy-id", "Copy note ID", icon = AppIcons.Copy)),
                 AppMenuEntry.Item(AppMenuItem("copy-text", "Copy note text", icon = AppIcons.Pen)),
                 AppMenuEntry.Item(AppMenuItem("copy-npub", "Copy author npub", icon = AppIcons.User)),
+                *if (rawEventJson != null) {
+                    arrayOf(
+                        AppMenuEntry.Item(AppMenuItem("raw-event", "View raw event JSON", icon = AppIcons.AppsGrid)),
+                    )
+                } else {
+                    arrayOf()
+                },
                 AppMenuEntry.Divider,
                 // Web interaction-profile parity: local ranking signals.
                 AppMenuEntry.Item(AppMenuItem("not-interested", "Not interested", icon = AppIcons.Close)),
@@ -502,6 +521,10 @@ fun NoteMoreMenuButton(
                     "copy-id" -> clipboard.setText(AnnotatedString(note.id))
                     "copy-text" -> clipboard.setText(AnnotatedString(note.content))
                     "copy-npub" -> clipboard.setText(AnnotatedString(npub))
+                    "raw-event" -> {
+                        showSheet = false
+                        rawEventFor = rawEventJson?.invoke()
+                    }
                     "open-attachment" -> note.mediaUrls.firstOrNull()?.let(onOpenAttachment)
                     "copy-attachment" -> note.mediaUrls.firstOrNull()?.let {
                         clipboard.setText(AnnotatedString(it))
@@ -518,4 +541,29 @@ fun NoteMoreMenuButton(
             },
         )
     }
+}
+
+/**
+ * Shared raw-event viewer (web "View raw event JSON" parity): the NIP-01
+ * canonical event object, monospace and scrollable for long payloads.
+ */
+@Composable
+fun RawEventDialog(json: String, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Raw event") },
+        text = {
+            Text(
+                json,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }

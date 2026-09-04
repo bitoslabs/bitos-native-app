@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,7 +48,6 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -509,16 +507,7 @@ private fun ActivityList(
         }
     }
     rawJsonFor?.let { raw ->
-        AlertDialog(
-            onDismissRequest = { rawJsonFor = null },
-            confirmButton = {
-                TextButton(onClick = { rawJsonFor = null }) { Text("Close") }
-            },
-            title = { Text("Raw event") },
-            text = {
-                Text(raw, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-            },
-        )
+        space.bitos.app.ui.components.RawEventDialog(json = raw, onDismiss = { rawJsonFor = null })
     }
 }
 

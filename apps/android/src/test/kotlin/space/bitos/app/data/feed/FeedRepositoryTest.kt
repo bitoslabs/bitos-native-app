@@ -79,6 +79,58 @@ class FeedRepositoryTest {
     }
 
     @Test
+    fun rawEventViewerServesTheCanonicalSignedObject() = runBlocking {
+        repository.start()
+        transport.emit(VALID_ESCAPED_CONTENT_MESSAGE)
+        val state = withTimeout(20_000) { repository.state.first { it.notes.isNotEmpty() } }
+        val note = state.notes.single()
+        assertNull(repository.rawEventJson("ff".repeat(32)))
+        // Canonical object, key order fixed, escaping byte-parity with the
+        // ID serialization, relay frame wrapper dropped, sig included.
+        assertEquals(
+            "{\"id\":\"6bbba7020543b6d2fbd740a5a387cd92054716342d2b6389692fec5257f5e7fd\"," +
+                "\"pubkey\":\"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001\"," +
+                "\"created_at\":1710000200,\"kind\":1," +
+                "\"tags\":[[\"e\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],[\"p\",\"cccccccccccccccccccccccccccccccc\"]]," +
+                "\"content\":\"line1\\nline2 \\\"quoted\\\" ₿\\u0007end\"," +
+                "\"sig\":\"6678f8524132e35027dd2403993fe012a3728b100cfce94a656a9a5da39f37802185d8e6d7120518436c773e64d8e19758a6ba914fd98a0fd86339caa6adf61b\"}",
+            repository.rawEventJson(note.id),
+        )
+    }
+
+    @Test
+    fun rawEventViewerResolvesRepostInnerEvents() = runBlocking {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { 1_710_000_000 })
+        val signer = DeterministicTestSigner("4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d")
+        val author = signer.publicKeyHex()
+        val original = composer.composeTextNote(author, "original content here")!!
+        val originalFrame = composer.publishMessage(original, signer.sign(original.messageBytes())!!)!!
+        val embedded = originalFrame.removePrefix("""["EVENT",""").removeSuffix("]")
+        val tags = listOf(listOf("e", original.idHex), listOf("p", author))
+        val repostId = NostrEventCodec.computeId(hasher, author, 1_710_000_100, 6, tags, embedded)
+        val unsigned = space.bitos.core.publish.UnsignedNote(repostId, author, 1_710_000_100, 6, tags, embedded)
+        val frame = composer.publishMessage(unsigned, signer.sign(unsigned.messageBytes())!!)!!
+
+        repository.start()
+        transport.emit(withSubscriptionId(frame))
+        val state = withTimeout(20_000) {
+            repository.state.first { it.notes.any { note -> note.content == "original content here" } }
+        }
+        // The card displays the ORIGINAL (repostedBy set): the raw viewer
+        // must key the inner event under the original's id.
+        assertEquals(author, state.notes.single().pubkey)
+        val json = repository.rawEventJson(original.idHex)!!
+        assertTrue(json.startsWith("{\"id\":\"${original.idHex}\""), json)
+        assertTrue(json.contains("\"content\":\"original content here\""), json)
+        // The repost frame itself stays reachable under its own id.
+        assertTrue(repository.rawEventJson(repostId)!!.contains("\"kind\":6"))
+    }
+
+    /** Wraps a publish frame with a relay subscription id (3-element gate). */
+    private fun withSubscriptionId(frame: String): String =
+        """["EVENT","sub1",""" + frame.removePrefix("""["EVENT",""")
+
+    @Test
     fun mentionedProfilesAreRequestedWhenANoteAbsorbs() = runBlocking {
         repository.start()
         val mentionHex = "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"

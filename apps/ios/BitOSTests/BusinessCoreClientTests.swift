@@ -10,6 +10,22 @@ final class BusinessCoreClientTests: XCTestCase {
         XCTAssertTrue(client.isProfileKind(0))
     }
 
+    /// Raw-event viewer seam (card ⋯ "View raw event JSON"): a decoded
+    /// signed frame rebuilds the canonical NIP-01 event object — canonical
+    /// key order, escaped content, relay frame wrapper dropped, sig kept.
+    func testEventJsonRebuildsTheCanonicalSignedObject() {
+        let client = FrameworkBusinessCoreClient()
+        // Verbatim fixture frame from contracts/nostr/fixtures/verification-vectors.json.
+        let frame = #"["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"gm from BitOS","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"#
+        guard let decoded = client.decodeVerifiedEventFrame(message: frame, relay: "wss://relay.damus.io") else {
+            return XCTFail("fixture frame must decode")
+        }
+        let json = client.eventJson(decoded.event)
+        XCTAssertTrue(json.hasPrefix(#"{"id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001""#), json)
+        XCTAssertTrue(json.contains(#""created_at":1710000000,"kind":1,"tags":[["t","bitcoin"]],"content":"gm from BitOS""#), json)
+        XCTAssertTrue(json.hasSuffix(#","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}"#), json)
+    }
+
     /// APP-019 studio seams (plan MST-005/010..015): the meme editor works
     /// the project wire through the client — normalize clamps, commands
     /// apply, hit-test selects, palette/packs feed the sheets, bounds feed

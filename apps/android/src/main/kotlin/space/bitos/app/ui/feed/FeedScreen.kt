@@ -1367,6 +1367,7 @@ private fun NotesList(
                 onOpenExternalLink = onOpenExternalLink,
                 onOpenNoteRef = onOpenNoteRef,
                 onOpenMentionProfile = onOpenMentionProfile,
+                rawEventJson = { viewModel.rawEventJson(note.id) },
                 sensitiveShowByDefault = sensitiveShowByDefault,
                 mediaPreview = mediaPreview,
                 compact = compact,

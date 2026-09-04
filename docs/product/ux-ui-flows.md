@@ -326,6 +326,16 @@ UI anatomy:
   shared ranker's one intentional drop); author demotions multiply the
   score by 0.25 and topic demotions by 0.5 (stackable, deterministic); all
   three sets are device-local, bounded and persisted — never published.
+- raw event viewer (web "View raw event JSON" parity): the shared feed
+  card's ⋯ menu (home, profile and author surfaces) offers **View raw event
+  JSON**, opening the note's canonical NIP-01 event object
+  (`id`/`pubkey`/`created_at`/`kind`/`tags`/`content`/`sig`) in a
+  monospace sheet. The object is rebuilt once in the shared codec from the
+  verified event — exactly the bytes the event ID commits to — never the
+  `["EVENT", …]` relay frame wrapper; repost cards serve the embedded
+  original's object (the card displays the original). Feed stores keep a
+  bounded recent-events map for the viewer; ingest never pays the
+  encoding, the sheet serializes on open.
 
 ## 6. Quick create flow
 

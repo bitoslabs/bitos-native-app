@@ -512,37 +512,8 @@ private struct AuthorTarget: Identifiable {
     let value: String
     var id: String { value }
 }
-
-private struct RawEvent: Identifiable {
-    let value: String
-    var id: String { String(value.hashValue) }
-}
-
-private struct RawEventSheet: View {
-    let text: String
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                Text(text)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-            }
-            .background(BitOSTheme.background)
-            .navigationTitle("Raw event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    SheetCloseButton { dismiss() }
-                }
-            }
-        }
-        .preferredColorScheme(BitOSTheme.preferredScheme)
-    }
-}
+// RawEvent / RawEventSheet live in DesignSystem/RawEventSheet.swift (shared
+// with the feed card ⋯ raw-event viewer).
 
 // MARK: - Rows
 

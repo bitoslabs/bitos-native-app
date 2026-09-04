@@ -157,6 +157,9 @@ class HomeViewModel(
     /** Ancestor lookup for sheet row tap-through (opens its thread). */
     fun remixAncestorNote(id: String): space.bitos.core.feed.FeedNote? = repository.remixAncestorNote(id)
 
+    /** Card ⋯ raw-event viewer (NIP-01 canonical object; null out of window). */
+    fun rawEventJson(eventId: String): String? = repository.rawEventJson(eventId)
+
     /** APP-015: re-fetch saved notes missing from the local map. */
     fun loadBookmarked() = repository.loadBookmarked()
 

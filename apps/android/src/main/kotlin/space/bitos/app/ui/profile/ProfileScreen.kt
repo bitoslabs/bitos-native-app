@@ -551,6 +551,7 @@ fun ProfileScreen(
                             onOpenExternalLink = { externalLink = it },
                             onOpenNoteRef = { noteRefTarget = it },
                             onOpenMentionProfile = onOpenMentionProfile,
+                            rawEventJson = { homeViewModel.rawEventJson(note.id) },
                         )
                     }
                 }

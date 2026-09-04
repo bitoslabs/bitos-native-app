@@ -69,6 +69,13 @@ object NostrEventCodec {
         val builder = StringBuilder()
         builder.append("[0,\"").append(pubkey).append("\",")
             .append(createdAt).append(',').append(kind).append(',')
+        appendTagsJson(builder, tags)
+        builder.append(",\"").append(escape(content)).append("\"]")
+        return builder.toString()
+    }
+
+    /** NIP-01 tags array `[["e", …], …]` with exact byte-parity escaping. */
+    private fun appendTagsJson(builder: StringBuilder, tags: List<List<String>>) {
         builder.append('[')
         tags.forEachIndexed { tagIndex, tag ->
             if (tagIndex > 0) builder.append(',')
@@ -80,7 +87,26 @@ object NostrEventCodec {
             builder.append(']')
         }
         builder.append(']')
-        builder.append(",\"").append(escape(content)).append("\"]")
+    }
+
+    /**
+     * The full signed event object (`id`/`pubkey`/`created_at`/`kind`/
+     * `tags`/`content`/`sig`) rebuilt from a verified event. This is the
+     * canonical NIP-01 form the event ID commits to — the same bytes
+     * [serializeForId] hashes — so raw-event viewers show exactly this and
+     * never the `["EVENT", …]` relay frame wrapper.
+     */
+    fun encodeEventJson(event: NostrEvent): String {
+        val builder = StringBuilder(160 + event.content.length)
+        builder.append("{\"id\":\"").append(event.id.value)
+            .append("\",\"pubkey\":\"").append(event.pubkey.value)
+            .append("\",\"created_at\":").append(event.createdAt)
+            .append(",\"kind\":").append(event.kind).append(",\"tags\":")
+        appendTagsJson(builder, event.tags)
+        builder.append(",\"content\":\"").append(escape(event.content)).append('"')
+        val signature = event.signature
+        if (signature == null) builder.append(",\"sig\":null") else builder.append(",\"sig\":\"").append(signature).append('"')
+        builder.append('}')
         return builder.toString()
     }
 

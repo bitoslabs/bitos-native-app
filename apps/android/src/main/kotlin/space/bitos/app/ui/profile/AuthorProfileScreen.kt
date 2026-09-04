@@ -528,6 +528,7 @@ fun AuthorProfileScreen(
                             onOpenExternalLink = { onOpenExternalLink(it) },
                             onOpenNoteRef = { onOpenNoteRef(it) },
                             onOpenMentionProfile = onOpenAuthor,
+                            rawEventJson = { authorRepository.rawEventJson(note.id) },
                         )
                     }
                 }

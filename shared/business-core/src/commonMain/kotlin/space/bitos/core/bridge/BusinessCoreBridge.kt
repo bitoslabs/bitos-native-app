@@ -161,6 +161,25 @@ class BusinessCoreBridge {
     fun relayEoseSubscriptionId(message: String): String? =
         NostrEventCodec.relayEoseSubscriptionId(message)
 
+    /**
+     * NIP-01 canonical event-object JSON (raw-event viewer seam): the signed
+     * object exactly as the event ID commits to it, without the
+     * `["EVENT", …]` relay frame wrapper.
+     */
+    fun eventJson(event: Event): String = NostrEventCodec.encodeEventJson(event.toCore())
+
+    /**
+     * The embedded original event of a kind-6 repost (raw-event viewer:
+     * repost cards display the original's id, so the raw lookup keys on
+     * it). Null when the frame is not a resolvable repost.
+     */
+    fun repostInnerEvent(event: Event): Event? {
+        if (event.kind != NostrKinds.REPOST) return null
+        val relay = RelayUrl.parse(event.relayUrl ?: return null) ?: return null
+        val inner = space.bitos.core.feed.RepostParser.resolve(event.toCore())?.first ?: return null
+        return bridgeEvent(inner, relay)
+    }
+
     fun isFeedKind(kind: Int): Boolean = FeedNote.isFeedKind(kind)
 
     /**

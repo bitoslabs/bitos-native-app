@@ -174,6 +174,14 @@ class FeedRepository(
     private val remixChainEvents = LinkedHashMap<String, NostrEvent>()
     private var chainCounter = 0
 
+    /**
+     * Verified events per note id for the raw-event viewer (card ⋯ menu),
+     * bounded to the window size. Repost cards display the embedded
+     * original, so the inner event is retained under the original's id.
+     * Serialized lazily on open — ingest never pays the encoding.
+     */
+    private val rawEvents = LinkedHashMap<String, NostrEvent>()
+
     /** APP-015: saved-note bodies for ids outside the live feed window. */
     private val bookmarkedNoteMap = LinkedHashMap<String, FeedNote>()
     private val bookmarkCandidates = mutableListOf<NostrEvent>()
@@ -1008,6 +1016,10 @@ class FeedRepository(
 
     private fun absorbNote(event: NostrEvent, fromOlderPage: Boolean = false) {
         val note = FeedNote.from(event)
+        retainRawEvent(event)
+        if (event.kind == NostrKinds.REPOST) {
+            space.bitos.core.feed.RepostParser.resolve(event)?.let { (inner, _) -> retainRawEvent(inner) }
+        }
         val isNew = synchronized(knownNoteIdsLock) { knownNoteIds.add(note.id) }
         if (isNew) {
             if (!fromOlderPage) {
@@ -1114,6 +1126,21 @@ class FeedRepository(
     /** Ancestor note for the sheet rows (tap-through opens its thread). */
     fun remixAncestorNote(id: String): FeedNote? =
         synchronized(remixChainEvents) { remixChainEvents[id] }?.let(FeedNote::from)
+
+    /**
+     * NIP-01 canonical event-object JSON for the card ⋯ raw-event viewer
+     * (null when the event is out of the bounded retention window).
+     */
+    fun rawEventJson(eventId: String): String? =
+        synchronized(rawEvents) { rawEvents[eventId] }?.let(NostrEventCodec::encodeEventJson)
+
+    /** Relay ingest and cache hydration can run on different threads. */
+    private fun retainRawEvent(event: NostrEvent) {
+        synchronized(rawEvents) {
+            rawEvents[event.id.value] = event
+            if (rawEvents.size > RAW_EVENTS_MAX) rawEvents.remove(rawEvents.keys.first())
+        }
+    }
 
     private suspend fun awaitRemixAncestor(id: String): NostrEvent? {
         repeat(CHAIN_AWAIT_POLLS) {
@@ -1290,6 +1317,7 @@ class FeedRepository(
                     event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
                     FeedNote.isFeedKind(event.kind) -> {
                         val note = FeedNote.from(event)
+                        retainRawEvent(event)
                         aggregator.insert(note)
                         if (event.pubkey.value in followingAuthors) followingWindow.insert(note)
                     }
@@ -1642,8 +1670,11 @@ class FeedRepository(
         const val CHAIN_AWAIT_POLLS = 20
         const val CHAIN_AWAIT_INTERVAL_MS = 150L
 
-        /** APP-015: by-id re-fetch bound for the bookmarks page. */
-        const val BOOKMARK_FETCH_MAX = 100
+    /** APP-015: by-id re-fetch bound for the bookmarks page. */
+    const val BOOKMARK_FETCH_MAX = 100
+
+    /** Raw-event retention for the card ⋯ viewer (covers the 200-note window). */
+    const val RAW_EVENTS_MAX = 256
 
         /** Verified events per one transactional cache flush (audit R6). */
         const val PERSIST_BATCH_MAX = 64

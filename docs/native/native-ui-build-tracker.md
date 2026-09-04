@@ -130,7 +130,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 - [x] Font-scale-safe Show more/less — line-based 8-line clamp (font scaling can't break it): Android `RichText` gained `maxLines` + `onOverflow` (`hasVisualOverflow`) with a Show more/less TextButton; iOS `ExpandableRichText` measures clamped vs natural height (hidden fixedSize twin + PreferenceKeys, probe stops once offered) — compact card lists only, full-screen pages never clamp
 - [ ] Poll display: bars, my vote, voters, closed
 - [x] Animated LikeButton (scale-bounce + haptic) per §2.4 — `AnimatedLikeIcon` (Android components: Animatable spring ≈ elasticOut, 300 ms, LongPress haptic on like-only, Solar heart Bold/Linear, `minimumInteractiveComponentSize` 48 dp) + iOS `LikeTapIcon` (spring 0.3/0.35 + light impact on like-only); adopted in both compact card action rows
-- [ ] Compact variant (bookmarks/search)
+- [ ] Compact variant (bookmarks/search) — 2026-09-04: iOS Discover search reuses the full card instead (home `NoteCardRow` → shared `DesignSystem/FeedNoteCard.swift`, now also the note-card home for `ExpandableRichText`/`LikeTapIcon`/`PollOptionsView`/`RelativeTimeText`); Android search still on `SearchCard`
 - [x] TEST: tokenizer contract (entities/links/hashtags/inert/merge/JSON shape) + NIP-36 projection — shared suites green
 
 ### APP-006 — Stories (spec §3.6) — W3
@@ -188,8 +188,8 @@ Wave legend per spec §8. W0 foundation is prior work.
 
 ### APP-010 — Discover (spec §3.10)
 
-- [x] Search (NIP-50) + topic chips + npub resolve (W0)
-- [x] Results tabs: Posts / People / Hashtags — shared `SearchResults` fan-in (3 common tests); Android tab row + People rows (Follow/Following via feed VM) + Hashtags rows (tap → re-search); iOS mirror via bridge JSON
+- [x] Search (NIP-50) + topic chips + npub resolve (W0); 2026-09-04: iOS search bar moved onto the design-system `BitosSearchField` (shared `BitosTextField.swift`, medium = 44 pt touch target, magnifier lead, inline clear, focused accent border, search keyboard) + Cancel affordance; Bitz search overlay adopts the same field
+- [x] Results tabs: Posts / People / Hashtags — shared `SearchResults` fan-in (3 common tests); Android tab row + People rows (Follow/Following via feed VM) + Hashtags rows (tap → re-search); iOS mirror via bridge JSON. 2026-09-04: iOS Posts results render the shared home card (`NoteCardRow` promoted to `DesignSystem/FeedNoteCard.swift` as `FeedNoteCard`; like/comment/repost/zap/bookmark/poll/mention/external-link wired to the shared `FeedStore`, ⋯ menu + note-ref open stay home-only) and the people/hashtag fan-in rows are memoized per data change (`.task(id:)` on a result/profile signature) so typing no longer re-runs the bridge JSON per render
 - [ ] Trending mosaic grid + skeleton 18 + load-more + error/empty
 - [ ] User rows: NIP-05 badge, follow/unfollow
 - [ ] Fullscreen image viewer (zoom, author bar, follow, open-note bar)

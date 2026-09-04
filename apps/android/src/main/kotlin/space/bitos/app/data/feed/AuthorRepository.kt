@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.feed.FeedNote
+import space.bitos.core.model.NostrEvent
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.model.RelayUrl
@@ -42,6 +43,12 @@ class AuthorRepository(
     private val hasher: EventHasher = Sha256EventHasher,
 ) {
     private val notes = LinkedHashMap<String, FeedNote>()
+
+    /**
+     * Verified events per note id for the raw-event viewer (card ⋯ menu),
+     * bounded. Serialized lazily on open — ingest never pays the encoding.
+     */
+    private val rawEvents = LinkedHashMap<String, NostrEvent>()
     private var profile: ProfileMetadata? = null
     private var profileAt = Long.MIN_VALUE
     private var pubkey: String? = null
@@ -82,6 +89,7 @@ class AuthorRepository(
                             }
                             FeedNote.isFeedKind(event.kind) -> {
                                 val note = FeedNote.from(event)
+                                retainRawEvent(event)
                                 if (!notes.containsKey(note.id)) {
                                     notes[note.id] = note
                                     publishState()
@@ -99,6 +107,7 @@ class AuthorRepository(
     fun open(authorPubkey: String) {
         pubkey = authorPubkey
         notes.clear()
+        synchronized(rawEvents) { rawEvents.clear() }
         profile = null
         profileAt = Long.MIN_VALUE
         page = 0
@@ -199,11 +208,25 @@ class AuthorRepository(
         )
     }
 
+    /** NIP-01 canonical event-object JSON for the card ⋯ raw-event viewer. */
+    fun rawEventJson(eventId: String): String? =
+        synchronized(rawEvents) { rawEvents[eventId] }?.let(NostrEventCodec::encodeEventJson)
+
+    private fun retainRawEvent(event: NostrEvent) {
+        synchronized(rawEvents) {
+            rawEvents[event.id.value] = event
+            if (rawEvents.size > RAW_EVENTS_MAX) rawEvents.remove(rawEvents.keys.first())
+        }
+    }
+
     private companion object {
         /** Hard page deadline (web REELS_PAGE_MAX_WAIT_MS parity). */
         const val PAGE_MAX_WAIT_MS = 4_000L
 
         /** A page carrying this many NEW notes keeps `canLoadMore` true. */
         const val FRESH_PAGE_TARGET = 5
+
+        /** Raw-event retention bound for the card ⋯ viewer. */
+        const val RAW_EVENTS_MAX = 100
     }
 }

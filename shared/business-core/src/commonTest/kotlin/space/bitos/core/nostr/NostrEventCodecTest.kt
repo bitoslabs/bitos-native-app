@@ -180,6 +180,44 @@ class NostrEventCodecTest {
     }
 
     @Test
+    fun eventJsonRebuildsTheCanonicalSignedObject() {
+        val relay = RelayUrl.parse("wss://relay.damus.io")!!
+        val decoded = NostrEventCodec.decodeRelayEvent(hasher, VALID_SIGNED_FRAME, relay)
+        // Canonical field order, relay frame wrapper dropped: exactly the
+        // object the event ID commits to.
+        assertEquals(
+            "{\"id\":\"${decoded.id.value}\",\"pubkey\":\"${decoded.pubkey.value}\"," +
+                "\"created_at\":${decoded.createdAt},\"kind\":${decoded.kind}," +
+                "\"tags\":[[\"t\",\"bitcoin\"]],\"content\":\"gm from BitOS\"," +
+                "\"sig\":\"${decoded.signature}\"}",
+            NostrEventCodec.encodeEventJson(decoded),
+        )
+    }
+
+    @Test
+    fun eventJsonEscapesLikeCanonicalSerialization() {
+        val tags = listOf(listOf("e", "bb".repeat(32)), listOf("p", "cc".repeat(32)))
+        val content = "Hello BitOS \"quote\"\nline2\ttab"
+        val event = space.bitos.core.model.NostrEvent(
+            id = EventId.parse(NostrEventCodec.computeId(hasher, pubkey, 1_710_000_000, 1, tags, content))!!,
+            pubkey = Pubkey.parse(pubkey)!!,
+            createdAt = 1_710_000_000,
+            kind = 1,
+            tags = tags,
+            content = content,
+            signature = "ee".repeat(64),
+            receivedFromRelay = RelayUrl.parse("wss://relay.test")!!,
+        )
+        assertTrue(NostrEventCodec.verifyId(hasher, event))
+        assertEquals(
+            "{\"id\":\"${event.id.value}\",\"pubkey\":\"$pubkey\",\"created_at\":1710000000,\"kind\":1," +
+                "\"tags\":[[\"e\",\"${"bb".repeat(32)}\"],[\"p\",\"${"cc".repeat(32)}\"]]," +
+                "\"content\":\"Hello BitOS \\\"quote\\\"\\nline2\\ttab\",\"sig\":\"${"ee".repeat(64)}\"}",
+            NostrEventCodec.encodeEventJson(event),
+        )
+    }
+
+    @Test
     fun decodeRelayEventFrameSharesDecodeRelayEventContract() {
         val relay = RelayUrl.parse("wss://relay.damus.io")!!
         // Non-EVENT frames throw exactly like decodeRelayEvent.

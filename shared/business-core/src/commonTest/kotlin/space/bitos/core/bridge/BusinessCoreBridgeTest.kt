@@ -41,6 +41,49 @@ class BusinessCoreBridgeTest {
         assertNull(bridge.decodeEvent("""["NOTICE","x"]""", "wss://relay.damus.io"))
     }
 
+    @Test
+    fun eventJsonEmitsTheCanonicalSignedObject() {
+        val event = bridge.decodeEvent(VALID_TEXT_NOTE_MESSAGE, "wss://relay.damus.io")
+        assertNotNull(event)
+        val json = bridge.eventJson(event)
+        assertTrue(json.startsWith("{\"id\":\"${event.id}\",\"pubkey\":\"${event.pubkey}\""), json)
+        assertTrue(json.contains("\"created_at\":1710000000,\"kind\":1,"), json)
+        assertTrue(json.contains("\"tags\":[[\"t\",\"bitcoin\"]],\"content\":\"gm from BitOS\""), json)
+        assertTrue(json.endsWith(",\"sig\":\"${event.signature}\"}"), json)
+    }
+
+    @Test
+    fun repostInnerEventExposesTheEmbeddedOriginal() = kotlinx.coroutines.runBlocking {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { 1_710_000_000 })
+        val signer = space.bitos.core.identity.DeterministicTestSigner(
+            "4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d",
+        )
+        val author = signer.publicKeyHex()
+        val original = composer.composeTextNote(author, "original content here")!!
+        val originalFrame = composer.publishMessage(original, signer.sign(original.messageBytes())!!)!!
+        val embedded = originalFrame.removePrefix("""["EVENT",""").removeSuffix("]")
+
+        val tags = listOf(listOf("e", original.idHex), listOf("p", author))
+        val repostId = space.bitos.core.nostr.NostrEventCodec.computeId(
+            space.bitos.core.nostr.Sha256EventHasher, author, 1_710_000_100, 6, tags, embedded,
+        )
+        val unsigned = space.bitos.core.publish.UnsignedNote(repostId, author, 1_710_000_100, 6, tags, embedded)
+        // publishMessage emits ["EVENT", {...}]; the relay gate wants the
+        // full 3-element frame, so add a subscription id.
+        val frame = composer.publishMessage(unsigned, signer.sign(unsigned.messageBytes())!!)!!
+        val message = """["EVENT","sub1",""" + frame.removePrefix("""["EVENT",""")
+        val repost = bridge.decodeEvent(message, "wss://relay.damus.io")
+        assertNotNull(repost)
+        val inner = bridge.repostInnerEvent(repost)
+        assertNotNull(inner)
+        assertEquals(original.idHex, inner.id)
+        assertEquals("original content here", inner.content)
+        // Non-repost frames never resolve.
+        val note = bridge.decodeEvent(VALID_TEXT_NOTE_MESSAGE, "wss://relay.damus.io")
+        assertNotNull(note)
+        assertNull(bridge.repostInnerEvent(note))
+    }
+
     // ── APP-011 DM presentation bridge contract ──────────────────
 
     private val me = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
