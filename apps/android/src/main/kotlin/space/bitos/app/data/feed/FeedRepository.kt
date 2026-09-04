@@ -143,6 +143,7 @@ class FeedRepository(
     private val pool: RelayPool,
     private val hasher: EventHasher = Sha256EventHasher,
     private val cache: EventCache,
+    private val followingProjectionStore: FollowingProjectionStore = InMemoryFollowingProjectionStore(),
     /** Injectable so contract tests drive the APP-004 empty-feed backoff
      * without real-time waits; production uses the shared-core policy. */
     private val retryDelayMs: (Int) -> Long = EmptyFeedRetry::delayMs,
@@ -160,6 +161,9 @@ class FeedRepository(
     private val aggregator = FeedAggregator(maxItems = 200)
     private val followingWindow = FeedAggregator(maxItems = 200)
     private val contactCandidates = mutableListOf<NostrEvent>()
+    /** Public-only cached kind-3 heads retained across the launch ordering
+     * race: cache hydration can complete before an account becomes active. */
+    private val cachedContactHeads = linkedMapOf<String, NostrEvent>()
     private val followingAuthors = mutableSetOf<String>()
     private var accountPubkey: String? = null
     private var mutedPubkeys: Set<String> = emptySet()
@@ -681,6 +685,7 @@ class FeedRepository(
         val updated = if (add) followingAuthors + author else followingAuthors - author
         followingAuthors.clear()
         followingAuthors.addAll(updated)
+        persistFollowingProjection()
         followingSubscribed = false
         subscribeFollowing()
         publishFromIntent()
@@ -829,6 +834,8 @@ class FeedRepository(
             followingResolved = pubkey == null,
         )
         if (pubkey != null) {
+            cachedContactHeads[pubkey]?.let { absorbContactList(it, persistHead = false) }
+            restoreFollowingProjection(pubkey)
             // The signed-in profile is not necessarily an author in the feed.
             // Request its kind-0 head explicitly so the You surface has a
             // fresh projection on a cold start and after account switching.
@@ -1267,7 +1274,7 @@ class FeedRepository(
         publishFromIntent()
     }
 
-    private fun absorbContactList(event: NostrEvent) {
+    private fun absorbContactList(event: NostrEvent, persistHead: Boolean = true) {
         val account = accountPubkey ?: return
         if (event.pubkey.value != account) return
         contactCandidates.add(event)
@@ -1281,7 +1288,41 @@ class FeedRepository(
         followingSubscribed = false
         subscribeFollowing()
         mutableState.value = mutableState.value.copy(followingResolved = true)
+        // The kind-3 head is the source for every Following surface. Keep
+        // the verified event in the bounded cache so Home, Bitz and Profile
+        // can render it during cold start before relays answer.
+        if (persistHead) persist(event)
+        persistFollowingProjection()
         publishState()
+    }
+
+    private fun cacheContactHead(event: NostrEvent) {
+        if (event.kind != NostrKinds.CONTACT_LIST) return
+        val existing = cachedContactHeads[event.pubkey.value]
+        if (existing != null && existing.createdAt > event.createdAt) return
+        cachedContactHeads[event.pubkey.value] = event
+        if (cachedContactHeads.size > 8) {
+            val oldest = cachedContactHeads.minByOrNull { it.value.createdAt }?.key
+            if (oldest != null) cachedContactHeads.remove(oldest)
+        }
+    }
+
+    private fun persistFollowingProjection() {
+        val account = accountPubkey ?: return
+        followingProjectionStore.write(account, followingAuthors)
+    }
+
+    private fun restoreFollowingProjection(account: String) {
+        val follows = followingProjectionStore.read(account)
+            .filter { space.bitos.core.model.Pubkey.parse(it) != null }
+            .take(ContactList.MAX_FOLLOWS)
+        if (follows.isEmpty()) return
+        followingAuthors.clear()
+        followingAuthors.addAll(follows)
+        followingAuthors.forEach(::enqueueProfile)
+        followingSubscribed = false
+        subscribeFollowing()
+        mutableState.value = mutableState.value.copy(followingResolved = true)
     }
 
     private fun subscribeFollowing() {
@@ -1314,6 +1355,10 @@ class FeedRepository(
                 .getOrNull().orEmpty()
             cached.forEach { event ->
                 when {
+                    event.kind == NostrKinds.CONTACT_LIST -> {
+                        cacheContactHead(event)
+                        absorbContactList(event, persistHead = false)
+                    }
                     event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
                     FeedNote.isFeedKind(event.kind) -> {
                         val note = FeedNote.from(event)

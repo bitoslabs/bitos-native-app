@@ -22,6 +22,7 @@ import space.bitos.core.feed.FeedNote
 import space.bitos.core.identity.DeterministicTestSigner
 import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.core.model.RelayUrl
+import space.bitos.core.model.NostrKinds
 import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
 import java.util.concurrent.CountDownLatch
@@ -595,6 +596,33 @@ class FeedRepositoryTest {
         transport.emit(VALID_TEXT_NOTE_MESSAGE)
         val state = withTimeout(20_000) { repository.state.first { it.notes.isNotEmpty() } }
         assertEquals(listOf("second author note"), state.notes.map { it.content })
+    }
+
+    @Test
+    fun hydratesFollowingListFromCachedContactHead() = runBlocking {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val followedAuthor = "e93fbf1000405bc8bb536a8ae37eebe349ebde8ecae3779ad3786def739aa301"
+        repository.start()
+        repository.setAccount(account)
+        transport.emit(VALID_CONTACT_LIST_MESSAGE)
+        withTimeout(20_000) { repository.state.first { it.followingResolved } }
+        withTimeout(20_000) {
+            while (cache.stored.none { it.kind == NostrKinds.CONTACT_LIST }) delay(10)
+        }
+
+        // A process restart must retain the account's Following projection
+        // even when cache hydration finishes before identity restoration and
+        // no relay contact-list response has arrived yet.
+        repository.stop()
+        val restarted = FeedRepository(scope, pool, hasher, cache)
+        restarted.start()
+        withTimeout(20_000) { restarted.state.first { it.hasLoadedAnyEvent } }
+        restarted.setAccount(account)
+        val hydrated = withTimeout(20_000) {
+            restarted.state.first { it.followingResolved && followedAuthor in it.following }
+        }
+        assertTrue(followedAuthor in hydrated.following)
+        restarted.stop()
     }
 
     @Test

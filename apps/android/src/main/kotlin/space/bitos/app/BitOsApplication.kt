@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import space.bitos.app.data.feed.DefaultRelays
 import space.bitos.app.data.feed.FeedRepository
+import space.bitos.app.data.feed.SharedPreferencesFollowingProjectionStore
 import space.bitos.app.data.db.SqliteEventCache
 import space.bitos.app.data.relay.OkHttpRelayTransport
 import space.bitos.app.data.relay.RelayPool
@@ -71,6 +72,9 @@ class BitOsApplication : Application() {
             scope = applicationScope,
             pool = relayPool,
             cache = SqliteEventCache(this),
+            followingProjectionStore = SharedPreferencesFollowingProjectionStore(
+                getSharedPreferences("bitos.following", MODE_PRIVATE),
+            ),
             // Web feedPreferences parity: read live so a settings change
             // reconciles on the next publish without rebuilding the repo.
             showProtocolNotes = { settingsStore.snapshot.value.showProtocolNotes },

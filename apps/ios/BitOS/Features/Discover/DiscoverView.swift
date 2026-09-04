@@ -55,10 +55,10 @@ struct DiscoverView: View {
         // round-trip it guards is not.
         .task(id: fanInSignature) {
             peopleRows = Self.derivePeople(
-                results: environment.searchStore.results,
-                profiles: environment.searchStore.profiles
+                results: displayedResults,
+                profiles: displayedProfiles
             )
-            hashtagHits = Self.deriveHashtags(results: environment.searchStore.results)
+            hashtagHits = Self.deriveHashtags(results: displayedResults)
         }
         .onChange(of: input) { _, newValue in
             // SearchStore applies the shared 400 ms relay debounce.
@@ -120,6 +120,32 @@ struct DiscoverView: View {
 
     // MARK: - Search bar
 
+    /// The normal feed window is the local search history. The search store
+    /// contributes matching events that arrive after the query starts.
+    private var displayedResults: [FeedNote] {
+        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cached = environment.feedStore.notes.filter { note in
+            guard [1, 21, 22].contains(note.kind) else { return false }
+            if let pubkey = environment.searchStore.resolvedNpub {
+                return note.pubkey == pubkey
+            }
+            if normalized.hasPrefix("#") {
+                let tag = String(normalized.dropFirst())
+                return !tag.isEmpty && note.hashtags.contains { $0.lowercased() == tag }
+            }
+            return note.content.lowercased().contains(normalized)
+                || note.hashtags.contains { $0.lowercased().contains(normalized) }
+        }
+        return (environment.searchStore.results + cached)
+            .reduce(into: [String: FeedNote]()) { $0[$1.id] = $1 }
+            .values
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var displayedProfiles: [String: ProfileMetadata] {
+        environment.feedStore.profiles.merging(environment.searchStore.profiles) { _, searchProfile in searchProfile }
+    }
+
     private var searchBar: some View {
         HStack(spacing: BitOSTheme.Spacing.sm) {
             BitosSearchField("Search notes, #hashtags, npub…", text: $input, focus: $searchFocused)
@@ -148,7 +174,7 @@ struct DiscoverView: View {
 
     private var tabRow: some View {
         let tabs: [(String, Int)] = [
-            ("Posts", environment.searchStore.results.count),
+            ("Posts", displayedResults.count),
             ("People", peopleRows.count),
             ("Hashtags", hashtagHits.count),
         ]
@@ -196,7 +222,7 @@ struct DiscoverView: View {
                     } label: {
                         CreatorCard(
                             pubkey: npub,
-                            profile: environment.searchStore.profiles[npub]
+                            profile: displayedProfiles[npub]
                                 ?? environment.feedStore.profiles[npub]
                         )
                     }
@@ -206,10 +232,10 @@ struct DiscoverView: View {
                     .padding(.horizontal, BitOSTheme.Spacing.screen)
                     .padding(.bottom, BitOSTheme.Spacing.sm)
                 }
-                if environment.searchStore.results.isEmpty {
+                if displayedResults.isEmpty {
                     resultsEmptyState
                 }
-                ForEach(environment.searchStore.results) { note in
+                ForEach(displayedResults) { note in
                     resultCardRow(note)
                 }
             }
@@ -306,8 +332,8 @@ struct DiscoverView: View {
     /// profile fields the rows render. Cheap to rebuild every render; the
     /// JSON derivation it gates runs once per actual change.
     private var fanInSignature: String {
-        let ids = environment.searchStore.results.map(\.id).joined(separator: ",")
-        let profileDigest = environment.searchStore.profiles.values
+        let ids = displayedResults.map(\.id).joined(separator: ",")
+        let profileDigest = displayedProfiles.values
             .map { "\($0.pubkey)|\($0.name ?? "")|\($0.displayName ?? "")|\($0.nip05 ?? "")" }
             .sorted()
             .joined(separator: ",")

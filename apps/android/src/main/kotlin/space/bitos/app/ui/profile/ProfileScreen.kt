@@ -690,6 +690,10 @@ fun ProfileScreen(
             pubkeys = homeViewModel.state.value.following,
             profiles = homeViewModel.state.value.profiles,
             onDismiss = { showFollowing = false },
+            onOpenProfile = { pubkey ->
+                showFollowing = false
+                onOpenMentionProfile(pubkey)
+            },
         )
     }
 
@@ -802,6 +806,7 @@ private fun ConnectionsBottomSheet(
     pubkeys: Set<String>,
     profiles: Map<String, space.bitos.core.model.ProfileMetadata>,
     onDismiss: () -> Unit,
+    onOpenProfile: (String) -> Unit,
 ) {
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -817,7 +822,13 @@ private fun ConnectionsBottomSheet(
                 pubkeys.sorted().take(100).forEach { pubkey ->
                     val profile = profiles[pubkey]
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(
+                                onClickLabel = "Open " + (profile?.bestDisplayName ?: "profile"),
+                            ) { onOpenProfile(pubkey) }
+                            .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         space.bitos.app.ui.components.PubkeyAvatar(pubkey = pubkey, size = 42, pictureUrl = profile?.picture, label = profile?.bestDisplayName)

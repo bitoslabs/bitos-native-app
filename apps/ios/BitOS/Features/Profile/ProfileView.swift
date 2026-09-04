@@ -26,6 +26,8 @@ struct ProfileView: View {
     @State private var bitzPlayerTarget: BitzPlayerTarget?
     @State private var showFollowing = false
     @State private var showFollowersInfo = false
+    @State private var followingProfilePubkey: String?
+    @State private var pendingFollowingProfilePubkey: String?
     @State private var moreMenu: AppMenuPresentation?
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
@@ -107,11 +109,29 @@ struct ProfileView: View {
             .padding(BitOSTheme.Spacing.base)
             .presentationDetents([.medium])
         }
-        .sheet(isPresented: $showFollowing) {
+        .sheet(isPresented: $showFollowing, onDismiss: {
+            guard let pubkey = pendingFollowingProfilePubkey else { return }
+            pendingFollowingProfilePubkey = nil
+            followingProfilePubkey = pubkey
+        }) {
             connectionsSheet
         }
         .sheet(isPresented: $showFollowersInfo) {
             followersInfoSheet
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { followingProfilePubkey != nil },
+            set: { if !$0 { followingProfilePubkey = nil } }
+        )) {
+            if let pubkey = followingProfilePubkey {
+                AuthorProfileFullView(
+                    authorPubkey: pubkey,
+                    onClose: { followingProfilePubkey = nil }
+                )
+                .environment(environment)
+                .environment(identity)
+                .environment(settings)
+            }
         }
         .fullScreenCover(isPresented: $showEdit) {
             ProfileEditSheet(
@@ -132,6 +152,12 @@ struct ProfileView: View {
             .environment(identity)
             .environment(settings)
             .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+        // Entering You asks relays for fresh account heads. The shared feed
+        // store keeps its cached profile/contact projection on screen while
+        // the verified responses arrive and persist.
+        .onAppear {
+            environment.feedStore.refreshProfileAndFollowing()
         }
     }
 
@@ -246,6 +272,20 @@ struct ProfileView: View {
                 moreMenuButton(account: account, profile: profile)
             }
             .padding(.horizontal, BitOSTheme.Spacing.base)
+            if feed.isRefreshingAccountHeads {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Refreshing from relays…")
+                        .font(.system(size: 12, weight: .medium))
+                    if feed.relayHealth.connected > 0 {
+                        Text("· \(feed.relayHealth.connected) connected")
+                            .font(.system(size: 12))
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .accessibilityLabel("Refreshing profile from relays")
+            }
             profileCompletionCard(profile)
             // ── Stats row (Posts · Following · Followers · Bitz · Sats) ──
             HStack {
@@ -338,24 +378,64 @@ struct ProfileView: View {
         NavigationStack {
             List(Array(environment.feedStore.following).sorted(), id: \.self) { pubkey in
                 let profile = environment.feedStore.profiles[pubkey]
-                HStack(spacing: 12) {
-                    HexAvatarView(pubkey: pubkey, size: 42, imageURL: safeProfilePictureURL(profile?.picture), label: profile?.bestDisplayName)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
-                            .font(.system(size: 15, weight: .semibold))
-                        if let name = profile?.name, !name.isEmpty {
-                            Text("@\(name)").font(.system(size: 12)).foregroundStyle(BitOSTheme.textSecondary)
+                Button {
+                    pendingFollowingProfilePubkey = pubkey
+                    showFollowing = false
+                } label: {
+                    HStack(spacing: 12) {
+                        HexAvatarView(
+                            pubkey: pubkey,
+                            size: 42,
+                            imageURL: safeProfilePictureURL(profile?.picture),
+                            label: profile?.bestDisplayName,
+                            hasLightning: !(profile?.lud16 ?? "").isEmpty
+                        )
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .lineLimit(1)
+                                if !(profile?.nip05 ?? "").isEmpty {
+                                    Image(systemName: AppIcons.checkCircle)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(BitOSTheme.cyan)
+                                }
+                                if !(profile?.lud16 ?? "").isEmpty {
+                                    AppIcons.image(for: AppIcons.zap)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(BitOSTheme.zap)
+                                }
+                            }
+                            if let name = profile?.name, !name.isEmpty {
+                                Text("@\(name)").font(.system(size: 12)).foregroundStyle(BitOSTheme.textSecondary)
+                            }
                         }
                     }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey)) profile")
             }
             .overlay {
                 if environment.feedStore.following.isEmpty {
                     ContentUnavailableView("No following yet", systemImage: "person.2", description: Text("Follow creators to build your timeline."))
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if environment.feedStore.isRefreshingFollowingProfiles {
+                    Label("Loading profile details from relays…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(BitOSTheme.background)
+                        .accessibilityLabel("Loading following profile details from relays")
+                }
+            }
             .navigationTitle("Following")
             .presentationDetents([.medium, .large])
+            .task {
+                environment.feedStore.refreshFollowingProfiles()
+            }
         }
     }
 

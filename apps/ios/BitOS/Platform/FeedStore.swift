@@ -74,6 +74,10 @@ final class FeedStore {
     var localActions = LocalActions()
     private(set) var accountPubkey: String?
     private(set) var followingResolved = false
+    /// Visible only on the You surface while its explicit relay-head refresh
+    /// is awaiting a verified profile or contact-list response.
+    private(set) var isRefreshingAccountHeads = false
+    private(set) var isRefreshingFollowingProfiles = false
     private(set) var comments: [String: [FeedNote]] = [:]
     /** APP-009 X-style display list per thread (shared assembly rule). */
     private(set) var threads: [String: [ThreadDisplayItem]] = [:]
@@ -114,6 +118,14 @@ final class FeedStore {
     private var window: (any FeedWindowing)?
     private var followingWindow: (any FeedWindowing)?
     private var followingAuthors: Set<String> = []
+    /// Newest kind-3 head accepted for the active account. Relay responses
+    /// can arrive out of order, so arrival order must not replace a newer
+    /// cached/live contact list.
+    private var contactHeadAt: Int64?
+    /// Cache hydration can win the launch race against account activation.
+    /// Hold a tiny public-only newest-head projection until `setAccount` can
+    /// decide whether it belongs to the active identity.
+    private var cachedContactHeads: [String: VerifiedEvent] = [:]
     private var followingSubscribed = false
     private var commentThreads: [String: [FeedNote]] = [:]
     private var bookmarked: [String] = []
@@ -123,6 +135,9 @@ final class FeedStore {
     private var tallyTargets: Set<String> = []
     private var collectTask: Task<Void, Never>?
     private var healthTask: Task<Void, Never>?
+    private var accountHeadRefreshTask: Task<Void, Never>?
+    private var followingProfilesRefreshTask: Task<Void, Never>?
+    private var followingProfileRefreshPending: Set<String> = []
     private var retryTask: Task<Void, Never>?
     private var retryAttempt = 0
     private var olderCounter = 0
@@ -241,6 +256,10 @@ final class FeedStore {
         profileFallbackTasks.removeAll()
         healthTask?.cancel()
         healthTask = nil
+        accountHeadRefreshTask?.cancel()
+        accountHeadRefreshTask = nil
+        followingProfilesRefreshTask?.cancel()
+        followingProfilesRefreshTask = nil
         retryTask?.cancel()
         retryTask = nil
         Task { await pool.broadcast(self.client.close(subscriptionId: self.currentSubscriptionId)) }
@@ -616,7 +635,12 @@ final class FeedStore {
         case .eose(let subId, let relay):
             return .eose(subscriptionId: subId, relay: relay)
         case .event(let gatedEvent):
-            let persists = client.isFeedKind(gatedEvent.event.kind) || client.isProfileKind(gatedEvent.event.kind)
+            // Account heads are part of the usable offline projection too.
+            // In particular, the kind-3 contact list powers Home, Bitz and
+            // the You → Following sheet before a relay has reconnected.
+            let persists = client.isFeedKind(gatedEvent.event.kind)
+                || client.isProfileKind(gatedEvent.event.kind)
+                || gatedEvent.event.kind == 3
             return .event(gatedEvent, tagsJson: persists ? client.tagsToJson(gatedEvent.event.tags) : nil)
         }
     }
@@ -656,6 +680,9 @@ final class FeedStore {
             }
         } else if event.kind == 3 {
             absorbContactList(gated)
+            // DAT-003: retain the verified newest contact-list head so the
+            // following projection is available at the next cold start.
+            if event.pubkey == accountPubkey { persist(event, tagsJson: tagsJson) }
         } else if event.kind == 9735 {
             let target = event.tags.first { $0.first == "e" }?.dropFirst().first
             if let target {
@@ -998,6 +1025,7 @@ final class FeedStore {
         } else {
             followingAuthors.remove(author)
         }
+        persistFollowingProjection()
         followingSubscribed = false
         subscribeFollowing()
         publishState()
@@ -1165,6 +1193,7 @@ final class FeedStore {
     func setAccount(_ pubkey: String?) {
         accountPubkey = pubkey
         followingAuthors.removeAll()
+        contactHeadAt = nil
         followingSubscribed = false
         followingResolved = pubkey == nil
         // Shared `AccountBootstrap`: a new account episode re-arms the head
@@ -1172,11 +1201,67 @@ final class FeedStore {
         accountHeadAttempts = [0, 0, 0, 0]
         bookmarkHeadReceived = false
         lastConnectedRelays = 0
-        if let pubkey { requestAccountHeads(for: pubkey) }
+        if let pubkey {
+            // A verified cached head establishes the replacement watermark;
+            // the local optimistic projection then remains visible until a
+            // newer relay head reconciles it.
+            restoreCachedContactHead(for: pubkey)
+            restoreFollowingProjection(for: pubkey)
+            requestAccountHeads(for: pubkey)
+        }
         bookmarked.removeAll()
         blocked.removeAll()
         blockHeadAt = nil
         publishState()
+    }
+
+    /// Profile "You" pull-to-fresh equivalent: request only the two account
+    /// heads rendered by that surface. Cached projections remain visible
+    /// until verified relay responses replace them.
+    func refreshProfileAndFollowing() {
+        guard let pubkey = accountPubkey else { return }
+        isRefreshingAccountHeads = true
+        accountHeadRefreshTask?.cancel()
+        accountHeadRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            self.isRefreshingAccountHeads = false
+        }
+        requestProfile(pubkey, force: true)
+        if let request = (bridgeFacade().contactListRequest(
+            subscriptionId: "bitos-contacts",
+            accountPubkey: pubkey
+        ) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+    }
+
+    /// The Following sheet owns its presentation, while this store owns the
+    /// relay request for its profile metadata. Bound the fan-in to the same
+    /// contact-list maximum and request in normal kind-0 batches.
+    func refreshFollowingProfiles() {
+        let authors = Array(followingAuthors).sorted().prefix(200)
+        guard !authors.isEmpty else { return }
+        followingProfileRefreshPending = Set(authors)
+        isRefreshingFollowingProfiles = true
+        followingProfilesRefreshTask?.cancel()
+        followingProfilesRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            self.followingProfileRefreshPending.removeAll()
+            self.isRefreshingFollowingProfiles = false
+        }
+        let profilesToRequest = Array(authors)
+        for start in stride(from: 0, to: profilesToRequest.count, by: Self.profileBatchSize) {
+            let end = min(start + Self.profileBatchSize, profilesToRequest.count)
+            let batch = Array(profilesToRequest[start..<end])
+            profileRequestCounter += 1
+            let request = client.profileRequest(
+                subscriptionId: "bitos-following-profiles-\(profileRequestCounter)",
+                authors: batch
+            )
+            Task { await pool.broadcast(request) }
+        }
     }
 
     // MARK: - Cold-start account bootstrap (shared `AccountBootstrap`)
@@ -1249,12 +1334,77 @@ final class FeedStore {
         // (Ingest verified the frame; the author check filters.)
         guard event.pubkey == account,
               let authors = (bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) else { return }
+        guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
+        followingAuthors = Set(authors)
+        contactHeadAt = event.createdAt
+        persistFollowingProjection()
+        followingAuthors.forEach { enqueueProfile($0) }
+        followingSubscribed = false
+        subscribeFollowing()
+        followingResolved = true
+        finishAccountHeadRefresh()
+        publishState()
+    }
+
+    /// Replays a cache row through the same verified contact-list extractor
+    /// used for relay frames. `StoredEvent` rows entered this cache only after
+    /// relay verification, and rebuilding its canonical EVENT wrapper keeps
+    /// the shared parser as the sole owner of kind-3 tag semantics.
+    private func absorbStoredContactList(_ event: VerifiedEvent) {
+        guard let account = accountPubkey, event.pubkey == account,
+              let authors = bridgeFacade().contactListAuthors(
+                  message: "[\"EVENT\",\"bitos-cache\",\(client.eventJson(event))]",
+                  relayUrl: event.relayUrl ?? "wss://relay.damus.io"
+              ) as? [String] else { return }
+        guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
+        followingAuthors = Set(authors)
+        contactHeadAt = event.createdAt
+        persistFollowingProjection()
+        followingAuthors.forEach { enqueueProfile($0) }
+        followingSubscribed = false
+        subscribeFollowing()
+        followingResolved = true
+        finishAccountHeadRefresh()
+    }
+
+    private func cacheContactHead(_ event: VerifiedEvent) {
+        guard event.kind == 3 else { return }
+        if let existing = cachedContactHeads[event.pubkey], existing.createdAt > event.createdAt { return }
+        cachedContactHeads[event.pubkey] = event
+        if cachedContactHeads.count > 8 {
+            let oldest = cachedContactHeads.min { $0.value.createdAt < $1.value.createdAt }?.key
+            if let oldest { cachedContactHeads.removeValue(forKey: oldest) }
+        }
+    }
+
+    private func restoreCachedContactHead(for pubkey: String?) {
+        guard let pubkey, let event = cachedContactHeads[pubkey] else { return }
+        absorbStoredContactList(event)
+    }
+
+    /// A follow tap is optimistic and its relay echo can arrive after the
+    /// process is closed. Keep a tiny account-scoped projection so You has
+    /// rows immediately on the next launch; a verified kind-3 head always
+    /// replaces it during normal reconciliation.
+    private func persistFollowingProjection() {
+        guard let account = accountPubkey else { return }
+        let authors = followingAuthors.sorted().prefix(500)
+        UserDefaults.standard.set(Array(authors), forKey: Self.followingCacheKey(account))
+    }
+
+    private func restoreFollowingProjection(for account: String) {
+        let stored = UserDefaults.standard.stringArray(forKey: Self.followingCacheKey(account)) ?? []
+        let authors = stored.filter(Self.isLowercaseHex64).prefix(500)
+        guard !authors.isEmpty else { return }
         followingAuthors = Set(authors)
         followingAuthors.forEach { enqueueProfile($0) }
         followingSubscribed = false
         subscribeFollowing()
         followingResolved = true
-        publishState()
+    }
+
+    private static func followingCacheKey(_ pubkey: String) -> String {
+        "bitos.following.v1.\(pubkey)"
     }
 
     private func subscribeFollowing() {
@@ -1264,6 +1414,12 @@ final class FeedStore {
         if let request = (bridgeFacade().followingRequest(subscriptionId: "bitos-following", authors: authors) as? String) {
             Task { await pool.broadcast(request) }
         }
+    }
+
+    private func finishAccountHeadRefresh() {
+        accountHeadRefreshTask?.cancel()
+        accountHeadRefreshTask = nil
+        isRefreshingAccountHeads = false
     }
 
     // MARK: - APP-009 X-style threading (shared assembly via bridge)
@@ -1315,6 +1471,13 @@ final class FeedStore {
         guard event.createdAt >= (profileTimestamps[metadata.pubkey] ?? Int64.min) else { return }
         profiles[metadata.pubkey] = metadata
         profileTimestamps[metadata.pubkey] = event.createdAt
+        if metadata.pubkey == accountPubkey { finishAccountHeadRefresh() }
+        if followingProfileRefreshPending.remove(metadata.pubkey) != nil,
+           followingProfileRefreshPending.isEmpty {
+            followingProfilesRefreshTask?.cancel()
+            followingProfilesRefreshTask = nil
+            isRefreshingFollowingProfiles = false
+        }
     }
 
     private func enqueueProfile(_ pubkey: String) {
@@ -1623,6 +1786,9 @@ final class FeedStore {
         guard let event = storedEventToVerified(stored) else { return }
         if client.isProfileKind(event.kind) {
             absorbProfile(event)
+        } else if event.kind == 3 {
+            cacheContactHead(event)
+            absorbStoredContactList(event)
         } else if client.isFeedKind(event.kind) {
             let note = client.feedNote(from: event)
             retainRawEvent(event)

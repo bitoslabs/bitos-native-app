@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import space.bitos.app.data.feed.SearchUiState
+import space.bitos.app.data.feed.SearchScope
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
@@ -106,6 +107,11 @@ fun DiscoverScreen(
     onOpenBitzPlayer: (authorPubkey: String, noteId: String) -> Unit = { _, _ -> },
 ) {
     val state by search.state.collectAsStateWithLifecycle()
+    val homeState = if (homeViewModel != null) {
+        homeViewModel.state.collectAsStateWithLifecycle().value
+    } else {
+        space.bitos.app.data.feed.FeedUiState()
+    }
     var input by remember { mutableStateOf("") }
     // UX-010: creator/result author taps open the profile sheet.
     var authorTarget by remember { mutableStateOf<String?>(null) }
@@ -168,8 +174,21 @@ fun DiscoverScreen(
                 onOpenBitz = onOpenBitzPlayer,
             )
         } else {
+            // Search the normal feed cache immediately. SearchRepository
+            // additionally filters newly arriving verified relay events.
+            val cachedMatches = remember(input, homeState.notes) {
+                homeState.notes.filter { note ->
+                    note.kind in SearchScope.GENERAL.kinds && SearchResults.matches(note, input)
+                }
+            }
+            val visibleResults = remember(state.results, cachedMatches) {
+                (state.results + cachedMatches).distinctBy { it.id }.sortedByDescending { it.createdAt }
+            }
             SearchResults(
-                state = state,
+                state = state.copy(
+                    results = visibleResults,
+                    profiles = homeState.profiles + state.profiles,
+                ),
                 homeViewModel = homeViewModel,
                 identityViewModel = identityViewModel,
                 notePublisher = notePublisher,
