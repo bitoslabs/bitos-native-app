@@ -88,19 +88,34 @@ fun DiscoverScreen(
     LaunchedEffect(input) { search.search(input) }
 
     Column(Modifier.fillMaxSize().background(BitOSColors.background)) {
+        // Compact = the design system's 48 dp medium ladder (§2.6) — the
+        // 56 dp default read as an oversized search bar. The clear glyph
+        // shrinks below the 48 dp minimum to fit the medium row.
         space.bitos.app.ui.components.BitosTextField(
             value = input,
             onValueChange = { if (it.length <= 200) input = it },
             placeholder = "Search notes, #hashtags, npub…",
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = BitOSColors.textTertiary) },
+            leadingIcon = {
+                Icon(
+                    Icons.Rounded.Search,
+                    contentDescription = null,
+                    tint = BitOSColors.textTertiary,
+                    modifier = Modifier.size(20.dp),
+                )
+            },
             trailingIcon = {
                 if (input.isNotEmpty()) {
-                    IconButton(onClick = { input = "" }) {
-                        Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement provides false,
+                    ) {
+                        IconButton(onClick = { input = "" }, modifier = Modifier.size(28.dp)) {
+                            Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                        }
                     }
                 }
             },
             singleLine = true,
+            compact = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = BitOSSpacing.screen, vertical = BitOSSpacing.md),

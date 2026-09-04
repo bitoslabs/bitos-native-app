@@ -1974,20 +1974,34 @@ private fun BitzSearchOverlay(
                     modifier = Modifier.fillMaxWidth().padding(end = BitOSSpacing.sm, top = BitOSSpacing.sm),
                 ) {
                     // Shared brand field (iOS BitosSearchField parity):
-                    // magnifier lead, inline clear, focused accent border.
+                    // compact = the 48 dp medium ladder (§2.6); the clear
+                    // glyph shrinks below the 48 dp minimum so it fits the
+                    // medium row (the field itself is the touch target).
                     space.bitos.app.ui.components.BitosTextField(
                         value = query,
                         onValueChange = { query = it },
                         placeholder = "Search Bitz",
-                        leadingIcon = { Icon(AppIcons.Search, contentDescription = null, tint = BitOSColors.textSecondary) },
+                        leadingIcon = {
+                            Icon(
+                                AppIcons.Search,
+                                contentDescription = null,
+                                tint = BitOSColors.textSecondary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        },
                         trailingIcon = {
                             if (query.isNotEmpty()) {
-                                IconButton(onClick = { query = "" }) {
-                                    Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                                androidx.compose.runtime.CompositionLocalProvider(
+                                    androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement provides false,
+                                ) {
+                                    IconButton(onClick = { query = "" }, modifier = Modifier.size(28.dp)) {
+                                        Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                                    }
                                 }
                             }
                         },
                         singleLine = true,
+                        compact = true,
                         modifier = Modifier.weight(1f).padding(start = BitOSSpacing.base),
                     )
                     TextButton(onClick = onDismiss) { Text("Cancel", color = BitOSColors.primary) }
