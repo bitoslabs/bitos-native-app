@@ -10,6 +10,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayConnectionState
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.feed.AlgorithmSnapshot
 import space.bitos.core.feed.AlgorithmSurface
 import space.bitos.core.feed.BitzTimelinePolicy
@@ -275,65 +276,56 @@ class FeedRepository(
         hydrateFromCache()
         pool.start()
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
-                    recordOlderEose(subId, frame.relay)
-                    recordHeadEose(subId, frame.relay)
-                    return@collect
-                }
-                // Phase 0 trace: the frame trust gate (decode + ID hash +
-                // BIP-340 verify) — pure CPU, non-suspending (PerfTrace
-                // contract; matches the iOS `relay.decode` signpost). The
-                // frame is parsed ONCE: the decode also recovers the delivery
-                // subscription id (audit §2.5 double-parse fix).
-                val gated = space.bitos.app.diagnostics.PerfTrace.section(
-                    space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
-                ) {
-                    runCatching {
-                        val decoded = NostrEventCodec.decodeRelayEventFrame(hasher, frame.message, frame.relay)
-                        // Non-negotiable principle 2: verify ID AND signature before
-                        // projection; unverified events never reach display state.
-                        if (NostrEventCodec.verifySignature(hasher, decoded.event)) decoded else null
-                    }.getOrNull()
-                } ?: return@collect
-                val event = gated.event
-                val relaySubscriptionId = gated.subscriptionId
-                when {
-                    event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
-                    event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
-                    event.kind == space.bitos.core.model.BlockList.KIND -> absorbBlockList(event)
-                    event.kind == space.bitos.core.model.ZapReceipt.RECEIPT_KIND -> absorbZapReceipt(event)
-                    event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
-                    event.kind == space.bitos.core.model.NostrKinds.REPOST -> {
-                        // APP-009: reposts targeting a thread note count live.
-                        tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
-                        absorbNote(event)
+            // Decode-once stage (audit Phase 2): frames arrive ID-verified
+            // and BIP-340-verified from the pool's shared trust gate; this
+            // collector holds only projection policy.
+            pool.verifiedFrames.collect { gated ->
+                when (gated) {
+                    is VerifiedPoolFrame.Eose -> {
+                        recordOlderEose(gated.subscriptionId, gated.relay)
+                        recordHeadEose(gated.subscriptionId, gated.relay)
                     }
-                    event.kind == NostrKinds.GENERIC_REACTION -> {
-                        // APP-009: kind-7 reactions tally per thread note.
-                        tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
-                        // Web `myEventId` parity: remember MY reaction event
-                        // per note so an unlike can publish its kind-5.
-                        val account = accountPubkey
-                        if (account != null && event.pubkey.value == account) {
-                            event.eTaggedIds().firstOrNull()?.let { target ->
-                                myReactionEventIds[target] = event.id.value
+                    is VerifiedPoolFrame.Verified -> {
+                        val event = gated.event
+                        val relaySubscriptionId = gated.subscriptionId
+                        when {
+                            event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
+                            event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
+                            event.kind == space.bitos.core.model.BlockList.KIND -> absorbBlockList(event)
+                            event.kind == space.bitos.core.model.ZapReceipt.RECEIPT_KIND -> absorbZapReceipt(event)
+                            event.kind == NostrKinds.PROFILE_METADATA -> absorbProfile(event)
+                            event.kind == space.bitos.core.model.NostrKinds.REPOST -> {
+                                // APP-009: reposts targeting a thread note count live.
+                                tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
+                                absorbNote(event)
+                            }
+                            event.kind == NostrKinds.GENERIC_REACTION -> {
+                                // APP-009: kind-7 reactions tally per thread note.
+                                tallyTargetFor(event.eTaggedIds())?.let { target -> mergeTally(target, event.kind, null) }
+                                // Web `myEventId` parity: remember MY reaction event
+                                // per note so an unlike can publish its kind-5.
+                                val account = accountPubkey
+                                if (account != null && event.pubkey.value == account) {
+                                    event.eTaggedIds().firstOrNull()?.let { target ->
+                                        myReactionEventIds[target] = event.id.value
+                                    }
+                                }
+                            }
+                            // NIP-22 comments (ADR-003): kind-1111 projects into the
+                            // comment thread only — never the feed windows.
+                            event.kind == NostrKinds.VIDEO_COMMENT -> absorbReply(FeedNote.from(event))
+                            // APP-008 poll votes: kind-1018 tallies per poll note.
+                            event.kind == NostrKinds.POLL_RESPONSE -> absorbPollVote(event)
+                            FeedNote.isFeedKind(event.kind) -> {
+                                val note = FeedNote.from(event)
+                                recordOlderEvent(relaySubscriptionId, event, note)
+                                absorbNote(
+                                    event,
+                                    fromOlderPage = relaySubscriptionId
+                                        ?.startsWith(OLDER_SUBSCRIPTION_PREFIX) == true,
+                                )
                             }
                         }
-                    }
-                    // NIP-22 comments (ADR-003): kind-1111 projects into the
-                    // comment thread only — never the feed windows.
-                    event.kind == NostrKinds.VIDEO_COMMENT -> absorbReply(FeedNote.from(event))
-                    // APP-008 poll votes: kind-1018 tallies per poll note.
-                    event.kind == NostrKinds.POLL_RESPONSE -> absorbPollVote(event)
-                    FeedNote.isFeedKind(event.kind) -> {
-                        val note = FeedNote.from(event)
-                        recordOlderEvent(relaySubscriptionId, event, note)
-                        absorbNote(
-                            event,
-                            fromOlderPage = relaySubscriptionId
-                                ?.startsWith(OLDER_SUBSCRIPTION_PREFIX) == true,
-                        )
                     }
                 }
             }

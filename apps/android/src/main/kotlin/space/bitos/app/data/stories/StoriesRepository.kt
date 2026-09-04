@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.app.ui.stories.StorySeenPrefs
 import space.bitos.core.model.Stories
 import space.bitos.core.model.StoryAuthor
@@ -74,11 +75,8 @@ class StoriesRepository(
         if (collectJob != null) return
         pool.start()
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+            pool.verifiedFrames.collect { gated ->
+                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
                 when (event.kind) {
                     Stories.STORY_KIND -> ingestStory(event)
                     Stories.DELETE_KIND -> ingestDeletion(event)

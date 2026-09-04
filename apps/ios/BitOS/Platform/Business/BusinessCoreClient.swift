@@ -21,9 +21,12 @@ struct VerifiedEvent: Sendable, Equatable {
 
 /// A verified event plus the subscription id that delivered it — both
 /// recovered from ONE frame parse (shared codec; audit §2.5 double-parse fix).
+/// [message] rides along for the few seams that still parse relay JSON
+/// (e.g. embedded zap-request ids).
 struct VerifiedEventFrame: Sendable {
     let event: VerifiedEvent
     let subscriptionId: String?
+    let message: String
 }
 
 /// One relay frame after the off-main protocol gate (audit R1/R2): EVENT
@@ -268,7 +271,11 @@ extension BusinessCoreClient {
     /// fixtures): decode first, then scan the subscription id.
     func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame? {
         guard let event = decodeVerifiedEvent(message: message, relay: relay) else { return nil }
-        return VerifiedEventFrame(event: event, subscriptionId: Self.eventSubscriptionId(in: message))
+        return VerifiedEventFrame(
+            event: event,
+            subscriptionId: Self.eventSubscriptionId(in: message),
+            message: message
+        )
     }
 
     private static func eventSubscriptionId(in message: String) -> String? {
@@ -311,20 +318,55 @@ enum FrameIngest {
         }
     }
 
-    /// The standard protocol gate shared by the frame stores: EVENT frames
-    /// verify once (single parse), EOSE subscription ids pass through, junk
-    /// drops. Runs off the main actor inside [pump].
-    static func verifiedGate(
-        _ client: any BusinessCoreClient
-    ) -> @Sendable (RelayFrame) -> GatedFrame? {
-        { frame in
-            if let gated = client.decodeVerifiedEventFrame(message: frame.message, relay: frame.relay.rawValue) {
-                return .event(gated)
+    /// The standard protocol gate for one frame: EVENT frames verify once
+    /// (single parse), EOSE subscription ids pass through, junk drops.
+    /// Phase 2 runs this exactly once per frame inside the pool's emit path;
+    /// stores consume pre-gated values.
+    static func gate(_ frame: RelayFrame, client: any BusinessCoreClient) -> GatedFrame? {
+        // Phase 0 signpost: the frame trust gate (JSON + SHA-256 ID +
+        // BIP-340). Counters only — never content.
+        let signpost = Perf.signposter.beginInterval(Perf.Interval.relayDecode)
+        defer { Perf.signposter.endInterval(Perf.Interval.relayDecode, signpost) }
+        if let gated = client.decodeVerifiedEventFrame(message: frame.message, relay: frame.relay.rawValue) {
+            return .event(gated)
+        }
+        if let subId = client.relayEoseSubscriptionId(message: frame.message) {
+            return .eose(subscriptionId: subId, relay: frame.relay)
+        }
+        return nil
+    }
+
+    /// Drives a PRE-GATED stream with a per-store transform: the pool's
+    /// shared decode-once stage already ran the protocol gate, so every
+    /// value is a verified event or an EOSE id; [ingest] only extracts
+    /// store-specific payloads off-main. The loop ends on stream finish,
+    /// task cancellation, or when [isAlive] turns false.
+    static func pump<T: Sendable>(
+        gated: AsyncStream<GatedFrame>,
+        isAlive: @escaping @Sendable () -> Bool,
+        ingest: @escaping @Sendable (GatedFrame) -> T?,
+        handle: @escaping @Sendable (T) async -> Void
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .userInitiated) {
+            for await value in gated {
+                guard !Task.isCancelled, isAlive() else { return }
+                guard let transformed = ingest(value) else { continue }
+                await handle(transformed)
             }
-            if let subId = client.relayEoseSubscriptionId(message: frame.message) {
-                return .eose(subscriptionId: subId, relay: frame.relay)
+        }
+    }
+
+    /// Drives a pre-gated stream with no per-store transform.
+    static func pump(
+        gated: AsyncStream<GatedFrame>,
+        isAlive: @escaping @Sendable () -> Bool,
+        handle: @escaping @Sendable (GatedFrame) async -> Void
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .userInitiated) {
+            for await value in gated {
+                guard !Task.isCancelled, isAlive() else { return }
+                await handle(value)
             }
-            return nil
         }
     }
 }
@@ -344,7 +386,11 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame? {
         guard let decoded = bridge.decodeEventWithSubscriptionId(message: message, relayUrl: relay) else { return nil }
-        return VerifiedEventFrame(event: makeVerifiedEvent(decoded.event), subscriptionId: decoded.subscriptionId)
+        return VerifiedEventFrame(
+            event: makeVerifiedEvent(decoded.event),
+            subscriptionId: decoded.subscriptionId,
+            message: message
+        )
     }
 
     private func makeVerifiedEvent(_ event: BusinessCoreBridge.Event) -> VerifiedEvent {

@@ -44,6 +44,8 @@ actor RelayPool {
     private var connections: [RelayURL: Connection] = [:]
     private var relayOrder: [RelayURL] = []
     private var continuations: [UUID: AsyncStream<RelayFrame>.Continuation] = [:]
+    private var gatedContinuations: [UUID: AsyncStream<GatedFrame>.Continuation] = [:]
+    private var gatedClient: (any BusinessCoreClient)?
     private var running = false
 
     init(urls: [RelayURL], urlSession: URLSession = .bitOSRelaySession()) {
@@ -67,6 +69,27 @@ actor RelayPool {
 
     private func removeContinuation(_ id: UUID) {
         continuations.removeValue(forKey: id)
+    }
+
+    /// One shared decode stage (performance audit Phase 2): frames are
+    /// decoded + ID-hash-checked + BIP-340-verified ONCE per process in the
+    /// emit path, and every store consumes this stream instead of running
+    /// its own gate — one JSON parse per frame instead of one per store.
+    /// Callers pass the process-wide client; conformers are stateless, so
+    /// the first registration's client decodes for everyone.
+    func verifiedFrames(client: any BusinessCoreClient) -> AsyncStream<GatedFrame> {
+        if gatedClient == nil { gatedClient = client }
+        let id = UUID()
+        return AsyncStream { continuation in
+            gatedContinuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeGatedContinuation(id) }
+            }
+        }
+    }
+
+    private func removeGatedContinuation(_ id: UUID) {
+        gatedContinuations.removeValue(forKey: id)
     }
 
     func start() {
@@ -252,6 +275,13 @@ actor RelayPool {
     private func emit(_ frame: RelayFrame) {
         for continuation in continuations.values {
             continuation.yield(frame)
+        }
+        // Decode-once fan-out (audit Phase 2): with no verified-stream
+        // registrations there is no decode cost at all.
+        guard !gatedContinuations.isEmpty, let client = gatedClient else { return }
+        guard let gated = FrameIngest.gate(frame, client: client) else { return }
+        for continuation in gatedContinuations.values {
+            continuation.yield(gated)
         }
     }
 

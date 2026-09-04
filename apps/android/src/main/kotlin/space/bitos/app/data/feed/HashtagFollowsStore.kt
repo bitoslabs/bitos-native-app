@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.model.InterestSet
 import space.bitos.core.model.NostrEvent
 import space.bitos.core.nostr.EventHasher
@@ -34,12 +35,9 @@ class HashtagFollowsStore(
 
     init {
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
+            pool.verifiedFrames.collect { gated ->
                 val account = accountPubkey ?: return@collect
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
                 if (event.kind != InterestSet.KIND || event.pubkey.value != account) return@collect
                 // Replaceable head: newest verified list wins.
                 if (head != null && event.createdAt <= head!!.createdAt) return@collect

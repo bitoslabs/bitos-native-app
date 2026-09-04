@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import space.bitos.core.model.RelayUrl
+import space.bitos.core.nostr.NostrEventCodec
+import space.bitos.core.nostr.Sha256EventHasher
 
 /**
  * Relay pool (REL-001): owns websocket lifetime, reconnect policy and the
@@ -43,6 +45,20 @@ class RelayPool(
     )
     val frames: SharedFlow<RelayFrame> = mutableFrames
 
+    /**
+     * Decode-once stage (performance audit Phase 2): ONE collector decodes
+     * and verifies every raw frame, and EVENT-consuming stores collect
+     * [verifiedFrames] instead of re-parsing [frames] independently — one
+     * JSON parse + ID hash + BIP-340 per frame per process instead of one
+     * per store. Replay mirrors [frames] so late subscribers catch up.
+     */
+    private val mutableVerifiedFrames = MutableSharedFlow<VerifiedPoolFrame>(
+        replay = 32,
+        extraBufferCapacity = 256,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val verifiedFrames: SharedFlow<VerifiedPoolFrame> = mutableVerifiedFrames
+
     /** Live per-relay connection states (status dots in the relays manager). */
     val statesFlow: StateFlow<Map<RelayUrl, RelayConnectionState>> = mutableStates.asStateFlow()
 
@@ -56,6 +72,39 @@ class RelayPool(
             relayOrder += url
             install(url)
         }
+        // The shared trust gate. Hasher is the canonical object — the
+        // verify-once outcome cache in the shared codec makes hasher
+        // identity irrelevant across stores.
+        scope.launch {
+            frames.collect { frame ->
+                val gated = space.bitos.app.diagnostics.PerfTrace.section(
+                    space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
+                ) { decodeVerifiedFrame(frame) }
+                if (gated != null) mutableVerifiedFrames.tryEmit(gated)
+            }
+        }
+    }
+
+    /**
+     * Protocol trust gate for one frame: EOSE subscription ids pass
+     * through; EVENT frames must decode and pass ID + BIP-340 verification
+     * (non-negotiable principle 2 — unverified events never reach display
+     * state). Malformed frames drop silently.
+     */
+    private fun decodeVerifiedFrame(frame: RelayFrame): VerifiedPoolFrame? {
+        NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
+            return VerifiedPoolFrame.Eose(subscriptionId = subId, relay = frame.relay)
+        }
+        return runCatching {
+            val decoded = NostrEventCodec.decodeRelayEventFrame(Sha256EventHasher, frame.message, frame.relay)
+            if (!NostrEventCodec.verifySignature(Sha256EventHasher, decoded.event)) return null
+            VerifiedPoolFrame.Verified(
+                event = decoded.event,
+                subscriptionId = decoded.subscriptionId,
+                relay = frame.relay,
+                message = frame.message,
+            )
+        }.getOrNull()
     }
 
     fun start() {

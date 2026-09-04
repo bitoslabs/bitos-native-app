@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.bridge.BusinessCoreBridge
 import space.bitos.core.nostr.EventHasher
 import space.bitos.core.nostr.NostrEventCodec
@@ -47,12 +48,9 @@ class SharedTemplateStore(
 
     init {
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
+            pool.verifiedFrames.collect { gated ->
+                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
                 if (event.kind != SHARED_TEMPLATE_KIND) return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
                 val dTag = event.tags.firstOrNull { it.firstOrNull() == "d" }?.getOrNull(1) ?: return@collect
                 if (!MemeTemplateContract.isTemplateDTag(dTag)) return@collect
                 val tagsJson = space.bitos.core.store.TagsCodec.encode(event.tags)

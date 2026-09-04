@@ -42,11 +42,10 @@ final class SearchStore {
 
         Task {
             await pool.start()
-            let stream = await pool.frames()
+            let stream = await pool.verifiedFrames(client: client)
             watchTask = FrameIngest.pump(
-                stream: stream,
-                isAlive: { [weak self] in self != nil },
-                ingest: FrameIngest.verifiedGate(client)
+                gated: stream,
+                isAlive: { [weak self] in self != nil }
             ) { [weak self] gated in
                 await self?.absorb(gated)
             }

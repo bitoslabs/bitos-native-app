@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.model.NotificationExtractor
 import space.bitos.core.model.NotificationFilters
 import space.bitos.core.model.NotificationItem
@@ -266,32 +267,26 @@ class NotificationRepository(
         if (collectJob != null) return
         pool.start()
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                absorbEose(frame)
-                // Phase 0 trace: the frame trust gate (decode + ID +
-                // BIP-340) — pure CPU, non-suspending (PerfTrace contract).
-                val event = space.bitos.app.diagnostics.PerfTrace.section(
-                    space.bitos.app.diagnostics.PerfTrace.RELAY_DECODE,
-                ) {
-                    runCatching {
-                        val decoded = NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                        if (NostrEventCodec.verifySignature(hasher, decoded)) decoded else null
-                    }.getOrNull()
-                } ?: return@collect
-                absorbBlockList(event)
-                absorbOrigin(event, frame.message)
-                absorbNotification(event, frame.message)
+            pool.verifiedFrames.collect { gated ->
+                when (gated) {
+                    is VerifiedPoolFrame.Eose -> absorbEose(gated.subscriptionId, gated.relay)
+                    is VerifiedPoolFrame.Verified -> {
+                        val event = gated.event
+                        absorbBlockList(event)
+                        absorbOrigin(event, gated.message)
+                        absorbNotification(event, gated.message)
+                    }
+                }
             }
         }
     }
 
     /** Head EOSE → connected; page EOSE → close the batch when all relays answered. */
-    private fun absorbEose(frame: space.bitos.app.data.relay.RelayFrame) {
-        val subId = NostrEventCodec.relayEoseSubscriptionId(frame.message) ?: return
+    private fun absorbEose(subId: String, relay: space.bitos.core.model.RelayUrl) {
         val batch = activePage
         when {
             subId == batch?.subId -> {
-                batch.eoseRelays += frame.relay
+                batch.eoseRelays += relay
                 if (batch.expectedRelays.isNotEmpty() && batch.eoseRelays.containsAll(batch.expectedRelays)) {
                     completePage(subId)
                 }

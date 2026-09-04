@@ -29,12 +29,11 @@ final class ProfileLookupStore {
     func start() {
         guard framesTask == nil else { return }
         Task { [weak self, pool, client] in
-            let stream = await pool.frames()
+            let stream = await pool.verifiedFrames(client: client)
             guard let self, !Task.isCancelled else { return }
             self.framesTask = FrameIngest.pump(
-                stream: stream,
-                isAlive: { [weak self] in self != nil },
-                ingest: FrameIngest.verifiedGate(client)
+                gated: stream,
+                isAlive: { [weak self] in self != nil }
             ) { [weak self] gated in
                 await self?.absorb(gated)
             }

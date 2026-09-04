@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
@@ -63,31 +64,29 @@ class AuthorRepository(
 
     init {
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                NostrEventCodec.relayEoseSubscriptionId(frame.message)?.let { subId ->
-                    recordEose(subId, frame.relay)
-                    return@collect
-                }
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
-                val target = pubkey ?: return@collect
-                if (event.pubkey.value != target) return@collect
-                when {
-                    event.kind == NostrKinds.PROFILE_METADATA -> {
-                        val metadata = ProfileMetadata.parse(event) ?: return@collect
-                        if (event.createdAt >= profileAt) {
-                            profile = metadata
-                            profileAt = event.createdAt
-                            publishState()
-                        }
-                    }
-                    FeedNote.isFeedKind(event.kind) -> {
-                        val note = FeedNote.from(event)
-                        if (!notes.containsKey(note.id)) {
-                            notes[note.id] = note
-                            publishState()
+            pool.verifiedFrames.collect { gated ->
+                when (gated) {
+                    is VerifiedPoolFrame.Eose -> recordEose(gated.subscriptionId, gated.relay)
+                    is VerifiedPoolFrame.Verified -> {
+                        val event = gated.event
+                        val target = pubkey ?: return@collect
+                        if (event.pubkey.value != target) return@collect
+                        when {
+                            event.kind == NostrKinds.PROFILE_METADATA -> {
+                                val metadata = ProfileMetadata.parse(event) ?: return@collect
+                                if (event.createdAt >= profileAt) {
+                                    profile = metadata
+                                    profileAt = event.createdAt
+                                    publishState()
+                                }
+                            }
+                            FeedNote.isFeedKind(event.kind) -> {
+                                val note = FeedNote.from(event)
+                                if (!notes.containsKey(note.id)) {
+                                    notes[note.id] = note
+                                    publishState()
+                                }
+                            }
                         }
                     }
                 }

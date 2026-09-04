@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
@@ -59,11 +60,8 @@ class SearchRepository(
 
     init {
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+            pool.verifiedFrames.collect { gated ->
+                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
                 when (event.kind) {
                     NostrKinds.PROFILE_METADATA -> {
                         val metadata = ProfileMetadata.parse(event) ?: return@collect

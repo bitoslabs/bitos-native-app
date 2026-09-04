@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
+import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.nostr.EventHasher
 import space.bitos.core.nostr.NostrEventCodec
@@ -38,11 +39,8 @@ class ProfileLookupStore(
 
     init {
         collectJob = scope.launch {
-            pool.frames.collect { frame ->
-                val event = runCatching {
-                    NostrEventCodec.decodeRelayEvent(hasher, frame.message, frame.relay)
-                }.getOrNull() ?: return@collect
-                if (!NostrEventCodec.verifySignature(hasher, event)) return@collect
+            pool.verifiedFrames.collect { gated ->
+                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
                 if (event.kind != space.bitos.core.model.NostrKinds.PROFILE_METADATA) return@collect
                 val key = event.pubkey.value
                 if (key !in wanted) return@collect

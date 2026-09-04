@@ -38,12 +38,12 @@ final class SharedTemplateStore {
     func start() {
         guard framesTask == nil else { return }
         Task { [weak self, pool, client] in
-            let stream = await pool.frames()
+            let stream = await pool.verifiedFrames(client: client)
             guard let self, !Task.isCancelled else { return }
             self.framesTask = FrameIngest.pump(
-                stream: stream,
+                gated: stream,
                 isAlive: { [weak self] in self != nil },
-                ingest: Self.templateIngest(client)
+                ingest: Self.templateFromGated(client)
             ) { [weak self] row in
                 await self?.upsert(row)
             }
@@ -58,15 +58,16 @@ final class SharedTemplateStore {
         }
     }
 
-    /// Protocol gate + template extraction in one off-main step: decode,
-    /// d-tag filter, summary bridge call and row construction all run on the
-    /// ingest task; the main actor only upserts finished rows.
-    private nonisolated static func templateIngest(
+    /// Template extraction from an already-verified frame — runs OFF the
+    /// main actor: d-tag filter, summary bridge call and row construction;
+    /// the main actor only upserts finished rows.
+    private nonisolated static func templateFromGated(
         _ client: FrameworkBusinessCoreClient
-    ) -> @Sendable (RelayFrame) -> Row? {
-        { frame in
-            guard let event = client.decodeVerifiedEvent(message: frame.message, relay: frame.relay.rawValue),
-                  event.kind == 30078,
+    ) -> @Sendable (GatedFrame) -> Row? {
+        { gated in
+            guard case .event(let gatedEvent) = gated else { return nil }
+            let event = gatedEvent.event
+            guard event.kind == 30078,
                   let dTag = event.tags.first(where: { $0.first == "d" })?.dropFirst().first,
                   dTag.hasPrefix("com.bitos.bitz:template:") else { return nil }
             guard let tagsData = try? JSONSerialization.data(withJSONObject: event.tags),

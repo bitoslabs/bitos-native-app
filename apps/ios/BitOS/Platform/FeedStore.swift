@@ -170,16 +170,15 @@ final class FeedStore {
         hydrateFromCache()
         await pool.start()
         subscribe()
-        let stream = await pool.frames()
-        // Ingest stage (audit R1/R2): protocol decode + ID/signature
-        // verification run OFF the main actor — the Schnorr pair is the
-        // burst hot path. The verified value then hops to main-actor
-        // absorption; one sequential task preserves frame order, and the
-        // shared verify-once cache dedupes the other frame collectors.
+        let stream = await pool.verifiedFrames(client: client)
+        // Ingest stage (audit R1/R2 + Phase 2): the pool's shared decode-once
+        // gate already ran the trust gate off-main; this task only prebuilds
+        // the persist tags JSON, then hops to main-actor absorption. One
+        // sequential task preserves frame order.
         collectTask = Task.detached(priority: .userInitiated) { [weak self, client] in
-            for await frame in stream {
+            for await gated in stream {
                 guard let self else { return }
-                await self.absorb(Self.ingest(frame, client: client), frame: frame)
+                await self.absorb(Self.ingest(gated, client: client))
             }
         }
         healthTask = Task { [weak self] in
@@ -563,50 +562,39 @@ final class FeedStore {
     // per [publishCoalesceMs] window (audit R3). User-intent paths still
     // publish synchronously through publishState().
 
-    /// One relay frame after the protocol trust gate, decoded off-main.
-    /// EVENT frames carry the delivery subscription id and — for kinds that
-    /// persist — the prebuilt tags JSON, so main-actor absorption performs
-    /// no protocol bridge work at all (audit §3.1).
+    /// One relay frame after the pool's shared decode-once gate. Persistable
+    /// kinds prebuild their tags JSON here, off the main actor; main-actor
+    /// absorption performs no protocol bridge work at all (audit §3.1).
     private enum IngestedFrame {
-        case eose(subscriptionId: String)
+        case eose(subscriptionId: String, relay: RelayURL)
         case event(VerifiedEventFrame, tagsJson: String?)
         case ignored
     }
 
-    /// Protocol gate for one frame: EVENT frames must decode and pass ID +
-    /// BIP-340 verification (shared core, whose outcome cache dedupes the
-    /// other frame collectors), EOSE ids pass through. Everything — one
-    /// frame parse, tags JSON for persistable kinds — runs OFF the main
-    /// actor; absorption only receives verified values.
-    private nonisolated static func ingest(_ frame: RelayFrame, client: any BusinessCoreClient) -> IngestedFrame {
-        let signpost = Perf.signposter.beginInterval(Perf.Interval.relayDecode)
-        defer { Perf.signposter.endInterval(Perf.Interval.relayDecode, signpost) }
-        if let gated = client.decodeVerifiedEventFrame(message: frame.message, relay: frame.relay.rawValue) {
-            // Phase 0 signpost: the frame trust gate (JSON + SHA-256 ID +
-            // BIP-340) off the main actor. Counters only — never content.
-            let persists = client.isFeedKind(gated.event.kind) || client.isProfileKind(gated.event.kind)
-            return .event(gated, tagsJson: persists ? client.tagsToJson(gated.event.tags) : nil)
+    private nonisolated static func ingest(_ gated: GatedFrame, client: any BusinessCoreClient) -> IngestedFrame {
+        switch gated {
+        case .eose(let subId, let relay):
+            return .eose(subscriptionId: subId, relay: relay)
+        case .event(let gatedEvent):
+            let persists = client.isFeedKind(gatedEvent.event.kind) || client.isProfileKind(gatedEvent.event.kind)
+            return .event(gatedEvent, tagsJson: persists ? client.tagsToJson(gatedEvent.event.tags) : nil)
         }
-        if let subId = client.relayEoseSubscriptionId(message: frame.message) {
-            return .eose(subscriptionId: subId)
-        }
-        return .ignored
     }
 
-    private func absorb(_ ingested: IngestedFrame, frame: RelayFrame) {
+    private func absorb(_ ingested: IngestedFrame) {
         switch ingested {
-        case .eose(let subId):
-            recordOlderEose(subscriptionId: subId, relay: frame.relay)
-            recordHeadEose(subscriptionId: subId, relay: frame.relay)
+        case .eose(let subId, let relay):
+            recordOlderEose(subscriptionId: subId, relay: relay)
+            recordHeadEose(subscriptionId: subId, relay: relay)
             return
         case .ignored:
             return
         case .event(let gated, let tagsJson):
-            absorbVerified(gated, tagsJson: tagsJson, frame: frame)
+            absorbVerified(gated, tagsJson: tagsJson)
         }
     }
 
-    private func absorbVerified(_ gated: VerifiedEventFrame, tagsJson: String?, frame: RelayFrame) {
+    private func absorbVerified(_ gated: VerifiedEventFrame, tagsJson: String?) {
         let event = gated.event
         // Older-page feed frames publish once per completed walk (batch
         // parity with Flutter appending the whole EOSE page at once); late
@@ -627,7 +615,7 @@ final class FeedStore {
                 myReactionEventIds[target] = event.id
             }
         } else if event.kind == 3 {
-            absorbContactList(frame, event: event)
+            absorbContactList(gated)
         } else if event.kind == 9735 {
             let target = event.tags.first { $0.first == "e" }?.dropFirst().first
             if let target {
@@ -646,7 +634,7 @@ final class FeedStore {
                 // APP-014: retain the embedded 9734 request id for exact
                 // paid matching in the zap sheet.
                 if let requestId = bridgeFacade().embeddedZapRequestId(
-                    message: frame.message, relayUrl: frame.relay.rawValue
+                    message: gated.message, relayUrl: gated.event.relayUrl ?? ""
                 ) as String? {
                     var ids = zapRequestIdsBuffer[target] ?? []
                     ids.insert(requestId)
@@ -655,9 +643,9 @@ final class FeedStore {
                 }
             }
         } else if event.kind == 30003 {
-            absorbBookmarkList(frame, event: event)
+            absorbBookmarkList(gated)
         } else if event.kind == 10004 {
-            absorbBlockList(frame, event: event)
+            absorbBlockList(gated)
         } else if client.isProfileKind(event.kind) {
             absorbProfile(event)
             // DAT-003: kind-0 heads persist so the You page (and every
@@ -988,11 +976,12 @@ final class FeedStore {
         return bookmarked
     }
 
-    private func absorbBookmarkList(_ frame: RelayFrame, event: VerifiedEvent) {
+    private func absorbBookmarkList(_ gated: VerifiedEventFrame) {
+        let event = gated.event
         guard let account = accountPubkey, event.pubkey == account else { return }
         // The account's bookmark head resolved — the bootstrap stops re-asking.
         bookmarkHeadReceived = true
-        let ids = (bridgeFacade().bookmarkIds(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) ?? []
+        let ids = (bridgeFacade().bookmarkIds(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) ?? []
         // Newer verified heads replace the local set (bounded by composer).
         if event.createdAt >= (bookmarkHeadAt ?? Int64.min) {
             bookmarked = ids
@@ -1003,9 +992,10 @@ final class FeedStore {
 
     private var bookmarkHeadAt: Int64?
 
-    private func absorbBlockList(_ frame: RelayFrame, event: VerifiedEvent) {
+    private func absorbBlockList(_ gated: VerifiedEventFrame) {
+        let event = gated.event
         guard let account = accountPubkey, event.pubkey == account else { return }
-        let ids = (bridgeFacade().blockListPubkeys(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) ?? []
+        let ids = (bridgeFacade().blockListPubkeys(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) ?? []
         if event.createdAt >= (blockHeadAt ?? Int64.min) {
             blocked = Set(ids)
             blockHeadAt = event.createdAt
@@ -1211,12 +1201,13 @@ final class FeedStore {
         }
     }
 
-    private func absorbContactList(_ frame: RelayFrame, event: VerifiedEvent) {
+    private func absorbContactList(_ gated: VerifiedEventFrame) {
+        let event = gated.event
         guard let account = accountPubkey else { return }
         // Only the account's own contact list drives the timeline.
         // (Ingest verified the frame; the author check filters.)
         guard event.pubkey == account,
-              let authors = (bridgeFacade().contactListAuthors(message: frame.message, relayUrl: frame.relay.rawValue) as? [String]) else { return }
+              let authors = (bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) else { return }
         followingAuthors = Set(authors)
         followingAuthors.forEach { enqueueProfile($0) }
         followingSubscribed = false
