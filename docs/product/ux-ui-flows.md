@@ -304,6 +304,9 @@ UI anatomy:
   the native For You pager snapshot from the reader's last For You visit;
   returning to For You preserves its visible session. An explicit For You
   refresh remains the reader's opt-in to refresh that session;
+- Recognized external video links render as image-only provider cards; opening
+  one follows the external-link confirmation gate. No provider iframe or
+  WebView executes inside BitOS;
 - Explore discovers media only through the standard NIP-68/NIP-71 kinds
   (20/21/22/34235/34236) queried deep — the first paint fills the 24-tile
   grid, not a six-tile sliver (see the Bitz discovery/query standard above);

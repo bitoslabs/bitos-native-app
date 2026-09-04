@@ -1,6 +1,34 @@
 import BusinessCore
 import SwiftUI
 
+/// Image-only provider card. Tapping stays behind the caller's link-confirm gate.
+private struct ExternalVideoPreviewCard: View {
+    let preview: ExternalVideoPreview
+    let onOpen: (String) -> Void
+
+    var body: some View {
+        Button { onOpen(preview.url) } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack {
+                    RemoteImageView(url: preview.thumbnailUrl)
+                    AppIcons.image(for: AppIcons.play)
+                        .font(.system(size: 36, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .aspectRatio(16 / 9, contentMode: .fit)
+                Text(preview.providerName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
+            .background(BitOSTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(preview.providerName) video")
+    }
+}
+
 // MARK: - APP-005: compact feed card (Home tab list parity)
 
 /**
@@ -109,11 +137,16 @@ struct FeedNoteCard: View {
                         onVote: onVotePoll
                     )
                 }
-                if !note.mediaUrls.isEmpty {
+                if !note.mediaUrls.isEmpty || !note.externalVideoPreviews.isEmpty {
                     if settings.state.mediaPreview {
-                        MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                        ForEach(note.externalVideoPreviews, id: \.url) { preview in
+                            ExternalVideoPreviewCard(preview: preview, onOpen: onOpenExternalLink)
+                        }
+                        if !note.mediaUrls.isEmpty {
+                            MediaGrid(urls: note.mediaUrls) { lightboxUrl = $0 }
+                        }
                     } else {
-                        Text("\(note.mediaUrls.count) attachment(s) \u{2014} previews off")
+                        Text("\(note.mediaUrls.count + note.externalVideoPreviews.count) attachment(s) \u{2014} previews off")
                             .font(.system(size: 12))
                             .foregroundStyle(BitOSTheme.textTertiary)
                     }

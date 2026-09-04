@@ -260,6 +260,9 @@ fun FeedNoteCard(
                 )
             }
             if (mediaPreview) {
+                note.externalVideoPreviews.forEach { preview ->
+                    ExternalVideoPreviewCard(preview, onOpenExternalLink)
+                }
                 MediaRow(urls = note.mediaUrls, onOpen = { lightboxUrl = it })
             } else {
                 Text(

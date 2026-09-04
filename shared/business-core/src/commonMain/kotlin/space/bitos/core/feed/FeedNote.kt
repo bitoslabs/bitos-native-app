@@ -24,6 +24,8 @@ data class FeedNote(
     val hashtags: List<String>,
     val mentions: List<String>,
     val mediaUrls: List<String>,
+    /** Allowlisted external-video link cards; never an executable embed. */
+    val externalVideoPreviews: List<ExternalVideoPreview> = emptyList(),
     val isProtocolPayload: Boolean,
     val video: MediaMetadata? = null,
     /** Reposter's pubkey when this note is displayed from a kind-6 repost. */
@@ -85,6 +87,7 @@ data class FeedNote(
             mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
             mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
                 .map { it.value }.distinct().take(8).toList(),
+            externalVideoPreviews = ExternalVideoPreviews.fromContent(event.content),
             isProtocolPayload = space.bitos.core.nostr.ContentClassification.isProtocolPayload(event.content),
             video = MediaMetadata.fromEvent(event),
             contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
