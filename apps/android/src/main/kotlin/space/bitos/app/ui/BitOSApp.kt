@@ -453,6 +453,9 @@ fun BitOSApp(
                                 notePublisher,
                                 authorRepository = authorRepository,
                                 onOpenAuthorProfile = { authorPageTarget = it },
+                                sensitiveShowByDefault = sensitiveShowByDefault,
+                                defaultZapSats = settingsSnapshot.defaultZapAmount,
+                                onOpenExternalLink = { externalLinkTarget = it },
                             )
                             // APP-011: profiles feed names/avatars; the zap
                             // chip routes to the author zap pipeline.

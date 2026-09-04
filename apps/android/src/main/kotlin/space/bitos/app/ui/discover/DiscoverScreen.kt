@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -47,6 +48,7 @@ import space.bitos.app.data.feed.SearchUiState
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
+import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.core.feed.FeedNote
@@ -68,6 +70,12 @@ fun DiscoverScreen(
     /** UX-010: enables author taps (profile sheet + full profile page). */
     authorRepository: space.bitos.app.data.feed.AuthorRepository? = null,
     onOpenAuthorProfile: (String) -> Unit = {},
+    /** Result cards are the shared home card: sensitive-media default. */
+    sensitiveShowByDefault: Boolean = false,
+    /** Zap preset for result-card zaps (settings default). */
+    defaultZapSats: Int = 21,
+    /** External-link tap → shell confirm host (never opens unattended). */
+    onOpenExternalLink: (String) -> Unit = {},
 ) {
     val state by search.state.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
@@ -85,6 +93,13 @@ fun DiscoverScreen(
             onValueChange = { if (it.length <= 200) input = it },
             placeholder = "Search notes, #hashtags, npub…",
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = BitOSColors.textTertiary) },
+            trailingIcon = {
+                if (input.isNotEmpty()) {
+                    IconButton(onClick = { input = "" }) {
+                        Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                    }
+                }
+            },
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
@@ -198,6 +213,9 @@ private fun SearchResults(
     identityViewModel: space.bitos.app.identity.IdentityViewModel? = null,
     notePublisher: space.bitos.app.data.publish.NotePublisher? = null,
     onOpenAuthor: (String) -> Unit = {},
+    sensitiveShowByDefault: Boolean = false,
+    defaultZapSats: Int = 21,
+    onOpenExternalLink: (String) -> Unit = {},
 ) {
     var threadTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<FeedNote?>(null) }
     // APP-010 results tabs: Posts · People · Hashtags (shared fan-in rule).
@@ -249,6 +267,9 @@ private fun SearchResults(
                 threadTarget = threadTarget,
                 onThreadTarget = { threadTarget = it },
                 onOpenAuthor = onOpenAuthor,
+                sensitiveShowByDefault = sensitiveShowByDefault,
+                defaultZapSats = defaultZapSats,
+                onOpenExternalLink = onOpenExternalLink,
             )
         }
     }
@@ -263,6 +284,9 @@ private fun PostsTab(
     threadTarget: FeedNote?,
     onThreadTarget: (FeedNote?) -> Unit,
     onOpenAuthor: (String) -> Unit = {},
+    sensitiveShowByDefault: Boolean = false,
+    defaultZapSats: Int = 21,
+    onOpenExternalLink: (String) -> Unit = {},
 ) {
     val thread = threadTarget
     if (thread != null && homeViewModel != null && identityViewModel != null && notePublisher != null) {
@@ -275,6 +299,46 @@ private fun PostsTab(
                 publisherState = publisherState,
                 onDismiss = { onThreadTarget(null) },
                 onOpenAuthor = onOpenAuthor,
+            )
+        }
+    }
+
+    // Result cards are the shared home feed card: like/comment/repost/zap/
+    // bookmark/polls ride the same HomeViewModel pipelines as the timeline
+    // (iOS FeedNoteCard parity). Hosts without a feed VM keep the plain card.
+    val vm = homeViewModel
+    var zapTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<FeedNote?>(null) }
+    val homeState = if (vm != null) {
+        vm.state.collectAsStateWithLifecycle().value
+    } else {
+        space.bitos.app.data.feed.FeedUiState()
+    }
+    val actions = if (vm != null) {
+        vm.localActions.collectAsStateWithLifecycle().value
+    } else {
+        space.bitos.app.ui.feed.LocalActions()
+    }
+    val canVotePoll = identityViewModel?.state?.value?.account != null
+
+    val zapTargetNote = zapTarget
+    if (zapTargetNote != null && vm != null && identityViewModel != null) {
+        val zapState by vm.zapState.collectAsStateWithLifecycle()
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { vm.dismissZap(); zapTarget = null }) {
+            space.bitos.app.ui.feed.ZapContent(
+                note = zapTargetNote,
+                lud16 = homeState.profiles[zapTargetNote.pubkey]?.lud16,
+                state = zapState,
+                profileName = homeState.profiles[zapTargetNote.pubkey]?.bestDisplayName,
+                hasIdentity = identityViewModel.state.value.account != null,
+                zapCount = homeState.zapCounts[zapTargetNote.id] ?: 0,
+                paidRequestIds = homeState.zapRequestIds[zapTargetNote.id] ?: emptySet(),
+                onPaid = { sats, memo -> vm.onZapPaid(zapTargetNote, sats, memo) },
+                onAmountSelected = vm::selectZapAmount,
+                onZap = { sats, comment, anonymous ->
+                    vm.selectZapAmount(sats)
+                    vm.zap(zapTargetNote, comment, anonymous)
+                },
+                onClose = { vm.dismissZap(); zapTarget = null },
             )
         }
     }
@@ -310,17 +374,59 @@ private fun PostsTab(
             }
         }
         items(state.results, key = { it.id }) { note ->
-            SearchCard(
-                note = note,
-                profile = state.profiles[note.pubkey],
-                onOpen = {
-                    if (homeViewModel != null && identityViewModel != null && notePublisher != null) {
-                        homeViewModel.loadComments(note.id)
+            if (vm == null) {
+                SearchCard(
+                    note = note,
+                    profile = state.profiles[note.pubkey],
+                    onOpen = {
+                        if (identityViewModel != null && notePublisher != null) {
+                            onThreadTarget(note)
+                        }
+                    },
+                    onOpenAuthor = { onOpenAuthor(note.pubkey) },
+                )
+            } else {
+                space.bitos.app.ui.components.FeedNoteCard(
+                    note = note,
+                    profile = homeState.profiles[note.pubkey] ?: state.profiles[note.pubkey],
+                    bookmarked = note.id in homeState.bookmarkedIds || note.id in actions.bookmarked,
+                    liked = note.id in actions.liked,
+                    resolveMentionName = { hex -> homeState.profiles[hex]?.bestDisplayName },
+                    onLike = { vm.toggleLike(note) },
+                    onBookmark = { vm.toggleBookmark(note.id) },
+                    onComment = {
+                        vm.loadComments(note.id)
                         onThreadTarget(note)
-                    }
-                },
-                onOpenAuthor = { onOpenAuthor(note.pubkey) },
-            )
+                    },
+                    onRepost = { vm.repost(note) },
+                    onZap = {
+                        vm.loadZaps(note.id)
+                        vm.selectZapAmount(defaultZapSats.toLong())
+                        zapTarget = note
+                    },
+                    onAuthor = { onOpenAuthor(note.pubkey) },
+                    isMuted = vm.isMuted(note.pubkey),
+                    onMuteToggle = { vm.toggleMute(note.pubkey) },
+                    onReport = { reason -> vm.report(note, reason) },
+                    // Local ranking signals (web interaction-profile parity).
+                    authorDemoted = vm.interaction?.isAuthorDemoted(note.pubkey) == true,
+                    tagDemoted = note.hashtags.firstOrNull()?.let { vm.interaction?.isTagDemoted(it) == true } == true,
+                    interactionAuthorName = homeState.profiles[note.pubkey]?.bestDisplayName,
+                    onNotInterested = { vm.notInterested(note) },
+                    onHideNote = { vm.hideNote(note) },
+                    onToggleAuthorDemotion = { vm.toggleShowLessFrom(note.pubkey) },
+                    onToggleTagDemotion = vm::toggleShowLessAbout,
+                    // APP-008 poll voting.
+                    pollTally = homeState.pollTallies[note.id],
+                    canVotePoll = canVotePoll,
+                    onLoadPollVotes = { vm.loadPollVotes(note.id) },
+                    onVotePoll = { optionIndex -> vm.votePoll(note, optionIndex) },
+                    onOpenExternalLink = onOpenExternalLink,
+                    onOpenMentionProfile = { onOpenAuthor(it) },
+                    rawEventJson = { vm.rawEventJson(note.id) },
+                    sensitiveShowByDefault = sensitiveShowByDefault,
+                )
+            }
         }
     }
 

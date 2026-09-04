@@ -1973,12 +1973,21 @@ private fun BitzSearchOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().padding(end = BitOSSpacing.sm, top = BitOSSpacing.sm),
                 ) {
-                    OutlinedTextField(
+                    // Shared brand field (iOS BitosSearchField parity):
+                    // magnifier lead, inline clear, focused accent border.
+                    space.bitos.app.ui.components.BitosTextField(
                         value = query,
                         onValueChange = { query = it },
-                        singleLine = true,
-                        placeholder = { Text("Search Bitz") },
+                        placeholder = "Search Bitz",
                         leadingIcon = { Icon(AppIcons.Search, contentDescription = null, tint = BitOSColors.textSecondary) },
+                        trailingIcon = {
+                            if (query.isNotEmpty()) {
+                                IconButton(onClick = { query = "" }) {
+                                    Icon(AppIcons.Close, contentDescription = "Clear search", tint = BitOSColors.textTertiary)
+                                }
+                            }
+                        },
+                        singleLine = true,
                         modifier = Modifier.weight(1f).padding(start = BitOSSpacing.base),
                     )
                     TextButton(onClick = onDismiss) { Text("Cancel", color = BitOSColors.primary) }
