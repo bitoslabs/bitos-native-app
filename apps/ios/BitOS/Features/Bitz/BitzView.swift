@@ -115,8 +115,6 @@ struct BitzView: View {
     @State private var explorePrefetchStart = 0
     @State private var revealedIds: Set<String> = []
     @State private var wifiUnmetered = false
-    @State private var positionMs: Int64 = 0
-    @State private var durationMs: Int64 = 0
     @State private var showSearch = false
     @State private var showComposer = false
     /** T4 capture entry: the Create hub (record Bitz / import media). */
@@ -206,18 +204,11 @@ struct BitzView: View {
         }
     }
 
-    /// Stage 2b (task loops; type-checker split).
+    /// Stage 2b (task loops; type-checker split). Position polling lives on
+    /// the settled BitzVideoPage — a root-level 2 Hz tick invalidated the
+    /// whole view tree (pager, sheets, computed projections) twice a second.
     private func stage2b<V: View>(_ base: V) -> some View {
         base
-        .task(id: topId) {
-            // Position polling feeds the settled page's scrubber.
-            guard let id = topId else { return }
-            while !Task.isCancelled {
-                positionMs = pool.positionMs(noteId: id)
-                durationMs = pool.durationMs(noteId: id)
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-        }
         .task(id: pendingJumpId) {
             guard let id = pendingJumpId else { return }
             // Splices land on the next store tick; retry briefly.
@@ -617,8 +608,6 @@ struct BitzView: View {
                         muted: settings.state.videoMuted,
                         sensitiveShown: settings.state.sensitiveMedia == .show,
                         revealed: revealedIds.contains(note.id),
-                        positionMs: note.id == topId ? positionMs : 0,
-                        durationMs: note.id == topId ? durationMs : 0,
                         onToggleMute: { settings.setVideoMuted(!settings.state.videoMuted) },
                         onLike: { like(note) },
                         onBookmark: { toggleBookmark(note) },
@@ -1322,8 +1311,10 @@ private struct BitzVideoPage: View {
     let muted: Bool
     let sensitiveShown: Bool
     let revealed: Bool
-    let positionMs: Int64
-    let durationMs: Int64
+    /** Settled-page playback head, polled HERE: a root-level 2 Hz tick
+     *  invalidated the whole BitzView tree twice a second (§ poll fix). */
+    @State private var positionMs: Int64 = 0
+    @State private var durationMs: Int64 = 0
     let onToggleMute: () -> Void
     let onLike: () -> Void
     let onBookmark: () -> Void
@@ -1448,6 +1439,21 @@ private struct BitzVideoPage: View {
                 Spacer()
                 controls
             }
+            }
+        }
+        .task(id: isSettled) {
+            // Playback-head polling for THIS page's scrubber. Local state
+            // keeps the 2 Hz invalidation scoped to this page — a root-level
+            // tick re-evaluated the entire BitzView tree twice per second.
+            guard isSettled else {
+                positionMs = 0
+                durationMs = 0
+                return
+            }
+            while !Task.isCancelled {
+                positionMs = pool.positionMs(noteId: note.id)
+                durationMs = pool.durationMs(noteId: note.id)
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
     }

@@ -1237,34 +1237,49 @@ fun PosterImage(
     })) {
         if (url != null) {
             if (showLoadingProgress) {
-                // Grid tiles want a per-tile loading slot; SubcomposeAsyncImage
-                // pays a subcomposition per instance, so full-screen posters
-                // (no slot needed) take the plain AsyncImage path below.
-                coil.compose.SubcomposeAsyncImage(
+                // Grid tiles want a per-tile loading slot. AsyncImage's state
+                // callbacks drive the overlay WITHOUT subcomposition —
+                // SubcomposeAsyncImage pays a subcomposition per instance,
+                // which is measurable on a 3-wide scrolling grid (§ bitz
+                // explore tiles).
+                var tileState by androidx.compose.runtime.remember(url) {
+                    androidx.compose.runtime.mutableStateOf<coil.compose.AsyncImagePainter.State?>(
+                        coil.compose.AsyncImagePainter.State.Empty,
+                    )
+                }
+                coil.compose.AsyncImage(
                     model = url,
                     contentDescription = null,
                     contentScale = contentScale,
                     modifier = Modifier.fillMaxSize(),
-                    loading = {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                color = BitOSColors.textTertiary,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    },
-                    error = {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(
-                                AppIcons.Play,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.size(30.dp),
-                            )
-                        }
-                    },
+                    onLoading = { tileState = it },
+                    onSuccess = { tileState = it },
+                    onError = { tileState = it },
                 )
+                when (tileState) {
+                    is coil.compose.AsyncImagePainter.State.Loading -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            color = BitOSColors.textTertiary,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    is coil.compose.AsyncImagePainter.State.Error -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            AppIcons.Play,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+                    else -> {}
+                }
             } else {
                 coil.compose.AsyncImage(
                     model = url,

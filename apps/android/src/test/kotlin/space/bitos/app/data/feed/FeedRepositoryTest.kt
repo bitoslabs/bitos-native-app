@@ -591,13 +591,15 @@ class FeedRepositoryTest {
         transport.emit(VALID_CONTACT_LIST_MESSAGE)
         withTimeout(20_000) { repository.state.first { it.followingResolved } }
 
-        // Unfollow the second key: optimistic set drops it immediately.
+        // Unfollow the second key: the returned set is optimistic and the
+        // projection lands on the ordered intent lane (never main).
         val updated = repository.applyFollowChange(followedAuthor, add = false)
         assertEquals(listOf("f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"), updated)
-        assertFalse(followedAuthor in repository.state.value.following)
+        withTimeout(20_000) { repository.state.first { followedAuthor !in it.following } }
         // Re-follow restores it.
         val restored = repository.applyFollowChange(followedAuthor, add = true)!!
         assertTrue(restored.contains(followedAuthor))
+        withTimeout(20_000) { repository.state.first { followedAuthor in it.following } }
         // No account: nothing changes.
         repository.setAccount(null)
         assertNull(repository.applyFollowChange(followedAuthor, add = true))
