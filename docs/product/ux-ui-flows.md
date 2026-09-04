@@ -300,6 +300,10 @@ UI anatomy:
   disables loading in the other;
 - Explore always reads and paginates the global For You lane, even after the
   user has visited Following; each mode therefore keeps the correct cursor;
+- Refreshing Explore reopens that shared relay lane, but it does not replace
+  the native For You pager snapshot from the reader's last For You visit;
+  returning to For You preserves its visible session. An explicit For You
+  refresh remains the reader's opt-in to refresh that session;
 - Explore discovers media only through the standard NIP-68/NIP-71 kinds
   (20/21/22/34235/34236) queried deep — the first paint fills the 24-tile
   grid, not a six-tile sliver (see the Bitz discovery/query standard above);

@@ -111,6 +111,10 @@ struct BitzView: View {
     @State private var mode: SettingsBitzMode?
     @State private var topId: String?
     @State private var spliced: [FeedNote] = []
+    /// The last For You visit is a native presentation snapshot. Explore
+    /// refreshes the same relay lane, but must not replace a reader's For You
+    /// pager when they return to it.
+    @State private var forYouNotes: [FeedNote] = []
     @State private var loadMoreCount = 0
     @State private var explorePrefetchStart = 0
     /** Explore browse-stable snapshot (§ explore stability): the window is
@@ -170,9 +174,10 @@ struct BitzView: View {
         // Search splices are exceptional. Preserve the store's existing
         // immutable projection in steady state instead of rebuilding a set
         // and copying up to 200 notes on every SwiftUI body access.
-        guard !spliced.isEmpty else { return videos }
-        let windowIds = Set(videos.map(\.id))
-        return spliced.filter { !windowIds.contains($0.id) } + videos
+        let displayedVideos = mode == .forYou && !forYouNotes.isEmpty ? forYouNotes : videos
+        guard !spliced.isEmpty else { return displayedVideos }
+        let windowIds = Set(displayedVideos.map(\.id))
+        return spliced.filter { !windowIds.contains($0.id) } + displayedVideos
     }
 
     private var rootContent: some View {
@@ -419,6 +424,7 @@ struct BitzView: View {
             switch mode {
             case .forYou:
                 environment.feedStore.selectTimeline(.forYou)
+                if forYouNotes.isEmpty { forYouNotes = videos }
                 // A pending jump (explore/search pick) owns the pager —
                 // never reset it to the window head underneath the jump.
                 guard pendingJumpId == nil else { break }
@@ -443,6 +449,13 @@ struct BitzView: View {
         }
         .onChange(of: settings.state.videoMuted) { _, muted in
             pool.setMuted(muted)
+        }
+        .onChange(of: videos) { _, newList in
+            // Keep the active For You pager current, but leave its prior
+            // visit untouched while Explore refreshes the shared relay lane.
+            guard !authorMode, mode == .forYou else { return }
+            let known = Set(forYouNotes.map(\.id))
+            forYouNotes.append(contentsOf: newList.filter { !known.contains($0.id) })
         }
     }
 
@@ -856,6 +869,7 @@ struct BitzView: View {
         spliced = []
         loadMoreCount = 0
         explorePrefetchStart = 0
+        if mode == .forYou { forYouNotes = videos }
         // Explore keeps its grid stable across the refresh: re-snapshot the
         // current window now, refreshed items merge in afterwards.
         if mode == .explore { exploreNotes = videos }
@@ -918,7 +932,7 @@ struct BitzView: View {
 
     /// Explore tile / search pick → splice ahead of the window and jump.
     private func openInPlayer(_ note: FeedNote) {
-        if !videos.contains(where: { $0.id == note.id }) {
+        if !playerNotes.contains(where: { $0.id == note.id }) {
             var next = spliced
             next.insert(note, at: 0)
             spliced = Array(next.prefix(8))

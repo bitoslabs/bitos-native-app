@@ -156,6 +156,14 @@ internal fun projectBitzPlayerNotes(
     return spliced.filterNot { it.id in windowIds } + videos
 }
 
+/** Keeps a completed Explore refresh from replacing an inactive For You visit. */
+internal fun bitzForYouDisplayNotes(
+    mode: BitzModeSetting,
+    forYouSnapshot: List<FeedNote>,
+    liveVideos: List<FeedNote>,
+): List<FeedNote> =
+    if (mode == BitzModeSetting.FOR_YOU && forYouSnapshot.isNotEmpty()) forYouSnapshot else liveVideos
+
 /**
  * Bitz short-video surface (APP-007, spec §3.7). Owns the glass top bar
  * with the persisted Explore · Following · For-you pills, the 3-column
@@ -251,6 +259,10 @@ fun BitzScreen(
         if (authorMode) authorState.notes.filter { it.video != null } else state.notes.filter { it.video != null }
     }
     val spliced = remember { mutableStateListOf<FeedNote>() }
+    // The last For You visit is a presentation snapshot. Explore refreshes
+    // the same global relay lane, but must not replace this pager when the
+    // reader switches back to For You.
+    val forYouNotes = remember { mutableStateListOf<FeedNote>() }
 
     // The paged list is the active tab's window (legacy `displayedEvents`):
     // search picks spliced ahead, then the verified video window. Author
@@ -258,7 +270,8 @@ fun BitzScreen(
     // playback scope must match the profile grid).
     val playerNotes by remember(authorMode, videos, spliced) {
         derivedStateOf {
-            projectBitzPlayerNotes(authorMode = authorMode, videos = videos, spliced = spliced)
+            val displayedVideos = bitzForYouDisplayNotes(mode, forYouNotes, videos)
+            projectBitzPlayerNotes(authorMode = authorMode, videos = displayedVideos, spliced = spliced)
         }
     }
 
@@ -320,9 +333,26 @@ fun BitzScreen(
         if (mode == BitzModeSetting.EXPLORE) snapshotExploreReplace()
     }
 
+    // Only the active For You visit receives live additions. In particular,
+    // an Explore refresh cannot replace this snapshot behind its tab.
+    LaunchedEffect(videos, mode) {
+        if (mode == BitzModeSetting.FOR_YOU) {
+            if (forYouNotes.isEmpty()) {
+                forYouNotes.addAll(videos)
+            } else {
+                val known = forYouNotes.mapTo(HashSet()) { it.id }
+                videos.forEach { if (it.id !in known) forYouNotes.add(it) }
+            }
+        }
+    }
+
     fun refreshWindow() {
         spliced.clear()
         loadMoreCount = 0
+        if (mode == BitzModeSetting.FOR_YOU) {
+            forYouNotes.clear()
+            forYouNotes.addAll(videos)
+        }
         if (mode == BitzModeSetting.EXPLORE) snapshotExploreReplace()
         viewModel.refresh()
     }
@@ -488,7 +518,7 @@ fun BitzScreen(
     }
 
     fun openInPlayer(note: FeedNote) {
-        if (note.id in videos.map { it.id }) {
+        if (note.id in playerNotes.map { it.id }) {
             mode = BitzModeSetting.FOR_YOU
             settingsStore.setRaw(SettingsContract.KEY_BITZ_MODE, BitzModeSetting.FOR_YOU.wire)
             pendingJumpId = note.id

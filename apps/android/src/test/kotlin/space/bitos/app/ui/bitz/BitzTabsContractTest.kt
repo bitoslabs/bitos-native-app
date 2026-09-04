@@ -104,6 +104,29 @@ class BitzTabsContractTest {
         assertEquals(listOf("search", "feed"), merged.map(FeedNote::id))
     }
 
+    @Test
+    fun exploreRefreshCannotReplaceTheLastForYouVisit() {
+        val previousForYou = listOf(note("for-you-before-refresh"))
+        val refreshedExploreLane = listOf(note("explore-refresh-result"))
+
+        assertSame(
+            previousForYou,
+            bitzForYouDisplayNotes(
+                mode = BitzModeSetting.FOR_YOU,
+                forYouSnapshot = previousForYou,
+                liveVideos = refreshedExploreLane,
+            ),
+        )
+        assertSame(
+            refreshedExploreLane,
+            bitzForYouDisplayNotes(
+                mode = BitzModeSetting.EXPLORE,
+                forYouSnapshot = previousForYou,
+                liveVideos = refreshedExploreLane,
+            ),
+        )
+    }
+
     private fun note(id: String) = FeedNote(
         id = id,
         pubkey = "pubkey-$id",
