@@ -409,11 +409,15 @@ struct BitzView: View {
             switch mode {
             case .forYou:
                 environment.feedStore.selectTimeline(.forYou)
+                // A pending jump (explore/search pick) owns the pager —
+                // never reset it to the window head underneath the jump.
+                guard pendingJumpId == nil else { break }
                 let visibleId = playerNotes.contains(where: { $0.id == topId }) ? topId : playerNotes.first?.id
                 topId = visibleId
                 reconcilePool(visibleId: visibleId)
             case .following:
                 environment.feedStore.selectTimeline(.following)
+                guard pendingJumpId == nil else { break }
                 let visibleId = playerNotes.contains(where: { $0.id == topId }) ? topId : playerNotes.first?.id
                 topId = visibleId
                 reconcilePool(visibleId: visibleId)
@@ -894,6 +898,11 @@ struct BitzView: View {
         }
         mode = .forYou
         settings.set(SettingsBitzMode.forYou)
+        // The tapped tile is in playerNotes NOW (window or spliced) — pin
+        // the pager to it immediately. Without this, the mode-change task's
+        // first-item fallback could pin the wrong page while topId was nil
+        // (first pager open) or stale (explore-tap bug).
+        topId = note.id
         pendingJumpId = note.id
     }
 
