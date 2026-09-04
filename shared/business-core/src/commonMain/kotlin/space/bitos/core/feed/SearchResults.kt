@@ -25,6 +25,26 @@ object SearchResults {
     const val MAX_PEOPLE = 24
     const val MAX_HASHTAGS = 16
 
+    /**
+     * Deterministic local Discover match over an already verified relay
+     * event. Native stores use this instead of treating an unrelated relay
+     * subscription as a search response. Hashtag searches are exact; free
+     * text searches include both caption text and visible hashtags.
+     */
+    fun matches(note: FeedNote, query: String): Boolean {
+        val normalized = query.trim().lowercase()
+        if (normalized.isEmpty()) return false
+        if (normalized.startsWith("#")) {
+            val tag = normalized.drop(1)
+            return tag.isNotEmpty() && note.hashtags.any { it.lowercase() == tag }
+        }
+        val resolvedNpub = normalized.takeIf { it.startsWith("npub1") }
+            ?.let(space.bitos.core.identity.NostrKeyCodec::parseNpub)
+        if (resolvedNpub != null) return note.pubkey == resolvedNpub
+        return note.content.lowercase().contains(normalized) ||
+            note.hashtags.any { it.lowercase().contains(normalized) }
+    }
+
     /** Distinct authors, most-results-first, name from profiles when known. */
     fun people(notes: List<FeedNote>, profiles: Map<String, ProfileMetadata>): List<PeopleRow> {
         val counts = LinkedHashMap<String, Int>()

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -146,10 +145,12 @@ fun AuthorProfileScreen(
             .background(BitOSColors.background),
     ) {
         // ── Header bar: back · name · ⋯ (copy link · npub · lightning) ──
+        // No statusBarsPadding here: the shell Scaffold already applies the
+        // system-bar inset to this surface — adding it again doubled the
+        // gap between the status bar and this row.
         Row(
             Modifier
                 .fillMaxWidth()
-                .statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

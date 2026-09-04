@@ -66,4 +66,12 @@ class SearchResultsTest {
         val hits = SearchResults.hashtags(notes)
         assertEquals(listOf("nostr" to 1), hits.map { it.tag to it.count })
     }
+
+    @Test
+    fun localSearchMatchesCaptionAndExactHashtag() {
+        val target = note("1", "aa".repeat(32), "Bitcoin", "Lightning").copy(content = "Good morning, Nostr")
+        assertTrue(SearchResults.matches(target, "morning"))
+        assertTrue(SearchResults.matches(target, "#bitcoin"))
+        assertTrue(!SearchResults.matches(target, "#bit"))
+    }
 }

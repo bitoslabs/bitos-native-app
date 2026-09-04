@@ -2,10 +2,7 @@ import BusinessCore
 import Foundation
 import Observation
 
-/// NIP-50 search scopes (Bitz discovery/query standard, web docs/SYSTEM.md):
-/// Bitz searches the standard NIP-68/NIP-71 media kinds only — it never
-/// discovers media by scanning kind-1 text notes. Discover keeps its
-/// text+video kinds.
+/// Local Discover scopes; Bitz remains restricted to standard media kinds.
 enum SearchScope {
     /// Discover's general search: text + native video kinds.
     case general
@@ -13,8 +10,8 @@ enum SearchScope {
     case bitzMedia
 }
 
-/// NIP-50 search store (SOC-004): debounced queries, npub creator
-/// resolution, verified results in a bounded window.
+/// Local Discover search over normally delivered, verified relay events.
+/// This avoids relay-specific NIP-50 search subscriptions.
 @MainActor
 @Observable
 final class SearchStore {
@@ -30,9 +27,11 @@ final class SearchStore {
     private var client: any BusinessCoreClient
     private var watchTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var settleTask: Task<Void, Never>?
     private var window: (any FeedWindowing)?
     private var seen = Set<String>()
-    private var subscriptionCounter = 0
+    private var activeQuery: String?
+    private var activeScope: SearchScope = .general
 
     init(pool: RelayPool, client: any BusinessCoreClient, bridge: BusinessCoreBridge = BusinessCoreBridge()) {
         self.pool = pool
@@ -55,14 +54,26 @@ final class SearchStore {
     func search(_ text: String, scope: SearchScope = .general) {
         query = text
         searchTask?.cancel()
+        settleTask?.cancel()
+        activeQuery = nil
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             results = []
             profiles = [:]
             resolvedNpub = nil
+            isSearching = false
             hasSearched = false
             return
         }
+        // Do not label prior-query cards as results for the newly typed text
+        // while the 400 ms debounce is pending.
+        seen.removeAll()
+        window = client.makeFeedWindow(maxItems: 100)
+        results = []
+        profiles = [:]
+        resolvedNpub = nil
+        isSearching = false
+        hasSearched = false
         searchTask = Task { [weak self, scope] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
@@ -71,9 +82,9 @@ final class SearchStore {
     }
 
     private func performSearch(_ query: String, scope: SearchScope) async {
-        subscriptionCounter += 1
         seen.removeAll()
         results = []
+        profiles = [:]
         resolvedNpub = nil
         isSearching = true
         hasSearched = true
@@ -81,39 +92,10 @@ final class SearchStore {
         let npub = query.hasPrefix("npub1") ? (bridge.resolveNpub(query: query) as? String) : nil
         resolvedNpub = npub
 
-        // Bitz discovery/query standard: the Bitz scope queries the standard
-        // NIP-68/NIP-71 media kinds only — never kind-1. Discover keeps its
-        // general text+video set.
-        let request: String? = {
-            switch scope {
-            case .bitzMedia:
-                return bridge.bitzSearchRequest(
-                    subscriptionId: "bitos-search-\(subscriptionCounter)",
-                    query: query,
-                    limit: 50
-                ) as String?
-            case .general:
-                return bridge.searchRequest(
-                    subscriptionId: "bitos-search-\(subscriptionCounter)",
-                    query: query,
-                    kinds: [1, 21, 22],
-                    limit: 50
-                ) as String?
-            }
-        }()
-        if let request {
-            Task { await pool.broadcast(request) }
-        }
-        if let npub {
-            if let request = (bridge.profileRequest(
-                subscriptionId: "bitos-search-profile-\(subscriptionCounter)",
-                authors: [npub]
-            ) as String?) {
-                Task { await pool.broadcast(request) }
-            }
-        }
+        activeQuery = query
+        activeScope = scope
 
-        Task { [weak self] in
+        settleTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard let self, self.isSearching, self.query.trimmingCharacters(in: .whitespaces) == query else { return }
             self.isSearching = false
@@ -124,10 +106,13 @@ final class SearchStore {
         guard case .event(let gatedEvent) = gated else { return }
         let event = gatedEvent.event
         if client.isProfileKind(event.kind) {
+            guard activeQuery != nil else { return }
             if let metadata = client.profile(from: event) {
                 profiles[metadata.pubkey] = metadata
             }
         } else if client.isFeedKind(event.kind) {
+            guard let query = activeQuery, activeScope.includes(event.kind),
+                  client.matchesSearch(event: event, query: query) else { return }
             guard !seen.contains(event.id) else { return }
             seen.insert(event.id)
             let note = client.feedNote(from: event)
@@ -135,6 +120,15 @@ final class SearchStore {
                 results = window?.snapshot() ?? results
             }
         }
-        isSearching = false
+    }
+
+}
+
+private extension SearchScope {
+    func includes(_ kind: Int) -> Bool {
+        switch self {
+        case .general: [1, 21, 22].contains(kind)
+        case .bitzMedia: [20, 21, 22, 34235, 34236].contains(kind)
+        }
     }
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import space.bitos.app.data.relay.RelayConnectionState
@@ -23,10 +24,8 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * Adapter-contract test for the NIP-50 search scopes (Bitz discovery/query
- * standard, web docs/SYSTEM.md): Bitz searches the standard NIP-68/NIP-71
- * media kinds only — never kind-1 text notes; Discover keeps its general
- * text+video kind set.
+ * Adapter-contract test for local Discover search: it filters normal verified
+ * relay events and never creates a dedicated NIP-50 search subscription.
  */
 class SearchRepositoryTest {
 
@@ -38,7 +37,7 @@ class SearchRepositoryTest {
 
     @BeforeTest
     fun setUp() {
-        transport = FakeSearchTransport()
+        transport = FakeSearchTransport(relay)
         pool = RelayPool(scope, listOf(relay)) { _, _ -> transport }
         repository = SearchRepository(scope, pool)
     }
@@ -49,38 +48,26 @@ class SearchRepositoryTest {
     }
 
     @Test
-    fun bitzScopeQueriesStandardMediaKindsOnly(): Unit = runBlocking {
-        repository.search("lightning", SearchScope.BITZ_MEDIA)
-        val request = awaitSearchRequest()
-        assertTrue(
-            request.contains("\"kinds\":[20,21,22,34235,34236],\"search\":\"lightning\",\"limit\":50"),
-            request,
-        )
-        assertTrue(!request.contains("\"kinds\":[1]"), request)
+    fun searchesNormalVerifiedRelayEventsWithoutCreatingARequest(): Unit = runBlocking {
+        repository.search("gm")
+        delay(500) // shared debounce
+        assertTrue(transport.sent.isEmpty())
+
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        val state = withTimeout(20_000) { repository.state.first { it.results.isNotEmpty() } }
+        kotlin.test.assertEquals("gm from BitOS", state.results.single().content)
     }
 
     @Test
-    fun generalScopeKeepsTextAndVideoKinds(): Unit = runBlocking {
-        repository.search("gm")
-        val request = awaitSearchRequest()
-        assertTrue(request.contains("\"kinds\":[1,21,22],\"search\":\"gm\",\"limit\":50"), request)
+    fun ignoresNormalEventsThatDoNotMatchTheQuery(): Unit = runBlocking {
+        repository.search("lightning")
+        delay(500)
+        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        delay(100)
+        assertTrue(repository.state.value.results.isEmpty())
     }
 
-    /** Waits out the shared 400 ms relay debounce for the first REQ. */
-    private fun awaitSearchRequest(): String {
-        var request: String? = null
-        runBlocking {
-            withTimeout(20_000) {
-                while (request == null) {
-                    request = transport.sent.lastOrNull { it.contains("bitos-search-") }
-                    if (request == null) delay(10)
-                }
-            }
-        }
-        return request!!
-    }
-
-    private class FakeSearchTransport : RelayTransport {
+    private class FakeSearchTransport(private val relay: RelayUrl) : RelayTransport {
         private val mutableState = MutableStateFlow(RelayConnectionState.DISCONNECTED)
         private val mutableFrames = MutableSharedFlow<RelayFrame>(
             replay = 8,
@@ -103,5 +90,15 @@ class SearchRepositoryTest {
         override fun close(code: Int, reason: String) {
             mutableState.value = RelayConnectionState.DISCONNECTED
         }
+
+        fun emit(message: String) {
+            mutableFrames.tryEmit(RelayFrame(relay, message))
+        }
+    }
+
+    private companion object {
+        // Signed fixture from contracts/nostr/fixtures/verification-vectors.json.
+        const val VALID_TEXT_NOTE_MESSAGE =
+            """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"gm from BitOS","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
     }
 }

@@ -10,10 +10,10 @@ import kotlinx.coroutines.launch
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.app.data.relay.VerifiedPoolFrame
 import space.bitos.core.feed.FeedNote
+import space.bitos.core.feed.SearchResults
 import space.bitos.core.model.NostrKinds
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.core.nostr.EventHasher
-import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
 
 data class SearchUiState(
@@ -28,21 +28,16 @@ data class SearchUiState(
     val hasSearched: Boolean = false,
 )
 
-/**
- * NIP-50 search scopes (Bitz discovery/query standard, web docs/SYSTEM.md):
- * Bitz searches the standard NIP-68/NIP-71 media kinds only — it never
- * discovers media by scanning kind-1 text notes. Discover keeps its
- * text+video kinds.
- */
+/** Local Discover scopes; Bitz remains restricted to standard media kinds. */
 enum class SearchScope(val kinds: List<Int>) {
     GENERAL(listOf(NostrKinds.SHORT_TEXT_NOTE, NostrKinds.NORMAL_VIDEO, NostrKinds.SHORT_VIDEO)),
     BITZ_MEDIA(space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS),
 }
 
 /**
- * NIP-50 search repository (SOC-004): debounced text search over feed kinds,
- * npub resolution for creator queries, verified results in a bounded window.
- * Results clear when the query clears.
+ * Local Discover search over the normal verified relay stream. It intentionally
+ * does not create a NIP-50 REQ: relay search support varies and every result
+ * must come from content the app has already received and verified.
  */
 class SearchRepository(
     private val scope: CoroutineScope,
@@ -53,7 +48,10 @@ class SearchRepository(
     private val profiles = mutableMapOf<String, ProfileMetadata>()
     private var collectJob: Job? = null
     private var searchJob: Job? = null
+    private var settleJob: Job? = null
     private var subscriptionCounter = 0
+    private var activeQuery: String? = null
+    private var activeScope: SearchScope = SearchScope.GENERAL
 
     private val mutableState = MutableStateFlow(SearchUiState())
     val state: StateFlow<SearchUiState> = mutableState.asStateFlow()
@@ -61,9 +59,11 @@ class SearchRepository(
     init {
         collectJob = scope.launch {
             pool.verifiedFrames.collect { gated ->
-                val event = (gated as? VerifiedPoolFrame.Verified)?.event ?: return@collect
+                val frame = gated as? VerifiedPoolFrame.Verified ?: return@collect
+                val event = frame.event
                 when (event.kind) {
                     NostrKinds.PROFILE_METADATA -> {
+                        if (activeQuery == null) return@collect
                         val metadata = ProfileMetadata.parse(event) ?: return@collect
                         val knownAt = profileTimestamps[metadata.pubkey.value] ?: Long.MIN_VALUE
                         if (event.createdAt >= knownAt) {
@@ -72,8 +72,13 @@ class SearchRepository(
                             publishState()
                         }
                     }
-                    else -> if (FeedNote.isFeedKind(event.kind)) {
+                    else -> if (
+                        FeedNote.isFeedKind(event.kind) &&
+                        event.kind in activeScope.kinds
+                    ) {
                         val note = FeedNote.from(event)
+                        val query = activeQuery ?: return@collect
+                        if (!SearchResults.matches(note, query)) return@collect
                         if (results.containsKey(note.id)) return@collect
                         results[note.id] = note
                         if (results.size > MAX_RESULTS) results.remove(results.keys.first())
@@ -90,15 +95,23 @@ class SearchRepository(
     /** Debounced search trigger; empty query clears results. The scope owns
      *  the queried kind set (Discover general vs Bitz media-only). */
     fun search(query: String, searchScope: SearchScope = SearchScope.GENERAL) {
-        mutableState.value = mutableState.value.copy(query = query)
         searchJob?.cancel()
+        settleJob?.cancel()
+        activeQuery = null
         val trimmed = query.trim()
         if (trimmed.isEmpty()) {
             results.clear()
             profiles.clear()
+            profileTimestamps.clear()
             mutableState.value = SearchUiState()
             return
         }
+        // A changed query must never show the previous query's cards during
+        // its debounce window.
+        results.clear()
+        profiles.clear()
+        profileTimestamps.clear()
+        mutableState.value = SearchUiState(query = query)
         searchJob = scope.launch {
             delay(DEBOUNCE_MS)
             performSearch(trimmed, searchScope)
@@ -106,9 +119,9 @@ class SearchRepository(
     }
 
     private suspend fun performSearch(query: String, searchScope: SearchScope) {
-        subscriptionCounter += 1
         results.clear()
         profiles.clear()
+        profileTimestamps.clear()
 
         val npub = if (query.startsWith("npub1")) {
             space.bitos.core.identity.NostrKeyCodec.parseNpub(query)
@@ -123,34 +136,11 @@ class SearchRepository(
             resolvedNpub = npub,
             isRefSearch = eventRef != null,
         )
-
-        if (eventRef != null) {
-            pool.broadcast(
-                NostrEventCodec.encodeRequest(
-                    "bitos-ref-$subscriptionCounter",
-                    space.bitos.core.nostr.EventRefs.requestFilter(eventRef),
-                ),
-            )
-        } else {
-        // Text search over the scope's kind set (NIP-50; relay support varies
-        // — the empty result state says "relays may not support search").
-        val kinds = searchScope.kinds.joinToString(",")
-        val filter = """{"kinds":[$kinds],"search":"${NostrEventCodec.escape(query)}","limit":50}"""
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-search-$subscriptionCounter", filter))
-
-        // npub: request the creator's profile + notes directly.
-        if (npub != null) {
-            pool.broadcast(
-                NostrEventCodec.encodeRequest(
-                    "bitos-search-profile-$subscriptionCounter",
-                    """{"kinds":[0,1,21,22],"authors":["$npub"],"limit":20}""",
-                ),
-            )
-        }
-        } // ref-search branch: no NIP-50/npub fan-out
+        activeQuery = query
+        activeScope = searchScope
 
         // Resolve the search-in-progress state after a settling window.
-        scope.launch {
+        settleJob = scope.launch {
             delay(SETTLE_MS)
             if (mutableState.value.isSearching && mutableState.value.query.trim() == query) {
                 mutableState.value = mutableState.value.copy(isSearching = false)
@@ -162,7 +152,6 @@ class SearchRepository(
         mutableState.value = mutableState.value.copy(
             results = results.values.sortedByDescending { it.createdAt },
             profiles = profiles.toMap(),
-            isSearching = false,
         )
     }
 

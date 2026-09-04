@@ -1026,6 +1026,10 @@ class BusinessCoreBridge {
         }
     }
 
+    /** Shared local-search predicate for verified, normally delivered events. */
+    fun matchesSearch(event: Event, query: String): Boolean =
+        space.bitos.core.feed.SearchResults.matches(FeedNote.from(event.toCore()), query)
+
     /**
      * Identity onboarding content (spec §4, docs/ui/app-01): shared copy for
      * the SwiftUI onboarding flow — welcome props, method cards, backup gate

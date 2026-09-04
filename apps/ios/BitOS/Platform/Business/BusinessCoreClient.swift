@@ -158,6 +158,7 @@ protocol BusinessCoreClient: Sendable {
     func bitzWalkPrefetchThreshold() -> Int
     func profile(from event: VerifiedEvent) -> ProfileMetadata?
     func feedNote(from event: VerifiedEvent) -> FeedNote
+    func matchesSearch(event: VerifiedEvent, query: String) -> Bool
     /// NIP-01 canonical event-object JSON (raw-event viewer seam): the
     /// signed object exactly as the event ID commits to it.
     func eventJson(_ event: VerifiedEvent) -> String
@@ -519,6 +520,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         )
     }
 
+    func matchesSearch(event: VerifiedEvent, query: String) -> Bool {
+        bridge.matchesSearch(event: event.bridgeEvent(bridge: bridge), query: query)
+    }
+
     func feedRequest(subscriptionId: String) -> String {
         bridge.feedRequest(subscriptionId: subscriptionId)
     }
@@ -869,6 +874,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
                  createdAt: event.createdAt, kind: event.kind, replyTo: nil,
                  hashtags: [], mentions: [], mediaUrls: [], isProtocolPayload: false,
                  video: MediaMetadata(url: "", mimeType: nil, posterUrl: nil, width: nil, height: nil, durationSeconds: nil))
+    }
+    func matchesSearch(event: VerifiedEvent, query: String) -> Bool {
+        event.content.localizedCaseInsensitiveContains(query)
     }
     func feedRequest(subscriptionId: String) -> String { "" }
     func eventJson(_ event: VerifiedEvent) -> String {
