@@ -263,15 +263,49 @@ final class FeedStore {
     /// Returning to the head silently merges the bounded arrival buffer.
     func holdNewNotes(_ hold: Bool) {
         let changed: Bool
-        let drained: Bool
         if hold {
             changed = heldTimelines.insert(timeline).inserted
-            drained = false
         } else {
             changed = heldTimelines.remove(timeline) != nil
-            drained = drainPending(for: timeline)
         }
-        if changed || drained { publishState() }
+        guard changed else { return }
+        if hold {
+            publishState()
+            return
+        }
+        scheduleReveal(for: timeline)
+    }
+
+    /// Reveal held arrivals in TWO passes (audit §reveal): the reader is
+    /// mid-gesture when row 0 re-appears, so a full burst lands as two
+    /// insert+publish pairs ~[revealSecondPassMs] apart instead of one
+    /// large main-actor window+list relayout.
+    private func scheduleReveal(for timeline: FeedTimeline) {
+        let revealed: [FeedNote]
+        switch timeline {
+        case .following:
+            revealed = pendingFollowing
+            pendingFollowing.removeAll()
+        case .forYou:
+            revealed = pendingForYou
+            pendingForYou.removeAll()
+        }
+        guard let target = olderSourceWindow(for: timeline) else { return }
+        if revealed.isEmpty {
+            publishState()
+            return
+        }
+        let firstPass = (revealed.count + 1) / 2
+        for note in revealed.prefix(firstPass) { target.insert(note) }
+        publishState()
+        guard firstPass < revealed.count else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.revealSecondPassMs))
+            guard let self else { return }
+            for note in revealed.dropFirst(firstPass) { target.insert(note) }
+            self.publishState()
+            self.flushPendingPersist()
+        }
     }
 
     private func drainPending(for timeline: FeedTimeline) -> Bool {
@@ -1665,6 +1699,8 @@ final class FeedStore {
 
     /// Hard cap on the trailing batch window after the first paint.
     private static let headFlushMaxMs = 5_000.0
+    /// Gap between the two reveal passes of held arrivals (audit §reveal).
+    private static let revealSecondPassMs = 120
     /// Relay-burst publication coalescing window (audit R3).
     private static let publishCoalesceMs = 150
     /// Verified events per one transactional cache flush (audit R6).

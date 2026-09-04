@@ -618,10 +618,11 @@ class FeedRepositoryTest {
             }
         }
 
-        // Optimistic add returns the new list for the publish.
+        // Optimistic add returns the new list for the publish; the
+        // projection lands on the ordered intent lane (never main).
         val updated = repository.applyBookmarkChange(targetId, add = true)
         assertEquals(listOf(targetId), updated)
-        assertTrue(targetId in repository.state.value.bookmarkedIds)
+        withTimeout(20_000) { repository.state.first { targetId in it.bookmarkedIds } }
         // Optimistic remove.
         val removed = repository.applyBookmarkChange(targetId, add = false)!!
         assertTrue(removed.isEmpty())

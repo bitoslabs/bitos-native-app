@@ -1,6 +1,7 @@
 package space.bitos.app.data.feed
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -402,7 +403,7 @@ class FeedRepository(
      */
     fun setAlgorithm(snapshot: AlgorithmSnapshot?) {
         algorithm = snapshot
-        publishState()
+        publishFromIntent()
     }
 
     private var algorithm: AlgorithmSnapshot? = null
@@ -414,7 +415,7 @@ class FeedRepository(
 
     fun setMuted(muted: Set<String>) {
         mutedPubkeys = muted
-        publishState()
+        publishFromIntent()
     }
 
     /** Local ranking signals (web interaction-profile parity). */
@@ -422,14 +423,13 @@ class FeedRepository(
         dismissedNoteIds = dismissed
         demotedAuthors = authors
         demotedTags = tags
-        publishState()
+        publishFromIntent()
     }
 
     fun selectTimeline(timeline: FeedTimeline) {
         mutableState.value = mutableState.value.copy(timeline = timeline)
         heldTimelines.remove(timeline)
-        drainPending(timeline)
-        publishState()
+        scheduleReveal(timeline)
     }
 
     fun refresh() {
@@ -448,10 +448,13 @@ class FeedRepository(
         // Flush notes absorbed mid-walk whose per-note publish was suppressed
         // when the batch was cancelled — must precede subscribe(), which
         // re-sets isLoading from the fresh snapshot (and re-arms the head
-        // batch window). The persist flush rides the same rule.
-        publishState()
-        flushPendingPersist()
-        subscribe()
+        // batch window). The persist flush rides the same rule. The tail
+        // runs on the ordered intent lane: never on the caller's main thread.
+        scope.launch(intentPublishes) {
+            publishState()
+            flushPendingPersist()
+            subscribe()
+        }
     }
 
     /** APP-004: manual retry from the relay-error / empty state — resets the
@@ -468,9 +471,11 @@ class FeedRepository(
         loadingOlderTimeline = null
         // Same mid-walk flush as refresh(): cancelled batches must not
         // strand suppressed publishes.
-        publishState()
-        flushPendingPersist()
-        subscribe()
+        scope.launch(intentPublishes) {
+            publishState()
+            flushPendingPersist()
+            subscribe()
+        }
     }
 
     /**
@@ -504,7 +509,7 @@ class FeedRepository(
         }
         val cursor = lane.cursorSeconds ?: BitzTimelinePolicy.cursor(oldest)
         loadingOlderTimeline = timeline
-        publishState()
+        publishFromIntent()
         walkOlder(
             timeline = timeline,
             cursor = cursor,
@@ -641,7 +646,7 @@ class FeedRepository(
 
     private fun finishOlderWalk(timeline: FeedTimeline) {
         if (loadingOlderTimeline == timeline) loadingOlderTimeline = null
-        publishState()
+        publishFromIntent()
     }
 
     /** ALL-window size of the For You timeline (mutes + protocol payload hidden). */
@@ -670,7 +675,7 @@ class FeedRepository(
         followingAuthors.addAll(updated)
         followingSubscribed = false
         subscribeFollowing()
-        publishState()
+        publishFromIntent()
         return updated.toList()
     }
 
@@ -685,7 +690,7 @@ class FeedRepository(
         if (bookmarked.size > space.bitos.core.model.BookmarkList.MAX_BOOKMARKS) {
             bookmarked.remove(bookmarked.first())
         }
-        publishState()
+        publishFromIntent()
         return bookmarked.toList()
     }
 
@@ -775,7 +780,7 @@ class FeedRepository(
     fun loadComments(targetEventId: String) {
         space.bitos.core.feed.NoteTallies.evict(tallyTargets, targetEventId)
         if (commentThreads.containsKey(targetEventId)) {
-            publishState()
+            publishFromIntent()
             return
         }
         commentThreads[targetEventId] = LinkedHashMap()
@@ -792,7 +797,7 @@ class FeedRepository(
                 COMMENT_ROOT_FILTER_PREFIX + targetEventId + COMMENT_FILTER_SUFFIX,
             )
         )
-        publishState()
+        publishFromIntent()
     }
 
     /** Account lifecycle: non-null activates the Following timeline, null clears it. */
@@ -824,7 +829,7 @@ class FeedRepository(
             requestBookmarkHead(pubkey)
             requestBlockHead(pubkey)
         }
-        publishState()
+        publishFromIntent()
     }
 
     // ── One-shot account heads (kind-0 / kind-3 / 30003 / 10004) ──────────
@@ -1083,7 +1088,7 @@ class FeedRepository(
                 ),
             )
         }
-        publishState()
+        publishFromIntent()
     }
 
     /**
@@ -1124,12 +1129,12 @@ class FeedRepository(
 
     fun selectFilter(filter: FeedFilter) {
         mutableState.value = mutableState.value.copy(filter = filter)
-        publishState()
+        publishFromIntent()
     }
 
     fun setLikedIds(liked: Set<String>) {
         likedIds = liked
-        if (mutableState.value.filter == FeedFilter.LIKED) publishState()
+        if (mutableState.value.filter == FeedFilter.LIKED) publishFromIntent()
     }
 
     /** Hold only while the active reader is away from the head. Returning to
@@ -1137,8 +1142,38 @@ class FeedRepository(
     fun holdNewNotes(hold: Boolean) {
         val timeline = mutableState.value.timeline
         val changed = if (hold) heldTimelines.add(timeline) else heldTimelines.remove(timeline)
-        val drained = if (!hold) drainPending(timeline) else false
-        if (changed || drained) publishState()
+        if (!changed) return
+        if (hold) {
+            publishFromIntent()
+            return
+        }
+        scheduleReveal(timeline)
+    }
+
+    /**
+     * Reveal held arrivals in TWO passes (audit §reveal): the reader is
+     * mid-gesture when row 0 re-appears, so a full burst lands as two
+     * insert+publish pairs ~[REVEAL_SECOND_PASS_MS] apart instead of one
+     * large single-frame relayout. Both passes publish on the ordered
+     * intent lane, never main.
+     */
+    private fun scheduleReveal(timeline: FeedTimeline) {
+        val revealed = pendingNotes.drain(timeline)
+        if (revealed.isEmpty()) {
+            publishFromIntent()
+            return
+        }
+        val firstPass = (revealed.size + 1) / 2
+        revealed.take(firstPass).forEach { windowFor(timeline).insert(it) }
+        publishFromIntent()
+        if (firstPass < revealed.size) {
+            scope.launch(intentPublishes) {
+                delay(REVEAL_SECOND_PASS_MS)
+                revealed.drop(firstPass).forEach { windowFor(timeline).insert(it) }
+                publishState()
+                flushPendingPersist()
+            }
+        }
     }
 
     private fun drainPending(timeline: FeedTimeline): Boolean {
@@ -1191,7 +1226,7 @@ class FeedRepository(
         pollVoters.getOrPut(targetEventId) { LinkedHashMap() }
         val filter = """{"kinds":[${NostrKinds.POLL_RESPONSE}],"#e":["$targetEventId"],"limit":${space.bitos.core.model.PollVotes.MAX_VOTERS}}"""
         pool.broadcast(NostrEventCodec.encodeRequest("bitos-pollvotes-$targetEventId".take(64), filter))
-        publishState()
+        publishFromIntent()
     }
 
     /** Optimistic local vote before the kind-1018 relay echo lands. */
@@ -1202,7 +1237,7 @@ class FeedRepository(
             voters,
             space.bitos.core.model.PollVote(account, optionIndex, System.currentTimeMillis() / 1_000),
         )
-        publishState()
+        publishFromIntent()
     }
 
     private fun absorbContactList(event: NostrEvent) {
@@ -1303,6 +1338,22 @@ class FeedRepository(
     // ── Coalesced UI publication (audit R3) ──────────────────────────
 
     private var publishJob: Job? = null
+
+    /**
+     * UI-intent publishes hop OFF the caller thread (usually main) but stay
+     * ordered — [intentPublishes] is a serialized lane, so projections land
+     * in intent order. The full window projection (snapshot, rank, filter,
+     * thread assembly) therefore never runs on main, including the reveal
+     * of held arrivals mid-scroll-gesture (audit §reveal).
+     */
+    private val intentPublishes = Dispatchers.Default.limitedParallelism(1)
+
+    private fun publishFromIntent() {
+        scope.launch(intentPublishes) {
+            publishState()
+            flushPendingPersist()
+        }
+    }
 
     /**
      * Relay-burst absorption schedules ONE projection per
@@ -1596,6 +1647,9 @@ class FeedRepository(
 
         /** Verified events per one transactional cache flush (audit R6). */
         const val PERSIST_BATCH_MAX = 64
+
+        /** Gap between the two reveal passes of held arrivals (audit §reveal). */
+        const val REVEAL_SECOND_PASS_MS = 120L
     }
 }
 
