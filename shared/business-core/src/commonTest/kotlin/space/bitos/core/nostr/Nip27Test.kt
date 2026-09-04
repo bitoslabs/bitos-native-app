@@ -123,14 +123,14 @@ class Nip27Test {
  */
 class FeedNoteContentWarningTest {
 
-    private fun note(tags: List<List<String>>): FeedNote {
+    private fun note(tags: List<List<String>>, content: String = "x"): FeedNote {
         val event = space.bitos.core.model.NostrEvent(
             id = space.bitos.core.model.EventId.parse("0".repeat(64))!!,
             pubkey = space.bitos.core.model.Pubkey.parse("aa".repeat(32))!!,
             createdAt = 1_710_000_000L,
             kind = 1,
             tags = tags,
-            content = "x",
+            content = content,
             signature = null,
             receivedFromRelay = null,
         )
@@ -152,5 +152,13 @@ class FeedNoteContentWarningTest {
     fun ordinaryTagsDoNotMarkTheNote() {
         assertTrue(!note(emptyList()).contentWarning)
         assertTrue(!note(listOf(listOf("t", "content"))).contentWarning)
+    }
+
+    @Test
+    fun legacySensitiveHashtagsFallBackToTheContentWarningGate() {
+        assertTrue(note(listOf(listOf("t", "NSFW"))).contentWarning)
+        assertTrue(note(emptyList(), "behind the scenes #Porn")).contentWarning)
+        assertTrue(note(emptyList(), "warning #nudity")).contentWarning)
+        assertTrue(note(emptyList(), "safe discussion of explicit permissions").contentWarning.not())
     }
 }

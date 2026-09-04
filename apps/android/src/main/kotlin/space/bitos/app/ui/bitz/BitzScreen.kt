@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -115,7 +117,6 @@ import space.bitos.app.ui.components.AppMenuDropdown
 import space.bitos.app.ui.components.AppMenuEntry
 import space.bitos.app.ui.components.AppMenuItem
 import space.bitos.app.ui.components.PubkeyAvatar
-import space.bitos.app.ui.components.SensitiveCover
 import space.bitos.app.ui.feed.HomeViewModel
 import space.bitos.app.ui.feed.LocalActions
 import space.bitos.app.ui.feed.PosterImage
@@ -275,6 +276,8 @@ fun BitzScreen(
             projectBitzPlayerNotes(authorMode = authorMode, videos = displayedVideos, spliced = spliced)
         }
     }
+    // Per-session state only; it is intentionally never persisted.
+    val revealed = remember { mutableStateMapOf<String, Boolean>() }
 
     // ── Player pool (bounded three-slot reconciliation) ────────────────
     val pool = remember {
@@ -405,11 +408,18 @@ fun BitzScreen(
     val bitzSettledId = playerNotes.getOrNull(pagerState.settledPage)?.id
     val bitzPrevId = playerNotes.getOrNull(pagerState.settledPage - 1)?.id
     val bitzNextId = playerNotes.getOrNull(pagerState.settledPage + 1)?.id
-    LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId, settingsSnapshot.videoQuality) {
+    val bitzVisibleCovered = playerNotes.getOrNull(pagerState.settledPage)?.let { note ->
+        note.contentWarning && !sensitiveShowByDefault && revealed[note.id] != true
+    } == true
+    LaunchedEffect(mode, bitzSettledId, bitzPrevId, bitzNextId, settingsSnapshot.videoQuality, bitzVisibleCovered) {
         if (!authorMode && mode == BitzModeSetting.EXPLORE) {
             pool.releaseAll()
         } else {
-            pool.update(pagerState.settledPage, playerNotes)
+            pool.update(
+                visibleIndex = pagerState.settledPage,
+                notes = playerNotes,
+                autoplayAllowed = !bitzVisibleCovered && autoplayAllowed(context, settingsSnapshot.mediaAutoPlay),
+            )
         }
     }
     // APP-004 hold rule: arrivals wait while the user is scrolled in.
@@ -537,7 +547,6 @@ fun BitzScreen(
     var commentsTarget by remember { mutableStateOf<FeedNote?>(null) }
     var zapTarget by remember { mutableStateOf<FeedNote?>(null) }
     var authorTarget by remember { mutableStateOf<String?>(null) }
-    val revealed = remember { mutableStateMapOf<String, Boolean>() }
     var showSearch by remember { mutableStateOf(false) }
     // APP-007 Chain: the note whose ancestry the sheet is showing.
     var chainTarget by remember { mutableStateOf<FeedNote?>(null) }
@@ -1538,8 +1547,17 @@ private fun BitzVideoPage(
             }
         }
         if (covered) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                SensitiveCover(onReveal = { revealed[note.id] = true })
+            Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                // Full-viewport blur ensures the underlying media is never
+                // legible at the edges of the sensitive-content decision.
+                PosterImage(
+                    url = note.video!!.posterUrl,
+                    contentScale = ContentScale.Crop,
+                    backgroundColor = Color.Black,
+                    modifier = Modifier.fillMaxSize().blur(32.dp),
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)))
+                BitzSensitiveGlassGate(onReveal = { revealed[note.id] = true })
             }
         }
         BitzCaption(
@@ -1627,6 +1645,48 @@ private fun BitzVideoPage(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Full-height Bitz safety gate. Unlike a feed-card cover, this is a clear
+ * decision surface over the entire player viewport. */
+@Composable
+private fun BitzSensitiveGlassGate(onReveal: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(0.78f)
+            .heightIn(min = 236.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(BitOSColors.surfaceElevated.copy(alpha = 0.82f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(28.dp))
+            .padding(horizontal = 28.dp, vertical = 30.dp)
+            .semantics { contentDescription = "Sensitive video hidden. Show video button." },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        SolarFeedIconImage(
+            icon = SolarFeedIcon.EyeClosed,
+            contentDescription = null,
+            tint = BitOSColors.textSecondary,
+            modifier = Modifier.size(44.dp),
+        )
+        Text(
+            "Sensitive video",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.W800,
+            color = Color.White,
+            modifier = Modifier.padding(top = 16.dp),
+        )
+        Text(
+            "This video may contain sensitive content. It will not play until you choose to show it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = BitOSColors.textSecondary,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        Button(onClick = onReveal, modifier = Modifier.padding(top = 22.dp)) {
+            Text("Show video")
         }
     }
 }

@@ -65,7 +65,7 @@ object OriginNotes {
             thumbUrl = thumbUrl,
             content = event.content,
             mediaUrls = mediaUrls,
-            contentWarning = Nip36.hasContentWarning(event.tags),
+            contentWarning = Nip36.hasContentWarning(event.tags, event.content),
         )
     }
 }

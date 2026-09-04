@@ -90,7 +90,7 @@ data class FeedNote(
             externalVideoPreviews = ExternalVideoPreviews.fromContent(event.content),
             isProtocolPayload = space.bitos.core.nostr.ContentClassification.isProtocolPayload(event.content),
             video = MediaMetadata.fromEvent(event),
-            contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags),
+            contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags, event.content),
             remixOfEventId = remixSource?.eventId,
             remixOfPubkey = remixSource?.pubkey,
             license = RemixRules.licenseOf(event.tags),

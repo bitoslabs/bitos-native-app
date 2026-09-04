@@ -292,7 +292,12 @@ UI anatomy:
 - top mode switch with clear selected state;
 - right action rail with labels available to assistive technology;
 - bottom author, caption, tags, sound and progress;
-- visible content-warning gate before playback;
+- visible full-viewport blurred content-warning gate before playback; media and
+  audio begin only after the reader explicitly reveals it; the decision sits in
+  a centered glass panel with a clear “Show video” action;
+- NIP-36 `content-warning` remains canonical; legacy posts also gate on a
+  case-insensitive sensitive `t` tag or standalone caption hashtag (`#nsfw`,
+  `#porn`, `#nudity`, and the shared conservative vocabulary);
 - one active audio player; warm next/previous players only;
 - relative time is `now`/seconds while a card is visible, then updates only on
   minute boundaries; the feed store is never republished for a clock tick;

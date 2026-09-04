@@ -86,7 +86,13 @@ class VideoPlayerPool(
         }
 
     /** Reconcile slots with [visibleIndex] ± 1 in [notes] (the paged list). */
-    fun update(visibleIndex: Int, notes: List<FeedNote>) {
+    fun update(
+        visibleIndex: Int,
+        notes: List<FeedNote>,
+        /** Sensitive-media gates may prepare the visible slot but must not
+         * start audio or video until the reader explicitly reveals it. */
+        autoplayAllowed: Boolean = canAutoplay(),
+    ) {
         val quality = qualityProvider()
         if (quality != currentQuality) {
             // Preference change: release the bounded slots so this pass
@@ -137,11 +143,10 @@ class VideoPlayerPool(
         }
         if (bindingsChanged) mutablePlayers.value = players.toMap()
         // Exactly the visible video plays — gated by the autoplay policy.
-        val autoplay = canAutoplay()
         val rate = rateProvider()
         val visibleId = notes[visibleIndex].id
         players.forEach { (id, player) ->
-            player.playWhenReady = id == visibleId && autoplay
+            player.playWhenReady = id == visibleId && autoplayAllowed
             if (player.playbackParameters.speed != rate) {
                 player.setPlaybackSpeed(rate)
             }

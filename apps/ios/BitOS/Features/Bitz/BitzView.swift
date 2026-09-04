@@ -200,6 +200,7 @@ struct BitzView: View {
         .onChange(of: playerNotes.count) { _, _ in
             reconcilePool(visibleId: topId)
         }
+        .onChange(of: revealedIds) { _, _ in reconcilePool(visibleId: topId) }
         .onChange(of: settings.state.videoMuted) { _, _ in reconcilePool(visibleId: topId) }
         // UX U9: quality change re-prepares the bounded slots at the new
         // rung immediately (pool rebuilds on preference change).
@@ -637,6 +638,7 @@ struct BitzView: View {
                         muted: settings.state.videoMuted,
                         sensitiveShown: settings.state.sensitiveMedia == .show,
                         revealed: revealedIds.contains(note.id),
+                        onReveal: { revealedIds.insert(note.id) },
                         onToggleMute: { settings.setVideoMuted(!settings.state.videoMuted) },
                         onLike: { like(note) },
                         onBookmark: { toggleBookmark(note) },
@@ -847,10 +849,13 @@ struct BitzView: View {
     // MARK: Actions
 
     private func reconcilePool(visibleId: String?) {
+        let covered = playerNotes.first(where: { $0.id == visibleId }).map {
+            $0.contentWarning && settings.state.sensitiveMedia != .show && !revealedIds.contains($0.id)
+        } ?? false
         pool.update(
             visibleId: visibleId,
             notes: playerNotes,
-            autoplayAllowed: autoplayAllowed(),
+            autoplayAllowed: !covered && autoplayAllowed(),
             rate: Float(Double(settings.state.playbackRate.rawValue) ?? 1),
             muted: settings.state.videoMuted,
             videoQuality: settings.state.videoQuality.rawValue
@@ -1368,6 +1373,7 @@ private struct BitzVideoPage: View {
     let muted: Bool
     let sensitiveShown: Bool
     let revealed: Bool
+    let onReveal: () -> Void
     /** Settled-page playback head, polled HERE: a root-level 2 Hz tick
      *  invalidated the whole BitzView tree twice a second (§ poll fix). */
     @State private var positionMs: Int64 = 0
@@ -1479,9 +1485,12 @@ private struct BitzVideoPage: View {
                         }
                 }
                 if covered {
-                    SensitiveCover(onReveal: {})
+                    BitzPosterImage(url: note.video?.posterUrl, fillsFrame: true)
+                        .blur(radius: 32)
+                        .scaleEffect(1.08)
+                    Color.black.opacity(0.72)
+                    BitzSensitiveGlassGate(onReveal: onReveal)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.black.opacity(0.9))
                 }
                 VStack {
                     Spacer()
@@ -1713,6 +1722,44 @@ private struct BitzVideoPage: View {
         .padding(.vertical, 2)
         // Clean chrome (user decision 2026-08-29): no black strip behind
         // the compact controls.
+    }
+}
+
+/// Full-height safety decision for the Bitz player. Feed cards use the small
+/// reusable cover; the player needs an explicit glass panel over its viewport.
+private struct BitzSensitiveGlassGate: View {
+    let onReveal: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AppIcons.image(for: AppIcons.eyeClosed)
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            Text("Sensitive video")
+                .font(.title3.weight(.heavy))
+                .foregroundStyle(.white)
+                .padding(.top, 16)
+            Text("This video may contain sensitive content. It will not play until you choose to show it.")
+                .font(.subheadline)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 10)
+            Button("Show video", action: onReveal)
+                .font(.subheadline.weight(.bold))
+                .buttonStyle(.borderedProminent)
+                .tint(BitOSTheme.accent)
+                .padding(.top, 22)
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 30)
+        .frame(maxWidth: 330, minHeight: 236)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(.white.opacity(0.18), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Sensitive video hidden. Show video button.")
     }
 }
 
@@ -1970,6 +2017,8 @@ private enum BitzPosterPurpose {
 private struct BitzPosterImage: View {
     let url: String?
     var purpose: BitzPosterPurpose = .screen
+    /** Used only behind the full-screen sensitive-content gate. */
+    var fillsFrame = false
     @Environment(AppEnvironment.self) private var environment
     @State private var image: UIImage?
     /** URL currently displayed in [image] — a page rebind keeps the last
@@ -1998,7 +2047,7 @@ private struct BitzPosterImage: View {
                 }
             }
             if let image {
-                if purpose == .grid {
+                if purpose == .grid || fillsFrame {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
