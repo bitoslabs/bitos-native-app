@@ -113,6 +113,11 @@ struct BitzView: View {
     @State private var spliced: [FeedNote] = []
     @State private var loadMoreCount = 0
     @State private var explorePrefetchStart = 0
+    /** Explore browse-stable snapshot (§ explore stability): the window is
+     *  a moving, bounded projection — live arrivals re-ordered the grid and
+     *  the cap deleted old tiles mid-browse. Captured on entry/refresh,
+     *  appended (never re-ordered) as pages land. */
+    @State private var exploreNotes: [FeedNote] = []
     @State private var revealedIds: Set<String> = []
     @State private var wifiUnmetered = false
     @State private var showSearch = false
@@ -127,6 +132,8 @@ struct BitzView: View {
     @State private var menu: AppMenuPresentation?
     /** Legacy-parity ⋯ overflow → bottom sheet. */
     @State private var moreSheetTarget: FeedNote?
+    /** Card ⋯ raw-event viewer (NIP-01 canonical object). */
+    @State private var rawEventText: RawEvent?
     /** External-link confirm sheet (never opens the browser unattended). */
     @State private var externalLink: String?
     @State private var pendingJumpId: String?
@@ -260,6 +267,9 @@ struct BitzView: View {
                 handleMoreSelect(note, id)
             }
             .presentationDetents([.medium])
+        }
+        .sheet(item: $rawEventText) { raw in
+            RawEventSheet(text: raw.value)
         }
         // External-link confirm: the browser only opens on an explicit Open.
         .sheet(isPresented: Binding(
@@ -427,6 +437,8 @@ struct BitzView: View {
                 // use the Following cursor and appear to stop loading.
                 environment.feedStore.selectTimeline(.forYou)
                 pool.releaseAll()
+                // Capture the browse-stable snapshot for this visit.
+                exploreNotes = videos
             }
         }
         .onChange(of: settings.state.videoMuted) { _, muted in
@@ -683,14 +695,18 @@ struct BitzView: View {
 
     @ViewBuilder
     private var exploreGrid: some View {
+        // The snapshot (falling back to the live window only until the
+        // first snapshot lands): stable while the reader browses — merges
+        // append at the tail, never re-order, never evict.
+        let stableList = exploreNotes.isEmpty ? videos : exploreNotes
         let visibleCount = rules.exploreVisibleCount(loadMoreCount: loadMoreCount)
-        let tiles = videos.prefix(visibleCount)
-        let prefetchUrls = videos.dropFirst(explorePrefetchStart).prefix(12).compactMap { $0.video?.posterUrl }
+        let tiles = stableList.prefix(visibleCount)
+        let prefetchUrls = stableList.dropFirst(explorePrefetchStart).prefix(12).compactMap { $0.video?.posterUrl }
         let columns = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]
         // Legacy bitz parity: centered spinner while the first page loads;
         // Flutter `_BitsEmptyState` when the window is empty — both keep
         // pull-to-refresh alive.
-        if videos.isEmpty && environment.feedStore.isLoading {
+        if stableList.isEmpty && environment.feedStore.isLoading {
             // UX U2: skeleton tiles in the grid shape while the first relay
             // page loads (§2.5 parity with the Android skeleton grid).
             ScrollView {
@@ -702,7 +718,7 @@ struct BitzView: View {
                 .padding(EdgeInsets(top: 76, leading: 10, bottom: 16, trailing: 10))
             }
             .refreshable { refreshWindow() }
-        } else if videos.isEmpty {
+        } else if stableList.isEmpty {
             exploreEmptyState
         } else {
             ScrollView {
@@ -741,7 +757,7 @@ struct BitzView: View {
                 .padding(EdgeInsets(top: 76, leading: 10, bottom: 16, trailing: 10))
                 // UX U7: exhausted walk — an explicit boundary instead of a
                 // silent dead-end at the grid's last tile.
-                if environment.feedStore.noMoreOlder && !videos.isEmpty {
+                if environment.feedStore.noMoreOlder && !stableList.isEmpty {
                     Text("You're all caught up")
                         .font(.footnote)
                         .foregroundStyle(BitOSTheme.textTertiary)
@@ -758,13 +774,21 @@ struct BitzView: View {
             .onChange(of: environment.feedStore.isLoadingOlder) { _, loading in
                 guard !loading, !environment.feedStore.noMoreOlder,
                       explorePrefetchStart >= max(0, visibleCount - environment.feedStore.paginationPrefetchThreshold) else { return }
-                if videos.count > visibleCount {
+                if stableList.count > visibleCount {
                     loadMoreCount += 1
                 } else {
                     environment.feedStore.loadOlder()
                 }
             }
-            .task(id: "\(explorePrefetchStart)-\(videos.count)") {
+            // Append-only merge into the snapshot (§ explore stability):
+            // relay pages and arrivals land at the tail, never re-ordering
+            // what the reader is already looking at.
+            .onChange(of: videos) { _, newList in
+                guard mode == .explore else { return }
+                let known = Set(exploreNotes.map(\.id))
+                exploreNotes.append(contentsOf: newList.filter { !known.contains($0.id) })
+            }
+            .task(id: "\(explorePrefetchStart)-\(stableList.count)") {
                 let scale = UIScreen.main.scale
                 let tilePixels = UIScreen.main.bounds.width * scale / 3
                 await environment.posterImages.prefetch(
@@ -832,6 +856,9 @@ struct BitzView: View {
         spliced = []
         loadMoreCount = 0
         explorePrefetchStart = 0
+        // Explore keeps its grid stable across the refresh: re-snapshot the
+        // current window now, refreshed items merge in afterwards.
+        if mode == .explore { exploreNotes = videos }
         environment.feedStore.refresh()
     }
 
@@ -973,6 +1000,7 @@ struct BitzView: View {
             .item(AppMenuItem(id: "copy-id", label: "Copy note ID", systemImage: AppIcons.copy)),
             .item(AppMenuItem(id: "copy-text", label: "Copy note text", systemImage: AppIcons.pen)),
             .item(AppMenuItem(id: "copy-npub", label: "Copy author npub", systemImage: AppIcons.user)),
+            .item(AppMenuItem(id: "raw-event", label: "View raw event JSON", systemImage: AppIcons.appsGrid)),
             .divider,
             .item(AppMenuItem(
                 id: "mute",
@@ -998,6 +1026,8 @@ struct BitzView: View {
             UIPasteboard.general.string = note.content
         case "copy-npub":
             UIPasteboard.general.string = rules.npub(note.pubkey)
+        case "raw-event":
+            rawEventText = environment.feedStore.rawEventJson(forNoteId: note.id).map(RawEvent.init)
         case "mute":
             environment.feedStore.toggleMute(note.pubkey)
         case "report-spam":
@@ -1702,18 +1732,11 @@ struct BitzSearchOverlay: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    AppIcons.image(for: AppIcons.search)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                    TextField("Search Bitz", text: $query)
-                        .focused($focused)
-                        .submitLabel(.search)
-                        .autocorrectionDisabled()
-                }
-                .padding(10)
-                .background(BitOSTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                BitosSearchField("Search Bitz", text: $query, focus: $focused)
+                    .onSubmit { focused = false }
                 Button("Cancel", action: onDismiss)
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(BitOSTheme.accent)
             }
             .padding(BitOSTheme.Spacing.base)

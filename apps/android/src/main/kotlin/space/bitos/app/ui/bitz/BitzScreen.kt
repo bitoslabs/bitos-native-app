@@ -303,9 +303,27 @@ fun BitzScreen(
             }
     }
 
+    // ── Explore stable snapshot (§ explore stability) ──────────────────
+    // The feed window is a moving, bounded projection: live arrivals insert
+    // at the head and the 200-item cap evicts the tail, so projecting
+    // Explore straight off it re-ordered tiles mid-browse and deleted old
+    // ones. Explore shows an append-only snapshot instead: captured on tab
+    // entry and pull-to-refresh, merged (never re-ordered) as relay pages
+    // and arrivals land.
+    val exploreNotes = remember { mutableStateListOf<FeedNote>() }
+    fun snapshotExploreReplace() {
+        exploreNotes.clear()
+        exploreNotes.addAll(videos)
+    }
+    // Entering Explore captures the window as the browse-stable snapshot.
+    LaunchedEffect(mode) {
+        if (mode == BitzModeSetting.EXPLORE) snapshotExploreReplace()
+    }
+
     fun refreshWindow() {
         spliced.clear()
         loadMoreCount = 0
+        if (mode == BitzModeSetting.EXPLORE) snapshotExploreReplace()
         viewModel.refresh()
     }
 
@@ -367,6 +385,18 @@ fun BitzScreen(
     LaunchedEffect(pagerState.settledPage) {
         if (!authorMode) viewModel.holdNewNotes(pagerState.settledPage != 0)
     }
+    // Re-anchor the pager by NOTE id (§ pager stability): the pager is
+    // index-anchored, so an arrival merged at the head swapped the video
+    // under the reader. Keep the settled note under the same finger
+    // position; new pages appear above it, reachable by swiping back.
+    val settledNoteId = playerNotes.getOrNull(pagerState.settledPage)?.id
+    LaunchedEffect(playerNotes) {
+        val id = settledNoteId ?: return@LaunchedEffect
+        val index = playerNotes.indexOfFirst { it.id == id }
+        if (index >= 0 && index != pagerState.settledPage && !pagerState.isScrollInProgress) {
+            pagerState.scrollToPage(index)
+        }
+    }
     // Prepare the next ten videos before the active tab reaches its edge.
     // Author mode pages the author's own REQ backward (same 5-note pages
     // as the profile grid — one store, one cursor).
@@ -389,6 +419,16 @@ fun BitzScreen(
     }
 
     // ── Explore paging (shared bounds: 24 + 10/near-edge reveal) ──────
+    // The grid renders the SNAPSHOT, falling back to the live window only
+    // until the first snapshot lands. Merge never re-orders: new ids
+    // append at the tail, whatever their arrival order.
+    val exploreList = if (exploreNotes.isEmpty()) videos else exploreNotes
+    LaunchedEffect(videos, mode) {
+        if (mode == BitzModeSetting.EXPLORE) {
+            val known = exploreNotes.mapTo(HashSet()) { it.id }
+            videos.forEach { if (it.id !in known) exploreNotes.add(it) }
+        }
+    }
     val visibleTiles = BitzExplore.visibleCount(loadMoreCount)
     val gridNearEnd by remember {
         derivedStateOf {
@@ -398,13 +438,13 @@ fun BitzScreen(
                 info.totalItemsCount - BitzTimelinePolicy.PREFETCH_BUFFER_THRESHOLD
         }
     }
-    LaunchedEffect(mode, gridNearEnd, videos.size, visibleTiles, state.isLoadingOlder, state.noMoreOlder) {
+    LaunchedEffect(mode, gridNearEnd, exploreList.size, visibleTiles, state.isLoadingOlder, state.noMoreOlder) {
         if (mode == BitzModeSetting.EXPLORE && gridNearEnd) {
             // Grid near its end (Flutter `loadMoreExplore` parity): reveal
-            // the next 10 local tiles when hidden ones remain; when the
+            // the next 10 snapshot tiles when hidden ones remain; when the
             // reveal catches the loaded window, ALSO warm the next relay
             // page so the footer never hits a cold boundary.
-            if (BitzExplore.hasMore(videos.size, visibleTiles)) {
+            if (BitzExplore.hasMore(exploreList.size, visibleTiles)) {
                 loadMoreCount++
             } else if (!state.noMoreOlder && !state.isLoadingOlder) {
                 viewModel.loadOlder()
@@ -588,7 +628,8 @@ fun BitzScreen(
         } else when (mode) {
             BitzModeSetting.EXPLORE -> ExploreGrid(
                 state = state,
-                videos = videos,
+                // The append-only snapshot: stable while the user browses.
+                videos = exploreList,
                 visibleTiles = visibleTiles,
                 gridState = gridState,
                 sensitiveShowByDefault = sensitiveShowByDefault,
