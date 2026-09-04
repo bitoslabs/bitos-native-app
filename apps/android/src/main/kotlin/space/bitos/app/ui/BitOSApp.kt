@@ -5,7 +5,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
+import space.bitos.app.ui.theme.AppIcons
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -50,15 +60,16 @@ import space.bitos.app.ui.profile.ProfileScreen
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSTheme
 
-/** Six-tab product shell (user decision 2026-08-28, legacy-app parity):
- * Home · Bitz · Discover · Chats · Activity · You. Studio/Create entry
- * points stay on the Home FAB, the Bitz header and the future You hub;
- * Settings pushes from You. */
+/** Five-slot product shell (prototype parity: Home · Bitz · ＋ · Activity · You).
+ * The center ＋ opens the Create sheet (New note / New Bitz) — it replaces
+ * the removed Home FAB, which conflicted with the tab bar. Chats lives
+ * INSIDE Activity as a chip (Activity | Chats · unread). Discover stays
+ * reachable from the Home header search and the More hub; Settings pushes
+ * from You. */
 private enum class TopLevelDestination(val label: String, @DrawableRes val iconRes: Int) {
     HOME("Home", R.drawable.solar_nav_home),
     BITZ("Bitz", R.drawable.solar_nav_bitz),
     DISCOVER("Discover", R.drawable.solar_nav_discover),
-    CHATS("Chats", R.drawable.solar_nav_chats),
     ACTIVITY("Activity", R.drawable.solar_nav_activity),
     YOU("You", R.drawable.solar_nav_you),
 }
@@ -155,6 +166,9 @@ fun BitOSApp(
             settingsSnapshot.sensitiveMedia == space.bitos.core.settings.SensitiveMediaSetting.SHOW
         // APP-008: the composer is a full page (legacy CreateView parity).
         var showCreateNote by remember { mutableStateOf(false) }
+        // Prototype `openCreateSheet`: the center ＋ picker (New note /
+        // New Bitz) — replaces the removed Home FAB.
+        var showCreateSheet by remember { mutableStateOf(false) }
         // APP-007 remix: the composer opens seeded with attribution tags.
         var composerSeedTags by remember { mutableStateOf<List<List<String>>>(emptyList()) }
         fun openSeededComposer(tags: List<List<String>>) {
@@ -257,13 +271,54 @@ fun BitOSApp(
                 // hub (camera · meme studio · mass production) is equally
                 // immersive, so the bar hides there too.
                 if (!showCreateNote && !showCreateHub) {
+                // Prototype tabdock parity: the combined unread badge covers
+                // BOTH inbox surfaces — notifications + chats now that Chats
+                // lives inside Activity.
+                val activityBadgeCount = unreadCount + dmUnreadCount
                 NavigationBar(containerColor = BitOSColors.surface) {
-                    TopLevelDestination.entries.filterNot { it == TopLevelDestination.DISCOVER }.forEach { item ->
+                    // Five slots: Home · Bitz · ＋ · Activity · You. The null
+                    // entry renders the center Create button.
+                    val slots: List<TopLevelDestination?> = listOf(
+                        TopLevelDestination.HOME,
+                        TopLevelDestination.BITZ,
+                        null,
+                        TopLevelDestination.ACTIVITY,
+                        TopLevelDestination.YOU,
+                    )
+                    slots.forEach { item ->
+                        if (item == null) {
+                            // Center ＋ (prototype `tab-create`): opens the
+                            // Create sheet — never a destination.
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { showCreateSheet = true },
+                                icon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .background(BitOSColors.primary, androidx.compose.foundation.shape.CircleShape),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            AppIcons.Add,
+                                            contentDescription = "Create",
+                                            tint = androidx.compose.ui.graphics.Color(0xFF0A0A0F),
+                                            modifier = Modifier.size(26.dp),
+                                        )
+                                    }
+                                },
+                                label = { Text("Create") },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    unselectedIconColor = BitOSColors.textSecondary,
+                                    unselectedTextColor = BitOSColors.textSecondary,
+                                ),
+                            )
+                            return@forEach
+                        }
                         val badge = when {
-                            item == TopLevelDestination.ACTIVITY && unreadCount > 0 ->
-                                if (unreadCount > 9) "9+" else unreadCount.toString()
-                            item == TopLevelDestination.CHATS && dmUnreadCount > 0 ->
-                                if (dmUnreadCount > 9) "9+" else dmUnreadCount.toString()
+                            item == TopLevelDestination.ACTIVITY && activityBadgeCount > 0 ->
+                                if (activityBadgeCount > 9) "9+" else activityBadgeCount.toString()
                             else -> null
                         }
                         NavigationBarItem(
@@ -459,18 +514,9 @@ fun BitOSApp(
                             )
                             // APP-011: profiles feed names/avatars; the zap
                             // chip routes to the author zap pipeline.
-                            TopLevelDestination.CHATS -> {
-                                ChatDestination(
-                                    homeViewModel = homeViewModel,
-                                    identityViewModel = identityViewModel,
-                                    dmRepository = dmRepository,
-                                    onZapPeer = { peer ->
-                                        homeViewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
-                                        chatZapTarget = peer
-                                    },
-                                    onOpenProfile = { peer -> authorPageTarget = peer },
-                                )
-                            }
+                            // APP-012: the Activity surface hosts BOTH inbox
+                            // chips (prototype parity): notifications and —
+                            // since the tab merge — Chats (NIP-17 DMs).
                             TopLevelDestination.ACTIVITY -> space.bitos.app.ui.inbox.InboxScreen(
                                 identityViewModel,
                                 notifications,
@@ -479,6 +525,19 @@ fun BitOSApp(
                                 authorRepository,
                                 sensitiveShowByDefault = sensitiveShowByDefault,
                                 onOpenAuthorProfile = { authorPageTarget = it },
+                                dmUnreadCount = dmUnreadCount,
+                                chats = {
+                                    ChatDestination(
+                                        homeViewModel = homeViewModel,
+                                        identityViewModel = identityViewModel,
+                                        dmRepository = dmRepository,
+                                        onZapPeer = { peer ->
+                                            homeViewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                                            chatZapTarget = peer
+                                        },
+                                        onOpenProfile = { peer -> authorPageTarget = peer },
+                                    )
+                                },
                             )
                             TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note }, onOpenMentionProfile = { authorPageTarget = it })
                         }
@@ -487,6 +546,35 @@ fun BitOSApp(
             }
         }
     }
+
+        // Center ＋ picker (prototype `openCreateSheet` parity): the two
+        // native creation entries. Story compose / quick MEM arrive with
+        // their surfaces; the sheet grows then.
+        if (showCreateSheet) {
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showCreateSheet = false }) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+                    Text(
+                        "Create",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BitOSColors.textTertiary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    CreateSheetRow(
+                        icon = AppIcons.Pen,
+                        title = "New note",
+                        subtitle = "text · poll · GIF · PoW",
+                        onClick = { showCreateSheet = false; showCreateNote = true },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    CreateSheetRow(
+                        icon = AppIcons.Camera,
+                        title = "New Bitz",
+                        subtitle = "camera → editor → publish",
+                        onClick = { showCreateSheet = false; showCreateHub = true },
+                    )
+                }
+            }
+        }
 
         // External-link confirm for shared cards on non-feed surfaces: the
         // browser only opens on an explicit Open.
@@ -631,6 +719,42 @@ fun BitOSApp(
  * enrichment. Collect that projection inside this destination so profile
  * arrivals recompose Chats, never the shell/navigation tree.
  */
+/** One Create-sheet row (prototype list-row parity): icon plate + labels. */
+@Composable
+private fun CreateSheetRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    androidx.compose.material3.Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+        color = BitOSColors.surfaceElevated,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier
+                .clickable(onClickLabel = title) { onClick() }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(BitOSColors.primaryContainer, androidx.compose.foundation.shape.RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = BitOSColors.primary, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, color = BitOSColors.textPrimary)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+            }
+        }
+    }
+}
+
 @Composable
 private fun ChatDestination(
     homeViewModel: HomeViewModel,

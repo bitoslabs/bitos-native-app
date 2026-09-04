@@ -382,22 +382,8 @@ fun FeedScreen(
             }
         }
 
-        // APP-004: New-note extended FAB (spec §3.4).
-        androidx.compose.material3.ExtendedFloatingActionButton(
-            onClick = onOpenComposer,
-            icon = {
-                Icon(
-                    painter = androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_pen_linear),
-                    contentDescription = null,
-                )
-            },
-            text = { Text("New note") },
-            containerColor = BitOSColors.primary,
-            contentColor = Color(0xFF0A0A0F),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 16.dp),
-        )
+        // Prototype tabdock parity: creation moved to the shell's center ＋
+        // (the Home FAB conflicted with the bottom bar and is removed).
     }
 
     authorTarget?.let { authorPubkey ->

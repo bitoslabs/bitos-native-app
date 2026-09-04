@@ -133,6 +133,10 @@ fun InboxScreen(
     sensitiveShowByDefault: Boolean = false,
     /** UX-010: opens the in-app full profile page for a pubkey. */
     onOpenAuthorProfile: (String) -> Unit = {},
+    /** Prototype tab merge: Chats (NIP-17 DMs) render inside Activity as a
+     *  chip. Unread count rides the chip; the shell supplies the surface. */
+    dmUnreadCount: Int = 0,
+    chats: @Composable () -> Unit = {},
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val state by notifications.state.collectAsStateWithLifecycle()
@@ -145,6 +149,8 @@ fun InboxScreen(
     var headerMenu by remember { mutableStateOf(false) }
     var threadTarget by remember { mutableStateOf<FeedNote?>(null) }
     var authorTarget by remember { mutableStateOf<String?>(null) }
+    /** Prototype `activityTab`: Activity | Chats (chats merged into this tab). */
+    var activityTab by rememberSaveable { mutableStateOf("notif") }
 
     // Keep the subscription aligned with the active account.
     LaunchedEffect(identity.account?.pubkeyHex) {
@@ -198,7 +204,18 @@ fun InboxScreen(
                 title = "Activity needs an identity",
                 message = "Create or import a key (You tab) to see replies, mentions, reactions, reposts and zaps addressed to you.",
             )
+            activityTab == "chats" -> {
+                // Prototype parity: the Chats chip hosts NIP-17 DMs inside
+                // Activity; the shell supplies the surface.
+                chats()
+            }
             else -> {
+                // Prototype `activityTab` chips: Activity | Chats (unread).
+                ActivityTabRow(
+                    selected = activityTab,
+                    dmUnreadCount = dmUnreadCount,
+                    onSelect = { activityTab = it },
+                )
                 // APP-012 search row: name/content contains over the shared rule.
                 if (searchOpen || query.isNotEmpty()) {
                     NotificationSearchRow(
@@ -333,6 +350,46 @@ private fun InboxHeader(
 }
 
 /** Mock 06 chip row: All (orange) / ⚡ Zaps / ♥ Likes / Follows / Mentions. */
+/** Prototype `activityTab` chips: Activity | Chats (chats merged into this tab). */
+@Composable
+private fun ActivityTabRow(selected: String, dmUnreadCount: Int, onSelect: (String) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.screen, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        InboxModeChip(
+            label = "Activity",
+            selected = selected == "notif",
+            modifier = Modifier,
+            onClick = { onSelect("notif") },
+        )
+        InboxModeChip(
+            label = if (dmUnreadCount > 0) "Chats · $dmUnreadCount" else "Chats",
+            selected = selected == "chats",
+            modifier = Modifier,
+            onClick = { onSelect("chats") },
+        )
+    }
+}
+
+@Composable
+private fun InboxModeChip(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    androidx.compose.material3.Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(999.dp),
+        color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
+        contentColor = if (selected) androidx.compose.ui.graphics.Color(0xFF0A0A0F) else BitOSColors.textSecondary,
+        modifier = modifier.clickable(onClickLabel = label) { onClick() },
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = BitOSSpacing.md, vertical = 6.dp),
+        )
+    }
+}
+
 @Composable
 private fun FilterChipRow(selected: InboxFilter, onSelect: (InboxFilter) -> Unit) {
     Row(

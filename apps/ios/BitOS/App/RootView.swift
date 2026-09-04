@@ -4,15 +4,18 @@ import SwiftUI
 enum AppDestination: Hashable {
     case home
     case bitz
-    case chats
+    /// Prototype tabdock center slot: never selects — the selection binding
+    /// intercepts it and opens the Create sheet instead.
+    case createSlot
     case activity
     case you
 }
 
-/// Six-tab product shell (user decision 2026-08-28, legacy-app parity):
-/// Home · Bitz · Discover · Chats · Activity · You. Studio/Create entry
-/// points stay on the Home composer FAB, the Bitz header and the future
-/// You hub (APP-017); Settings pushes from You (APP-018).
+/// Five-slot product shell (prototype parity): Home · Bitz · ＋ · Activity ·
+/// You. The center ＋ opens the Create sheet (New note / New Bitz) and
+/// replaces the removed Home composer FAB, which conflicted with the tab
+/// bar. Chats lives INSIDE Activity as a chip. Discover stays on the Home
+/// header search and the More hub (APP-017); Settings pushes from You.
 struct RootView: View {
     /// T16: pending inbound deep link (consumed once by the router below).
     var deepLinkUri: String? = nil
@@ -30,6 +33,12 @@ struct RootView: View {
     @State private var showOnboarding = !OnboardingPrefs.hasOnboarded
     @State private var showDiscover = false
     @State private var showMore = false
+    /** Prototype `openCreateSheet`: the center ＋ picker. */
+    @State private var showCreateSheet = false
+    /** The Create sheet's New note row opens the full-page composer. */
+    @State private var showCreateNote = false
+    /** The Create sheet's New Bitz row opens the capture hub. */
+    @State private var showCreateBitz = false
     /** T16 deep-link surfaces. */
     @State private var deepLinkAuthor: String?
     @State private var deepLinkInvoice: String?
@@ -69,6 +78,31 @@ struct RootView: View {
         }
     }
 
+    /// Prototype tabdock center ＋ — an action slot, not a destination.
+    private var createSlotItem: some View {
+        Color.clear
+            .tag(AppDestination.createSlot)
+            .tabItem { Label { Text("Create") } icon: { Image(systemName: "plus.circle.fill") } }
+            .accessibilityLabel("Create")
+    }
+
+    /// Activity hosts BOTH inbox chips (prototype parity): notifications
+    /// and — since the tab merge — Chats (NIP-17 DMs).
+    private var activityItem: some View {
+        deferred(.activity) {
+            InboxView(
+                store: environment.inboxStore,
+                dmUnreadCount: dmUnreadCount,
+                chats: AnyView(DmScreen(
+                    onZapPeer: { chatZapPeer = $0 },
+                    onOpenProfile: { chatProfilePeer = $0 }
+                ))
+            )
+        }
+        .tag(AppDestination.activity)
+        .tabItem { Label { Text("Activity") } icon: { AppIcons.image(for: AppIcons.inbox) } }
+    }
+
     private var appTabs: some View {
         TabView(selection: tabSelection) {
             deferred(.home) {
@@ -87,22 +121,13 @@ struct RootView: View {
             .tag(AppDestination.bitz)
             .tabItem { Label { Text("Bitz") } icon: { AppIcons.image(for: AppIcons.bitz) } }
 
-            deferred(.chats) {
-                DmScreen(
-                    onZapPeer: { chatZapPeer = $0 },
-                    onOpenProfile: { chatProfilePeer = $0 }
-                )
-            }
-            .tag(AppDestination.chats)
-            .tabItem { Label { Text("Chats") } icon: { AppIcons.image(for: AppIcons.chat) } }
-            .badge(chatsBadge)
+            // Prototype tabdock center: the ＋ is intercepted by
+            // tabSelection (opens the Create sheet); the slot composes
+            // nothing and never selects.
+            createSlotItem
 
-            deferred(.activity) {
-                InboxView(store: environment.inboxStore)
-            }
-            .tag(AppDestination.activity)
-            .tabItem { Label { Text("Activity") } icon: { AppIcons.image(for: AppIcons.inbox) } }
-            .badge(activityBadge)
+            activityItem
+                .badge(activityBadge)
 
             deferred(.you) {
                 ProfileView(store: environment.identityStore)
@@ -173,6 +198,43 @@ struct RootView: View {
             .environment(environment)
             .environment(environment.identityStore)
         }
+        // Prototype `openCreateSheet`: the center ＋ picker — the two
+        // native creation entries (story compose / quick MEM arrive with
+        // their surfaces; the sheet grows then).
+        .sheet(isPresented: $showCreateSheet) {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.base) {
+                Text("Create")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+                createRow(icon: "square.and.pencil", title: "New note",
+                          subtitle: "text · poll · GIF · PoW") {
+                    showCreateSheet = false
+                    showCreateNote = true
+                }
+                createRow(icon: "camera.fill", title: "New Bitz",
+                          subtitle: "camera → editor → publish") {
+                    showCreateSheet = false
+                    showCreateBitz = true
+                }
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.top, 12)
+            .presentationDetents([.height(220)])
+            .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+        // Create sheet → New note: the full-page composer (legacy parity).
+        .fullScreenCover(isPresented: $showCreateNote) {
+            ComposerScreen {
+                environment.notePublisher.dismiss()
+                showCreateNote = false
+            }
+        }
+        // Create sheet → New Bitz: the capture hub (record / import).
+        .fullScreenCover(isPresented: $showCreateBitz) {
+            CreateView()
+                .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
         .sheet(isPresented: $showMore) {
             MoreView(
                 onOpenProfile: { showMore = false; destination = .you },
@@ -240,16 +302,17 @@ struct RootView: View {
 
     /** Unread badge for the Activity tab; "9+" cap keeps the bar tidy. */
     private var activityBadge: Text? {
+        // Prototype tabdock: the combined badge covers BOTH inbox surfaces
+        // — notifications + chats now that Chats lives inside Activity.
         let count = environment.inboxStore.unreadCount
+            + environment.dmStore.unreadCount + environment.dmStore.requestCount
         guard count > 0 else { return nil }
         return Text(count > 9 ? "9+" : "\(count)")
     }
 
-    /** APP-011: Chats badge = DM unread + pending requests (mock parity). */
-    private var chatsBadge: Text? {
-        let count = environment.dmStore.unreadCount + environment.dmStore.requestCount
-        guard count > 0 else { return nil }
-        return Text(count > 9 ? "9+" : "\(count)")
+    /** Chats unread for the in-Activity chip (DM unread + pending requests). */
+    private var dmUnreadCount: Int {
+        environment.dmStore.unreadCount + environment.dmStore.requestCount
     }
 
     /**
@@ -262,6 +325,13 @@ struct RootView: View {
         Binding(
             get: { destination },
             set: { next in
+                // Prototype tabdock: the center ＋ is an action, not a
+                // destination — open the Create sheet and keep the current
+                // tab selected.
+                if next == .createSlot {
+                    showCreateSheet = true
+                    return
+                }
                 if next == destination, next == .home || next == .bitz {
                     feedRetapTick += 1
                 }
@@ -279,5 +349,37 @@ struct RootView: View {
         } else {
             Color.clear
         }
+    }
+
+    /// One Create-sheet row (prototype list-row parity).
+    private func createRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(BitOSTheme.accent.opacity(0.14))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: icon)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(BitOSTheme.accent)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(BitOSTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
     }
 }

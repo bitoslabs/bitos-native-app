@@ -39,6 +39,10 @@ enum InboxFilter: String, CaseIterable {
 struct InboxView: View {
     @Environment(AppEnvironment.self) private var environment
     let store: InboxStore
+    /** Prototype tab merge: Chats (NIP-17 DMs) render inside Activity as a
+     *  chip. Unread rides the chip; the shell supplies the surface. */
+    var dmUnreadCount: Int = 0
+    var chats: AnyView? = nil
 
     @State private var filter: InboxFilter = .all
     @State private var query = ""
@@ -47,6 +51,9 @@ struct InboxView: View {
     @State private var rawJson: RawEvent?
     @State private var threadTarget: FeedNote?
     @State private var authorTarget: AuthorTarget?
+    /** Prototype `activityTab`: Activity | Chats (chats merged into this tab). */
+    @State private var activityTab: String = "notif"
+    @State private var showChats = false
 
     var body: some View {
         NavigationStack {
@@ -101,7 +108,14 @@ struct InboxView: View {
             let sections = displaySections
             let sentZapsEmpty = environment.sentZaps.records.isEmpty
             VStack(spacing: 0) {
+                if let chats {
+                    // Prototype parity: the Chats chip hosts NIP-17 DMs
+                    // inside Activity; the shell supplies the surface.
+                    header
+                    chats
+                } else {
                 header
+                ActivityTabRowView(dmUnreadCount: dmUnreadCount) { showChats = $0 }
                 if searchOpen || !query.isEmpty {
                     searchRow
                 }
@@ -182,9 +196,40 @@ struct InboxView: View {
                         }
                     }
                 }
+                }
             }
             .onAppear { requestOrigins() }
             .onChange(of: store.items.count) { _, _ in requestOrigins() }
+        }
+    }
+
+    /// Prototype `activityTab` chips: Activity | Chats (merged tab).
+    private struct ActivityTabRowView: View {
+        let dmUnreadCount: Int
+        let onSelect: (Bool) -> Void
+
+        var body: some View {
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                chip(label: "Activity", active: true) { onSelect(false) }
+                chip(label: dmUnreadCount > 0 ? "Chats · \(dmUnreadCount)" : "Chats", active: false) { onSelect(true) }
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.vertical, 6)
+        }
+
+        private func chip(label: String, active: Bool, action: @escaping () -> Void) -> some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(active ? Color.black.opacity(0.85) : BitOSTheme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        active ? BitOSTheme.accent : BitOSTheme.surface,
+                        in: Capsule()
+                    )
+            }
+            .buttonStyle(.plain)
         }
     }
 
