@@ -33,6 +33,9 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.HowToVote
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Numbers
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.People
 import androidx.compose.material.icons.rounded.Person
@@ -129,6 +132,11 @@ object AppIcons {
     val Chat = Icons.Rounded.ChatBubble
     val Globe = Icons.Rounded.Public            // Solar: global
     val Logout = Icons.Rounded.ExitToApp
+
+    // ── Discover (prototype `#/discover` parity) ────────────────────
+    val Flame = Icons.Rounded.LocalFireDepartment // trending-hot hashtag
+    val Hash = Icons.Rounded.Numbers                // hashtag glyph
+    val ChevronRight = Icons.Rounded.ChevronRight // list-row affordance
 
     // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
     val MusicNote = Icons.Rounded.MusicNote     // Solar: music (sound library)

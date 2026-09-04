@@ -188,9 +188,9 @@ Wave legend per spec §8. W0 foundation is prior work.
 
 ### APP-010 — Discover (spec §3.10)
 
-- [x] Search (NIP-50) + topic chips + npub resolve (W0); 2026-09-04: iOS search bar moved onto the design-system `BitosSearchField` (shared `BitosTextField.swift`, medium = 44 pt touch target, magnifier lead, inline clear, focused accent border, search keyboard) + Cancel affordance; Bitz search overlay adopts the same field; Android parity (same day): Discover + Bitz search overlays moved onto the shared `BitosTextField` with an inline clear affordance
-- [x] Results tabs: Posts / People / Hashtags — shared `SearchResults` fan-in (3 common tests); Android tab row + People rows (Follow/Following via feed VM) + Hashtags rows (tap → re-search); iOS mirror via bridge JSON. 2026-09-04: iOS Posts results render the shared home card (`NoteCardRow` promoted to `DesignSystem/FeedNoteCard.swift` as `FeedNoteCard`; like/comment/repost/zap/bookmark/poll/mention/external-link wired to the shared `FeedStore`, ⋯ menu + note-ref open stay home-only) and the people/hashtag fan-in rows are memoized per data change (`.task(id:)` on a result/profile signature) so typing no longer re-runs the bridge JSON per render. Android parity (same day): Posts results render the shared `FeedNoteCard` (like/comment/repost/zap/bookmark/polls/ranking signals wired via `HomeViewModel`, zap sheet + thread sheet hosted in the tab; hosts without a feed VM keep the plain `SearchCard`)
-- [ ] Trending mosaic grid + skeleton 18 + load-more + error/empty
+- [x] Search (NIP-50) + topic chips + npub resolve (W0); 2026-09-04: iOS search bar moved onto the design-system `BitosSearchField` (shared `BitosTextField.swift`, medium = 44 pt touch target, magnifier lead, inline clear, focused accent border, search keyboard) + Cancel affordance; Bitz search overlay adopts the same field; Android parity (same day): Discover + Bitz search overlays moved onto the shared `BitosTextField` with an inline clear affordance. Later 2026-09-04: Android idle page rebuilt to the prototype `#/discover` home — recent-search chips (settled-query recording, cap 6, Clear), Trending on Nostr card (hairline-divided rows, flame for the hot head, shared hashtag fan-in over the live window), Creators-to-follow rail (people fan-in minus me/followed, orange Follow chip through the feed VM) and the Explore Bitz 3×3 mosaic (standard NIP-68/71 media from the shared window, sensitive tiles excluded, ▶ live-tally badge, tile → shared player author mode); iOS home still ships the topic-chip list
+- [x] Results tabs: Posts / People / Hashtags — shared `SearchResults` fan-in (3 common tests); Android tab row + People rows (Follow/Following via feed VM) + Hashtags rows (tap → re-search); iOS mirror via bridge JSON. 2026-09-04: iOS Posts results render the shared home card (`NoteCardRow` promoted to `DesignSystem/FeedNoteCard.swift` as `FeedNoteCard`; like/comment/repost/zap/bookmark/poll/mention/external-link wired to the shared `FeedStore`, ⋯ menu + note-ref open stay home-only) and the people/hashtag fan-in rows are memoized per data change (`.task(id:)` on a result/profile signature) so typing no longer re-runs the bridge JSON per render. Android parity (same day): Posts results render the shared `FeedNoteCard` (like/comment/repost/zap/bookmark/polls/ranking signals wired via `HomeViewModel`, zap sheet + thread sheet hosted in the tab; hosts without a feed VM keep the plain `SearchCard`). Later 2026-09-04: Android Posts tab is home-parity chrome — full-bleed cards with hairline dividers between (not floating inset cards); the shell params dropped at the SearchResults seam (sensitive default, zap preset, external-link host) now thread through; Hashtags tab picks re-run the search pipeline (was a dead no-op) and the literal `${hit.tag}` label rendering bug is fixed
+- [ ] Trending mosaic grid + skeleton 18 + load-more + error/empty — 2026-09-04: Android Discover home ships the 3×3 Explore Bitz mosaic first paint (real NIP-68/71 window tiles, poster loader + tally badge, tap → shared player); skeleton-18, scroll load-more and error/retry states remain
 - [ ] User rows: NIP-05 badge, follow/unfollow
 - [ ] Fullscreen image viewer (zoom, author bar, follow, open-note bar)
 - [ ] Debounce + cancel; search cache
@@ -1881,6 +1881,35 @@ fixed, what's next.
   tabs (pbxproj registered). Verified: shared androidHost + native
   301/301, Android compile + tests green, iOS Swift 6 typecheck 0
   errors, structure check.
+
+- 2026-09-04 — APP-010 Android Discover prototype-parity pass (idle home
+  + Posts-tab chrome, no shared-core change). The idle page now follows
+  the prototype `#/discover` home instead of the static topic list:
+  recent-search chips (query recorded after a 600 ms settle so keystroke
+  prefixes never pollute the row, deduped, cap 6, red Clear), Trending on
+  Nostr as ONE card with hairline-divided rows (flame icon for the hot
+  head, hash for the rest, chevron affordance; ranked by the shared
+  `SearchResults.hashtags` fan-in over the live feed window, row tap →
+  the same NIP-50 pipeline), a Creators-to-follow rail (people fan-in
+  minus self and already-followed; 150 dp tiles, orange Follow/Following
+  chip through the feed VM's contact list) and the Explore Bitz 3×3
+  mosaic (standard NIP-68/71 media already riding the shared Home+Bitz
+  window, content-warning tiles excluded unless revealed by setting,
+  explore poster loader + "▶ tally" scrim badge, tile → shared reels
+  player in author mode via a new `onOpenBitzPlayer` shell hop).
+  Sections hide while their window slice is empty — connecting plate
+  until the first verified event, footnote after (no seed data).
+  Posts tab: home-parity list chrome — full-bleed shared `FeedNoteCard`s
+  with hairline dividers between (not after the last), creator/empty
+  chrome keeps its inset. Seam fix: `sensitiveShowByDefault` /
+  `defaultZapSats` / `onOpenExternalLink` were declared by
+  DiscoverScreen but dropped at the SearchResults call — result cards
+  now honor the shell's sensitive default, zap preset and link-confirm
+  host. Hashtags tab picks re-run the search (was a no-op `/* router
+  hop next */`) and the escaped `"#${'$'}{hit.tag}"` literal (rendered
+  as text) is real interpolation again. Icons: `AppIcons.Flame` /
+  `Hash` / `ChevronRight` added (material extended). Verified: Android
+  compileDebugKotlin + testDebugUnitTest green.
 
 - 2026-08-28 — APP-009 reply-row deltas (closes the live-deltas item
   end-to-end). Both repos now resolve the tally target through ANY

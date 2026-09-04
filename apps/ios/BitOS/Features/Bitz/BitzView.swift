@@ -274,7 +274,7 @@ struct BitzView: View {
             .presentationDetents([.medium])
         }
         .sheet(item: $rawEventText) { raw in
-            RawEventSheet(text: raw.value)
+            RawEventSheet(text: raw.value, isEventJson: raw.isEventJson)
         }
         // External-link confirm: the browser only opens on an explicit Open.
         .sheet(isPresented: Binding(
@@ -1042,6 +1042,10 @@ struct BitzView: View {
             UIPasteboard.general.string = rules.npub(note.pubkey)
         case "raw-event":
             rawEventText = environment.feedStore.rawEventJson(forNoteId: note.id).map(RawEvent.init)
+                ?? RawEvent(
+                    value: "This event is no longer available in this device's bounded feed cache.",
+                    isEventJson: false
+                )
         case "mute":
             environment.feedStore.toggleMute(note.pubkey)
         case "report-spam":

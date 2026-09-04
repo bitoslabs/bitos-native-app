@@ -440,9 +440,13 @@ fun NoteMoreMenuButton(
         space.bitos.core.identity.NostrKeyCodec.npub(note.pubkey) ?: note.pubkey
     }
     var showSheet by remember { mutableStateOf(false) }
+    var showRawEvent by remember { mutableStateOf(false) }
     var rawEventFor by remember { mutableStateOf<String?>(null) }
-    rawEventFor?.let { raw ->
-        RawEventDialog(json = raw, onDismiss = { rawEventFor = null })
+    if (showRawEvent) {
+        RawEventDialog(
+            json = rawEventFor,
+            onDismiss = { showRawEvent = false },
+        )
     }
     androidx.compose.material3.IconButton(
         onClick = { showSheet = true },
@@ -527,6 +531,7 @@ fun NoteMoreMenuButton(
                     "raw-event" -> {
                         showSheet = false
                         rawEventFor = rawEventJson?.invoke()
+                        showRawEvent = true
                     }
                     "open-attachment" -> note.mediaUrls.firstOrNull()?.let(onOpenAttachment)
                     "copy-attachment" -> note.mediaUrls.firstOrNull()?.let {
@@ -551,22 +556,34 @@ fun NoteMoreMenuButton(
  * canonical event object, monospace and scrollable for long payloads.
  */
 @Composable
-fun RawEventDialog(json: String, onDismiss: () -> Unit) {
+fun RawEventDialog(json: String?, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Raw event") },
         text = {
-            Text(
-                json,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-            )
+            if (json == null) {
+                Text("This event is no longer available in this device's bounded feed cache.")
+            } else {
+                Text(
+                    json,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            Row {
+                if (json != null) {
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(json)) }) {
+                        Text("Copy event text")
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
         },
     )
 }

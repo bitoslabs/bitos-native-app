@@ -244,6 +244,10 @@ struct HomeView: View {
             UIPasteboard.general.string = (bridge.npubEncode(pubkeyHex: note.pubkey) as String?) ?? note.pubkey
         case "raw-event":
             rawEventText = store.rawEventJson(forNoteId: note.id).map(RawEvent.init)
+                ?? RawEvent(
+                    value: "This event is no longer available in this device's bounded feed cache.",
+                    isEventJson: false
+                )
         case "open-attachment":
             // The external-link confirm gate owns the actual open.
             if let url = note.mediaUrls.first { externalLink = url }
@@ -483,7 +487,7 @@ struct HomeView: View {
                 .presentationDetents([.medium])
             }
             .sheet(item: $rawEventText) { raw in
-                RawEventSheet(text: raw.value)
+                RawEventSheet(text: raw.value, isEventJson: raw.isEventJson)
             }
             .sheet(isPresented: Binding(
                 get: { shareText != nil },

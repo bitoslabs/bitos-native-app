@@ -535,6 +535,9 @@ fun BitOSApp(
                                 sensitiveShowByDefault = sensitiveShowByDefault,
                                 defaultZapSats = settingsSnapshot.defaultZapAmount,
                                 onOpenExternalLink = { externalLinkTarget = it },
+                                // Discover mosaic → the shared reels player scoped to
+                                // the tile's author (same surface as profile grids).
+                                onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note },
                             )
                             // APP-011: profiles feed names/avatars; the zap
                             // chip routes to the author zap pipeline.
