@@ -422,11 +422,11 @@ final class InboxStore {
         guard watchTask == nil else { return }
         await pool.start()
         sendHeadRequests()
-        let stream = await pool.frames()
+        let stream = await pool.verifiedFrames(client: FrameworkBusinessCoreClient())
         guard !Task.isCancelled, let account = accountPubkey else { return }
         let boxedBridge = StatelessBridge(bridge: bridge)
         watchTask = FrameIngest.pump(
-            stream: stream,
+            gated: stream,
             isAlive: { [weak self] in self != nil },
             ingest: Self.notificationIngest(boxedBridge, account: account)
         ) { [weak self] frame in
@@ -461,7 +461,7 @@ final class InboxStore {
         }
     }
 
-    /// Sendable outcome of the off-main notification frame gate.
+    /// Sendable outcome of the shared decode-once gate for one frame.
     private struct InboxFrame: Sendable {
         struct Row: Sendable {
             let id: String
@@ -485,49 +485,54 @@ final class InboxStore {
         let blockHead: BlockHead?
     }
 
-    /// EOSE/notification/block-head extraction — runs OFF the main actor.
-    /// `extractNotification` parses EVERY relay frame and used to run on the
-    /// main actor per frame (audit §3.1); the pump hops the typed rows back.
+    /// Notification/block-head projection from ALREADY-VERIFIED events —
+    /// runs OFF the main actor via the event-based bridge seams (Phase 2);
+    /// no per-frame re-decode. The pump hops the typed rows back.
     private nonisolated static func notificationIngest(
         _ boxedBridge: StatelessBridge,
         account: String
-    ) -> @Sendable (RelayFrame) -> InboxFrame? {
-        { frame in
-            let eoseSubId = boxedBridge.bridge.relayEoseSubscriptionId(message: frame.message) as String?
-            let blockHead: InboxFrame.BlockHead?
-            if let list = boxedBridge.bridge.blockListFromFrame(
-                message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
-            ) as? [String: Any] {
-                blockHead = InboxFrame.BlockHead(
-                    createdAt: Self.int64(list["createdAt"]),
-                    pubkeys: (list["pubkeys"] as? [String]) ?? []
+    ) -> @Sendable (GatedFrame) -> InboxFrame? {
+        { gated in
+            switch gated {
+            case .eose(let subId, let relay):
+                return InboxFrame(
+                    relay: relay, message: "",
+                    eoseSubId: subId, notification: nil, blockHead: nil
                 )
-            } else {
-                blockHead = nil
-            }
-            var row: InboxFrame.Row?
-            if let notification = boxedBridge.bridge.extractNotification(
-                message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
-            ) as? [String: Any] {
-                let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) }
-                row = InboxFrame.Row(
-                    id: (notification["id"] as? String) ?? UUID().uuidString,
-                    authorPubkey: (notification["authorPubkey"] as? String) ?? "",
-                    kindOrdinal: kind?.ordinal ?? NotificationKind.mention.ordinal,
-                    targetEventId: (notification["targetEventId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-                    summary: (notification["summary"] as? String) ?? "",
-                    createdAt: Self.int64(notification["createdAt"]),
-                    amountMsat: Self.int64(notification["amountMsat"])
+            case .event(let gatedEvent):
+                let bridgeEvent = gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge)
+                let blockHead: InboxFrame.BlockHead?
+                if let list = boxedBridge.bridge.blockListFromEvent(event: bridgeEvent, accountPubkey: account) as? [String: Any] {
+                    blockHead = InboxFrame.BlockHead(
+                        createdAt: (list["createdAt"] as? NSNumber)?.int64Value ?? 0,
+                        pubkeys: (list["pubkeys"] as? [String]) ?? []
+                    )
+                } else {
+                    blockHead = nil
+                }
+                var row: InboxFrame.Row?
+                if let notification = boxedBridge.bridge.extractNotificationFromEvent(event: bridgeEvent, accountPubkey: account) as? [String: Any] {
+                    let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) }
+                    row = InboxFrame.Row(
+                        id: (notification["id"] as? String) ?? UUID().uuidString,
+                        authorPubkey: (notification["authorPubkey"] as? String) ?? "",
+                        kindOrdinal: kind?.ordinal ?? NotificationKind.mention.ordinal,
+                        targetEventId: (notification["targetEventId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                        summary: (notification["summary"] as? String) ?? "",
+                        createdAt: (notification["createdAt"] as? NSNumber)?.int64Value ?? 0,
+                        amountMsat: (notification["amountMsat"] as? NSNumber)?.int64Value ?? -1
+                    )
+                }
+                if row == nil, blockHead == nil { return nil }
+                return InboxFrame(
+                    // The verified event carries its delivery relay URL.
+                    relay: gatedEvent.event.relayUrl.flatMap(RelayURL.parse) ?? RelayURL(rawValue: "wss://unknown.relay"),
+                    message: gatedEvent.message,
+                    eoseSubId: nil,
+                    notification: row,
+                    blockHead: blockHead
                 )
             }
-            if eoseSubId == nil, row == nil, blockHead == nil { return nil }
-            return InboxFrame(
-                relay: frame.relay,
-                message: frame.message,
-                eoseSubId: eoseSubId,
-                notification: row,
-                blockHead: blockHead
-            )
         }
     }
 

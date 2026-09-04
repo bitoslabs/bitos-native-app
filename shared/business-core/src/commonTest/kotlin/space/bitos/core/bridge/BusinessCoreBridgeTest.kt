@@ -835,8 +835,116 @@ class BusinessCoreBridgeTest {
         assertEquals("", bridge.memeGifLadderCanvas(1080, 608, 4))
     }
 
+    // ── Event-based extractor seams (decode-once stage, audit Phase 2) ──
+
+    /** Fabricated events suffice here: these seams trust the gate, so the
+     *  id need not match a signature — only hex shape and projections. */
+    private fun bridgeEvent(
+        kind: Int,
+        tags: List<List<String>>,
+        content: String = "",
+        createdAt: Long = 1_710_000_000,
+        pubkey: String = VALID_AUTHOR,
+    ) = BusinessCoreBridge.Event(
+        id = "aa".repeat(32),
+        pubkey = pubkey,
+        createdAt = createdAt,
+        kind = kind,
+        tags = tags,
+        content = content,
+        relayUrl = "wss://relay.damus.io",
+        signature = "",
+    )
+
+    @Test
+    fun storyFromEventProjectsVerifiedStory() {
+        val now = 1_710_050_000L
+        val slide = bridge.storyFromEvent(
+            bridgeEvent(
+                kind = 30_315,
+                tags = listOf(listOf("d", "slide-1"), listOf("expiration", "${now + 3_600}")),
+                content = "https://blossom.example/story.jpg",
+                createdAt = now - 60,
+            ),
+            now,
+        )
+        assertNotNull(slide)
+        assertEquals("aa".repeat(32), slide["id"])
+        assertEquals("slide-1", slide["d"])
+        // Non-story kinds and expired slides drop.
+        assertNull(bridge.storyFromEvent(bridgeEvent(kind = 1, tags = emptyList(), content = "x"), now))
+        assertNull(
+            bridge.storyFromEvent(
+                bridgeEvent(
+                    kind = 30_315,
+                    tags = listOf(listOf("expiration", "$now")),
+                    content = "https://blossom.example/story.jpg",
+                    createdAt = now - 60,
+                ),
+                now,
+            ),
+        )
+    }
+
+    @Test
+    fun interestSetFromEventReturnsHashtagsAndCreatedAtTogether() {
+        val account = VALID_AUTHOR
+        val head = bridge.interestSetFromEvent(
+            bridgeEvent(
+                kind = 30_015,
+                tags = listOf(listOf("d", "interest"), listOf("t", "Bitcoin"), listOf("t", "nostr")),
+            ),
+            account,
+        )
+        assertNotNull(head)
+        assertEquals(listOf("bitcoin", "nostr"), head["hashtags"])
+        assertEquals(1_710_000_000L, (head["createdAt"] as Long))
+        // Another author's head must not match.
+        assertNull(
+            bridge.interestSetFromEvent(
+                bridgeEvent(kind = 30_015, tags = listOf(listOf("d", "interest")), pubkey = "bb".repeat(32)),
+                account,
+            ),
+        )
+    }
+
+    @Test
+    fun blockListFromEventProjectsBlockedSet() {
+        val blocked = bridge.blockListFromEvent(
+            bridgeEvent(
+                kind = 10_004,
+                tags = listOf(listOf("p", "cc".repeat(32)), listOf("p", "not-hex")),
+            ),
+            VALID_AUTHOR,
+        )
+        assertNotNull(blocked)
+        assertEquals(listOf("cc".repeat(32)), blocked["pubkeys"])
+        // A non-list event has no blocked set.
+        assertNull(bridge.blockListFromEvent(bridgeEvent(kind = 1, tags = emptyList()), VALID_AUTHOR))
+    }
+
+    @Test
+    fun extractNotificationFromEventMatchesFrameSeamShape() {
+        // Another author replies mentioning the account — own events
+        // never count (extractor rule).
+        val reply = bridge.extractNotificationFromEvent(
+            bridgeEvent(
+                kind = 1,
+                tags = listOf(listOf("p", VALID_AUTHOR), listOf("e", "cc".repeat(32))),
+                content = "replying to you",
+                pubkey = "bb".repeat(32),
+            ),
+            VALID_AUTHOR,
+        )
+        assertNotNull(reply)
+        assertEquals("replying to you", reply["summary"])
+        assertEquals(-1L, reply["amountMsat"])
+    }
+
+
     private companion object {
         // Verbatim relay frames from contracts/nostr/fixtures/verification-vectors.json.
+        const val VALID_AUTHOR = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
         const val VALID_TEXT_NOTE_MESSAGE =
             """["EVENT","sub1",{"kind":1,"created_at":1710000000,"tags":[["t","bitcoin"]],"content":"gm from BitOS","pubkey":"2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001","id":"10cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a","sig":"1e22f5b27ad14c461d6156a0c2b19cbaf77899d2ed803d1f3c0a13e04cebf201c19276d5a6a73921da5fa770449f7971e882d7809e1b0c067dcb13a91d26c4c8"}]"""
         const val VALID_PROFILE_METADATA_MESSAGE =

@@ -46,10 +46,10 @@ final class HashtagFollowsStore {
         guard framesTask == nil else { return }
         let boxedBridge = StatelessBridge(bridge: bridge)
         Task { [weak self, pool] in
-            let stream = await pool.frames()
+            let stream = await pool.verifiedFrames(client: FrameworkBusinessCoreClient())
             guard let self, !Task.isCancelled else { return }
             self.framesTask = FrameIngest.pump(
-                stream: stream,
+                gated: stream,
                 isAlive: { [weak self] in self != nil },
                 ingest: Self.headIngest(boxedBridge, accountBox: self.accountBox)
             ) { [weak self] head in
@@ -101,21 +101,23 @@ final class HashtagFollowsStore {
         }
     }
 
-    /// Interest-set head extraction — runs OFF the main actor; the bridge
-    /// verifies signature, kind, d coordinate and author inside the call.
+    /// Interest-set head projection from an ALREADY-VERIFIED event — runs
+    /// OFF the main actor via the single event-based seam (Phase 2); the
+    /// bridge checks kind and author inside the call.
     private nonisolated static func headIngest(
         _ boxedBridge: StatelessBridge,
         accountBox: AccountBox
-    ) -> @Sendable (RelayFrame) -> InterestHead? {
-        { frame in
-            guard let account = accountBox.get(),
-                  let hashtags = boxedBridge.bridge.interestSetHashtags(
-                      message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
-                  ) as? [String],
-                  let eventAt = (boxedBridge.bridge.interestSetCreatedAt(
-                      message: frame.message, relayUrl: frame.relay.rawValue, accountPubkey: account
-                  ) as KotlinLong?)?.int64Value else { return nil }
-            return InterestHead(hashtags: hashtags, createdAt: Int64(eventAt))
+    ) -> @Sendable (GatedFrame) -> InterestHead? {
+        { gated in
+            guard case .event(let gatedEvent) = gated,
+                  let account = accountBox.get(),
+                  let head = boxedBridge.bridge.interestSetFromEvent(
+                      event: gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge),
+                      accountPubkey: account
+                  ) as? [String: Any],
+                  let hashtags = head["hashtags"] as? [String],
+                  let createdAt = (head["createdAt"] as? NSNumber)?.int64Value else { return nil }
+            return InterestHead(hashtags: hashtags, createdAt: Int64(createdAt))
         }
     }
 

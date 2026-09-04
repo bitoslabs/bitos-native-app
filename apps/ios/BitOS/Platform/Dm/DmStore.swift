@@ -30,6 +30,7 @@ final class DmStore {
     private let defaults: UserDefaults
     private var accountPubkey: String?
     private var watchTask: Task<Void, Never>?
+    private var watchOkTask: Task<Void, Never>?
     private var requested = false
 
     // Persistence keys (bounded).
@@ -73,6 +74,8 @@ final class DmStore {
         requestCount = 0
         watchTask?.cancel()
         watchTask = nil
+        watchOkTask?.cancel()
+        watchOkTask = nil
         guard pubkey != nil else { return }
         Task { await start() }
     }
@@ -187,15 +190,25 @@ final class DmStore {
                 Task { await pool.broadcast(request) }
             }
         }
-        let stream = await pool.frames()
+        // OK receipts ride the RAW frame stream (they are not Nostr events);
+        // gift wraps arrive pre-verified from the shared decode-once stage.
+        let rawStream = await pool.frames()
+        let verifiedStream = await pool.verifiedFrames(client: FrameworkBusinessCoreClient())
         guard !Task.isCancelled else { return }
         let boxedBridge = StatelessBridge(bridge: bridge)
+        watchOkTask = FrameIngest.pump(
+            stream: rawStream,
+            isAlive: { [weak self] in self != nil },
+            ingest: Self.okIngest(boxedBridge)
+        ) { [weak self] wrapId in
+            await self?.absorbOk(wrapId: wrapId)
+        }
         watchTask = FrameIngest.pump(
-            stream: stream,
+            gated: verifiedStream,
             isAlive: { [weak self] in self != nil },
             ingest: Self.dmIngest(boxedBridge, secretCache: secretCache)
-        ) { [weak self] frame in
-            await self?.absorb(frame)
+        ) { [weak self] rumor in
+            await self?.absorb(rumor)
         }
     }
 
@@ -233,37 +246,44 @@ final class DmStore {
         Self.resolveSecret(secretCache)
     }
 
-    /// Sendable outcome of the off-main DM frame gate.
-    private enum DmFrame: Sendable {
-        /// Relay OK receipt for one of our wraps.
-        case accepted(wrapId: String)
-        /// Unwrapped NIP-17 rumor; [peer] is nil when the wrap names none.
-        case rumor(id: String, author: String, peer: String?, content: String, createdAt: Int64)
+    /// Sendable unwrapped rumor from the shared decode-once stage.
+    private struct DmRumor: Sendable {
+        let id: String
+        let author: String
+        let peer: String?
+        let content: String
+        let createdAt: Int64
     }
 
-    /// OK parse + NIP-44 unwrap — runs OFF the main actor (the unwrap is
-    /// real crypto per frame; audit §3.1).
+    /// Relay OK parse — RAW frames: OK receipts are not Nostr events, so
+    /// they never enter the verified stream. Runs OFF the main actor.
+    private nonisolated static func okIngest(
+        _ boxedBridge: StatelessBridge
+    ) -> @Sendable (RelayFrame) -> String? {
+        { frame in
+            guard let accepted = boxedBridge.bridge.parseOkAccepted(message: frame.message) as? Bool,
+                  accepted else { return nil }
+            return boxedBridge.bridge.okEventId(message: frame.message) as String?
+        }
+    }
+
+    /// NIP-44 unwrap of an ALREADY-VERIFIED gift wrap — runs OFF the main
+    /// actor via the event-based seam; no frame re-decode (Phase 2).
     private nonisolated static func dmIngest(
         _ boxedBridge: StatelessBridge,
         secretCache: LockedSecret
-    ) -> @Sendable (RelayFrame) -> DmFrame? {
-        { frame in
-            // Relay OK receipt: any pending wrap accepted → delivered tick.
-            if let accepted = boxedBridge.bridge.parseOkAccepted(message: frame.message) as? Bool,
-               accepted,
-               let wrapId = boxedBridge.bridge.okEventId(message: frame.message) as String? {
-                return .accepted(wrapId: wrapId)
-            }
-            guard let map = boxedBridge.bridge.secureDmUnwrap(
-                message: frame.message,
-                relayUrl: frame.relay.rawValue,
+    ) -> @Sendable (GatedFrame) -> DmRumor? {
+        { gated in
+            guard case .event(let gatedEvent) = gated else { return nil }
+            guard let map = boxedBridge.bridge.secureDmUnwrapEvent(
+                event: gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge),
                 myPrivateKeyHex: resolveSecret(secretCache)
             ) as? [String: Any],
                   let id = map["id"] as? String,
                   let author = map["author"] as? String,
                   let content = map["content"] as? String,
                   let createdAt = (map["createdAt"] as? NSNumber)?.int64Value else { return nil }
-            return .rumor(
+            return DmRumor(
                 id: id,
                 author: author,
                 peer: map["peer"] as? String,
@@ -273,14 +293,13 @@ final class DmStore {
         }
     }
 
-    private func absorb(_ frame: DmFrame) {
+    private func absorb(_ rumor: DmRumor) {
         guard accountPubkey != nil else { return }
-        switch frame {
-        case .accepted(let wrapId):
-            absorbOk(wrapId: wrapId)
-        case .rumor(let id, let author, let peer, let content, let createdAt):
-            appendMessage(id: id, author: author, peer: peer ?? accountPubkey ?? "", content: content, createdAt: createdAt)
-        }
+        appendMessage(
+            id: rumor.id, author: rumor.author,
+            peer: rumor.peer ?? accountPubkey ?? "",
+            content: rumor.content, createdAt: rumor.createdAt
+        )
     }
 
     private func absorbOk(wrapId: String) {

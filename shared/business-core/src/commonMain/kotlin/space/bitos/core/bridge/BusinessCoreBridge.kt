@@ -1121,7 +1121,29 @@ class BusinessCoreBridge {
             return null
         }
         if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
-        val slide = space.bitos.core.model.Stories.parseSlide(event, nowSeconds) ?: return null
+        return storyFromEvent(
+            Event(
+                id = event.id.value,
+                pubkey = event.pubkey.value,
+                createdAt = event.createdAt,
+                kind = event.kind,
+                tags = event.tags,
+                content = event.content,
+                relayUrl = relay.value,
+                signature = event.signature ?: "",
+            ),
+            nowSeconds,
+        )
+    }
+
+    /**
+     * APP-006: project an ALREADY-VERIFIED story event → slide map (null =
+     * not a valid story). The decode-once stage (audit Phase 2) owns the
+     * trust gate; this seam must never re-decode or re-verify.
+     */
+    fun storyFromEvent(event: Event, nowSeconds: Long): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        val slide = space.bitos.core.model.Stories.parseSlide(core, nowSeconds) ?: return null
         return mapOf(
             "id" to slide.id,
             "pubkey" to slide.pubkey,
@@ -1132,6 +1154,26 @@ class BusinessCoreBridge {
             "imageUrl" to (slide.imageUrl ?: ""),
             "gradient" to (slide.gradient ?: ""),
             "pow" to (slide.pow ?: 0),
+        )
+    }
+
+    /**
+     * Bridge event → core event. Pure structural conversion for seams that
+     * consume events the pool already ID-hash-checked and BIP-340-verified;
+     * null when the hex fields are malformed.
+     */
+    private fun coreEvent(event: Event): space.bitos.core.model.NostrEvent? {
+        val id = space.bitos.core.model.EventId.parse(event.id) ?: return null
+        val pubkey = space.bitos.core.model.Pubkey.parse(event.pubkey) ?: return null
+        return space.bitos.core.model.NostrEvent(
+            id = id,
+            pubkey = pubkey,
+            createdAt = event.createdAt,
+            kind = event.kind,
+            tags = event.tags,
+            content = event.content,
+            signature = event.signature.ifEmpty { null },
+            receivedFromRelay = event.relayUrl?.let { RelayUrl.parse(it) },
         )
     }
 
@@ -1150,7 +1192,25 @@ class BusinessCoreBridge {
         } catch (_: NostrEventCodec.Rejected) {
             return null
         }
-        val rumor = space.bitos.core.publish.SecureDmComposer.unwrap(event, myPrivateKeyHex) ?: return null
+        return secureDmUnwrapEvent(
+            Event(
+                id = event.id.value,
+                pubkey = event.pubkey.value,
+                createdAt = event.createdAt,
+                kind = event.kind,
+                tags = event.tags,
+                content = event.content,
+                relayUrl = relay.value,
+                signature = event.signature ?: "",
+            ),
+            myPrivateKeyHex,
+        )
+    }
+
+    /** APP-011: unwrap an ALREADY-VERIFIED gift-wrap event (decode-once stage owns the trust gate). */
+    fun secureDmUnwrapEvent(event: Event, myPrivateKeyHex: String): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        val rumor = space.bitos.core.publish.SecureDmComposer.unwrap(core, myPrivateKeyHex) ?: return null
         val peer = rumor.tags.firstOrNull { it.firstOrNull() == "p" }?.getOrNull(1) ?: return null
         return mapOf(
             "id" to rumor.id.value,
@@ -2735,6 +2795,21 @@ class BusinessCoreBridge {
         return event.createdAt
     }
 
+    /**
+     * The account's ALREADY-VERIFIED interest-set head as one seam: followed
+     * hashtags + created_at (the decode-once stage owns the trust gate).
+     * Null when the event is not the account's kind-30015 head.
+     */
+    fun interestSetFromEvent(event: Event, accountPubkey: String): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        if (core.kind != space.bitos.core.model.InterestSet.KIND) return null
+        if (core.pubkey.value != accountPubkey) return null
+        return mapOf(
+            "hashtags" to space.bitos.core.model.InterestSet.followedHashtags(core),
+            "createdAt" to core.createdAt,
+        )
+    }
+
     private fun interestSetEvent(message: String, relayUrl: String): space.bitos.core.model.NostrEvent? {
         val relay = RelayUrl.parse(relayUrl) ?: return null
         val event = try {
@@ -3426,6 +3501,17 @@ class BusinessCoreBridge {
         )
     }
 
+    /** The account's ALREADY-VERIFIED kind-10004 head → block list map. */
+    fun blockListFromEvent(event: Event, accountPubkey: String): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        if (core.pubkey.value != accountPubkey) return null
+        val blocked = space.bitos.core.model.BlockList.blockedPubkeys(core) ?: return null
+        return mapOf(
+            "createdAt" to core.createdAt,
+            "pubkeys" to blocked.toList(),
+        )
+    }
+
     /** APP-012 search-row predicate (shared `NotificationFilters` rule). */
     fun notificationQueryMatches(summary: String, authorName: String?, query: String): Boolean {
         val item = space.bitos.core.model.NotificationItem(
@@ -3511,7 +3597,25 @@ class BusinessCoreBridge {
             return null
         }
         if (!NostrEventCodec.verifySignature(Sha256EventHasher, event)) return null
-        val item = space.bitos.core.model.NotificationExtractor.extract(event, accountPubkey) ?: return null
+        return extractNotificationFromEvent(
+            Event(
+                id = event.id.value,
+                pubkey = event.pubkey.value,
+                createdAt = event.createdAt,
+                kind = event.kind,
+                tags = event.tags,
+                content = event.content,
+                relayUrl = relay.value,
+                signature = event.signature ?: "",
+            ),
+            accountPubkey,
+        )
+    }
+
+    /** Project an ALREADY-VERIFIED event → notification item map (decode-once stage owns the trust gate). */
+    fun extractNotificationFromEvent(event: Event, accountPubkey: String): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        val item = space.bitos.core.model.NotificationExtractor.extract(core, accountPubkey) ?: return null
         return mapOf(
             "id" to item.id,
             "authorPubkey" to item.authorPubkey,

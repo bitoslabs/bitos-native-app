@@ -797,9 +797,10 @@ private extension FeedNote {
     }
 }
 
-private extension VerifiedEvent {
+extension VerifiedEvent {
     /// Rebuilds the bridge event handle for a second bridge call
-    /// (profile/normalization). Cheap: struct copies only.
+    /// (profile/normalization, and the event-based extractor seams).
+    /// Cheap: struct copies only.
     func bridgeEvent(bridge: BusinessCoreBridge) -> BusinessCoreBridge.Event {
         BusinessCoreBridge.Event(
             id: id,

@@ -88,29 +88,28 @@ final class StoriesStore {
                 Task { await pool.broadcast(request) }
             }
         }
-        let stream = await pool.frames()
+        let stream = await pool.verifiedFrames(client: FrameworkBusinessCoreClient())
         guard !Task.isCancelled else { return }
         let boxedBridge = StatelessBridge(bridge: bridge)
         watchTask = FrameIngest.pump(
-            stream: stream,
+            gated: stream,
             isAlive: { [weak self] in self != nil },
-            ingest: Self.storyIngest(boxedBridge)
+            ingest: Self.storyFromGated(boxedBridge)
         ) { [weak self] slide in
             await self?.absorbSlide(slide)
         }
     }
 
-    /// Story extraction — runs OFF the main actor: the bridge verifies the
-    /// frame and projects the slide dictionary; the pump hops the typed
-    /// mirror to absorption.
-    private nonisolated static func storyIngest(
+    /// Story projection from an ALREADY-VERIFIED event — runs OFF the main
+    /// actor via the event-based bridge seam; no frame re-decode (Phase 2).
+    private nonisolated static func storyFromGated(
         _ boxedBridge: StatelessBridge
-    ) -> @Sendable (RelayFrame) -> StorySlideMirror? {
-        { frame in
+    ) -> @Sendable (GatedFrame) -> StorySlideMirror? {
+        { gated in
+            guard case .event(let gatedEvent) = gated else { return nil }
             let now = Int64(Date.now.timeIntervalSince1970)
-            guard let slide = boxedBridge.bridge.storyFromFrame(
-                message: frame.message, relayUrl: frame.relay.rawValue, nowSeconds: now
-            ) as? [String: Any],
+            let bridgeEvent = gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge)
+            guard let slide = boxedBridge.bridge.storyFromEvent(event: bridgeEvent, nowSeconds: now) as? [String: Any],
                   let id = slide["id"] as? String,
                   let pubkey = slide["pubkey"] as? String,
                   let content = slide["content"] as? String,
