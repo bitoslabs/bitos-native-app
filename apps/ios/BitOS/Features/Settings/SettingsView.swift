@@ -155,12 +155,14 @@ struct SettingsView: View {
             .disabled(identity.account == nil)
         }
         .confirmationDialog(
-            "Remove this account's key from this device?",
+            "Sign out of this account?",
             isPresented: $showSignOutConfirm,
             titleVisibility: .visible
         ) {
             Button("Sign out", role: .destructive) { identity.signOut() }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your account stays sealed on this device \u{2014} you can switch back to it anytime.")
         }
     }
 }
@@ -674,6 +676,8 @@ private struct AccountSection: View {
     @State private var showEdit = false
     // APP-018a row 1: switches ride the branded overlay (MoreView parity).
     @State private var switchTarget: RegisteredAccountRow?
+    // Removal is gated by a confirmation dialog — never an immediate wipe.
+    @State private var removeTarget: RegisteredAccountRow?
 
     var body: some View {
         List {
@@ -732,7 +736,7 @@ private struct AccountSection: View {
                                         .foregroundStyle(BitOSTheme.accent)
                                 }
                                 Button("Remove", role: .destructive) {
-                                    identity.removeRegisteredAccount(pubkeyHex: acct.pubkeyHex)
+                                    removeTarget = acct
                                 }
                                 .font(.system(size: 13))
                             }
@@ -787,6 +791,28 @@ private struct AccountSection: View {
                 switchAction: { identity.switchTo(pubkeyHex: target.pubkeyHex) },
                 onFinished: { switchTarget = nil }
             )
+        }
+        .confirmationDialog(
+            "Remove this account from this device?",
+            isPresented: Binding(
+                get: { removeTarget != nil },
+                set: { if !$0 { removeTarget = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: removeTarget
+        ) { target in
+            Button("Remove", role: .destructive) {
+                identity.removeRegisteredAccount(pubkeyHex: target.pubkeyHex)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { target in
+            let remaining = identity.registeredAccounts.filter { $0.pubkeyHex != target.pubkeyHex }
+            let consequence = "\(target.displayName ?? "This account")'s sealed key is wiped from this device \u{2014} without an nsec backup it can't be restored here."
+            if let next = remaining.first {
+                Text("\(consequence) You'll switch to \(next.displayName ?? "your other saved account").")
+            } else {
+                Text("\(consequence) It's your only saved account, so you'll be signed out to browse.")
+            }
         }
     }
 }
@@ -852,6 +878,14 @@ private struct SecuritySection: View {
             ) {
                 Button("Remove key", role: .destructive) { identity.removeAccount() }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                let active = identity.account?.pubkeyHex
+                let consequence = "The active key is wiped \u{2014} back up your nsec first or this identity can't be restored here."
+                if let next = identity.registeredAccounts.first(where: { $0.pubkeyHex != active }) {
+                    Text("\(consequence) You'll switch to \(next.displayName ?? "your other saved account").")
+                } else {
+                    Text("\(consequence) Themes and feed preferences stay; you'll be signed out to browse.")
+                }
             }
         }
         .tint(BitOSTheme.accent)

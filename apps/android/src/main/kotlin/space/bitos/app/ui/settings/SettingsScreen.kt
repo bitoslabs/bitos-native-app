@@ -129,8 +129,6 @@ fun SettingsScreen(
 
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val account = identity.account
-    val clipboard = LocalClipboardManager.current
-    var npubCopied by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
 
     Column(
@@ -209,20 +207,22 @@ fun SettingsScreen(
         }
 
         if (account != null) {
-            if (confirmSignOut) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { identityViewModel.signOut(); confirmSignOut = false }) {
-                        Text("Confirm sign out", color = BitOSColors.error, fontWeight = FontWeight.W600)
-                    }
-                    TextButton(onClick = { confirmSignOut = false }) {
-                        Text("Cancel", color = BitOSColors.textSecondary)
-                    }
-                }
-            } else {
-                TextButton(onClick = { confirmSignOut = true }) {
-                    Text("Sign out", color = BitOSColors.error, fontWeight = FontWeight.W600)
-                }
+            TextButton(onClick = { confirmSignOut = true }) {
+                Text("Sign out", color = BitOSColors.error, fontWeight = FontWeight.W600)
             }
+        }
+        if (confirmSignOut) {
+            space.bitos.app.ui.components.ConfirmDialog(
+                title = "Sign out of this account?",
+                body = "Your account stays sealed on this device — you can switch back to it anytime.",
+                confirmLabel = "Sign out",
+                destructive = true,
+                onConfirm = {
+                    identityViewModel.signOut()
+                    confirmSignOut = false
+                },
+                onDismiss = { confirmSignOut = false },
+            )
         }
 
         // Official wordmark (theme-aware) above the version line.
@@ -732,6 +732,7 @@ private fun AccountDetail(
     val clipboard = LocalClipboardManager.current
     var npubCopied by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
+    // Removal is gated by ConfirmDialog — never an in-place button swap.
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     // APP-018a row 1: switches ride the branded overlay (MoreScreen parity).
     var switchTarget by remember {
@@ -817,19 +818,18 @@ private fun AccountDetail(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    if (confirmRemove == acct.pubkeyHex) {
-                        TextButton(onClick = {
-                            identityViewModel.removeRegisteredAccount(acct.pubkeyHex)
-                            confirmRemove = null
-                        }) { Text("Remove", color = BitOSColors.error, fontWeight = FontWeight.W600) }
-                    } else {
-                        TextButton(onClick = { confirmRemove = acct.pubkeyHex }) {
-                            Text("Remove", color = BitOSColors.textSecondary)
-                        }
+                    TextButton(onClick = { confirmRemove = acct.pubkeyHex }) {
+                        Text("Remove", color = BitOSColors.textSecondary)
                     }
                 }
             }
-            Footnote("Switching keeps every account sealed on this device — one tap back. Remove wipes that account's key (back it up first).")
+            // Description rides inside the card here — pad it like a card row
+            // (Footnote's 4dp is for page-background placement only).
+            Text(
+                "Switching keeps every account sealed on this device — one tap back. Remove wipes that account's key (back it up first).",
+                fontSize = 12.sp, color = BitOSColors.textTertiary,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp),
+            )
         }
     }
 
@@ -852,6 +852,27 @@ private fun AccountDetail(
             hapticsEnabled = { snapshot.hapticEnabled },
             switchAction = { identityViewModel.switchTo(target.pubkeyHex) },
             onFinished = { switchTarget = null },
+        )
+    }
+
+    confirmRemove?.let { pubkey ->
+        val target = registered.firstOrNull { it.pubkeyHex == pubkey }
+        val next = registered.firstOrNull { it.pubkeyHex != pubkey }
+        val consequence = "That account's sealed key is wiped from this device — without an nsec backup it can't be restored here."
+        space.bitos.app.ui.components.ConfirmDialog(
+            title = "Remove ${target?.displayName?.takeIf { it.isNotBlank() } ?: "account"} from this device?",
+            body = if (next != null) {
+                "$consequence You'll switch to ${next.displayName?.takeIf { it.isNotBlank() } ?: "your other saved account"}."
+            } else {
+                "$consequence It's your only saved account, so you'll be signed out to browse."
+            },
+            confirmLabel = "Remove",
+            destructive = true,
+            onConfirm = {
+                identityViewModel.removeRegisteredAccount(pubkey)
+                confirmRemove = null
+            },
+            onDismiss = { confirmRemove = null },
         )
     }
 }
@@ -932,6 +953,7 @@ private fun PendingDetail(sectionKey: String) {
 @Composable
 private fun SecurityDetail(identityViewModel: IdentityViewModel) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
+    val registered by identityViewModel.registeredAccounts.collectAsStateWithLifecycle()
     val account = identity.account ?: run {
         Footnote("No account — create or import a key on the You tab.")
         return
@@ -979,23 +1001,32 @@ private fun SecurityDetail(identityViewModel: IdentityViewModel) {
     Footnote("Back up your nsec somewhere safe — it is the only way to recover this account.")
 
     DetailCard("Danger zone") {
-        if (confirmRemove) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    identityViewModel.removeAccount()
-                    confirmRemove = false
-                }) { Text("Remove key", color = BitOSColors.error, fontWeight = FontWeight.W600) }
-                TextButton(onClick = { confirmRemove = false }) {
-                    Text("Cancel", color = BitOSColors.textSecondary)
-                }
-            }
-        } else {
-            TextButton(onClick = { confirmRemove = true }, modifier = Modifier.padding(horizontal = 4.dp)) {
-                Text("Remove key from this device", color = BitOSColors.error, fontWeight = FontWeight.W600)
-            }
+        TextButton(onClick = { confirmRemove = true }, modifier = Modifier.padding(horizontal = 4.dp)) {
+            Text("Remove key from this device", color = BitOSColors.error, fontWeight = FontWeight.W600)
         }
     }
     Footnote("Keeps every saved theme and feed preference — only the active key is removed.")
+
+    if (confirmRemove) {
+        val next = registered.firstOrNull { it.pubkeyHex != identity.account?.pubkeyHex }
+        space.bitos.app.ui.components.ConfirmDialog(
+            title = "Remove the active key from this device?",
+            body = if (next != null) {
+                "The active key is wiped — back up your nsec first or this identity can't be restored here. " +
+                    "You'll switch to ${next.displayName?.takeIf { it.isNotBlank() } ?: "your other saved account"}."
+            } else {
+                "The active key is wiped — back up your nsec first or this identity can't be restored here. " +
+                    "Themes and feed preferences stay; you'll be signed out to browse."
+            },
+            confirmLabel = "Remove key",
+            destructive = true,
+            onConfirm = {
+                identityViewModel.removeAccount()
+                confirmRemove = false
+            },
+            onDismiss = { confirmRemove = false },
+        )
+    }
 }
 
 @Composable
@@ -1135,10 +1166,18 @@ private fun PrivacyDetail(
                 }
             }
             if (blocked.size > 50) {
-                Footnote("Showing first 50 of ${blocked.size} blocked authors.")
+                Text(
+                    "Showing first 50 of ${blocked.size} blocked authors.",
+                    fontSize = 12.sp, color = BitOSColors.textTertiary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                )
             }
             PublishStatusLine(publishState)
-            Footnote("Unblock publishes a new kind-10004 head to your write relays.")
+            Text(
+                "Unblock publishes a new kind-10004 head to your write relays.",
+                fontSize = 12.sp, color = BitOSColors.textTertiary,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp),
+            )
         }
     }
     Footnote("Blocked authors are filtered from feeds and the inbox (NIP-51). DM/mention gates and read receipts arrive with the DM wave.")

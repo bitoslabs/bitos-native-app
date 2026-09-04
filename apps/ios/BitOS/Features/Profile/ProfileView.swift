@@ -13,8 +13,7 @@ import UIKit
 /// Notes · Replies · Bitz · Reposts tab rail.
 struct ProfileView: View {
     @State private var store: IdentityStore
-    @State private var importText = ""
-    @State private var confirmRemove = false
+    @State private var showOnboarding = false
     @State private var showEdit = false
     @State private var showSettings = false
     @State private var showZaps = false
@@ -44,9 +43,12 @@ struct ProfileView: View {
                     // cover reaches the screen edges like the legacy hero.
                     accountPanel(account)
                 } else {
+                    // ID-004 browse-first: one explainer card, and identity
+                    // creation/import reuses the shared onboarding flow
+                    // (method → import/backup → verify) — never a second,
+                    // divergent import form.
                     VStack(spacing: BitOSTheme.Spacing.md) {
-                        browsePanel
-                        importPanel
+                        signedOutPanel
                     }
                     .padding(BitOSTheme.Spacing.screen)
                 }
@@ -75,6 +77,14 @@ struct ProfileView: View {
         .sheet(isPresented: $showSettings) {
                 NavigationStack { SettingsView() }
                     .environment(environment)
+            }
+        }
+        // Signed-out identity entry reuses the shared onboarding flow; it
+        // drives its own backup/verify gates, so this surface hosts no
+        // preview sheet of its own.
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingScreen(store: store) {
+                showOnboarding = false
             }
         }
         .sheet(isPresented: $showQr) {
@@ -122,16 +132,6 @@ struct ProfileView: View {
             .environment(identity)
             .environment(settings)
             .preferredColorScheme(BitOSTheme.preferredScheme)
-        }
-        .sheet(item: $store.preview) { preview in
-            ConfirmIdentitySheet(
-                preview: preview,
-                secretNsec: preview.isNewKey ? store.previewSecretNsec : nil,
-                busy: store.busy,
-                onConfirm: { store.confirmPreview() },
-                onCancel: { store.cancelPreview() }
-            )
-            .presentationDetents([.medium])
         }
     }
 
@@ -779,20 +779,22 @@ struct ProfileView: View {
         .padding(.top, BitOSTheme.Spacing.sm)
     }
 
-    // MARK: - Browse / import (signed-out)
+    // MARK: - Browse / add identity (signed-out)
 
-    private var browsePanel: some View {
+    /// Browse-first explainer (ID-004): nothing is created silently; the
+    /// Add identity action reuses the shared onboarding flow verbatim.
+    private var signedOutPanel: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             Text("Browsing without an identity")
                 .font(.subheadline.weight(.semibold))
-            Text("You can watch and explore anonymously. Actions that need a signature offer key creation or import below — nothing is created silently.")
+            Text("Watch and explore anonymously. Add an identity to create a new key or import one you already have — nothing is created silently.")
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 Button {
-                    store.createKeyPreview()
+                    showOnboarding = true
                 } label: {
-                    Label { Text("Create identity") } icon: { AppIcons.image(for: AppIcons.user) }
+                    Label { Text("Add identity") } icon: { AppIcons.image(for: AppIcons.user) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(BitOSTheme.accent)
@@ -801,39 +803,6 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(BitOSTheme.Spacing.base)
         .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.lg).fill(BitOSTheme.surface))
-    }
-
-    private var importPanel: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Log in with a secret key")
-                .font(.subheadline.weight(.semibold))
-            SecretKeyField(
-                text: $importText,
-                error: store.importError,
-                onSubmit: { store.importKeyPreview(importText) }
-            )
-            .onChange(of: importText) { _, _ in store.clearImportError() }
-            if secretKeyReady(importText) {
-                DerivedIdentityCard(
-                    check: BusinessCoreBridge().keyImportCheck(raw: importText)
-                )
-            }
-            Button {
-                store.importKeyPreview(importText)
-            } label: {
-                Label { Text("Review key") } icon: { AppIcons.image(for: AppIcons.qrCode) }
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(BitOSTheme.accent)
-            .disabled(!secretKeyReady(importText))
-            Text("The key stays on this device, sealed in the Keychain. Never share an nsec.")
-                .font(.caption2)
-                .foregroundStyle(BitOSTheme.textTertiary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(BitOSTheme.Spacing.base)
-        .background(RoundedRectangle(cornerRadius: BitOSTheme.Radius.lg).fill(BitOSTheme.surfaceElevated))
     }
 }
 

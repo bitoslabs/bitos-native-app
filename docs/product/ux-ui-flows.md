@@ -58,6 +58,7 @@ First signed action
 ```
 
 - Do not create an identity silently.
+- The signed-out You tab reuses the identity-onboarding flow behind one "Add identity" action (method → import/backup → verify); it never hosts a second, divergent import form.
 - Never show/copy an `nsec` casually; backup is a deliberate protected flow.
 - Remote/external signer rejection returns to the pending action without data loss.
 - Multi-account switch shows the active identity before signing or paying.
@@ -85,7 +86,7 @@ keys are accepted alongside `nsec`.
 | KF-3 | Feedback is live and specific before submit: npub-instead-of-nsec, too short/too long, internal whitespace, wrong prefix, invalid checksum — and a green "valid key" state; a submit error clears as soon as the text changes. |
 | KF-4 | The review/submit action is the primary action of its surface and is enabled only when the input resolves to a usable secret (nsec or 64-hex). |
 | KF-5 | Every control (field, paste, reveal, copy) carries an accessibility label; state is never communicated by color alone (icon + text). |
-| KF-6 | A READY input previews the derived identity live before submit: the shared rule returns the derived x-only pubkey and npub, and the surface renders a hex avatar + monospace npub + copy chip (onboarding import step, You-tab import panel, More-hub add-account sheet). |
+| KF-6 | A READY input previews the derived identity live before submit: the shared rule returns the derived x-only pubkey and npub, and the surface renders a hex avatar + monospace npub + copy chip (onboarding import step, More-hub add-account sheet). |
 | KF-7 | The More-hub add-account surface is a bottom sheet on both platforms (never a centered dialog: it hosts a keyboard form opened from the switcher sheet), renders the shared v2 copy verbatim (`IdentityOnboardingContent` add-account + nsec-help vectors), previews the derived identity (KF-6), and carries a collapsible "What's an nsec?" help — what the key is, where to export it, npub-vs-nsec, sealed-on-device — collapsed by default. |
 | KF-8 | Add-account action hierarchy: one filled primary "Review key" gated on the shared READY rule, an outlined "Create new key" alternative, and a quiet Cancel — no two actions of equal weight. |
 
@@ -98,6 +99,15 @@ keys are accepted alongside `nsec`.
 | CB-2b | The backup confirm stays disabled until the user checks an explicit acknowledgment ("I saved my key somewhere safe and understand it can't be recovered.") — on the onboarding backup screen and in the shared confirm dialog/sheet alike. |
 | CB-3 | Imported keys are not offered a backup reveal (the user already holds the key) — the gate asks them to verify the npub instead. |
 | CB-4 | The secret crosses to the view only inside the preview transaction; it is never logged, persisted, or shown outside the confirm gate. |
+
+### 4.2a Sign-out & account-removal confirmation gates
+
+| # | Given / When / Then |
+|---|---|
+| DA-1 | Every destructive account action — removing a saved account (Settings → Account, "Accounts on this device") and removing the active key (Settings → Security, danger zone) — confirms through a modal dialog (Compose `AlertDialog` / SwiftUI `confirmationDialog`); an in-place confirm-button swap never gates a wipe, because the confirming tap lands on the same pixel that triggered the request. |
+| DA-2 | The removal dialog names the account (display name, falling back to "account") and states the consequence and the boundary: that account's sealed key is wiped on this device, an nsec backup is the only way to restore it here, and themes and feed preferences survive. When other saved accounts remain, the dialog names the account it will switch to; removing the ACTIVE account auto-switches to the next sealed account instead of dropping to browse — the signed-out shell has no switcher, so dropping would strand the remaining accounts. Only when no other account remains does removal sign out to browse. |
+| DA-3 | Sign out is presented as reversible: its dialog says the account stays sealed on this device and can be switched back to anytime — never copy that claims the key is removed (sign-out clears only the active pointer; key removal lives solely in the Security danger zone). |
+| DA-4 | The confirm action carries the destructive role/color and Cancel dismisses without touching sealed storage. |
 
 
 ### 4.1 Profile view & edit flow (APP-013, legacy-Flutter parity)

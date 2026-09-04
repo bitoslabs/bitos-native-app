@@ -30,7 +30,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.PersonAddAlt
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Settings
@@ -39,7 +38,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,8 +50,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
@@ -69,7 +65,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.identity.IdentityViewModel
-import space.bitos.app.ui.components.secretKeyReady
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.Language
@@ -126,6 +121,17 @@ fun ProfileScreen(
             privacyPrefs = privacyPrefs,
             profileLookup = profileLookup,
             onBack = { showSettings = false },
+        )
+        return
+    }
+    // Signed-out identity entry reuses the shared onboarding flow (method →
+    // import/backup → verify) — never a second, divergent import form; the
+    // flow drives its own backup/verify gates.
+    var showOnboarding by remember { mutableStateOf(false) }
+    if (showOnboarding) {
+        space.bitos.app.ui.onboarding.OnboardingScreen(
+            identityViewModel = identityViewModel,
+            onDone = { showOnboarding = false },
         )
         return
     }
@@ -625,7 +631,6 @@ fun ProfileScreen(
             }
         }
     } else {
-        val importFocus = remember { FocusRequester() }
         Column(
             Modifier
                 .fillMaxSize()
@@ -650,16 +655,7 @@ fun ProfileScreen(
                         )
                     }
                 }
-                BrowseOnlyPanel(
-                    onCreate = identityViewModel::createKeyPreview,
-                    onImport = { importFocus.requestFocus() },
-                )
-                ImportPanel(
-                    onSubmit = identityViewModel::importNsecPreview,
-                    error = state.importError,
-                    onEdit = identityViewModel::clearImportError,
-                    focusRequester = importFocus,
-                )
+                BrowseOnlyPanel(onAddIdentity = { showOnboarding = true })
             }
         }
     }
@@ -749,18 +745,6 @@ fun ProfileScreen(
             )
         }
     }
-
-    state.preview?.let { preview ->
-        space.bitos.app.ui.components.ConfirmIdentityDialog(
-            npub = preview.npub,
-            replacesExisting = preview.replacesExisting,
-            isNewKey = preview.isNewKey,
-            secretNsec = if (preview.isNewKey) identityViewModel.previewNsec() else null,
-            busy = state.busy,
-            onConfirm = identityViewModel::confirmPreview,
-            onDismiss = identityViewModel::cancelPreview,
-        )
-    }
 }
 
 /** Compact social counter parity: 1234 -> "1.2K", 1_200_000 -> "1.2M". */
@@ -770,76 +754,24 @@ private fun formatCount(count: Int): String = when {
     else -> count.toString()
 }
 
+/**
+ * Browse-first explainer (ID-004): nothing is created silently; the
+ * Add identity action reuses the shared onboarding flow verbatim.
+ */
 @Composable
-private fun BrowseOnlyPanel(onCreate: () -> Unit, onImport: () -> Unit) {
+private fun BrowseOnlyPanel(onAddIdentity: () -> Unit) {
     Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surface, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
             Text("Browsing without an identity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
             Text(
-                "You can watch and explore anonymously. Actions that need a signature offer key creation or import below — nothing is created silently.",
+                "Watch and explore anonymously. Add an identity to create a new key or import one you already have — nothing is created silently.",
                 style = MaterialTheme.typography.bodySmall,
                 color = BitOSColors.textSecondary,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-                Button(onClick = onCreate) {
-                    androidx.compose.material3.Icon(Icons.Outlined.Key, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Create identity")
-                }
-                OutlinedButton(onClick = onImport) {
-                    androidx.compose.material3.Icon(Icons.Outlined.PersonAddAlt, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Log in with nsec")
-                }
+            Button(onClick = onAddIdentity) {
+                androidx.compose.material3.Icon(Icons.Outlined.Key, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                Text("Add identity")
             }
-        }
-    }
-}
-
-/**
- * Secret-key login panel (ID-004): the shared [SecretKeyField] plus the
- * review action, gated to a valid key by the shared rule. A READY key also
- * previews the derived identity (KF-6) before anything is stored.
- */
-@Composable
-private fun ImportPanel(
-    onSubmit: (String) -> Unit,
-    error: String?,
-    onEdit: () -> Unit,
-    focusRequester: FocusRequester,
-) {
-    var input by remember { mutableStateOf("") }
-    val check = remember(input) { space.bitos.core.identity.KeyImportForm.check(input) }
-    val ready = check.verdict == space.bitos.core.identity.KeyImportVerdict.READY
-    Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surfaceElevated, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-            Text("Log in with a secret key", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
-            space.bitos.app.ui.components.SecretKeyField(
-                value = input,
-                onValueChange = {
-                    input = it
-                    onEdit()
-                },
-                error = error,
-                onSubmit = { onSubmit(input) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-            )
-            if (ready) {
-                space.bitos.app.ui.components.DerivedIdentityCard(check)
-            }
-            Button(
-                onClick = { onSubmit(input) },
-                enabled = ready,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                androidx.compose.material3.Icon(Icons.Outlined.QrCode2, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                Text("Review key")
-            }
-            Text(
-                "The key stays on this device, sealed in the Android Keystore. Never share an nsec.",
-                style = MaterialTheme.typography.bodySmall,
-                color = BitOSColors.textTertiary,
-            )
         }
     }
 }

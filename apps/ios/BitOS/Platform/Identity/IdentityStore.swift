@@ -285,7 +285,10 @@ final class IdentityStore {
     }
 
     /// Destructive: removes the ACTIVE secret + legacy slot after explicit
-    /// confirmation (security danger zone).
+    /// confirmation (security danger zone). Removing the active account hops
+    /// to the next sealed account instead of dropping to browse — the
+    /// signed-out shell has no switcher, so without the hop the remaining
+    /// accounts would be unreachable.
     func removeAccount() {
         if let pubkey = account?.pubkeyHex {
            IdentityKeychain.removeSlot(pubkey: pubkey)
@@ -298,6 +301,9 @@ final class IdentityStore {
         preview = nil
         cachedActiveSecret = nil
         sessionEpoch += 1
+        if let next = registeredAccounts.first {
+            switchTo(pubkeyHex: next.pubkeyHex)
+        }
     }
 
     /// One-tap account switch (registry row → sealed slot → active). The
@@ -331,6 +337,8 @@ final class IdentityStore {
     }
 
     /// Destructive per-account removal: wipes the sealed slot + registry row.
+    /// Removing the ACTIVE account hops to the next sealed account instead of
+    /// dropping to browse (same rationale as `removeAccount`).
     func removeRegisteredAccount(pubkeyHex: String) {
         IdentityKeychain.removeSlot(pubkey: pubkeyHex)
         registeredAccounts.removeAll { $0.pubkeyHex == pubkeyHex }
@@ -340,6 +348,9 @@ final class IdentityStore {
            account = nil
            cachedActiveSecret = nil
            sessionEpoch += 1
+           if let next = registeredAccounts.first {
+               switchTo(pubkeyHex: next.pubkeyHex)
+           }
         }
     }
 

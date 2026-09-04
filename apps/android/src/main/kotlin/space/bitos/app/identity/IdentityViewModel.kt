@@ -209,12 +209,18 @@ class IdentityViewModel(
         mutableState.value = IdentityUiState()
     }
 
-    /** Destructive: removes the sealed secret after explicit confirmation. */
+    /**
+     * Destructive: removes the sealed secret after explicit confirmation.
+     * Hops to the next sealed account instead of dropping to browse (same
+     * rationale as [removeRegisteredAccount]).
+     */
     fun removeAccount() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.clear() }
+            val removed = mutableState.value.account?.pubkeyHex
             registry.setActive(null)
-            mutableState.value = IdentityUiState()
+            val next = registeredAccounts.value.firstOrNull { it.pubkeyHex != removed }
+            if (next != null) switchTo(next.pubkeyHex) else mutableState.value = IdentityUiState()
         }
     }
 
@@ -240,13 +246,19 @@ class IdentityViewModel(
         }
     }
 
-    /** Destructive per-account removal: wipes the sealed slot + registry row. */
+    /**
+     * Destructive per-account removal: wipes the sealed slot + registry row.
+     * Removing the ACTIVE account hops to the next sealed account instead of
+     * dropping to browse — the signed-out shell has no switcher, so without
+     * the hop the remaining accounts would be unreachable.
+     */
     fun removeRegisteredAccount(pubkeyHex: String) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.removeSecret(pubkeyHex) }
             registry.remove(pubkeyHex)
             if (mutableState.value.account?.pubkeyHex == pubkeyHex) {
-                mutableState.value = IdentityUiState()
+                val next = registeredAccounts.value.firstOrNull { it.pubkeyHex != pubkeyHex }
+                if (next != null) switchTo(next.pubkeyHex) else mutableState.value = IdentityUiState()
             }
         }
     }
