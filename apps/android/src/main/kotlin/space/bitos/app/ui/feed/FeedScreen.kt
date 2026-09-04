@@ -285,7 +285,10 @@ fun FeedScreen(
             // keeps the control visible while preserving tab hit targets.
             Box(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxSize()) {
-                    if (state.accountPubkey == null) {
+                    // Wait for identity RESOLUTION, not just absence: gating
+                    // on accountPubkey alone flashed the guest banner to
+                    // every signed-in cold start while the key restored.
+                    if (identityState.account == null && identityState.identityResolved) {
                         GuestBanner(onGetStarted = onOpenProfile)
                     }
                     when {

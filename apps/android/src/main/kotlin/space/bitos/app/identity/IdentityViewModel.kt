@@ -31,6 +31,11 @@ data class IdentityPreview(
 
 data class IdentityUiState(
     val account: AccountIdentity? = null,
+    /** True once the cold-start restore attempt finished — account found OR
+     *  absent. Guest chrome (the "Get started" banner) must wait for this:
+     *  gating on [account] alone flashed the banner to every signed-in user
+     *  for the whole Keystore-decrypt + pubkey-derive window. */
+    val identityResolved: Boolean = false,
     val preview: IdentityPreview? = null,
     val importError: String? = null,
     val busy: Boolean = false,
@@ -72,26 +77,33 @@ class IdentityViewModel(
 
     private fun loadExisting() {
         viewModelScope.launch {
-            val secret = withContext(Dispatchers.IO) {
-                // Active slot first (multi-account); legacy single-secret fallback.
-                registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) }
-                    ?: store.loadSecret()
-            } ?: return@launch
-            val identity = identityFor(secret) ?: return@launch
-            // Legacy migration: an account created before the registry ships
-            // backfills its row so the switcher shows it (and Add works).
-            if (registry.accounts.value.none { it.pubkeyHex == identity.pubkeyHex }) {
-                withContext(Dispatchers.IO) { store.storeSecret(secret, slotPubkey = identity.pubkeyHex) }
-                registry.register(
-                    space.bitos.core.identity.RegisteredAccount(
-                        pubkeyHex = identity.pubkeyHex,
-                        npub = identity.npub,
-                        addedAtSeconds = System.currentTimeMillis() / 1_000,
-                    ),
-                    makeActive = registry.activePubkey.value == null,
-                )
+            try {
+                val secret = withContext(Dispatchers.IO) {
+                    // Active slot first (multi-account); legacy single-secret fallback.
+                    registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) }
+                        ?: store.loadSecret()
+                } ?: return@launch
+                val identity = identityFor(secret) ?: return@launch
+                // Legacy migration: an account created before the registry ships
+                // backfills its row so the switcher shows it (and Add works).
+                if (registry.accounts.value.none { it.pubkeyHex == identity.pubkeyHex }) {
+                    withContext(Dispatchers.IO) { store.storeSecret(secret, slotPubkey = identity.pubkeyHex) }
+                    registry.register(
+                        space.bitos.core.identity.RegisteredAccount(
+                            pubkeyHex = identity.pubkeyHex,
+                            npub = identity.npub,
+                            addedAtSeconds = System.currentTimeMillis() / 1_000,
+                        ),
+                        makeActive = registry.activePubkey.value == null,
+                    )
+                }
+                mutableState.value = mutableState.value.copy(account = identity, identityResolved = true)
+            } catch (failure: Exception) {
+                // A dead key slot degrades to the guest state — identity must
+                // always resolve, or the banner would never appear or hide.
+            } finally {
+                mutableState.value = mutableState.value.copy(identityResolved = true)
             }
-            mutableState.value = mutableState.value.copy(account = identity)
         }
     }
 
