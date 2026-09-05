@@ -251,7 +251,11 @@ private fun FullscreenVideoPlayer(url: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun RemoteBitmapImage(url: String, modifier: Modifier = Modifier) {
+fun RemoteBitmapImage(
+    url: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
     val bitmap by produceState<Bitmap?>(initialValue = null, url) {
         value = loadBitmap(url)
     }
@@ -267,7 +271,7 @@ fun RemoteBitmapImage(url: String, modifier: Modifier = Modifier) {
             Image(
                 bitmap = image.asImageBitmap(),
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
+                contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -320,32 +324,79 @@ suspend fun loadUriThumbnail(resolver: android.content.ContentResolver, uri: and
         }.getOrNull()
     }
 
-/** Fullscreen zoomable media viewer (lightbox). */
+/** Fullscreen zoomable media viewer (lightbox).
+ *
+ * The original image is always fitted inside the viewport; it is never
+ * cropped. Multi-image notes retain their order so the reader can move
+ * between attachments without dismissing and reopening the viewer.
+ */
 @Composable
-fun MediaLightbox(url: String, onDismiss: () -> Unit) {
+fun MediaLightbox(
+    urls: List<String>,
+    initialUrl: String,
+    onDismiss: () -> Unit,
+) {
+    val media = remember(urls) { urls.distinct() }
+    var currentIndex by remember(media, initialUrl) {
+        mutableStateOf(media.indexOf(initialUrl).coerceAtLeast(0))
+    }
+    val currentUrl = media.getOrElse(currentIndex) { initialUrl }
     var scale by remember { mutableStateOf(1f) }
+    androidx.compose.runtime.LaunchedEffect(currentUrl) { scale = 1f }
     Box(
         Modifier
             .fillMaxSize()
             .background(Color(0xFF0A0A0F))
-            .pointerInput(url) {
-                detectTransformGestures { _, _, zoom, _ ->
+            .pointerInput(currentUrl) {
+                detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 5f)
+                    if (scale == 1f && zoom == 1f && pan.x > 72f && currentIndex > 0) {
+                        currentIndex -= 1
+                    } else if (scale == 1f && zoom == 1f && pan.x < -72f && currentIndex < media.lastIndex) {
+                        currentIndex += 1
+                    }
                 }
-            }
-            .clickable(onClickLabel = "Close media") { onDismiss() },
+            },
         contentAlignment = Alignment.Center,
     ) {
         RemoteBitmapImage(
-            url = url,
+            url = currentUrl,
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .graphicsLayer(
                     scaleX = scale,
                     scaleY = scale,
                     transformOrigin = TransformOrigin.Center,
                 ),
+            contentScale = ContentScale.Fit,
         )
+        if (media.size > 1) {
+            IconButton(
+                onClick = { currentIndex -= 1 },
+                enabled = currentIndex > 0,
+                modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).size(48.dp),
+            ) {
+                Icon(AppIcons.ChevronLeft, contentDescription = "Previous image", tint = Color.White)
+            }
+            IconButton(
+                onClick = { currentIndex += 1 },
+                enabled = currentIndex < media.lastIndex,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).size(48.dp),
+            ) {
+                Icon(AppIcons.ChevronRight, contentDescription = "Next image", tint = Color.White)
+            }
+            Text(
+                text = "${currentIndex + 1} of ${media.size}",
+                color = Color.White,
+                style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x80000000))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
         Box(
             Modifier
                 .align(Alignment.TopEnd)
@@ -360,6 +411,11 @@ fun MediaLightbox(url: String, onDismiss: () -> Unit) {
         }
     }
 }
+
+/** Compatibility entry point for single-image surfaces. */
+@Composable
+fun MediaLightbox(url: String, onDismiss: () -> Unit) =
+    MediaLightbox(urls = listOf(url), initialUrl = url, onDismiss = onDismiss)
 
 /** NIP-36 sensitive cover with per-session reveal. */
 @Composable

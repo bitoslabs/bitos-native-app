@@ -173,7 +173,7 @@ struct FeedNoteCard: View {
             get: { lightboxUrl.map { CardLightboxTarget(url: $0) } },
             set: { lightboxUrl = $0?.url }
         )) { target in
-            MediaLightbox(url: target.url, onClose: { lightboxUrl = nil })
+            MediaLightbox(urls: note.mediaUrls, initialUrl: target.url, onClose: { lightboxUrl = nil })
         }
     }
 

@@ -138,7 +138,7 @@ fun FeedNoteCard(
             onDismissRequest = { lightboxUrl = null },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            MediaLightbox(url = url, onDismiss = { lightboxUrl = null })
+            MediaLightbox(urls = note.mediaUrls, initialUrl = url, onDismiss = { lightboxUrl = null })
         }
     }
     Column(

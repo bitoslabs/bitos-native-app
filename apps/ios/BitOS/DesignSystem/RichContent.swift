@@ -268,15 +268,30 @@ struct BareVideoPlayerScreen: View {
 
 /// Fullscreen zoomable media viewer (lightbox).
 struct MediaLightbox: View {
-    let url: String
+    let urls: [String]
     let onClose: () -> Void
+    @State private var currentIndex: Int
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
+
+    init(urls: [String], initialUrl: String, onClose: @escaping () -> Void) {
+        let media = Array(NSOrderedSet(array: urls)) as? [String] ?? urls
+        self.urls = media.isEmpty ? [initialUrl] : media
+        self.onClose = onClose
+        _currentIndex = State(initialValue: max(0, media.firstIndex(of: initialUrl) ?? 0))
+    }
+
+    init(url: String, onClose: @escaping () -> Void) {
+        self.init(urls: [url], initialUrl: url, onClose: onClose)
+    }
+
+    private var currentUrl: String { urls[currentIndex] }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             BitOSTheme.background.ignoresSafeArea()
-            RemoteImageView(url: url)
+            RemoteImageView(url: currentUrl)
+                .id(currentUrl)
                 .scaleEffect(scale)
                 .gesture(
                     MagnificationGesture()
@@ -289,6 +304,21 @@ struct MediaLightbox: View {
                         lastScale = scale
                     }
                 }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 24)
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height),
+                                  scale == 1 else { return }
+                            if value.translation.width < 0, currentIndex < urls.count - 1 {
+                                currentIndex += 1
+                            } else if value.translation.width > 0, currentIndex > 0 {
+                                currentIndex -= 1
+                            }
+                        }
+                )
+            if urls.count > 1 {
+                lightboxNavigation
+            }
             Button(action: onClose) {
                 Image(systemName: AppIcons.close)
                     .font(.system(size: 16, weight: .semibold))
@@ -298,6 +328,44 @@ struct MediaLightbox: View {
             }
             .padding(BitOSTheme.Spacing.base)
             .accessibilityLabel("Close media")
+        }
+        .onChange(of: currentIndex) { _, _ in
+            scale = 1
+            lastScale = 1
+        }
+    }
+
+    @ViewBuilder
+    private var lightboxNavigation: some View {
+        HStack {
+            Button { currentIndex -= 1 } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(.black.opacity(0.5)))
+            }
+            .disabled(currentIndex == 0)
+            .accessibilityLabel("Previous image")
+            Spacer()
+            Button { currentIndex += 1 } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(.black.opacity(0.5)))
+            }
+            .disabled(currentIndex == urls.count - 1)
+            .accessibilityLabel("Next image")
+        }
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .contain)
+        .overlay(alignment: .top) {
+            Text("\(currentIndex + 1) of \(urls.count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.black.opacity(0.5)))
+                .padding(.top, BitOSTheme.Spacing.base)
         }
     }
 }

@@ -179,7 +179,9 @@ User stories:
    images or one 16:9 video tile), carries a like · repost · zap action row
    (real shared-core publishes: kind-7 reaction, kind-6 repost, NIP-57 note
    zap), and opens the note's thread sheet on tap; Bitz grid tiles open the
-   same thread.
+   same thread. Opening an image uses a dark, full-screen lightbox that fits
+   the complete image inside the viewport (never crops it); multi-image posts
+   show a position label and previous/next controls, disabled at either end.
 7. **Own notes are deletable (NIP-09)** — the shared core composes bounded
    kind-5 deletions (`composeDeletion`, ≤50 targets, hex-validated); the
    thread sheet offers Delete on the root card and reply rows for the
