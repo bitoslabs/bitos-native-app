@@ -283,7 +283,11 @@ fun FeedNoteCard(
             )
             NoteCardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
             NoteCardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
-            NoteCardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
+            // Advisory bitz:zaps off — the author asked clients to hide
+            // the zap action on this note.
+            if (!note.zapsDisabled) {
+                NoteCardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
+            }
             NoteCardAction(
                 if (bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
                 if (bookmarked) "Remove bookmark" else "Bookmark",

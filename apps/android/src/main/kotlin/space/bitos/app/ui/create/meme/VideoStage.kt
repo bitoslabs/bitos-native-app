@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -43,6 +42,7 @@ import kotlin.math.max
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
+import space.bitos.app.ui.components.BitosSlider
 import space.bitos.core.studio.MemeOverlay
 import space.bitos.core.studio.MemeProject
 
@@ -125,6 +125,8 @@ internal fun VideoStage(
         ExoPlayer.Builder(context).build().apply {
             // This standard SurfaceView is supported by Media3's effect path.
             // The matrix only targets decoded video; Compose overlays stay crisp.
+            // Register one stable GPU effect before prepare. Updating its
+            // matrix is safe on devices that reject effect-pipeline swaps.
             setVideoEffects(listOf(androidx.media3.effect.RgbMatrix { _, _ -> colorMatrix.get() }))
             clips.forEachIndexed { index, clip ->
                 addMediaItem(
@@ -150,7 +152,7 @@ internal fun VideoStage(
     }
     var previewError by remember(player) { mutableStateOf<String?>(null) }
     DisposableEffect(player, project.lookId, project.adjust, clips) {
-        fun updateLook() {
+        fun updateLook(redrawPausedFrame: Boolean) {
             val active = clips.getOrNull(player.currentMediaItemIndex)
             colorMatrix.set(
                 MemeVideoColor.glMatrix(
@@ -160,22 +162,19 @@ internal fun VideoStage(
                     ),
                 ),
             )
-        }
-        val listener = object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateLook()
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                val active = clips.getOrNull(player.currentMediaItemIndex)
-                val grading = active?.lookId != null || project.lookId != null || project.adjust != null
-                if (grading) {
-                    // An effect failure must never make the editor unusable.
-                    player.setVideoEffects(emptyList())
-                    previewError = "Look preview is unavailable on this device. Playing original video."
-                } else {
-                    previewError = "Video preview unavailable. Tap retry."
-                }
+            // A playing player consumes the matrix on its next decoded frame.
+            // A paused player needs one same-position seek to refresh the held frame.
+            if (redrawPausedFrame && !player.isPlaying && player.playbackState == Player.STATE_READY) {
+                player.seekTo(player.currentMediaItemIndex, player.currentPosition)
             }
         }
-        updateLook()
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateLook(false)
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                previewError = "Video preview unavailable. Tap retry."
+            }
+        }
+        updateLook(true)
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
@@ -231,7 +230,9 @@ internal fun VideoStage(
             playing = player.isPlaying
             // Per-clip audio follows the playhead (mute/volume preview).
             player.volume = (clips.getOrNull(index)?.volume ?: 1f).coerceIn(0f, 1f)
-            kotlinx.coroutines.delay(100)
+            // 30 fps keeps the cursor and timed overlays fluid without
+            // spending a frame loop while playback is paused.
+            kotlinx.coroutines.delay(if (player.isPlaying) 33 else 100)
         }
     }
 
@@ -307,6 +308,8 @@ internal fun VideoStage(
             }
         }
         if (showScrub) {
+            var draggingScrubber by remember { mutableStateOf(false) }
+            var pendingScrubMs by remember { mutableStateOf(0f) }
             // Scrub row: play/pause + timeline position slider.
             Row(
                 modifier = Modifier
@@ -327,9 +330,17 @@ internal fun VideoStage(
                 Spacer(Modifier.width(BitOSSpacing.sm))
                 Box(Modifier.weight(1f)) {
                     val duration = max(1L, timelineDurationMs)
-                    Slider(
-                        value = timelineMs.toFloat().coerceIn(0f, duration.toFloat()),
-                        onValueChange = { seekTimelineTo(it.toLong()) },
+                    BitosSlider(
+                        value = if (draggingScrubber) pendingScrubMs
+                            else timelineMs.toFloat().coerceIn(0f, duration.toFloat()),
+                        onValueChange = {
+                            draggingScrubber = true
+                            pendingScrubMs = it
+                        },
+                        onValueChangeFinished = {
+                            seekTimelineTo(pendingScrubMs.toLong())
+                            draggingScrubber = false
+                        },
                         valueRange = 0f..duration.toFloat(),
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -348,7 +359,7 @@ internal fun VideoStage(
                     }
                 }
                 Text(
-                    "${timelineMs / 1000}s",
+                    "%02d:%02d".format((timelineMs / 1000) / 60, (timelineMs / 1000) % 60),
                     style = MaterialTheme.typography.labelSmall,
                     color = BitOSColors.textSecondary,
                     maxLines = 1,

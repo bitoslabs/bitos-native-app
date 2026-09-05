@@ -62,7 +62,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -122,6 +121,8 @@ import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.app.ui.theme.SolarStudioIcon
 import space.bitos.app.ui.theme.SolarStudioIconImage
+import space.bitos.app.ui.components.BitosAdjustmentSlider
+import space.bitos.app.ui.components.BitosSlider
 import space.bitos.core.studio.MemeFontSlot
 import space.bitos.core.studio.MemeMode
 import space.bitos.core.studio.MemeExportRules
@@ -1562,7 +1563,6 @@ fun MemeEditorScreen(
                         selectedClipIndex = selectedClipIndex,
                         positionMs = videoPositionMs,
                         totalMs = timelineDurationMs,
-                        rate = videoRate,
                         onSelectClip = { selectedClipIndex = it },
                         onSplit = ::splitAtPlayhead,
                         onDelete = {
@@ -2164,7 +2164,7 @@ fun MemeEditorScreen(
             coverPreview = coverPreview,
             coverUploading = coverUploading,
             publishState = memePublishState,
-            onPublish = { caption, altText, cwReason, tags, license, remixOf, remixAuthor ->
+            onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor ->
                 val project = state.project
                 // Video/GIF modes have no `activeAsset` (their media lives in
                 // session bytes) — the mode itself gates readiness here.
@@ -2253,6 +2253,7 @@ fun MemeEditorScreen(
                         remixTagsFor(state.project, remixOf, remixAuthor),
                         tags,
                         license,
+                        allowZaps,
                     )
                     if (project.mode == MemeMode.VIDEO) {
                         // The exported timeline (windows ÷ speed) is the
@@ -2650,11 +2651,11 @@ private fun TimelineClipSegment(
             .clip(RoundedCornerShape(6.dp))
             .background(
                 if (selected) BitOSColors.primary.copy(alpha = 0.85f)
-                else BitOSColors.textTertiary.copy(alpha = 0.35f),
+                else BitOSColors.surfaceElevated,
             )
             .border(
                 1.5.dp,
-                if (selected) BitOSColors.primary else androidx.compose.ui.graphics.Color.Transparent,
+                if (selected) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.45f),
                 RoundedCornerShape(6.dp),
             )
             .clickable { onSelect() },
@@ -2689,7 +2690,6 @@ private fun TimelineStrip(
     selectedClipIndex: Int,
     positionMs: Long,
     totalMs: Long,
-    rate: Float,
     onSelectClip: (Int) -> Unit,
     onSplit: () -> Unit,
     onDelete: () -> Unit,
@@ -2700,6 +2700,8 @@ private fun TimelineStrip(
     onSetCover: (Long) -> Unit,
 ) {
     val safeTotal = maxOf(1L, totalMs)
+    var draggingScrubber by remember { mutableStateOf(false) }
+    var pendingScrubMs by remember { mutableStateOf(0f) }
     fun mmss(ms: Long): String =
         String.format("%02d:%02d", (ms / 1000) / 60, (ms / 1000) % 60)
 
@@ -2713,9 +2715,17 @@ private fun TimelineStrip(
             IconButton(onClick = transport.playPause) {
                 Icon(if (transport.isPlaying()) AppIcons.Pause else AppIcons.Play, contentDescription = "Play or pause")
             }
-            Slider(
-                value = positionMs.toFloat().coerceIn(0f, safeTotal.toFloat()),
-                onValueChange = { transport.seekTo(it.toLong()) },
+            BitosSlider(
+                value = if (draggingScrubber) pendingScrubMs
+                    else positionMs.toFloat().coerceIn(0f, safeTotal.toFloat()),
+                onValueChange = {
+                    draggingScrubber = true
+                    pendingScrubMs = it
+                },
+                onValueChangeFinished = {
+                    transport.seekTo(pendingScrubMs.toLong())
+                    draggingScrubber = false
+                },
                 valueRange = 0f..safeTotal.toFloat(),
                 modifier = Modifier.weight(1f),
             )
@@ -2728,10 +2738,17 @@ private fun TimelineStrip(
             )
             TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
         }
+        Text(
+            "Timeline · clip ${selectedClipIndex + 1} of ${clips.size}",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+        )
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
-                .height(44.dp)
+                .height(48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(BitOSColors.surfaceElevated.copy(alpha = 0.55f))
                 .pointerInput(safeTotal) {
                     detectTapGestures { tap ->
                         val fraction = (tap.x / size.width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
@@ -2759,18 +2776,11 @@ private fun TimelineStrip(
                 Modifier
                     .align(Alignment.CenterStart)
                     .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) {
-                        (trackWidth * positionMs.coerceAtMost(safeTotal) / safeTotal).toDp()
+                        (trackWidth * (positionMs.coerceIn(0L, safeTotal).toFloat() / safeTotal) - 1f).toDp()
                     })
                     .width(2.dp)
                     .fillMaxHeight()
                     .background(BitOSColors.primary),
-            )
-        }
-        if (rate != 1f) {
-            Text(
-                "whole-timeline speed ${rate}×",
-                style = MaterialTheme.typography.labelSmall,
-                color = BitOSColors.textSecondary,
             )
         }
         Row(
@@ -3790,21 +3800,14 @@ private fun LabeledSlider(
     range: IntRange,
     onValueChange: (Float) -> Unit,
 ) {
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text(
-                value.roundToInt().toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = BitOSColors.textSecondary,
-            )
-        }
-        Slider(
-            value = value.coerceIn(range.first.toFloat(), range.last.toFloat()),
-            onValueChange = onValueChange,
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-        )
-    }
+    BitosAdjustmentSlider(
+        label = label,
+        value = value,
+        valueRange = range.first.toFloat()..range.last.toFloat(),
+        valueText = value.roundToInt().toString(),
+        onValueChange = onValueChange,
+        step = 1f,
+    )
 }
 
 /** Sticker sheet: shared [StickerCatalog] packs (web port), recents row. */
@@ -3902,6 +3905,7 @@ private fun MemePostFlowScreen(
         cwReason: String?,
         tags: List<String>,
         license: String,
+        allowZaps: Boolean,
         remixEventId: String,
         remixAuthor: String,
     ) -> Unit,
@@ -3920,8 +3924,15 @@ private fun MemePostFlowScreen(
     var cwOn by remember { mutableStateOf(false) }
     var cwReason by remember { mutableStateOf("Sensitive content") }
     var license by remember { mutableStateOf("CC0-1.0") }
+    var allowZaps by remember { mutableStateOf(true) }
     var remixOf by remember { mutableStateOf("") }
     var remixAuthor by remember { mutableStateOf("") }
+    // Allow-remix and the license chips are one `license` tag seen two ways:
+    // the switch restores the last remixable code after "Nostr only".
+    var lastRemixableLicense by remember { mutableStateOf("CC0-1.0") }
+    LaunchedEffect(license) {
+        if (license != "bitz/all-reserved") lastRemixableLicense = license
+    }
 
     val phase = publishState?.phase ?: space.bitos.app.ui.feed.MemePublishPhase.IDLE
     val published = phase == space.bitos.app.ui.feed.MemePublishPhase.DONE
@@ -4071,12 +4082,25 @@ private fun MemePostFlowScreen(
                     if (state.project.mode == MemeMode.VIDEO) {
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             DetailSettingsRow(
                                 icon = AppIcons.Photo,
                                 title = "Cover image",
                                 subtitle = if (coverSet) "custom frame captured" else "first frame (capture on the editor stage)",
+                                modifier = Modifier.weight(1f),
                             )
+                            // Cover "Edit" drops the flow back onto the
+                            // editor stage, where the video scrub row's
+                            // "Set cover" lives.
+                            TextButton(onClick = onDismiss) {
+                                Text(
+                                    "Edit",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.W600,
+                                    color = BitOSColors.primary,
+                                )
+                            }
                         }
                         HorizontalDivider(color = BitOSColors.border)
                     }
@@ -4092,6 +4116,45 @@ private fun MemePostFlowScreen(
                             subtitle = "Published publicly on Nostr",
                             trailing = "Everyone",
                             modifier = Modifier.weight(1f),
+                        )
+                    }
+                    HorizontalDivider(color = BitOSColors.border)
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DetailSettingsRow(
+                            icon = AppIcons.Zap,
+                            iconTint = BitOSColors.warning,
+                            title = "Zap settings",
+                            subtitle = "viewers can zap this post — off hides the zap action (advisory tag)",
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(checked = allowZaps, onCheckedChange = { allowZaps = it })
+                    }
+                    HorizontalDivider(color = BitOSColors.border)
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DetailSettingsRow(
+                            icon = AppIcons.Loop,
+                            title = "Allow remix",
+                            subtitle = "others duet / remix with attribution — rides the license tag",
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Off is exactly "Nostr only" (bitz/all-reserved) —
+                        // the switch and the license chips stay in sync.
+                        Switch(
+                            checked = license != "bitz/all-reserved",
+                            onCheckedChange = { allow ->
+                                if (allow) {
+                                    license = lastRemixableLicense
+                                } else {
+                                    if (license != "bitz/all-reserved") lastRemixableLicense = license
+                                    license = "bitz/all-reserved"
+                                }
+                            },
                         )
                     }
                     HorizontalDivider(color = BitOSColors.border)
@@ -4116,27 +4179,36 @@ private fun MemePostFlowScreen(
                             modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.xs),
                         )
                     }
-                    HorizontalDivider(color = BitOSColors.border)
-                    Column(Modifier.padding(vertical = BitOSSpacing.sm), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-                        Text("Remix source (optional)", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
-                        space.bitos.app.ui.components.BitosTextField(
-                            value = remixOf,
-                            onValueChange = { remixOf = it },
-                            placeholder = "note1 / event id",
-                            singleLine = true,
-                            compact = true,
-                            textStyle = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        if (remixOf.isNotEmpty()) {
-                            space.bitos.app.ui.components.BitosTextField(
-                                value = remixAuthor,
-                                onValueChange = { remixAuthor = it },
-                                placeholder = "Source author npub/hex (p-tag)",
-                                singleLine = true,
-                                compact = true,
-                                textStyle = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.fillMaxWidth(),
+                    if (remixOf.isNotEmpty()) {
+                        HorizontalDivider(color = BitOSColors.border)
+                        Column(
+                            Modifier.padding(vertical = BitOSSpacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(
+                                "Remix · auto-attributed",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = BitOSColors.textSecondary,
+                                fontWeight = FontWeight.W600,
+                            )
+                            Text(
+                                "source ${shortRef(remixOf)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textSecondary,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            )
+                            if (remixAuthor.isNotEmpty()) {
+                                Text(
+                                    "author ${shortRef(remixAuthor)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                )
+                            }
+                            Text(
+                                "remix + p tags are stamped on publish — keep a remixable license (CC0 / CC-BY) so the chain stays open",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textTertiary,
                             )
                         }
                     }
@@ -4178,6 +4250,21 @@ private fun MemePostFlowScreen(
                         color = BitOSColors.textSecondary,
                     )
                 }
+
+                // Prototype splits/PoW/schedule slot: the tags exist on the
+                // wire (NIP-57 zap splits, NIP-13 PoW, NIP-38 schedule) but
+                // the pipeline doesn't mine or schedule yet — say so instead
+                // of faking controls.
+                Text(
+                    "Split payments (NIP-57 zap tags), proof-of-work and scheduled publishing ship in wave 4 — this pipeline won't fake them.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BitOSColors.surface)
+                        .padding(BitOSSpacing.sm),
+                )
 
                 Button(
                     onClick = { step = 1 },
@@ -4238,6 +4325,8 @@ private fun MemePostFlowScreen(
                     HorizontalDivider(color = BitOSColors.border)
                     PostPreflightRow(true, "License", license)
                     HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(true, "Zaps", if (allowZaps) "on · viewers can zap" else "off · advisory bitz:zaps tag")
+                    HorizontalDivider(color = BitOSColors.border)
                     PostPreflightRow(true, "Audience", "Everyone · public post")
                     HorizontalDivider(color = BitOSColors.border)
                     PostPreflightRow(true, "Relays", "${space.bitos.app.data.feed.DefaultRelays.writeUrls.size} write relays · receipt machine")
@@ -4292,6 +4381,7 @@ private fun MemePostFlowScreen(
                                     if (cwOn) cwReason else null,
                                     tags,
                                     license,
+                                    allowZaps,
                                     remixOf,
                                     remixAuthor,
                                 )
@@ -4327,6 +4417,7 @@ private fun MemePostFlowScreen(
                             if (cwOn) cwReason else null,
                             tags,
                             license,
+                            allowZaps,
                             remixOf,
                             remixAuthor,
                         )
@@ -4749,7 +4840,12 @@ private fun PublishMachineSection(
 }
 
 /** TagsCodec `[[name,…],…]` JSON: remix lineage + explicit t-tags + license. */
-private fun postExtraTagsJson(remixJson: String, tags: List<String>, license: String): String {
+private fun postExtraTagsJson(
+    remixJson: String,
+    tags: List<String>,
+    license: String,
+    allowZaps: Boolean = true,
+): String {
     val out = org.json.JSONArray()
     if (remixJson.isNotBlank()) {
         runCatching {
@@ -4759,6 +4855,8 @@ private fun postExtraTagsJson(remixJson: String, tags: List<String>, license: St
     }
     tags.forEach { out.put(org.json.JSONArray().put("t").put(it)) }
     out.put(org.json.JSONArray().put("license").put(license))
+    // Zap settings off → shared advisory marker (cards hide the zap action).
+    if (!allowZaps) out.put(org.json.JSONArray().put(space.bitos.core.feed.ZapPolicy.OFF_TAG).put("off"))
     return out.toString()
 }
 
@@ -4979,31 +5077,15 @@ private fun AdjustSliderRow(
     range: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.W600,
-            modifier = Modifier.width(84.dp),
-        )
-        androidx.compose.material3.Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = range,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            "${(value * 100).toInt()}%",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.W700,
-            color = BitOSColors.primary,
-            modifier = Modifier.width(42.dp),
-        )
-    }
+    BitosAdjustmentSlider(
+        label = label,
+        value = value,
+        valueRange = range,
+        valueText = "${(value * 100).toInt()}%",
+        onValueChange = onValueChange,
+        step = 0.01f,
+        modifier = Modifier.padding(vertical = BitOSSpacing.xs),
+    )
 }
 
 /**
@@ -5145,6 +5227,10 @@ private object SfxPreview {
         track = null
     }
 }
+
+/** Relay-friendly short form of an event id / npub for read-only rows. */
+private fun shortRef(value: String): String =
+    if (value.length > 16) value.take(8) + "…" + value.takeLast(4) else value
 
 /** MST-042: lineage tags via the shared seam; "" when no source given. */
 private fun remixTagsFor(
@@ -5474,7 +5560,7 @@ private fun VolumeSheetContent(
                 maxLines = 1,
             )
         }
-        Slider(
+        BitosSlider(
             value = value.coerceIn(0f, 1f),
             onValueChange = { value = it },
             valueRange = 0f..1f,
@@ -6240,7 +6326,7 @@ private fun TrimSheetContent(
             modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
         )
         Text("Start ${suiteClock(start.toLong())}", style = MaterialTheme.typography.labelMedium)
-        Slider(
+        BitosSlider(
             value = start,
             onValueChange = {
                 start = it.coerceIn(0f, end - 200f)
@@ -6248,7 +6334,7 @@ private fun TrimSheetContent(
             valueRange = 0f..durationMs.toFloat(),
         )
         Text("End ${suiteClock(end.toLong())}", style = MaterialTheme.typography.labelMedium)
-        Slider(
+        BitosSlider(
             value = end,
             onValueChange = {
                 end = it.coerceIn(start + 200f, durationMs.toFloat())

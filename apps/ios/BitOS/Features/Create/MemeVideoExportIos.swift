@@ -715,6 +715,8 @@ struct VideoStageIos: View {
     @State private var positionSeconds: Double = 0
     @State private var durationSeconds: Double = 0.01
     @State private var playing = false
+    @State private var scrubbing = false
+    @State private var pendingScrubSeconds: Double = 0
 
     var body: some View {
         VStack(spacing: BitOSTheme.Spacing.xs) {
@@ -774,10 +776,23 @@ struct VideoStageIos: View {
                     ZStack {
                         Slider(
                             value: Binding(
-                                get: { positionSeconds },
-                                set: { player?.seek(to: CMTime(seconds: $0, preferredTimescale: 600)) }
+                                get: { scrubbing ? pendingScrubSeconds : positionSeconds },
+                                set: { pendingScrubSeconds = $0 }
                             ),
-                            in: 0...max(0.01, durationSeconds)
+                            in: 0...max(0.01, durationSeconds),
+                            onEditingChanged: { editing in
+                                if editing {
+                                    scrubbing = true
+                                    pendingScrubSeconds = positionSeconds
+                                } else {
+                                    player?.seek(
+                                        to: CMTime(seconds: pendingScrubSeconds, preferredTimescale: 600),
+                                        toleranceBefore: .zero,
+                                        toleranceAfter: .zero
+                                    )
+                                    scrubbing = false
+                                }
+                            }
                         )
                         GeometryReader { geo in
                             ForEach(Array(cueAtSeconds.enumerated()), id: \.offset) { _, at in
@@ -837,12 +852,23 @@ struct VideoStageIos: View {
                         onPositionChange(positionSeconds)
                         playing = player.timeControlStatus == .playing
                     }
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    // Keep the ruler and timed overlays smooth while playing,
+                    // but avoid a busy update loop for a paused editor.
+                    try? await Task.sleep(nanoseconds: playing ? 33_000_000 : 100_000_000)
                 }
             }
         }
         .onChange(of: projectJson) { _, _ in
-            if let item = player?.currentItem { applyGrade(to: item) }
+            guard let player, let item = player.currentItem else { return }
+            let time = player.currentTime()
+            let wasPlaying = player.timeControlStatus == .playing
+            // AVPlayerItem accepts a replacement videoComposition while it is
+            // playing, but a paused frame otherwise stays cached. Seeking to
+            // that same frame forces the newly selected Look to render now.
+            applyGrade(to: item)
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                if wasPlaying { player.play() }
+            }
         }
         .onDisappear {
             player?.pause()

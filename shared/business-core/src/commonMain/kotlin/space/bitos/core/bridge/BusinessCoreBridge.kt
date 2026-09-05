@@ -87,6 +87,8 @@ class BusinessCoreBridge {
         val remixOfPubkey: String? = null,
         /** APP-007 `license` tag (remix advisory gate); null = permissive. */
         val license: String? = null,
+        /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
+        val zapsDisabled: Boolean = false,
         /** FED-004 mirror chain (NIP-92 `fallback`), order preserved. */
         val fallbackUrls: List<String> = emptyList(),
         /** FED-004 rendition ladder as `url|height|bitrate` spec rows. */
@@ -499,6 +501,7 @@ class BusinessCoreBridge {
             remixOfEventId = note.remixOfEventId,
             remixOfPubkey = note.remixOfPubkey,
             license = note.license,
+            zapsDisabled = note.zapsDisabled,
             fallbackUrls = note.video?.fallbackUrls ?: emptyList(),
             renditionSpecs = note.video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
             externalVideoPreviews = note.externalVideoPreviews,
@@ -4127,6 +4130,7 @@ class FeedWindow(maxItems: Int) {
         remixOfEventId = remixOfEventId,
         remixOfPubkey = remixOfPubkey,
         license = license,
+        zapsDisabled = zapsDisabled,
     )
 
     private fun FeedNote.toBridge() = BusinessCoreBridge.Note(
@@ -4154,6 +4158,7 @@ class FeedWindow(maxItems: Int) {
         remixOfEventId = remixOfEventId,
         remixOfPubkey = remixOfPubkey,
         license = license,
+        zapsDisabled = zapsDisabled,
         fallbackUrls = video?.fallbackUrls ?: emptyList(),
         renditionSpecs = video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
     )

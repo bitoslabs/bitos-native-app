@@ -152,20 +152,7 @@ struct FeedNoteCard: View {
                     }
                 }
             }
-            HStack(spacing: BitOSTheme.Spacing.base) {
-                // User decision 2026-08-29: order [like · comment · repost ·
-                // zap · bookmark]; APP-005 §2.4 scale-bounce + haptic on like.
-                let liked = actions.liked.contains(note.id)
-                LikeTapIcon(
-                    liked: liked,
-                    tint: liked ? BitOSTheme.like : BitOSTheme.textSecondary,
-                    action: onLike
-                )
-                cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
-                cardAction(AppIcons.repost, "Repost", BitOSTheme.repost, onRepost)
-                cardAction(AppIcons.zap, "Zap", BitOSTheme.zap, onZap)
-                cardAction(isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark, isBookmarked ? "Remove bookmark" : "Bookmark", isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary, onBookmark)
-            }
+            actionBar
         }
         .padding(.horizontal, BitOSTheme.Spacing.screen)
         .padding(.vertical, BitOSTheme.Spacing.md)
@@ -174,6 +161,26 @@ struct FeedNoteCard: View {
             set: { lightboxUrl = $0?.url }
         )) { target in
             MediaLightbox(urls: note.mediaUrls, initialUrl: target.url, onClose: { lightboxUrl = nil })
+        }
+    }
+
+    /// User decision 2026-08-29: order [like · comment · repost · zap ·
+    /// bookmark]; APP-005 §2.4 scale-bounce + haptic on like. Advisory
+    /// bitz:zaps off — the author asked clients to hide the zap action.
+    private var actionBar: some View {
+        HStack(spacing: BitOSTheme.Spacing.base) {
+            let liked = actions.liked.contains(note.id)
+            LikeTapIcon(
+                liked: liked,
+                tint: liked ? BitOSTheme.like : BitOSTheme.textSecondary,
+                action: onLike
+            )
+            cardAction(AppIcons.comment, "Replies", BitOSTheme.reply, onComment)
+            cardAction(AppIcons.repost, "Repost", BitOSTheme.repost, onRepost)
+            if !note.zapsDisabled {
+                cardAction(AppIcons.zap, "Zap", BitOSTheme.zap, onZap)
+            }
+            cardAction(isBookmarked ? AppIcons.bookmarkFill : AppIcons.bookmark, isBookmarked ? "Remove bookmark" : "Bookmark", isBookmarked ? BitOSTheme.bookmark : BitOSTheme.textSecondary, onBookmark)
         }
     }
 

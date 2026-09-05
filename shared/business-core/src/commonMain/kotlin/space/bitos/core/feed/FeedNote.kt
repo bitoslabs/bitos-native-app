@@ -40,6 +40,8 @@ data class FeedNote(
     val remixOfPubkey: String? = null,
     /** APP-007 `license` tag value (remix advisory gate), null = permissive. */
     val license: String? = null,
+    /** Advisory `["bitz:zaps", "off"]` marker — cards hide the zap action. */
+    val zapsDisabled: Boolean = false,
 ) {
     companion object {
         private val hashtagPattern = Regex("(?:^|\\s)#([\\p{L}\\p{N}_-]{2,60})")
@@ -94,6 +96,7 @@ data class FeedNote(
             remixOfEventId = remixSource?.eventId,
             remixOfPubkey = remixSource?.pubkey,
             license = RemixRules.licenseOf(event.tags),
+            zapsDisabled = ZapPolicy.isDisabled(event.tags),
         )
         }
 

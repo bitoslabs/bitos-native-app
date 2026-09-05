@@ -401,16 +401,34 @@ move, mute/volume, trim, per-clip look, picker-added clips) are UNDOABLE and
 interleave correctly with overlay/style edits through one undo affordance
 (seeding a session from the camera is not an undo step), and a
 per-mode bottom bar. Post details
-collects caption, explicit t-tags (≤ 8), cover/audience/zap/remix toggles,
-content warning and the license chip (CC0 / CC-BY / Nostr-only — rides the
-`license` tag). Its preview/caption row and tag entry use the compact, flat
+collects caption, explicit t-tags (≤ 8), the cover row (video, with an Edit
+action that drops back onto the editor stage's Set cover), the audience row,
+the Zap settings switch (viewers can zap this post; OFF stamps the shared
+advisory `["bitz:zaps", "off"]` tag and BitOS feed cards hide the zap action
+on that note — advisory like `license`, and NOT pay-per-view: zap-gated
+unlocking needs invoice + preimage verification and stays future work), the
+Allow-remix switch (one view of the `license` tag: off is exactly Nostr-only; on restores
+the last remixable chip), content warning + reason, and the license chips
+(CC0 / CC-BY / Nostr-only — rides the `license` tag). Remix lineage is NEVER
+typed by hand: when a remix source rides the draft (auto-added by the remix
+handoff, MST-042) the form previews it read-only — source + author short refs
+plus the keep-it-remixable license note — and publish stamps the machine
+`remix` + `p` tags via the shared `RemixRules` seam. Its preview/caption row
+and tag entry use the compact, flat
 prototype treatment; caption input enforces the displayed 300-character limit.
 Preflight shows the real checklist (media, tags, license,
 audience, relays, signer) and runs the existing render → hash-verified upload →
 sign machine with phase feedback. Zap-scope tags, splits, PoW and schedule
-remain wave-4 work (see `docs/native/meme-studio-plan.md`) and stay out of the
-user flow until functional. The video expert dock stays behind the per-mode
+remain wave-4 work (see `docs/native/meme-studio-plan.md`): the details form
+carries an explicit wave-4 note where the prototype mocks those controls
+instead of faking them. The video expert dock stays behind the per-mode
 bar's Timeline slot — progressive disclosure per rule 8.
+
+The editor uses one native range-control treatment throughout: an orange
+cursor and completed rail over a neutral remaining rail, with a 40dp touch
+target. Playback has one scrubber; the clip ruler separately shows selection
+and one playhead. A clip's speed belongs to that clip and is displayed on its
+segment, so no project-wide speed progress is implied.
 
 ## 7. Camera UX
 

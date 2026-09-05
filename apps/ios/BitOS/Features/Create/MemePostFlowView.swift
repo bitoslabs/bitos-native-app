@@ -20,7 +20,7 @@ struct MemePostFlowView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            MemePostDetailsView(draft: $draft, store: store) {
+            MemePostDetailsView(draft: $draft, store: store, onEditCover: { dismissFlow() }) {
                 path.append(.preflight)
             }
             .navigationDestination(for: FlowStep.self) { step in
@@ -117,7 +117,8 @@ struct MemePostDraft {
     }
 
     /// Extra event tags for the publish call: explicit t-tags the caption
-    /// doesn't already carry, plus the license tag.
+    /// doesn't already carry, the license tag, and — when Zap settings is
+    /// off — the shared advisory `bitz:zaps` marker our cards honor.
     var extraTags: [[String]] {
         var seen = captionHashtags
         var tags: [[String]] = []
@@ -126,6 +127,7 @@ struct MemePostDraft {
             tags.append(["t", tag])
         }
         tags.append(["license", license.rawValue])
+        if !allowZaps { tags.append(["bitz:zaps", "off"]) }
         return tags
     }
 }
@@ -180,8 +182,15 @@ enum MemeLicense: String, CaseIterable {
 private struct MemePostDetailsView: View {
     @Binding var draft: MemePostDraft
     let store: MemeEditorStore
+    /// Cover "Edit" — drop the flow and land back on the editor stage,
+    /// where the video scrub row's "Set cover" lives.
+    let onEditCover: () -> Void
     let onReview: () -> Void
     @State private var tagInput = ""
+    /// Last remixable license the chips held, so the Allow-remix switch can
+    /// restore it after "Nostr only" (the switch and the chips are two views
+    /// of the same `license` tag).
+    @State private var lastRemixableLicense: MemeLicense = .cc0
 
     private static let maxTags = 8
 
@@ -192,6 +201,7 @@ private struct MemePostDetailsView: View {
                 tagsCard
                 settingsCard
                 licenseSection
+                waveFourNote
                 Button {
                     onReview()
                 } label: {
@@ -208,6 +218,9 @@ private struct MemePostDetailsView: View {
         .navigationTitle("Post details")
         .navigationBarTitleDisplayMode(.inline)
         .background(BitOSTheme.background)
+        .onChange(of: draft.license) { _, new in
+            if new != .nostrOnly { lastRemixableLicense = new }
+        }
     }
 
     // ── Preview + caption ─────────────────────────────────────────────
@@ -285,18 +298,39 @@ private struct MemePostDetailsView: View {
     private var settingsCard: some View {
         VStack(spacing: 0) {
             if store.isVideoMode {
-                DetailRow(
-                    icon: "photo",
-                    title: "Cover image",
-                    subtitle: store.coverThumbUrl != nil
-                        ? "custom frame captured"
-                        : "first frame (capture on the editor stage)"
-                )
+                HStack {
+                    DetailRow(
+                        icon: "photo",
+                        title: "Cover image",
+                        subtitle: store.coverThumbUrl != nil
+                            ? "custom frame captured"
+                            : "first frame (capture on the editor stage)"
+                    )
+                    Button("Edit") { onEditCover() }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                        .buttonStyle(.plain)
+                }
                 .padding(.vertical, BitOSTheme.Spacing.xs)
                 Divider().padding(.leading, 48)
             }
             DetailRow(icon: "globe", title: "Who can watch",
                 subtitle: "Published publicly on Nostr", trailing: .value("Everyone"))
+            Divider().padding(.leading, 48)
+            Toggle(isOn: $draft.allowZaps) {
+                DetailRow(icon: "bolt.fill", tint: BitOSTheme.warning, title: "Zap settings",
+                    subtitle: "viewers can zap this post — off hides the zap action (advisory tag)")
+            }
+            .padding(.vertical, 2)
+            Divider().padding(.leading, 48)
+            Toggle(isOn: allowRemixBinding) {
+                DetailRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    title: "Allow remix",
+                    subtitle: "others duet / remix with attribution — rides the license tag"
+                )
+            }
+            .padding(.vertical, 2)
             Divider().padding(.leading, 48)
             Toggle(isOn: $draft.contentWarningOn) {
                 DetailRow(
@@ -314,23 +348,10 @@ private struct MemePostDetailsView: View {
                     .padding(.vertical, 10)
                     .background(BitOSTheme.background)
             }
-            Divider().padding(.leading, 48)
-            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
-                Text("Remix source (optional)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                BitosField("note1 / event id", text: $draft.remixOf, size: .small)
-                    .font(.caption2)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                if !draft.remixOf.isEmpty {
-                    BitosField("Source author npub/hex (p-tag)", text: $draft.remixAuthor, size: .small)
-                        .font(.caption2)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                }
+            if !draft.remixOf.isEmpty {
+                Divider().padding(.leading, 48)
+                remixLineagePreview
             }
-            .padding(.vertical, 6)
             Divider().padding(.leading, 48)
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
                 Text("Alt text (optional)")
@@ -345,6 +366,71 @@ private struct MemePostDetailsView: View {
         }
         .padding(BitOSTheme.Spacing.sm)
         .background(BitOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+    }
+
+    /// Allow-remix and the license chips are the same `license` tag seen two
+    /// ways: off is exactly "Nostr only" (bitz/all-reserved), on restores the
+    /// last remixable code the chips held.
+    private var allowRemixBinding: Binding<Bool> {
+        Binding(
+            get: { draft.license != .nostrOnly },
+            set: { allow in
+                if allow {
+                    draft.license = lastRemixableLicense
+                } else {
+                    if draft.license != .nostrOnly { lastRemixableLicense = draft.license }
+                    draft.license = .nostrOnly
+                }
+            }
+        )
+    }
+
+    /// MST-042 lineage is stamped by the machine (remix + p + meme tags via
+    /// the shared `RemixRules` seam) — never typed by hand. When a remix
+    /// source rides the draft, preview it read-only with the license note.
+    private var remixLineagePreview: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Remix · auto-attributed")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            Text("source \(shortRef(draft.remixOf))")
+                .font(.caption2.monospaced())
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if !draft.remixAuthor.isEmpty {
+                Text("author \(shortRef(draft.remixAuthor))")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Text("remix + p tags are stamped on publish — keep a remixable license (CC0 / CC-BY) so the chain stays open")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// Relay-friendly short form of an event id / npub for read-only rows.
+    private func shortRef(_ value: String) -> String {
+        value.count > 16 ? "\(value.prefix(8))…\(value.suffix(4))" : value
+    }
+
+    /// Prototype splits/PoW/schedule slot: the tags exist on the wire
+    /// (NIP-57 zap splits, NIP-13 PoW, NIP-38 schedule) but the pipeline
+    /// doesn't mine or schedule yet — say so instead of faking controls.
+    private var waveFourNote: some View {
+        HStack(alignment: .top, spacing: BitOSTheme.Spacing.xs) {
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .foregroundStyle(BitOSTheme.textSecondary)
+            Text("Split payments (NIP-57 zap tags), proof-of-work and scheduled publishing ship in wave 4 — this pipeline won't fake them.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(BitOSTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BitOSTheme.surface.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
     }
 
@@ -462,6 +548,12 @@ private struct MemePreflightView: View {
                         done: true,
                         label: "License",
                         meta: "\(draft.license.label) · license tag"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: true,
+                        label: "Zaps",
+                        meta: draft.allowZaps ? "on · viewers can zap" : "off · advisory bitz:zaps tag"
                     )
                     Divider().padding(.leading, 32)
                     PreflightLine(done: true, label: "Audience", meta: "Everyone · public post")

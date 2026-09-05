@@ -61,6 +61,8 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     var remixOfPubkey: String? = nil
     /** APP-007 `license` tag (remix advisory gate); nil = permissive. */
     var license: String? = nil
+    /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
+    var zapsDisabled: Bool = false
     /** Safe image-only previews for allowlisted external providers. */
     var externalVideoPreviews: [ExternalVideoPreview] = []
 }
@@ -552,6 +554,7 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
             remixOfEventId: note.remixOfEventId,
             remixOfPubkey: note.remixOfPubkey,
             license: note.license,
+            zapsDisabled: note.zapsDisabled,
             externalVideoPreviews: note.externalVideoPreviews.map {
                 ExternalVideoPreview(url: $0.url, providerName: $0.providerName, thumbnailUrl: $0.thumbnailUrl)
             }
@@ -824,7 +827,8 @@ private final class SharedFeedWindow: FeedWindowing {
                 pollOptions: note.pollOptions.map { $0 as String },
                 remixOfEventId: note.remixOfEventId,
                 remixOfPubkey: note.remixOfPubkey,
-                license: note.license
+                license: note.license,
+                zapsDisabled: note.zapsDisabled
             )
         }
     }
@@ -865,6 +869,7 @@ private extension FeedNote {
             remixOfEventId: remixOfEventId,
             remixOfPubkey: remixOfPubkey,
             license: license,
+            zapsDisabled: zapsDisabled,
             fallbackUrls: video?.fallbackUrls ?? [],
             renditionSpecs: video?.renditionSpecs ?? [],
             externalVideoPreviews: []
