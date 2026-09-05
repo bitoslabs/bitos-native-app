@@ -574,6 +574,7 @@ fun MemeEditorScreen(
     /** M5 per-clip audio (volume · mute) — replaces the old "Sound · soon". */
     var showVolume by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    var showCanvas by remember { mutableStateOf(false) }
     /** V2 Draw mode: pen strokes captured on the stage (all modes). */
     var drawMode by remember { mutableStateOf(false) }
     var penColorIndex by remember { mutableIntStateOf(2) }
@@ -662,8 +663,18 @@ fun MemeEditorScreen(
                 }
             }
             val accepted = state.addAssets(candidates.map { it.id })
-            accepted.forEach { id ->
-                candidates.firstOrNull { it.id == id }?.let { assets += it }
+            // Image mode STACK semantics: the FIRST pick is the background;
+            // every later pick lands as a draggable image layer (the same
+            // overlay binding video-mode inserts use).
+            val hadBackground = assets.isNotEmpty()
+            accepted.forEachIndexed { pickIndex, id ->
+                candidates.firstOrNull { it.id == id }?.let { asset ->
+                    assets += asset
+                    if (!videoMode && (hadBackground || pickIndex > 0)) {
+                        state.addImageOverlay(id)
+                        exportStatus = "Layer added — drag to place it on the stack"
+                    }
+                }
             }
             if (activeAssetId == null) activeAssetId = accepted.firstOrNull()
         }
@@ -1172,10 +1183,18 @@ fun MemeEditorScreen(
             } else if (gifMode) {
                 val frame = gifFrames[gifPreviewIndex.coerceIn(0, gifFrames.size - 1)]
                 val frameAspect = frame.width.toFloat() / frame.height
+                val canvasTerms = state.project.canvasRatio
+                    ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
+                val stageAspect = if (canvasTerms != null) {
+                    canvasTerms.first.toFloat() / canvasTerms.second
+                } else {
+                    frameAspect
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .aspectRatio(frameAspect, matchHeightConstraintsFirst = frameAspect < 1f)
+                        .aspectRatio(stageAspect, matchHeightConstraintsFirst = stageAspect < 1f)
+                        .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
                         .onSizeChanged { stagePx = it },
                 ) {
                     androidx.compose.foundation.Image(
@@ -1215,17 +1234,28 @@ fun MemeEditorScreen(
                         )
                     }
                     StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    // Gesture layer INSIDE the fitted box: tap positions map
+                    // 1:1 onto the overlay/delete-handle math. A sibling over
+                    // the letterboxed container offsets every hit.
+                    StageGestures(
+                        stageWidthPx = stageWidth,
+                        stageHeightPx = stageHeight,
+                        state = state,
+                    )
                 }
-                StageGestures(
-                    stageWidthPx = stageWidth,
-                    stageHeightPx = stageHeight,
-                    state = state,
-                )
             } else if (current != null) {
+                val canvasTerms = state.project.canvasRatio
+                    ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
+                val stageAspect = if (canvasTerms != null) {
+                    canvasTerms.first.toFloat() / canvasTerms.second
+                } else {
+                    current.aspect
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .aspectRatio(current.aspect, matchHeightConstraintsFirst = current.aspect < 1f)
+                        .aspectRatio(stageAspect, matchHeightConstraintsFirst = stageAspect < 1f)
+                        .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
                         .onSizeChanged { stagePx = it },
                 ) {
                     AsyncImage(
@@ -1265,12 +1295,13 @@ fun MemeEditorScreen(
                         )
                     }
                     StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    // Gesture layer INSIDE the fitted box (see GIF branch).
+                    StageGestures(
+                        stageWidthPx = stageWidth,
+                        stageHeightPx = stageHeight,
+                        state = state,
+                    )
                 }
-                StageGestures(
-                    stageWidthPx = stageWidth,
-                    stageHeightPx = stageHeight,
-                    state = state,
-                )
             }
             // Draw mode captures pen strokes ON the media rect (above all
             // stage content — it owns touches while active).
@@ -1453,11 +1484,18 @@ fun MemeEditorScreen(
                     onAddImage = {
                         // launchPicker() is video-mode-aware (clips) — the
                         // inline image button always means IMAGES: frames in
-                        // GIF mode, background in IMAGE mode, layers in VIDEO.
-                        if (gifMode) {
-                            gifPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                        } else {
-                            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        // GIF mode, background/stack in IMAGE mode, and
+                        // LAYERS in VIDEO (the layer picker binds overlays).
+                        when {
+                            videoMode -> layerPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                            gifMode -> gifPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
+                            )
+                            else -> picker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
                         }
                     },
                     onUndo = ::undoEdit,
@@ -1614,6 +1652,7 @@ fun MemeEditorScreen(
                     gifUniformDelayMs = next
                     exportStatus = "Frame hold $next ms"
                 },
+                onOpenCanvas = { showCanvas = true },
             )
             statusLine()
         }
@@ -1976,6 +2015,10 @@ fun MemeEditorScreen(
             SfxSheetContent(
                 cues = state.project.sfxCues,
                 positionMs = videoPositionMs,
+                onApplyTemplate = { id ->
+                    space.bitos.core.studio.SfxTemplates.ALL.firstOrNull { it.id == id }
+                        ?.cues?.forEach { cue -> state.addSfxCue(cue.sfx, videoPositionMs + cue.atMs) }
+                },
                 onAdd = { state.addSfxCue(it, videoPositionMs) },
                 onRemove = { state.removeSfxCue(it) },
             )
@@ -2057,6 +2100,16 @@ fun MemeEditorScreen(
                     showClipSheet = false
                     videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
                 },
+            )
+        }
+    }
+
+    if (showCanvas && !videoMode) {
+        ModalBottomSheet(onDismissRequest = { showCanvas = false }) {
+            CanvasSheetContent(
+                ratio = state.project.canvasRatio ?: space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
+                bg = state.project.canvasBg,
+                onPick = { ratio, bg -> state.setCanvas(ratio, bg) },
             )
         }
     }
@@ -2760,6 +2813,115 @@ private fun ClipToolButton(
     }
 }
 
+/** Canvas settings (image/GIF): ratio preset + background color (shared
+ *  [space.bitos.core.studio.MemeCanvas] rules; the media letterboxes). */
+@Composable
+private fun CanvasSheetContent(
+    ratio: String,
+    bg: String?,
+    onPick: (ratio: String?, bg: String?) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.base)
+            .padding(bottom = BitOSSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Text("Canvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text("Size", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
+                val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Source" else id
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (ratio == id) BitOSColors.primary else BitOSColors.surfaceElevated,
+                    modifier = Modifier.clickable(onClickLabel = label) { onPick(id, bg) },
+                ) {
+                    Text(
+                        short,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.W600,
+                        color = if (ratio == id) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
+        Text("Background", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf("#000000", "#ffffff", "#fde047", "#f97316", "#22d3ee", "#a3e635", "#f472b6")
+                .forEach { hex ->
+                    val selected = bg == hex
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(parseCanvasColor(hex) ?: androidx.compose.ui.graphics.Color.White)
+                            .border(
+                                if (selected) 2.dp else 1.dp,
+                                if (selected) BitOSColors.primary else BitOSColors.border,
+                                androidx.compose.foundation.shape.CircleShape,
+                            )
+                            .clickable(onClickLabel = "Background $hex") { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex) },
+                    )
+                }
+            if (bg != null) {
+                TextButton(onClick = { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, null) }) {
+                    Text("Clear", color = BitOSColors.textSecondary)
+                }
+            }
+        }
+        var hex by remember { mutableStateOf(bg ?: "") }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            space.bitos.app.ui.components.BitosTextField(
+                value = hex,
+                onValueChange = { value ->
+                    hex = value.take(7)
+                    // Apply as typed when it completes a valid #rrggbb.
+                    if (space.bitos.core.studio.MemeCanvas.isValidBackground(hex)) {
+                        onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex)
+                    }
+                },
+                placeholder = "#rrggbb custom",
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(parseCanvasColor(hex) ?: BitOSColors.surfaceElevated)
+                    .border(1.dp, BitOSColors.border, androidx.compose.foundation.shape.CircleShape),
+            )
+        }
+        Text(
+            "The media letterboxes onto the canvas; captions and layers keep their positions.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+        )
+    }
+}
+
+/** `#rrggbb` → Compose color; null when malformed. */
+private fun parseCanvasColor(hex: String?): androidx.compose.ui.graphics.Color? = hex?.let {
+    if (it.length == 7 && it.startsWith("#")) {
+        it.drop(1).toLongOrNull(16)?.let { value ->
+            androidx.compose.ui.graphics.Color(
+                red = ((value shr 16) and 0xFF).toInt() / 255f,
+                green = ((value shr 8) and 0xFF).toInt() / 255f,
+                blue = (value and 0xFF).toInt() / 255f,
+                alpha = 1f,
+            )
+        }
+    } else {
+        null
+    }
+}
+
 /** Output settings before export (MUX-04): shows EXACTLY the profile the
  *  pipeline renders — the only tested profile per mode — with automatic
  *  adjustments disclosed up front and the destination named. */
@@ -2899,12 +3061,15 @@ private fun SelectionControlsRow(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SelectionControlButton("Nudge left", AppIcons.Back, onClick = { onNudge(-0.05f, 0f) })
-        SelectionControlButton("Nudge right", AppIcons.ChevronRight, onClick = { onNudge(0.05f, 0f) })
-        SelectionControlButton("Nudge up", AppIcons.ArrowUp, onClick = { onNudge(0f, -0.05f) })
-        SelectionControlButton("Nudge down", AppIcons.Download, onClick = { onNudge(0f, 0.05f) })
-        SelectionControlButton("Shrink", AppIcons.Filter, onClick = { onScale(0.9f) })
-        SelectionControlButton("Enlarge", AppIcons.Add, onClick = { onScale(1.1f) })
+        // Icon = function (Solar alt-arrow / magnifier semantics): the old
+        // row mixed a back arrow, a download icon and a bare plus, which
+        // read as navigation/save/add instead of nudge/zoom.
+        SelectionControlButton("Nudge left", AppIcons.NudgeLeft, onClick = { onNudge(-0.05f, 0f) })
+        SelectionControlButton("Nudge right", AppIcons.NudgeRight, onClick = { onNudge(0.05f, 0f) })
+        SelectionControlButton("Nudge up", AppIcons.NudgeUp, onClick = { onNudge(0f, -0.05f) })
+        SelectionControlButton("Nudge down", AppIcons.NudgeDown, onClick = { onNudge(0f, 0.05f) })
+        SelectionControlButton("Shrink", AppIcons.ZoomOut, onClick = { onScale(0.9f) })
+        SelectionControlButton("Enlarge", AppIcons.ZoomIn, onClick = { onScale(1.1f) })
         SelectionControlButton("Rotate left", AppIcons.Repost, onClick = { onRotate(-15f) })
         SelectionControlButton("Rotate right", AppIcons.Refresh, onClick = { onRotate(15f) })
         if (isText) {
@@ -2951,6 +3116,7 @@ private fun PerModeBar(
     onOpenLayers: () -> Unit,
     onOpenSuite: () -> Unit,
     onCycleGifSpeed: () -> Unit,
+    onOpenCanvas: () -> Unit = {},
 ) {
     val borderColor = BitOSColors.border
     Row(
@@ -2974,11 +3140,13 @@ private fun PerModeBar(
             ClipToolButton(AppIcons.AppsGrid, "Overlay") { onOpenLayers() }
             ClipToolButton(AppIcons.Sparkles, "Timeline") { onOpenSuite() }
         } else if (gifMode) {
+            ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
             ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
             ClipToolButton(AppIcons.Loop, "Loop") { onNotice("GIFs loop forever — nothing to set") }
             ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
             ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
         } else {
+            ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
             ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
             ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
             ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
@@ -3311,6 +3479,8 @@ internal fun DeleteHandle(overlay: MemeOverlay, stageWidthPx: Int, stageHeightPx
     val (boundsW, boundsH) = MemeRules.estimateBounds(overlay)
     val chipCenterX = overlay.x * stageWidthPx + boundsW * stageWidthPx / 2f
     val chipCenterY = overlay.y * stageHeightPx - boundsH * stageHeightPx / 2f
+    val density = LocalDensity.current
+    val placeableHalfPx = with(density) { 12.dp.toPx() }
     // The handle is drawn but taps are handled by [stageGestures] (the
     // gesture layer owns the stage), so this node is pointer-transparent.
     Box(
@@ -3320,8 +3490,11 @@ internal fun DeleteHandle(overlay: MemeOverlay, stageWidthPx: Int, stageHeightPx
                 layout(0, 0) { placeable.placeRelative(0, 0) }
             }
             .graphicsLayer {
-                translationX = chipCenterX
-                translationY = chipCenterY
+                // Center the chip ON the tap-tested point — the gesture
+                // layer hit-tests this exact center, so an offset here
+                // makes the drawn ✕ miss its own target.
+                translationX = chipCenterX - placeableHalfPx
+                translationY = chipCenterY - placeableHalfPx
             },
     ) {
         Box(
@@ -3830,18 +4003,11 @@ private fun MemePostFlowScreen(
                             singleLine = false,
                             minLines = 3,
                             maxLines = 4,
+                            // Flat input (user-directed): no border, no card padding.
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .drawBehind {
-                                    drawLine(
-                                        color = captionBorder,
-                                        start = androidx.compose.ui.geometry.Offset(0f, size.height),
-                                        end = androidx.compose.ui.geometry.Offset(size.width, size.height),
-                                        strokeWidth = 1.dp.toPx(),
-                                    )
-                                }
-                                .padding(horizontal = BitOSSpacing.xs, vertical = BitOSSpacing.sm),
+                                .padding(vertical = 2.dp),
                             placeholder = "Write a caption… #tag @mention",
                         )
                         Text(
@@ -3903,11 +4069,15 @@ private fun MemePostFlowScreen(
                         .padding(BitOSSpacing.sm),
                 ) {
                     if (state.project.mode == MemeMode.VIDEO) {
-                        DetailSettingsRow(
-                            icon = AppIcons.Photo,
-                            title = "Cover image",
-                            subtitle = if (coverSet) "custom frame captured" else "first frame (capture on the editor stage)",
-                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                        ) {
+                            DetailSettingsRow(
+                                icon = AppIcons.Photo,
+                                title = "Cover image",
+                                subtitle = if (coverSet) "custom frame captured" else "first frame (capture on the editor stage)",
+                            )
+                        }
                         HorizontalDivider(color = BitOSColors.border)
                     }
                     Row(
@@ -3948,12 +4118,13 @@ private fun MemePostFlowScreen(
                     }
                     HorizontalDivider(color = BitOSColors.border)
                     Column(Modifier.padding(vertical = BitOSSpacing.sm), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-                        Text("Remix source (optional)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+                        Text("Remix source (optional)", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
                         space.bitos.app.ui.components.BitosTextField(
                             value = remixOf,
                             onValueChange = { remixOf = it },
                             placeholder = "note1 / event id",
                             singleLine = true,
+                            textStyle = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         if (remixOf.isNotEmpty()) {
@@ -3962,6 +4133,7 @@ private fun MemePostFlowScreen(
                                 onValueChange = { remixAuthor = it },
                                 placeholder = "Source author npub/hex (p-tag)",
                                 singleLine = true,
+                                textStyle = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -5024,9 +5196,20 @@ private fun SfxSheetContent(
     positionMs: Long,
     onAdd: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onApplyTemplate: (String) -> Unit = {},
 ) {
     var bucketId by remember { mutableStateOf(space.bitos.core.studio.SfxSynth.BUCKETS.first().id) }
+    var search by remember { mutableStateOf("") }
     val bucket = space.bitos.core.studio.SfxSynth.BUCKETS.first { it.id == bucketId }
+    val searching = search.isNotBlank()
+    // Case-insensitive label search (web filterEntries parity): a query
+    // flattens the buckets; empty keeps the bucket view.
+    val entries: List<Pair<String, String>> = if (searching) {
+        space.bitos.core.studio.SfxSynth.BUCKETS.flatMap { b -> b.sfx.map { it to space.bitos.core.studio.SfxSynth.labelOf(it) } }
+            .filter { it.second.lowercase().contains(search.trim().lowercase()) }
+    } else {
+        bucket.sfx.map { it to space.bitos.core.studio.SfxSynth.labelOf(it) }
+    }
     Column(Modifier.padding(BitOSSpacing.base)) {
         Text("Sound effects", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
         Text(
@@ -5035,7 +5218,14 @@ private fun SfxSheetContent(
             color = BitOSColors.textSecondary,
             modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+        space.bitos.app.ui.components.BitosTextField(
+            value = search,
+            onValueChange = { search = it },
+            placeholder = "Search sounds",
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.sm),
+        )
+        if (!searching) Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
             space.bitos.core.studio.SfxSynth.BUCKETS.forEach { b ->
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -5054,7 +5244,7 @@ private fun SfxSheetContent(
         }
         Spacer(Modifier.height(BitOSSpacing.sm))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-            rowItems(bucket.sfx) { id ->
+            rowItems(entries, key = { it.first }) { (id, label) ->
                 val recipe = space.bitos.core.studio.SfxSynth.recipeOf(id) ?: return@rowItems
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -5067,7 +5257,7 @@ private fun SfxSheetContent(
                             .clickable(onClickLabel = id) { SfxPreview.play(recipe) },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(id, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W600)
+                        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W600)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -5098,13 +5288,40 @@ private fun SfxSheetContent(
                 }
             }
         }
+        if (!searching) {
+            Spacer(Modifier.height(BitOSSpacing.sm))
+            Text("Templates", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                rowItems(space.bitos.core.studio.SfxTemplates.ALL, key = { it.id }) { template ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = BitOSColors.surface,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border),
+                        modifier = Modifier.clickable(onClickLabel = "Apply ${template.label}") { onApplyTemplate(template.id) },
+                    ) {
+                        Column(
+                            Modifier.padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.xs),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(template.emoji, fontSize = 18.sp)
+                            Text(template.label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W600)
+                            Text(
+                                "${template.cues.size} cues",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
         if (cues.isNotEmpty()) {
             Spacer(Modifier.height(BitOSSpacing.sm))
             Text("Cues (${cues.size}/${space.bitos.core.studio.SfxSynth.MAX_CUES})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
             cues.sortedBy { it.atMs }.forEach { cue ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "${cue.sfx} @ ${(cue.atMs / 1000.0).let { s -> "%.1f".format(s) }}s",
+                        "${space.bitos.core.studio.SfxSynth.labelOf(cue.sfx)} @ ${(cue.atMs / 1000.0).let { s -> "%.1f".format(s) }}s",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )

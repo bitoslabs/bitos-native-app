@@ -148,6 +148,10 @@ data class MemeProject(
     val adjust: MemeAdjust? = null,
     /** Synth SFX cues in media time (MST-041; ≤ [SfxSynth.MAX_CUES]). */
     val sfxCues: List<MemeSfxCue> = emptyList(),
+    /** Canvas ratio preset ([MemeCanvas.RATIOS] id; null/`source` = media frame). */
+    val canvasRatio: String? = null,
+    /** Canvas background `#rrggbb` (null = platform default). */
+    val canvasBg: String? = null,
 ) {
     /** True when nothing worth confirming a discard for exists. */
     val isEmpty: Boolean
@@ -314,6 +318,16 @@ object MemeProjectContract {
                 add(JsonPrimitive(tag.take(MAX_TAG_LENGTH)))
             }
         })
+        // Canvas (image/GIF): additive v1 wire key — written only when set
+        // so older wires stay byte-identical; unknown ids drop on read.
+        val ratio = project.canvasRatio?.takeIf { it != MemeCanvas.RATIO_SOURCE }
+        val bg = project.canvasBg?.takeIf { MemeCanvas.isValidBackground(it) }
+        if (ratio != null || bg != null) {
+            put("canvas", buildJsonObject {
+                ratio?.take(12)?.let { put("ratio", it) }
+                bg?.let { put("bg", it) }
+            })
+        }
     }.toString()
 
     internal fun overlayJson(overlay: MemeOverlay) = buildJsonObject {
@@ -416,6 +430,12 @@ object MemeProjectContract {
                     ?.map { it.take(MAX_TAG_LENGTH) }
                     ?.take(MAX_TAGS)
                     ?: emptyList(),
+                canvasRatio = (root["canvas"] as? kotlinx.serialization.json.JsonObject)
+                    ?.get("ratio")?.let { (it as? JsonPrimitive)?.content }
+                    ?.takeIf { it.length <= 12 && MemeCanvas.isValidRatio(it) },
+                canvasBg = (root["canvas"] as? kotlinx.serialization.json.JsonObject)
+                    ?.get("bg")?.let { (it as? JsonPrimitive)?.content }
+                    ?.takeIf { it.length == 7 && MemeCanvas.isValidBackground(it) },
             )
         } catch (_: Exception) {
             null

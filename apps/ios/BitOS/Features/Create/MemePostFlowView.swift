@@ -217,10 +217,11 @@ private struct MemePostDetailsView: View {
             MemePostPreviewThumb(store: store)
                 .frame(width: 80, height: 112)
             VStack(alignment: .trailing, spacing: 4) {
+                // Flat input (user-directed): no border, no card padding —
+                // the field's own hit spacing only.
                 BitosField("Write a caption… #tag @mention", text: $draft.caption, axis: .vertical)
                     .lineLimit(4, reservesSpace: true)
-                    .padding(.horizontal, 4)
-                    .overlay(alignment: .bottom) { Divider() }
+                    .padding(.vertical, 2)
                     .onChange(of: draft.caption) { _, value in
                         if value.count > 300 { draft.caption = String(value.prefix(300)) }
                     }
@@ -291,6 +292,7 @@ private struct MemePostDetailsView: View {
                         ? "custom frame captured"
                         : "first frame (capture on the editor stage)"
                 )
+                .padding(.vertical, BitOSTheme.Spacing.xs)
                 Divider().padding(.leading, 48)
             }
             DetailRow(icon: "globe", title: "Who can watch",
@@ -315,14 +317,15 @@ private struct MemePostDetailsView: View {
             Divider().padding(.leading, 48)
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
                 Text("Remix source (optional)")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textSecondary)
                 BitosField("note1 / event id", text: $draft.remixOf)
-                    
+                    .font(.caption2)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                 if !draft.remixOf.isEmpty {
                     BitosField("Source author npub/hex (p-tag)", text: $draft.remixAuthor)
-                        
+                        .font(.caption2)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }

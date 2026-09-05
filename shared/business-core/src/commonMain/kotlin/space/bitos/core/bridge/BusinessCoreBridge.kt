@@ -1604,6 +1604,20 @@ class BusinessCoreBridge {
         space.bitos.core.studio.MemeProjectContract.decode(projectJson)
             ?.let(space.bitos.core.studio.MemeProjectContract::encode) ?: ""
 
+    /**
+     * Sets the canvas fields on a project wire (additive `canvas` key);
+     * null ratio clears to source, an invalid background is ignored.
+     * "" only when the project wire is corrupt.
+     */
+    fun memeSetCanvas(projectJson: String, ratio: String?, bg: String?): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val nextRatio = ratio?.takeIf { it.length <= 12 && space.bitos.core.studio.MemeCanvas.isValidRatio(it) }
+        val nextBg = bg?.takeIf { space.bitos.core.studio.MemeCanvas.isValidBackground(it) }
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            project.copy(canvasRatio = nextRatio, canvasBg = nextBg),
+        )
+    }
+
     // ── M5 timeline seams: the shared clip list rules for both platforms'
     // multi-clip editors (clips JSON = the wire's `clips` rows). ─────────
 
@@ -2320,15 +2334,43 @@ class BusinessCoreBridge {
     // ── APP-019 synth SFX (plan MST-041 / §3.6): 31 recipes as data, a
     // pure-Kotlin renderer + WAV writer; previews play per platform.
 
-    /** Catalog `[{"id","label","sfx":[…]}]` (5 buckets, 31 sounds). */
-    fun memeSfxCatalog(): String = buildJsonArray {
-        space.bitos.core.studio.SfxSynth.BUCKETS.forEach { bucket ->
-            add(buildJsonObject {
-                put("id", bucket.id)
-                put("label", bucket.label)
-                put("sfx", buildJsonArray { bucket.sfx.forEach(::add) })
-            })
-        }
+    /**
+     * Catalog doc for the native sound pickers:
+     * `{"buckets":[{"id","label","sfx":[…]}],"labels":{id:label},
+     * "templates":[{"id","label","emoji","cues":[{"sfx","at"}]}]}` —
+     * buckets (5, 31 sounds), human labels (web SFX_LABELS) and sound
+     * templates (suggestion chips parity) in one read.
+     */
+    fun memeSfxCatalog(): String = buildJsonObject {
+        put("buckets", buildJsonArray {
+            space.bitos.core.studio.SfxSynth.BUCKETS.forEach { bucket ->
+                add(buildJsonObject {
+                    put("id", bucket.id)
+                    put("label", bucket.label)
+                    put("sfx", buildJsonArray { bucket.sfx.forEach(::add) })
+                })
+            }
+        })
+        put("labels", buildJsonObject {
+            space.bitos.core.studio.SfxSynth.LABELS.forEach { (id, label) -> put(id, label) }
+        })
+        put("templates", buildJsonArray {
+            space.bitos.core.studio.SfxTemplates.ALL.forEach { template ->
+                add(buildJsonObject {
+                    put("id", template.id)
+                    put("label", template.label)
+                    put("emoji", template.emoji)
+                    put("cues", buildJsonArray {
+                        template.cues.forEach { cue ->
+                            add(buildJsonObject {
+                                put("sfx", cue.sfx)
+                                put("at", cue.atMs)
+                            })
+                        }
+                    })
+                })
+            }
+        })
     }.toString()
 
     /** Rendered preview as a base64 WAV (mono 16-bit 44.1 kHz); "" junk id. */

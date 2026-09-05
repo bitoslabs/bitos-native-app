@@ -2,6 +2,11 @@ package space.bitos.app.ui.theme
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Undo
@@ -146,6 +151,15 @@ object AppIcons {
     val Flame = Icons.Rounded.LocalFireDepartment // trending-hot hashtag
     val Hash = Icons.Rounded.Numbers                // hashtag glyph
     val ChevronRight = Icons.Rounded.ChevronRight // list-row affordance
+    val ChevronLeft = Icons.Rounded.ChevronLeft   // list-row affordance (mirrored)
+
+    // ── Overlay manipulation (MUX-03 selection controls) ────────────
+    val NudgeLeft = Icons.Rounded.ChevronLeft       // Solar: altArrowLeft
+    val NudgeRight = Icons.Rounded.ChevronRight     // Solar: altArrowRight
+    val NudgeUp = Icons.Rounded.KeyboardArrowUp     // Solar: altArrowUp
+    val NudgeDown = Icons.Rounded.KeyboardArrowDown // Solar: altArrowDown
+    val ZoomOut = Icons.Rounded.ZoomOut             // Solar: magniferZoomOut
+    val ZoomIn = Icons.Rounded.ZoomIn               // Solar: magniferZoomIn
 
     // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
     val MusicNote = Icons.Rounded.MusicNote     // Solar: music (sound library)

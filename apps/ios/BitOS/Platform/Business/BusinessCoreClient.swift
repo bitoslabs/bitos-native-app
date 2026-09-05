@@ -196,6 +196,9 @@ protocol BusinessCoreClient: Sendable {
     // on the project wire; corrupt wires normalize to "" and unknown
     // commands are no-ops, never throws.
     func memeProjectNormalize(_ projectJson: String) -> String
+    /// Sets the canvas fields (ratio preset + `#rrggbb` background); nil
+    /// clears; "" when the project wire is corrupt.
+    func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String
     /// Top-most overlay id at the normalized point; "" = no hit.
     func memeHitTest(_ projectJson: String, x: Float, y: Float) -> String
@@ -620,6 +623,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeProjectNormalize(projectJson: projectJson)
     }
 
+    func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String {
+        bridge.memeSetCanvas(projectJson: projectJson, ratio: ratio, bg: bg)
+    }
+
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String {
         bridge.memeApplyCommand(projectJson: projectJson, commandJson: commandJson)
     }
@@ -952,6 +959,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     // Meme seams delegate to the framework (same decode-once rule).
     func memeProjectNormalize(_ projectJson: String) -> String {
         FrameworkBusinessCoreClient().memeProjectNormalize(projectJson)
+    }
+    func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String {
+        FrameworkBusinessCoreClient().memeSetCanvas(projectJson, ratio: ratio, bg: bg)
     }
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String {
         FrameworkBusinessCoreClient().memeApplyCommand(projectJson, commandJson: commandJson)

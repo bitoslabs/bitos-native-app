@@ -297,12 +297,14 @@ internal fun VideoStage(
                         stageHeightPx = stageHeightPx,
                     )
                 }
+                // Gesture layer INSIDE the fitted box: tap positions map 1:1
+                // onto the overlay/delete-handle math.
+                StageGestures(
+                    stageWidthPx = stageWidthPx,
+                    stageHeightPx = stageHeightPx,
+                    state = state,
+                )
             }
-            StageGestures(
-                stageWidthPx = stageWidthPx,
-                stageHeightPx = stageHeightPx,
-                state = state,
-            )
         }
         if (showScrub) {
             // Scrub row: play/pause + timeline position slider.

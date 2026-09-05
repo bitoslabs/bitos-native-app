@@ -928,6 +928,59 @@ final class MemeEditorStore {
         coverThumbUrl = url
     }
 
+    // MARK: - Canvas (image/GIF: ratio preset + background)
+
+    /** Canvas ratio preset id (`source`/`w:h`); nil = media frame. */
+    var canvasRatio: String? { Self.canvasRatio(ofProject: projectJson) }
+
+    /** Canvas background `#rrggbb`; nil = platform default. */
+    var canvasBg: String? { Self.canvasBg(ofProject: projectJson) }
+
+    /** Wire canvas ratio (`source`/`w:h`); nil when unset/malformed. */
+    nonisolated static func canvasRatio(ofProject json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let canvas = root["canvas"] as? [String: Any],
+              let ratio = canvas["ratio"] as? String else { return nil }
+        return ratio
+    }
+
+    /** Wire canvas background `#rrggbb`; nil when unset/malformed. */
+    nonisolated static func canvasBg(ofProject json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let canvas = root["canvas"] as? [String: Any],
+              let bg = canvas["bg"] as? String else { return nil }
+        return bg
+    }
+
+    /** Sets both canvas fields (nil ratio = source); undoable like any edit. */
+    func setCanvas(ratio: String?, bg: String?) {
+        let next = client.memeSetCanvas(projectJson, ratio: ratio, bg: bg)
+        guard !next.isEmpty else { return }
+        pushHistory(projectJson)
+        projectJson = next
+        refresh()
+    }
+
+    /** Canvas aspect override for the stage; nil = keep the media's. */
+    var canvasAspect: CGFloat? {
+        guard let ratio = canvasRatio else { return nil }
+        let terms = ratio.split(separator: ":").compactMap { Int($0) }
+        guard terms.count == 2, terms[1] > 0 else { return nil }
+        return CGFloat(terms[0]) / CGFloat(terms[1])
+    }
+
+    /** Stage/export background; nil = the theme surface. */
+    var canvasBackgroundHex: String? { canvasBg }
+
+    /** `#rrggbb` → Color (stage/export fill); nil when malformed. */
+    nonisolated static func colorHex(_ hex: String) -> Color? {
+        guard hex.count == 7, hex.hasPrefix("#"),
+              let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+        return Color(hex: value)
+    }
+
     func setExportMessage(_ message: String) {
         exportState = .failed(message)
     }
@@ -1709,6 +1762,7 @@ struct MemeEditorView: View {
     @State private var showLayers = false
     @State private var showTrim = false
     @State private var showSpeed = false
+    @State private var showCanvas = false
     /** M5 per-clip management (select · reorder · remove · add). */
     @State private var showClipSheet = false
     /** M5 per-clip audio (volume · mute). */
@@ -1922,6 +1976,10 @@ struct MemeEditorView: View {
         }
         .sheet(isPresented: $showSpeed) {
             SpeedSheetView(store: store)
+                .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showCanvas) {
+            CanvasSheet(store: store)
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showDetailsFlow) {
@@ -2252,6 +2310,8 @@ struct MemeEditorView: View {
 
     /** Media aspect for the draw layer's fitted rect (stage parity). */
     private var mediaAspect: CGFloat {
+        // A pinned canvas ratio owns the stage frame (media letterboxes).
+        if let canvas = store.canvasAspect { return canvas }
         if store.isVideoMode, let probe = store.videoProbe {
             return CGFloat(probe.uprightWidth) / CGFloat(max(1, probe.uprightHeight))
         }
@@ -2589,7 +2649,10 @@ struct MemeEditorView: View {
         stage
             .frame(height: height)
             .frame(maxWidth: .infinity)
-            .background(BitOSTheme.surface)
+            .background(
+                store.canvasBackgroundHex.flatMap { MemeEditorStore.colorHex($0) }
+                    ?? BitOSTheme.surface
+            )
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay {
                 if drawMode { drawCaptureOverlay }
@@ -2900,6 +2963,7 @@ struct MemeEditorView: View {
                     suiteMode = true
                 }
             } else if store.isGifMode {
+                ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
                 ClipTool(icon: "timer", label: "Speed") {
                     let next = store.gifUniformDelayMs >= 200 ? 50 : store.gifUniformDelayMs + 50
                     store.setGifUniformDelay(next)
@@ -2911,6 +2975,7 @@ struct MemeEditorView: View {
                 ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
                 ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
             } else {
+                ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
                 ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
                 ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
                 ClipTool(icon: "slider.horizontal.3", label: "Adjust") { togglePanel(.fx) }
@@ -3011,13 +3076,21 @@ struct MemeEditorView: View {
             pickerItems = []
             return
         }
+        // Image mode: the FIRST pick is the background; every later pick
+        // STACKS on the canvas as a draggable image layer (the same
+        // overlay binding video-mode inserts use).
+        let hadBackground = !store.assets.isEmpty
         let room = MemeEditorStore.imageAssetCap - store.assets.count
         var added = 0
         for item in items where added < room {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data),
-               store.addAsset(image: image) != nil {
+               let id = store.addAsset(image: image) {
                 added += 1
+                if hadBackground || added > 1 {
+                    store.addImageOverlay(assetId: id)
+                    store.setNotice("Layer added — drag to place it on the stack")
+                }
             }
         }
         pickerItems = []
@@ -4270,15 +4343,60 @@ enum MemeRaster {
               let rows = envelope["items"] as? [[String: Any]] else {
             throw ExportError(message: "The meme could not be planned for export")
         }
-        let size = CGSize(width: width, height: height)
-        let strokeRows = envelope["strokes"] as? [[String: Any]] ?? []
+        // A pinned canvas re-frames the export: same long-edge budget,
+        // media letterboxed centered, background filled, plan re-mapped to
+        // the canvas size (the plan normalizes against given dims).
+        var size = CGSize(width: width, height: height)
+        var mediaRect = CGRect(origin: .zero, size: size)
+        var canvasRows = rows
+        var canvasStrokes = envelope["strokes"] as? [[String: Any]] ?? []
+        let canvasRatio = MemeEditorStore.canvasRatio(ofProject: projectJson)
+        let canvasBgHex = MemeEditorStore.canvasBg(ofProject: projectJson)
+        if let ratio = canvasRatio {
+            let terms = ratio.split(separator: ":").compactMap { Int($0) }
+            if terms.count == 2, terms[0] > 0, terms[1] > 0 {
+                let aspect = CGFloat(terms[0]) / CGFloat(terms[1])
+                let longEdge = max(width, height)
+                let canvasSize = aspect >= 1
+                    ? CGSize(width: longEdge, height: longEdge / aspect)
+                    : CGSize(width: longEdge * aspect, height: longEdge)
+                let evened = CGSize(
+                    width: (canvasSize.width / 2).rounded() * 2,
+                    height: (canvasSize.height / 2).rounded() * 2
+                )
+                let scale = min(evened.width / width, evened.height / height)
+                let fitted = CGSize(width: width * scale, height: height * scale)
+                mediaRect = CGRect(
+                    x: (evened.width - fitted.width) / 2,
+                    y: (evened.height - fitted.height) / 2,
+                    width: fitted.width,
+                    height: fitted.height
+                )
+                size = evened
+                let reJson = client.memeExportPlan(
+                    projectJson,
+                    sourceWidth: Int(evened.width),
+                    sourceHeight: Int(evened.height)
+                )
+                if let reData = reJson.data(using: .utf8),
+                   let rePlan = try? JSONSerialization.jsonObject(with: reData) as? [String: Any],
+                   let reRows = rePlan["items"] as? [[String: Any]] {
+                    canvasRows = reRows
+                    canvasStrokes = rePlan["strokes"] as? [[String: Any]] ?? []
+                }
+            }
+        }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let image = renderer.image { context in
-            media.draw(in: CGRect(origin: .zero, size: size))
-            paintStrokes(strokeRows, in: context.cgContext)
-            for row in rows {
+            if let bgHex = canvasBgHex, let bg = MemeEditorStore.colorHex(bgHex) {
+                context.cgContext.setFillColor(UIColor(bg).cgColor)
+                context.cgContext.fill(CGRect(origin: .zero, size: size))
+            }
+            media.draw(in: mediaRect)
+            paintStrokes(canvasStrokes, in: context.cgContext)
+            for row in canvasRows {
                 paint(row, in: context.cgContext)
             }
         }
@@ -4620,26 +4738,69 @@ private struct SfxSheet: View {
     let store: MemeEditorStore
     let positionSec: Double
     @State private var bucketId = "funny"
+    @State private var search = ""
 
     private struct Bucket: Identifiable {
         let id: String, label: String
         let sfx: [String]
     }
 
-    private var buckets: [Bucket] {
+    private struct TemplateRow: Identifiable {
+        let id: String, label: String, emoji: String
+        let cues: [(sfx: String, atMs: Int64)]
+    }
+
+    /// One catalog read: buckets + labels + templates (shared seam).
+    private static func catalog() -> (buckets: [Bucket], labels: [String: String], templates: [TemplateRow])? {
         guard let data = FrameworkBusinessCoreClient().memeSfxCatalog().data(using: .utf8),
-              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
         }
-        return rows.compactMap { row in
+        let labels = (root["labels"] as? [String: String]) ?? [:]
+        let bucketRows = (root["buckets"] as? [[String: Any]]) ?? []
+        let buckets = bucketRows.compactMap { (row) -> Bucket? in
             guard let id = row["id"] as? String else { return nil }
-            return Bucket(id: id, label: (row["label"] as? String) ?? id,
-                          sfx: (row["sfx"] as? [String]) ?? [])
+            return Bucket(
+                id: id,
+                label: (row["label"] as? String) ?? id,
+                sfx: (row["sfx"] as? [String]) ?? []
+            )
         }
+        let templateRows = (root["templates"] as? [[String: Any]]) ?? []
+        let templates = templateRows.compactMap { (row) -> TemplateRow? in
+            guard let id = row["id"] as? String else { return nil }
+            let cues = (row["cues"] as? [[String: Any]] ?? []).compactMap { (cue) -> (String, Int64)? in
+                guard let sfx = cue["sfx"] as? String else { return nil }
+                return (sfx, (cue["at"] as? NSNumber)?.int64Value ?? 0)
+            }
+            guard !cues.isEmpty else { return nil }
+            return TemplateRow(
+                id: id,
+                label: (row["label"] as? String) ?? id,
+                emoji: (row["emoji"] as? String) ?? "🔊",
+                cues: cues
+            )
+        }
+        return (buckets, labels, templates)
+    }
+
+    /// Case/diacritic-insensitive label search (web filterEntries parity):
+    /// empty query keeps the bucket view; a query flattens everything.
+    private var matching: [(sfx: String, label: String)] {
+        guard let catalog = Self.catalog() else { return [] }
+        let all = catalog.buckets.flatMap { bucket in
+            bucket.sfx.map { ($0, catalog.labels[$0] ?? $0) }
+        }
+        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return all }
+        return all.filter { $0.1.lowercased().contains(query) }
     }
 
     var body: some View {
-        let allBuckets = buckets
+        let catalog = Self.catalog()
+        let allBuckets = catalog?.buckets ?? []
+        let templates = catalog?.templates ?? []
+        let searching = !search.trimmingCharacters(in: .whitespaces).isEmpty
         let bucket = allBuckets.first { $0.id == bucketId } ?? allBuckets.first
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
@@ -4651,7 +4812,9 @@ private struct SfxSheet: View {
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
             }
-            if let bucket {
+            BitosField("Search sounds", text: $search)
+                .autocorrectionDisabled()
+            if !searching {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: BitOSTheme.Spacing.xs) {
                         ForEach(allBuckets) { b in
@@ -4664,35 +4827,75 @@ private struct SfxSheet: View {
                         }
                     }
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: BitOSTheme.Spacing.xs)]) {
-                    ForEach(bucket.sfx, id: \.self) { sfx in
-                        VStack(spacing: 4) {
-                            Button {
-                                store.previewSfx(sfx)
-                            } label: {
-                                VStack(spacing: 2) {
-                                    Text(sfx).font(.caption.weight(.semibold)).lineLimit(1)
-                                    AppIcons.image(for: AppIcons.play)
-                                        .font(.caption2)
-                                        .foregroundStyle(BitOSTheme.textSecondary)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, BitOSTheme.Spacing.xs)
-                                .background(BitOSTheme.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+            }
+            let rows = searching
+                ? matching
+                : (bucket?.sfx ?? []).map { ($0, catalog?.labels[$0] ?? $0) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: BitOSTheme.Spacing.xs)]) {
+                ForEach(rows, id: \.sfx) { row in
+                    VStack(spacing: 4) {
+                        Button {
+                            store.previewSfx(row.sfx)
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text(row.label).font(.caption.weight(.semibold)).lineLimit(1)
+                                AppIcons.image(for: AppIcons.play)
+                                    .font(.caption2)
+                                    .foregroundStyle(BitOSTheme.textSecondary)
                             }
-                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, BitOSTheme.Spacing.xs)
+                            .background(BitOSTheme.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            store.addSfxCue(row.sfx, atMs: Int64(positionSec * 1000))
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 2) {
+                                AppIcons.image(for: AppIcons.add)
+                                Text("cue")
+                            }
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(BitOSTheme.accent)
+                        }
+                    }
+                }
+            }
+            if !searching && !templates.isEmpty {
+                Text("Templates").font(.subheadline.weight(.semibold))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: BitOSTheme.Spacing.xs) {
+                        ForEach(templates) { template in
                             Button {
-                                store.addSfxCue(sfx, atMs: Int64(positionSec * 1000))
+                                let base = Int64(positionSec * 1000)
+                                template.cues.forEach { cue in
+                                    store.addSfxCue(cue.sfx, atMs: base + cue.atMs)
+                                }
+                                store.setNotice("\(template.label) staged at \(String(format: "%.1f", positionSec))s")
                                 dismiss()
                             } label: {
-                                HStack(spacing: 2) {
-                                    AppIcons.image(for: AppIcons.add)
-                                    Text("cue")
+                                VStack(spacing: 2) {
+                                    Text(template.emoji).font(.title3)
+                                    Text(template.label)
+                                        .font(.caption2.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text("\(template.cues.count) cues")
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(BitOSTheme.textSecondary)
                                 }
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(BitOSTheme.accent)
+                                .padding(BitOSTheme.Spacing.xs)
+                                .frame(minWidth: 84)
+                                .background(BitOSTheme.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm)
+                                        .strokeBorder(BitOSTheme.border, lineWidth: 1)
+                                )
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Apply template \(template.label)")
                         }
                     }
                 }
@@ -5187,6 +5390,114 @@ private struct TrimSheetView: View {
 
 /// Speed sheet (V2 suite): whole-clip playback rate (web speed-track
 /// bounds 0.5–2×). Pitch shifts with the clip in V1 — said out loud.
+/// Canvas settings (image/GIF): ratio preset + background color (shared
+/// `MemeCanvas` rules through the wire; the media letterboxes onto it).
+private struct CanvasSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var store: MemeEditorStore
+    @State private var picked = Color.white
+
+    /** Shared 7-color web palette + plain black/white swatches. */
+    private let swatches: [String] = [
+        "#000000", "#ffffff", "#fde047", "#f97316",
+        "#22d3ee", "#a3e635", "#f472b6",
+    ]
+
+    private static func color(fromHex hex: String) -> Color? {
+        guard hex.count == 7, hex.hasPrefix("#"),
+              let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+        return Color(hex: value)
+    }
+
+    private static func hex(_ color: Color) -> String {
+        let ui = UIColor(color)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(
+            format: "#%02x%02x%02x",
+            Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded())
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Canvas").font(.headline)
+            if store.isVideoMode {
+                Text("Video keeps its source frame in V1 — canvas settings apply to image and GIF memes.")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            } else {
+                Text("Size")
+                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(
+                        ["source", "1:1", "4:5", "9:16", "16:9"],
+                        id: \.self
+                    ) { ratio in
+                        let label = ratio == "source" ? "Source" : ratio
+                        Button(label) {
+                            store.setCanvas(ratio: ratio, bg: store.canvasBg)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(
+                            (store.canvasRatio ?? "source") == ratio
+                                ? BitOSTheme.accent : BitOSTheme.surface
+                        )
+                        .foregroundStyle(
+                            (store.canvasRatio ?? "source") == ratio ? Color.black : BitOSTheme.textPrimary
+                        )
+                        .clipShape(Capsule())
+                    }
+                }
+                Text("Background")
+                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(swatches, id: \.self) { hex in
+                        Button {
+                            store.setCanvas(ratio: store.canvasRatio, bg: hex)
+                        } label: {
+                            Circle()
+                                .fill(Self.color(fromHex: hex) ?? .white)
+                                .frame(width: 28, height: 28)
+                                .overlay(
+                                    Circle().strokeBorder(
+                                        store.canvasBg == hex ? BitOSTheme.accent : BitOSTheme.border,
+                                        lineWidth: store.canvasBg == hex ? 2 : 1
+                                    )
+                                )
+                                .background(Self.color(fromHex: hex) ?? .clear)
+                        }
+                        .accessibilityLabel("Background \(hex)")
+                    }
+                    ColorPicker("Custom", selection: $picked, supportsOpacity: false)
+                        .labelsHidden()
+                        .onChange(of: picked) { _, color in
+                            store.setCanvas(ratio: store.canvasRatio, bg: Self.hex(color))
+                        }
+                    if store.canvasBg != nil {
+                        Button("Clear") {
+                            store.setCanvas(ratio: store.canvasRatio, bg: nil)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+                Text("The media letterboxes onto the canvas; captions and layers keep their positions.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Button("Done") { dismiss() }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BitOSTheme.accent)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.sm)
+        .padding(.bottom, BitOSTheme.Spacing.lg)
+    }
+}
+
 private struct SpeedSheetView: View {
     @Bindable var store: MemeEditorStore
 

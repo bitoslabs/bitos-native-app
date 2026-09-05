@@ -44,6 +44,26 @@ object SfxSynth {
 
     data class Bucket(val id: String, val label: String, val sfx: List<String>)
 
+    /** Human labels (web sound-catalog.ts SFX_LABELS — display copy, single
+     *  source: pickers show these, the wire keeps raw ids). */
+    val LABELS: Map<String, String> = mapOf(
+        "boom" to "Boom", "bruh" to "Bruh", "laugh" to "Laugh",
+        "crowd-laugh" to "Crowd laugh", "gasp" to "Gasp",
+        "sad-trombone" to "Sad trombone", "awkward-silence" to "Awkward silence",
+        "bass-hit" to "Bass hit", "whoosh" to "Whoosh", "slam" to "Slam",
+        "explosion" to "Explosion", "punch" to "Punch", "anime-slash" to "Anime slash",
+        "error" to "Error", "success" to "Success", "notification" to "Notification",
+        "loading" to "Loading", "game-over" to "Game over",
+        "coin" to "Coin", "cash" to "Cash", "jackpot" to "Jackpot",
+        "lightning-zap" to "Lightning zap",
+        "pop" to "Pop", "boing" to "Boing", "drumroll" to "Drumroll", "ding" to "Ding",
+        "swipe" to "Swipe", "click" to "Click", "snap" to "Snap",
+        "record-scratch" to "Record scratch", "reverse-whoosh" to "Reverse whoosh",
+    )
+
+    /** Display label for an id — the id itself when unknown. */
+    fun labelOf(id: String): String = LABELS[id] ?: id
+
     /** The 5 Meme-Pack buckets (schema.ts MEME_SFX_IDS ordering). */
     val BUCKETS: List<Bucket> = listOf(
         Bucket("funny", "Funny", listOf("boom", "bruh", "laugh", "crowd-laugh", "gasp", "sad-trombone", "awkward-silence")),

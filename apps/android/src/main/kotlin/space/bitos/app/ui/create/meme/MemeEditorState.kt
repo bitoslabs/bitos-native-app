@@ -308,6 +308,19 @@ class MemeEditorState(
         commit(MemeCommand.SetSpeed(clamped))
     }
 
+    /**
+     * Canvas ratio/background (image/GIF). Undoable through the direct
+     * project-edit stack; invalid values are ignored by the shared rules.
+     */
+    fun setCanvas(ratio: String?, bg: String?) {
+        val nextRatio = ratio?.takeIf { space.bitos.core.studio.MemeCanvas.isValidRatio(it) }
+        val nextBg = bg?.takeIf { space.bitos.core.studio.MemeCanvas.isValidBackground(it) }
+        if (project.canvasRatio == nextRatio && project.canvasBg == nextBg) return
+        beginClipsEdit()
+        project = project.copy(canvasRatio = nextRatio, canvasBg = nextBg)
+        revision += 1
+    }
+
     // ── Pen drawing (V2 Draw chip) ──────────────────────────────────────
 
     /** Commits a finished stroke (clamped by the shared rule); true when it landed. */

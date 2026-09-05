@@ -48,12 +48,49 @@ object MemeRaster {
 
     /** Renders asset + overlay plan at the export resolution (even dims).
      *  The grade (MST-043) burns into the MEDIA only — overlays draw
-     *  unfiltered after it, exactly like the web canvas (`ctx.filter`). */
+     *  unfiltered after it, exactly like the web canvas (`ctx.filter`).
+     *  A pinned canvas re-frames the output: same long-edge budget, media
+     *  letterboxed centered over the background fill, plan re-mapped to
+     *  the canvas size. */
     fun render(source: Bitmap, project: MemeProject): Bitmap {
-        val (width, height) = MemeExportRules.outputSize(source.width, source.height)
-        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val (mediaWidth, mediaHeight) = MemeExportRules.outputSize(source.width, source.height)
+        val canvasTerms = project.canvasRatio?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
+        var width = mediaWidth
+        var height = mediaHeight
+        var mediaRect = RectF(0f, 0f, width.toFloat(), height.toFloat())
+        if (canvasTerms != null) {
+            val (rw, rh) = canvasTerms
+            val longEdge = maxOf(mediaWidth, mediaHeight)
+            val raw = if (rw >= rh) {
+                longEdge to (longEdge.toLong() * rh / rw).toInt()
+            } else {
+                (longEdge.toLong() * rw / rh).toInt() to longEdge
+            }
+            width = raw.first - raw.first % 2
+            height = raw.second - raw.second % 2
+            val scale = minOf(width.toFloat() / mediaWidth, height.toFloat() / mediaHeight)
+            mediaRect = RectF(
+                (width - mediaWidth * scale) / 2f,
+                (height - mediaHeight * scale) / 2f,
+                (width + mediaWidth * scale) / 2f,
+                (height + mediaHeight * scale) / 2f,
+            )
+        }
+        val out = Bitmap.createBitmap(width.coerceAtLeast(2), height.coerceAtLeast(2), Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
-        canvas.drawBitmap(source, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
+        project.canvasBg?.let { hex ->
+            val value = hex.drop(1).toLongOrNull(16)
+            if (value != null) {
+                canvas.drawColor(
+                    android.graphics.Color.rgb(
+                        ((value shr 16) and 0xFF).toInt(),
+                        ((value shr 8) and 0xFF).toInt(),
+                        (value and 0xFF).toInt(),
+                    ),
+                )
+            }
+        }
+        canvas.drawBitmap(source, null, mediaRect, basePaint(project))
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
         MemeExportRules.exportPlan(project, width, height).forEach { item ->
             drawItem(canvas, item)
