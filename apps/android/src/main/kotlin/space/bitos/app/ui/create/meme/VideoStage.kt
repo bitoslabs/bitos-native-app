@@ -114,12 +114,8 @@ internal fun VideoStage(
         clips.lastOrNull()?.let { last + clipOutputMs(it) }
     } ?: 0L
 
-    val colorMatrix = remember { java.util.concurrent.atomic.AtomicReference(MemeVideoColor.glMatrix(
-        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(project.lookId, project.adjust),
-    )) }
     val player = remember(sourceFiles) {
         ExoPlayer.Builder(context).build().apply {
-            setVideoEffects(listOf(androidx.media3.effect.RgbMatrix { _, _ -> colorMatrix.get() }))
             clips.forEachIndexed { index, clip ->
                 addMediaItem(
                     index,
@@ -142,19 +138,13 @@ internal fun VideoStage(
             playWhenReady = true
         }
     }
-    DisposableEffect(player, project.lookId, project.adjust, clips) {
-        fun updateGrade() {
-            val clip = clips.getOrNull(player.currentMediaItemIndex)
-            colorMatrix.set(MemeVideoColor.glMatrix(
-                space.bitos.core.studio.MemeLooks.adjustedMatrixFor(clip?.lookId ?: project.lookId, project.adjust),
-            ))
-        }
+    var previewError by remember(player) { mutableStateOf<String?>(null) }
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { updateGrade() }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                previewError = "Video preview unavailable. Tap retry."
+            }
         }
-        updateGrade()
-        // Re-render the held frame as well, so paused adjustments are immediately visible.
-        player.setVideoEffects(androidx.media3.common.VideoFrameProcessor.REDRAW)
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
@@ -227,10 +217,8 @@ internal fun VideoStage(
             ) {
                 AndroidView(
                     factory = { contextView ->
-                        // Inflated (not constructed): the effects pipeline
-                        // needs the video_renderer surface type, which is
-                        // only settable from XML — a plain PlayerView stays
-                        // black with setVideoEffects.
+                        // Inflated so the stage uses its explicit, standard
+                        // Media3 surface and fit policy on every device.
                         @Suppress("InflateParams") // attached by AndroidView
                         android.view.LayoutInflater.from(contextView)
                             .inflate(space.bitos.app.R.layout.video_stage_player_view, null)
@@ -244,6 +232,16 @@ internal fun VideoStage(
                     update = { view -> view.player = player },
                     modifier = Modifier.fillMaxSize(),
                 )
+                previewError?.let { message ->
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            previewError = null
+                            player.prepare()
+                            player.play()
+                        },
+                        modifier = Modifier.align(Alignment.Center),
+                    ) { Text(message) }
+                }
                 overlays.forEach { overlay ->
                     // MST-044/M5: out-of-window overlays hide; fx transforms
                     // track the playhead on the TIMELINE clock.

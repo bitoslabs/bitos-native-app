@@ -1126,7 +1126,8 @@ fun MemeEditorScreen(
                     cues = state.project.sfxCues,
                     onPositionChange = { videoPositionMs = it },
                     imageAssets = imageAssetMap,
-                    showScrub = !suiteMode,
+                    // The basic dock owns transport and the single canonical playhead.
+                    showScrub = false,
                     transport = videoTransport,
                     onSetCover = { timelineMs ->
                         val mapped = timelineToMedia(timelineMs) ?: return@VideoStage
@@ -1533,6 +1534,23 @@ fun MemeEditorScreen(
                             showSpeed = true
                         },
                         onLayer = { showLayers = true },
+                        transport = videoTransport,
+                        onSetCover = { timelineMs ->
+                            val mapped = timelineToMedia(timelineMs) ?: return@TimelineStrip
+                            scope.launch {
+                                val jpeg = withContext(Dispatchers.IO) {
+                                    MemeVideoExport.captureCoverJpeg(mapped.first.bytes, mapped.second)
+                                }
+                                if (jpeg == null) {
+                                    exportStatus = "Cover capture failed"
+                                } else {
+                                    mediaPublishViewModel?.uploadMemeCover(jpeg) { url ->
+                                        coverThumbUrl = url
+                                        if (url == null) exportStatus = "Cover upload failed"
+                                    }
+                                }
+                            }
+                        },
                     )
                 }
                 Spacer(Modifier.height(BitOSSpacing.sm))
@@ -2593,6 +2611,8 @@ private fun TimelineStrip(
     onMute: () -> Unit,
     onSpeed: () -> Unit,
     onLayer: () -> Unit,
+    transport: VideoTransport,
+    onSetCover: (Long) -> Unit,
 ) {
     val safeTotal = maxOf(1L, totalMs)
     fun mmss(ms: Long): String =
@@ -2604,9 +2624,16 @@ private fun TimelineStrip(
             .padding(horizontal = BitOSSpacing.base),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
     ) {
-        Row(Modifier.fillMaxWidth()) {
-            Text(mmss(0), style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textSecondary)
-            Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = transport.playPause) {
+                Icon(if (transport.isPlaying()) AppIcons.Pause else AppIcons.Play, contentDescription = "Play or pause")
+            }
+            Slider(
+                value = positionMs.toFloat().coerceIn(0f, safeTotal.toFloat()),
+                onValueChange = { transport.seekTo(it.toLong()) },
+                valueRange = 0f..safeTotal.toFloat(),
+                modifier = Modifier.weight(1f),
+            )
             Text(
                 "${mmss(positionMs.coerceAtMost(safeTotal))} / ${mmss(safeTotal)}",
                 style = MaterialTheme.typography.labelSmall,
@@ -2614,8 +2641,7 @@ private fun TimelineStrip(
                 color = BitOSColors.primary,
                 fontWeight = FontWeight.W600,
             )
-            Spacer(Modifier.weight(1f))
-            Text(mmss(safeTotal), style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textSecondary)
+            TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().height(44.dp)) {
             val trackWidth = constraints.maxWidth.toFloat()

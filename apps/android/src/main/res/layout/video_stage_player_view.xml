@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Editor stage surface: the stage player runs setVideoEffects (color
-     grade), whose processed frames require the decoder-output renderer —
-     the default surface_view renders black. -->
+<!-- Keep preview playback on Media3's supported, device-compatible surface.
+     Color grading is rendered in the export pipeline until a preview effect
+     has passed the device codec matrix. -->
 <androidx.media3.ui.PlayerView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -9,4 +9,4 @@
     android:layout_height="match_parent"
     app:use_controller="false"
     app:resize_mode="fit"
-    app:surface_type="video_decoder_gl_surface_view" />
+    app:surface_type="surface_view" />
