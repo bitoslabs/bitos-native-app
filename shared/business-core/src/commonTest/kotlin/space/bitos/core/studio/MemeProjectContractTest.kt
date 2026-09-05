@@ -214,7 +214,7 @@ class MemeProjectContractTest {
         val video = project.copy(
             mode = MemeMode.VIDEO,
             clips = listOf(
-                MemeClip("v1", 0, 12_000, lookId = "sepia"),
+                MemeClip("v1", 0, 12_000, lookId = "sepia", speed = 0.75f),
                 MemeClip("v2", 3_500, 9_000, volume = 0f),
                 MemeClip("v3", 1_000, 60_000, volume = 1.5f, lookId = "junk-grade"),
             ),
@@ -227,12 +227,15 @@ class MemeProjectContractTest {
         assertEquals(0f, decoded?.clips?.get(1)?.volume)
         assertEquals(1.5f, decoded?.clips?.get(2)?.volume)
         assertEquals(1f, decoded?.clips?.get(0)?.volume)
+        assertEquals(0.75f, decoded?.clips?.get(0)?.speed)
         // Per-clip look: normalized; unknown ids degrade to none (inherit
         // the project grade).
         assertEquals("sepia", decoded?.clips?.get(0)?.lookId)
         assertEquals(null, decoded?.clips?.get(2)?.lookId)
         val hostileVol = """{"v":1,"mode":"video","assets":[],"overlays":[],"clips":[{"id":"v1","start":0,"end":10,"vol":9}]}"""
         assertEquals(MemeProjectContract.MAX_CLIP_VOLUME, MemeProjectContract.decode(hostileVol)?.clips?.first()?.volume)
+        val hostileRate = """{"v":1,"mode":"video","assets":[],"overlays":[],"clips":[{"id":"v1","start":0,"end":10,"rate":9}]}"""
+        assertEquals(2f, MemeProjectContract.decode(hostileRate)?.clips?.first()?.speed)
     }
 
     @Test

@@ -100,8 +100,10 @@ internal fun VideoStage(
             }
         }
     }
+    fun clipRate(clip: SessionClip): Float =
+        space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)
     fun clipOutputMs(clip: SessionClip): Long =
-        (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / rate).toLong()
+        (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / clipRate(clip)).toLong()
     val offsets = remember(clips, rate) {
         var acc = 0L
         clips.map { clip ->
@@ -114,8 +116,16 @@ internal fun VideoStage(
         clips.lastOrNull()?.let { last + clipOutputMs(it) }
     } ?: 0L
 
+    val colorMatrix = remember {
+        java.util.concurrent.atomic.AtomicReference(
+            MemeVideoColor.glMatrix(space.bitos.core.studio.MemeLooks.adjustedMatrixFor(null, null)),
+        )
+    }
     val player = remember(sourceFiles) {
         ExoPlayer.Builder(context).build().apply {
+            // This standard SurfaceView is supported by Media3's effect path.
+            // The matrix only targets decoded video; Compose overlays stay crisp.
+            setVideoEffects(listOf(androidx.media3.effect.RgbMatrix { _, _ -> colorMatrix.get() }))
             clips.forEachIndexed { index, clip ->
                 addMediaItem(
                     index,
@@ -133,22 +143,45 @@ internal fun VideoStage(
             // A TIMELINE repeats end-to-end; REPEAT_MODE_ONE would loop the
             // current clip forever and never advance to the next one.
             repeatMode = if (clips.size > 1) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_ONE
-            setPlaybackSpeed(rate)
+            setPlaybackSpeed(clipRate(clips.first()))
             prepare()
             playWhenReady = true
         }
     }
     var previewError by remember(player) { mutableStateOf<String?>(null) }
-    DisposableEffect(player) {
+    DisposableEffect(player, project.lookId, project.adjust, clips) {
+        fun updateLook() {
+            val active = clips.getOrNull(player.currentMediaItemIndex)
+            colorMatrix.set(
+                MemeVideoColor.glMatrix(
+                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                        active?.lookId ?: project.lookId,
+                        project.adjust,
+                    ),
+                ),
+            )
+        }
         val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateLook()
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                previewError = "Video preview unavailable. Tap retry."
+                val active = clips.getOrNull(player.currentMediaItemIndex)
+                val grading = active?.lookId != null || project.lookId != null || project.adjust != null
+                if (grading) {
+                    // An effect failure must never make the editor unusable.
+                    player.setVideoEffects(emptyList())
+                    previewError = "Look preview is unavailable on this device. Playing original video."
+                } else {
+                    previewError = "Video preview unavailable. Tap retry."
+                }
             }
         }
+        updateLook()
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
-    LaunchedEffect(player, rate) { player.setPlaybackSpeed(rate) }
+    LaunchedEffect(player, clips) {
+        player.setPlaybackSpeed(clipRate(clips.getOrElse(player.currentMediaItemIndex) { clips.first() }))
+    }
     /** Seeks the timeline clock to [timelineMs] (maps to item + position).
      *  Clipped items address positions RELATIVE to their window start. */
     fun seekTimelineTo(timelineMs: Long) {
@@ -156,7 +189,7 @@ internal fun VideoStage(
         for (index in clips.indices) {
             val out = clipOutputMs(clips[index])
             if (remaining < out || index == clips.lastIndex) {
-                player.seekTo(index, (remaining * rate).toLong())
+                player.seekTo(index, (remaining * clipRate(clips[index])).toLong())
                 return
             }
             remaining -= out
@@ -184,14 +217,16 @@ internal fun VideoStage(
     var playing by remember { mutableStateOf(false) }
     // Re-keyed when the timeline shape changes so the offsets/duration the
     // clock reads can never go stale after a trim/split/reorder.
-    LaunchedEffect(player, clips, rate) {
+    LaunchedEffect(player, clips) {
         while (true) {
             val index = player.currentMediaItemIndex.coerceIn(0, clips.lastIndex.coerceAtLeast(0))
             // ClippingConfiguration remaps item positions to the WINDOW
             // (0 = window start) — no source-start subtraction here, or the
             // playhead drifts out of sync with what's on screen.
             val localPos = player.currentPosition.coerceAtLeast(0L)
-            timelineMs = (offsets.getOrElse(index) { 0L }) + ((localPos / rate).toLong())
+            val clip = clips.getOrElse(index) { clips.first() }
+            player.setPlaybackSpeed(clipRate(clip))
+            timelineMs = (offsets.getOrElse(index) { 0L }) + ((localPos / clipRate(clip)).toLong())
             onPositionChange(timelineMs.coerceIn(0L, max(1L, timelineDurationMs)))
             playing = player.isPlaying
             // Per-clip audio follows the playhead (mute/volume preview).

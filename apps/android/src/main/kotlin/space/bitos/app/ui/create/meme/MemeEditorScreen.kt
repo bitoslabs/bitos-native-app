@@ -158,6 +158,8 @@ internal data class SessionClip(
     val volume: Float = 1f,
     /** Per-clip grade; null = the project grade. */
     val lookId: String? = null,
+    /** Per-clip playback rate. Split clips inherit this setting. */
+    val speed: Float = 1f,
 )
 
 /** Timeline clip cap (M5 plan §F1). */
@@ -228,11 +230,13 @@ fun MemeEditorScreen(
     val hasVideo = videoClips.isNotEmpty()
     val videoBytes: ByteArray? = videoClips.firstOrNull()?.bytes
     val videoProbe: MemeVideoExport.Probe? = videoClips.firstOrNull()?.probe
-    val videoRate: Float =
-        space.bitos.core.studio.MemeProjectContract.clampSpeed(state.project.speed)
+    /** Legacy project speed remains the fallback for drafts created before clip rates. */
+    val videoRate: Float = space.bitos.core.studio.MemeProjectContract.clampSpeed(state.project.speed)
+    fun clipRate(clip: SessionClip): Float =
+        space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)
 
     fun clipOutputMs(clip: SessionClip): Long =
-        (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / videoRate).toLong()
+        (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / clipRate(clip)).toLong()
 
     fun clipTimelineOffsetMs(index: Int): Long =
         videoClips.subList(0, index.coerceIn(0, videoClips.size)).sumOf { clipOutputMs(it) }
@@ -246,7 +250,7 @@ fun MemeEditorScreen(
             val start = clipTimelineOffsetMs(index)
             val end = start + clipOutputMs(clip)
             if (timelineMs < end || index == videoClips.lastIndex) {
-                return clip to (clip.startMs + ((timelineMs - start) * videoRate).toLong())
+                return clip to (clip.startMs + ((timelineMs - start) * clipRate(clip)).toLong())
             }
         }
         return null
@@ -256,7 +260,10 @@ fun MemeEditorScreen(
     fun syncWireClips() {
         state.syncClips(
             videoClips.map {
-                space.bitos.core.studio.MemeClip(it.id, it.startMs, it.endMs, it.volume, it.lookId)
+                space.bitos.core.studio.MemeClip(
+                    id = it.id, startMs = it.startMs, endMs = it.endMs,
+                    volume = it.volume, lookId = it.lookId, speed = it.speed,
+                )
             },
         )
     }
@@ -293,7 +300,7 @@ fun MemeEditorScreen(
         val id = "v${maxClipCounter() + 1}"
         if (undoable) state.beginClipsEdit()
         state.addAssets(listOf(id), kind = MemeMode.VIDEO)
-        val clip = SessionClip(id, bytes, probe, cut.startMs, cut.endMs)
+        val clip = SessionClip(id, bytes, probe, cut.startMs, cut.endMs, speed = videoRate)
         videoClips += clip
         archiveClip(clip)
         selectedClipIndex = videoClips.lastIndex
@@ -335,7 +342,7 @@ fun MemeEditorScreen(
             val offset = clipTimelineOffsetMs(index)
             val outMs = clipOutputMs(clip)
             if (timelineMs < offset || timelineMs >= offset + outMs) continue
-            val intoMediaMs = ((timelineMs - offset) * videoRate).toLong()
+            val intoMediaMs = ((timelineMs - offset) * clipRate(clip)).toLong()
             val splitAt = clip.startMs + intoMediaMs
             if (splitAt - clip.startMs < 200 || clip.endMs - splitAt < 200) {
                 exportStatus = "Too close to a clip edge to split"
@@ -359,6 +366,9 @@ fun MemeEditorScreen(
     var videoTrimBytes by remember { mutableStateOf<ByteArray?>(null) }
     /** MST-032: separately-uploaded cover URL (session-only in V1). */
     var coverThumbUrl by remember { mutableStateOf<String?>(null) }
+    /** Immediate local preview while the separately uploaded public cover is in flight. */
+    var coverPreview by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var coverUploading by remember { mutableStateOf(false) }
     val videoMode = state.project.mode == MemeMode.VIDEO
 
     /** Rebuilds the session clip list from the wire after undo/redo. Full
@@ -371,7 +381,9 @@ fun MemeEditorScreen(
             clipArchive[row.id]?.let { (bytes, probe) ->
                 val start = row.startMs.coerceIn(0, probe.durationMs)
                 val end = row.endMs.coerceAtMost(probe.durationMs)
-                if (end > start) SessionClip(row.id, bytes, probe, start, end, row.volume, row.lookId) else null
+                if (end > start) SessionClip(
+                    row.id, bytes, probe, start, end, row.volume, row.lookId, row.speed,
+                ) else null
             }
         }
         if (rebuilt.size == wire.size) {
@@ -449,6 +461,7 @@ fun MemeEditorScreen(
                                 end,
                                 wireClip.volume,
                                 wireClip.lookId,
+                                wireClip.speed,
                             )
                             videoClips += restored
                             archiveClip(restored)
@@ -1122,7 +1135,7 @@ fun MemeEditorScreen(
                     overlays = state.project.overlays,
                     selectedId = state.selectedOverlayId,
                     state = state,
-                    coverSet = coverThumbUrl != null,
+                    coverSet = coverPreview != null || coverThumbUrl != null,
                     cues = state.project.sfxCues,
                     onPositionChange = { videoPositionMs = it },
                     imageAssets = imageAssetMap,
@@ -1138,7 +1151,10 @@ fun MemeEditorScreen(
                             if (jpeg == null) {
                                 exportStatus = "Cover capture failed"
                             } else {
+                                coverPreview = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                coverUploading = true
                                 mediaPublishViewModel?.uploadMemeCover(jpeg) { url ->
+                                    coverUploading = false
                                     coverThumbUrl = url
                                     if (url == null) exportStatus = "Cover upload failed"
                                 }
@@ -1544,7 +1560,10 @@ fun MemeEditorScreen(
                                 if (jpeg == null) {
                                     exportStatus = "Cover capture failed"
                                 } else {
+                                    coverPreview = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                    coverUploading = true
                                     mediaPublishViewModel?.uploadMemeCover(jpeg) { url ->
+                                        coverUploading = false
                                         coverThumbUrl = url
                                         if (url == null) exportStatus = "Cover upload failed"
                                     }
@@ -1725,6 +1744,7 @@ fun MemeEditorScreen(
                                                 lookId = space.bitos.core.studio.MemeLooks.normalize(id),
                                             )
                                             syncWireClips()
+                                            exportStatus = "Look applies to vdo ${index + 1}"
                                         }
                                     },
                                     adjust = state.project.adjust,
@@ -1925,10 +1945,11 @@ fun MemeEditorScreen(
                             val index = videoClips.indexOf(clip)
                             if (index >= 0) {
                                 state.beginClipsEdit()
-                                videoClips[index] = clip.copy(
-                                    lookId = space.bitos.core.studio.MemeLooks.normalize(id),
-                                )
-                                syncWireClips()
+                                            videoClips[index] = clip.copy(
+                                                lookId = space.bitos.core.studio.MemeLooks.normalize(id),
+                                            )
+                                            syncWireClips()
+                                            exportStatus = "Look applies to vdo ${index + 1}"
                             }
                             showLooks = false
                         },
@@ -1987,7 +2008,7 @@ fun MemeEditorScreen(
                 startMs = clip.startMs,
                 endMs = clip.endMs,
                 durationMs = clip.probe.durationMs,
-                speed = state.project.speed,
+                speed = clipRate(clip),
                 onApply = { start, end ->
                     val index = videoClips.indexOf(clip)
                     if (index >= 0) {
@@ -2041,12 +2062,19 @@ fun MemeEditorScreen(
     }
 
     if (showSpeed) {
+        val selected = videoClips.getOrNull(selectedClipIndex)
         ModalBottomSheet(onDismissRequest = { showSpeed = false }) {
             SpeedSheetContent(
-                speed = state.project.speed,
-                mediaDurationMs = videoProbe?.durationMs ?: state.project.trimEndMs,
+                speed = selected?.let(::clipRate) ?: videoRate,
+                mediaDurationMs = selected?.let { it.endMs - it.startMs }
+                    ?: videoProbe?.durationMs ?: state.project.trimEndMs,
                 onPick = {
-                    state.setSpeed(it)
+                    if (selected != null) {
+                        state.beginClipsEdit()
+                        videoClips[selectedClipIndex] = selected.copy(speed = it)
+                        syncWireClips()
+                        exportStatus = "Speed applies to vdo ${selectedClipIndex + 1}"
+                    }
                     showSpeed = false
                 },
             )
@@ -2078,7 +2106,10 @@ fun MemeEditorScreen(
             hasVideo = hasVideo,
             timelineSeconds = ((timelineDurationMs + 999) / 1000).toInt(),
             clipCount = videoClips.size,
-            coverSet = coverThumbUrl != null,
+            coverSet = coverPreview != null || coverThumbUrl != null,
+            coverUrl = coverThumbUrl,
+            coverPreview = coverPreview,
+            coverUploading = coverUploading,
             publishState = memePublishState,
             onPublish = { caption, altText, cwReason, tags, license, remixOf, remixAuthor ->
                 val project = state.project
@@ -2551,6 +2582,7 @@ private fun TimelineClipSegment(
     index: Int,
     widthPx: Float,
     outSec: Int,
+    speed: Float,
     muted: Boolean,
     selected: Boolean,
     onSelect: () -> Unit,
@@ -2586,7 +2618,7 @@ private fun TimelineClipSegment(
                 Text("🔇", fontSize = 9.sp)
             }
             Text(
-                "${outSec}s",
+                "${outSec}s · ${"%.2g".format(java.util.Locale.US, speed)}×",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                 fontWeight = FontWeight.W600,
@@ -2643,15 +2675,26 @@ private fun TimelineStrip(
             )
             TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().height(44.dp)) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .pointerInput(safeTotal) {
+                    detectTapGestures { tap ->
+                        val fraction = (tap.x / size.width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+                        transport.seekTo((fraction * safeTotal).toLong())
+                    }
+                },
+        ) {
             val trackWidth = constraints.maxWidth.toFloat()
             Row(Modifier.fillMaxHeight()) {
                 clips.forEachIndexed { index, clip ->
                     key(clip.id) {
                         TimelineClipSegment(
                             index = index,
-                            widthPx = trackWidth * clipOutputMsOf(clip, rate) / safeTotal,
-                            outSec = ((clipOutputMsOf(clip, rate) + 999) / 1000).toInt(),
+                            widthPx = trackWidth * clipOutputMsOf(clip) / safeTotal,
+                            outSec = ((clipOutputMsOf(clip) + 999) / 1000).toInt(),
+                            speed = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed),
                             muted = clip.volume == 0f,
                             selected = index == selectedClipIndex,
                             onSelect = { onSelectClip(index) },
@@ -2691,8 +2734,9 @@ private fun TimelineStrip(
 }
 
 /** Output window ms for one clip at the project rate (display math only). */
-private fun clipOutputMsOf(clip: SessionClip, rate: Float): Long =
-    ((maxOf(0L, clip.endMs - clip.startMs)) / maxOf(0.01f, rate)).toLong()
+private fun clipOutputMsOf(clip: SessionClip): Long =
+    ((maxOf(0L, clip.endMs - clip.startMs)) /
+        space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)).toLong()
 
 /** Icon-over-caption clip tool / per-mode bar button. */
 @Composable
@@ -3675,6 +3719,9 @@ private fun MemePostFlowScreen(
     timelineSeconds: Int,
     clipCount: Int,
     coverSet: Boolean,
+    coverUrl: String?,
+    coverPreview: android.graphics.Bitmap?,
+    coverUploading: Boolean,
     publishState: space.bitos.app.ui.feed.MemePublishUiState?,
     onPublish: (
         caption: String,
@@ -3767,6 +3814,8 @@ private fun MemePostFlowScreen(
                         isVideo = state.project.mode == MemeMode.VIDEO && hasVideo,
                         isGif = state.project.mode == MemeMode.GIF && gifFrameCount > 0,
                         timelineSeconds = timelineSeconds,
+                        coverUrl = coverUrl,
+                        coverPreview = coverPreview,
                         modifier = Modifier.size(width = 80.dp, height = 112.dp),
                     )
                     Column(
@@ -3970,6 +4019,8 @@ private fun MemePostFlowScreen(
                         isVideo = state.project.mode == MemeMode.VIDEO && hasVideo,
                         isGif = state.project.mode == MemeMode.GIF && gifFrameCount > 0,
                         timelineSeconds = timelineSeconds,
+                        coverUrl = coverUrl,
+                        coverPreview = coverPreview,
                         modifier = Modifier.size(width = 64.dp, height = 96.dp),
                     )
                     Column {
@@ -4021,6 +4072,13 @@ private fun MemePostFlowScreen(
                 publishState?.failure?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = BitOSColors.error)
                 }
+                if (coverUploading) {
+                    Text(
+                        "Uploading selected cover before public post…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                }
                 when (phase) {
                     space.bitos.app.ui.feed.MemePublishPhase.UPLOADING -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
                         CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp), color = BitOSColors.primary)
@@ -4063,7 +4121,7 @@ private fun MemePostFlowScreen(
                                 )
                                 step = 2
                             },
-                            enabled = !busy,
+                            enabled = !busy && !coverUploading,
                             colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
                             modifier = Modifier.weight(1f),
                         ) {
@@ -4535,6 +4593,8 @@ private fun PostPreviewThumb(
     isVideo: Boolean,
     isGif: Boolean,
     timelineSeconds: Int,
+    coverUrl: String?,
+    coverPreview: android.graphics.Bitmap?,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -4544,6 +4604,12 @@ private fun PostPreviewThumb(
             .border(1.dp, BitOSColors.border, RoundedCornerShape(10.dp)),
     ) {
         when {
+            isVideo && (coverPreview != null || coverUrl != null) -> AsyncImage(
+                model = coverPreview ?: coverUrl,
+                contentDescription = "Selected video cover",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
             isVideo -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(AppIcons.Play, contentDescription = null, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f))
             }
@@ -4558,6 +4624,12 @@ private fun PostPreviewThumb(
             )
         }
         if (isVideo) {
+            Icon(
+                AppIcons.Play,
+                contentDescription = null,
+                tint = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier.align(Alignment.Center).size(20.dp),
+            )
             Text(
                 "${timelineSeconds}s",
                 style = MaterialTheme.typography.labelSmall,
@@ -4924,8 +4996,10 @@ private fun List<SessionClip>.toClipInputs(rate: Float): List<MemeVideoExport.Cl
             offsetMs = acc,
             volume = clip.volume,
             lookId = clip.lookId,
+            speed = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed),
         )
-        acc += (((clip.endMs - clip.startMs).coerceAtLeast(0L)) / rate).toLong()
+        acc += (((clip.endMs - clip.startMs).coerceAtLeast(0L)) /
+            space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)).toLong()
         input
     }
 }

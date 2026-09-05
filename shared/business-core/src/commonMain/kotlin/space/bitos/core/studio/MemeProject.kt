@@ -67,6 +67,8 @@ data class MemeClip(
     val volume: Float = 1f,
     /** Per-clip color grade ([MemeLooks] id; null = the project grade). */
     val lookId: String? = null,
+    /** Per-clip playback rate. Legacy projects use the project rate as fallback. */
+    val speed: Float = 1f,
 )
 
 data class MemeOverlay(
@@ -248,6 +250,8 @@ object MemeProjectContract {
                             put("end", clip.endMs.coerceIn(0, MAX_DURATION_MS))
                             if (clip.volume != 1f) put("vol", clip.volume.coerceIn(0f, MAX_CLIP_VOLUME))
                             MemeLooks.normalize(clip.lookId)?.let { put("look", it) }
+                            val clipSpeed = clampSpeed(clip.speed)
+                            if (clipSpeed != 1f) put("rate", clipSpeed)
                         })
                     }
                 })
@@ -441,6 +445,7 @@ object MemeProjectContract {
                 volume = ((obj["vol"] as? JsonPrimitive)?.content?.toFloatOrNull() ?: 1f)
                     .coerceIn(0f, MAX_CLIP_VOLUME),
                 lookId = MemeLooks.normalize((obj["look"] as? JsonPrimitive)?.content),
+                speed = clampSpeed((obj["rate"] as? JsonPrimitive)?.content?.toFloatOrNull() ?: 1f),
             )
         }.take(MAX_VIDEO_CLIPS)
     }

@@ -60,6 +60,8 @@ object MemeVideoExport {
         val volume: Float = 1f,
         /** Per-clip grade; null = the project grade. */
         val lookId: String? = null,
+        /** Per-clip playback speed. */
+        val speed: Float = 1f,
     )
 
     /**
@@ -79,7 +81,6 @@ object MemeVideoExport {
         imageAssets: Map<String, Uri> = emptyMap(),
     ): ByteArray {
         require(clips.isNotEmpty()) { "no clips" }
-        val rate = space.bitos.core.studio.MemeProjectContract.clampSpeed(project.speed)
         val imageFor: ((String) -> Bitmap?) = imageAssets.takeIf { it.isNotEmpty() }?.let { assets ->
             { id -> assets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) } }
         } ?: { null }
@@ -87,6 +88,7 @@ object MemeVideoExport {
         val files = mutableListOf<File>()
         try {
             val editedItems = clips.map { clip ->
+                val rate = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)
                 val probe = clip.probe
                 val frameWidth = max(2, probe.uprightWidth - (probe.uprightWidth % 2))
                 val frameHeight = max(2, probe.uprightHeight - (probe.uprightHeight % 2))
