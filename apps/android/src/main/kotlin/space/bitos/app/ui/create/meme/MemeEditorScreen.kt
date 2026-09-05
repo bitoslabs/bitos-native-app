@@ -4007,7 +4007,7 @@ private fun MemePostFlowScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .padding(vertical = 2.dp),
+                                .padding(vertical = 0.dp),
                             placeholder = "Write a caption… #tag @mention",
                         )
                         Text(
@@ -4124,6 +4124,7 @@ private fun MemePostFlowScreen(
                             onValueChange = { remixOf = it },
                             placeholder = "note1 / event id",
                             singleLine = true,
+                            compact = true,
                             textStyle = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -4133,6 +4134,7 @@ private fun MemePostFlowScreen(
                                 onValueChange = { remixAuthor = it },
                                 placeholder = "Source author npub/hex (p-tag)",
                                 singleLine = true,
+                                compact = true,
                                 textStyle = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -4144,6 +4146,8 @@ private fun MemePostFlowScreen(
                         onValueChange = { altText = it },
                         placeholder = "Alt text (defaults to the caption)",
                         singleLine = true,
+                        compact = true,
+                        textStyle = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
                     )
                 }

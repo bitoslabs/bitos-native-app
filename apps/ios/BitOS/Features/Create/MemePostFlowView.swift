@@ -319,16 +319,27 @@ private struct MemePostDetailsView: View {
                 Text("Remix source (optional)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BitOSTheme.textSecondary)
-                BitosField("note1 / event id", text: $draft.remixOf)
+                BitosField("note1 / event id", text: $draft.remixOf, size: .small)
                     .font(.caption2)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                 if !draft.remixOf.isEmpty {
-                    BitosField("Source author npub/hex (p-tag)", text: $draft.remixAuthor)
+                    BitosField("Source author npub/hex (p-tag)", text: $draft.remixAuthor, size: .small)
                         .font(.caption2)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
+            }
+            .padding(.vertical, 6)
+            Divider().padding(.leading, 48)
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                Text("Alt text (optional)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                BitosField("Describe the meme (defaults to the caption)", text: $draft.altText, size: .small)
+                    .font(.caption2)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
             }
             .padding(.vertical, 6)
         }
