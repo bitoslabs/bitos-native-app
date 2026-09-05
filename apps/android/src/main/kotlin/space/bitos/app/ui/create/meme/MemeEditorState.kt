@@ -40,6 +40,8 @@ class MemeEditorState(
         val atMs: Long,
         /** Gesture entries never coalesce with neighbours. */
         val fromGesture: Boolean,
+        /** Global action sequence — orders undo against clip-list edits. */
+        val seq: Long = 0L,
     )
 
     var project: MemeProject = MemeProject(mode = MemeMode.IMAGE)
@@ -60,6 +62,8 @@ class MemeEditorState(
         project = MemeProjectContract.decode(MemeProjectContract.encode(document)) ?: project
         undoStack.clear()
         redoStack.clear()
+        clipsStack.clear()
+        clipsRedo.clear()
         gesture = null
         clearSelection()
         revision += 1
@@ -80,17 +84,46 @@ class MemeEditorState(
         )
         undoStack.clear()
         redoStack.clear()
+        clipsStack.clear()
+        clipsRedo.clear()
         gesture = null
         revision += 1
     }
 
-    val canUndo: Boolean get() = undoStack.isNotEmpty()
-    val canRedo: Boolean get() = redoStack.isNotEmpty()
+    val canUndo: Boolean get() = undoStack.isNotEmpty() || clipsStack.isNotEmpty()
+    val canRedo: Boolean get() = redoStack.isNotEmpty() || clipsRedo.isNotEmpty()
     val canAddOverlay: Boolean get() = project.overlays.size < MemeProjectContract.MAX_OVERLAYS
     val isEmpty: Boolean get() = project.isEmpty
 
     private val undoStack = ArrayDeque<UndoEntry>()
     private val redoStack = ArrayDeque<RedoEntry>()
+
+    // ── Clip-list edits (split/delete/move/mute/trim/volume) ────────────
+    // The session clip data (bytes/probes) lives in the screen; these
+    // entries carry the wire state, interleaved with command entries by
+    // [actionSeq] so ONE undo affordance steps back the newest action of
+    // either kind.
+
+    /** (original seq, projectBefore) per clip-list edit. */
+    private val clipsStack = ArrayDeque<Pair<Long, MemeProject>>()
+    /** (original seq, projectAfter) for redone clip-list edits. */
+    private val clipsRedo = ArrayDeque<Pair<Long, MemeProject>>()
+    private var actionSeq = 0L
+
+    private fun nextSeq(): Long = ++actionSeq
+
+    /**
+     * Opens an undoable clip-list edit — call AFTER the edit's guards pass
+     * and BEFORE the session list mutates (the screen then mirrors the
+     * result through [syncClips]). Refused edits never call this, so the
+     * stack holds no no-op steps.
+     */
+    fun beginClipsEdit() {
+        clipsStack.addLast(nextSeq() to project)
+        while (clipsStack.size > MAX_UNDO_ENTRIES) clipsStack.removeFirst()
+        clipsRedo.clear()
+        redoStack.clear()
+    }
 
     // ── Assets (session-local ids; the screen owns the image refs) ──────
 
@@ -221,6 +254,7 @@ class MemeEditorState(
                     ),
                     atMs = clockMs(),
                     fromGesture = true,
+                    seq = nextSeq(),
                 ),
             )
             trimUndo()
@@ -248,8 +282,8 @@ class MemeEditorState(
     /**
      * M5 timeline sync: mirrors the session clip list into the project wire
      * (bounded + clamped by the contract; the first clip's window mirrors
-     * into the legacy trim fields for old readers). Session-mutation sync,
-     * not an undoable edit — clip list changes originate from the screen.
+     * into the legacy trim fields for old readers). Call after the screen
+     * mutated the list — undoability comes from [beginClipsEdit] before it.
      */
     fun syncClips(clips: List<space.bitos.core.studio.MemeClip>) {
         if (project.mode != MemeMode.VIDEO) return
@@ -414,9 +448,11 @@ class MemeEditorState(
                     command = command,
                     atMs = clockMs(),
                     fromGesture = true,
+                    seq = nextSeq(),
                 ),
             )
             redoStack.clear()
+            clipsRedo.clear()
             trimUndo()
             revision += 1
         }
@@ -441,10 +477,33 @@ class MemeEditorState(
     private data class RedoEntry(val entry: UndoEntry, val projectAfter: MemeProject)
 
     fun undo(): Boolean {
+        // Step back the NEWEST action of either kind.
+        val cmdSeq = undoStack.lastOrNull()?.seq ?: -1L
+        val clipSeq = clipsStack.lastOrNull()?.first ?: -1L
+        if (clipSeq > cmdSeq) {
+            val (seq, before) = clipsStack.removeLast()
+            clipsRedo.addLast(seq to project)
+            trimRedo()
+            project = before
+            if (project.overlays.none { it.id == selectedOverlayId }) clearSelection()
+            revision += 1
+            return true
+        }
         val entry = undoStack.removeLastOrNull() ?: return false
+        // Clip edits live in the session list (syncClips is not a command)
+        // — a restored snapshot must not resurrect an older clip list, or
+        // the next autosave silently drops splits/deletes while the strip
+        // still shows them.
+        val liveClips = project.clips
+        val liveTrimStart = project.trimStartMs
+        val liveTrimEnd = project.trimEndMs
         redoStack.addLast(RedoEntry(entry, project))
         trimRedo()
-        project = entry.projectBefore
+        project = entry.projectBefore.copy(
+            clips = liveClips,
+            trimStartMs = liveTrimStart,
+            trimEndMs = liveTrimEnd,
+        )
         if (project.overlays.none { it.id == selectedOverlayId }) clearSelection()
         revision += 1
         return true
@@ -452,11 +511,32 @@ class MemeEditorState(
 
     /** Re-applies the last undone state; any new edit clears the branch. */
     fun redo(): Boolean {
+        val cmdSeq = redoStack.lastOrNull()?.entry?.seq ?: -1L
+        val clipSeq = clipsRedo.lastOrNull()?.first ?: -1L
+        // Redo replays ASCENDING (the oldest undone action first): each
+        // stack pops its own subsequence in order, so the next global
+        // action is the top with the SMALLER seq.
+        if (clipSeq != -1L && (cmdSeq == -1L || clipSeq < cmdSeq)) {
+            val (seq, after) = clipsRedo.removeLast()
+            clipsStack.addLast(seq to project)
+            trimUndo()
+            project = after
+            if (project.overlays.none { it.id == selectedOverlayId }) clearSelection()
+            revision += 1
+            return true
+        }
         val redoEntry = redoStack.removeLastOrNull() ?: return false
+        val liveClips = project.clips
+        val liveTrimStart = project.trimStartMs
+        val liveTrimEnd = project.trimEndMs
         // The current project equals entry.projectBefore again, so the
         // original undo entry goes back untouched (coalescing survives).
         undoStack.addLast(redoEntry.entry)
-        project = redoEntry.projectAfter
+        project = redoEntry.projectAfter.copy(
+            clips = liveClips,
+            trimStartMs = liveTrimStart,
+            trimEndMs = liveTrimEnd,
+        )
         if (project.overlays.none { it.id == selectedOverlayId }) clearSelection()
         revision += 1
         return true
@@ -468,6 +548,7 @@ class MemeEditorState(
         if (project == before) return
         revision += 1
         redoStack.clear()
+        clipsRedo.clear()
         val now = clockMs()
         val last = undoStack.lastOrNull()
         if (last != null && !last.fromGesture && now - last.atMs <= coalesceWindowMs) {
@@ -477,16 +558,20 @@ class MemeEditorState(
                 return
             }
         }
-        undoStack.addLast(UndoEntry(projectBefore = before, command = command, atMs = now, fromGesture = false))
+        undoStack.addLast(
+            UndoEntry(projectBefore = before, command = command, atMs = now, fromGesture = false, seq = nextSeq()),
+        )
         trimUndo()
     }
 
     private fun trimUndo() {
         while (undoStack.size > MAX_UNDO_ENTRIES) undoStack.removeFirst()
+        while (clipsStack.size > MAX_UNDO_ENTRIES) clipsStack.removeFirst()
     }
 
     private fun trimRedo() {
         while (redoStack.size > MAX_UNDO_ENTRIES) redoStack.removeFirst()
+        while (clipsRedo.size > MAX_UNDO_ENTRIES) clipsRedo.removeFirst()
     }
 
     /** Test seam: committed (non-coalesced) step count. */

@@ -227,10 +227,14 @@ internal fun VideoStage(
             ) {
                 AndroidView(
                     factory = { contextView ->
-                        PlayerView(contextView).apply {
-                            useController = false
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        }
+                        // Inflated (not constructed): the effects pipeline
+                        // needs the video_renderer surface type, which is
+                        // only settable from XML — a plain PlayerView stays
+                        // black with setVideoEffects.
+                        @Suppress("InflateParams") // attached by AndroidView
+                        android.view.LayoutInflater.from(contextView)
+                            .inflate(space.bitos.app.R.layout.video_stage_player_view, null)
+                            as PlayerView
                     },
                     // The player is rebuilt whenever the clip list changes
                     // (a multi-take handoff appends clips across frames, so

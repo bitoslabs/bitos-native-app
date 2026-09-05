@@ -392,6 +392,10 @@ final class MemeEditorStore {
         if redoHistory.count > Self.maxHistory { redoHistory.removeFirst() }
         projectJson = previous
         refresh()
+        // The wire's clip list travels with the history: rebuild the
+        // session from it; when a source is missing keep the session list
+        // and re-sync instead of dropping clips.
+        if !rebuildClipsFromWire() { syncWireClips() }
     }
 
     /// Re-applies the last undone wire; any new edit clears the branch.
@@ -401,6 +405,7 @@ final class MemeEditorStore {
         if history.count > Self.maxHistory { history.removeFirst() }
         projectJson = next
         refresh()
+        if !rebuildClipsFromWire() { syncWireClips() }
     }
 
     private func pushHistory(_ before: String) {
@@ -707,6 +712,45 @@ final class MemeEditorStore {
         }
     }
 
+    /// Undoable-clips support: id → source clip (bytes/url/probe are
+    /// shared, not copied) so a restored wire clip list can rebuild the
+    /// session after undo/redo. Bounded — ≤8 ids live per session and
+    /// removed halves linger for their redo step.
+    private var clipArchive: [String: EditorClip] = [:]
+
+    private func archiveClip(_ clip: EditorClip) {
+        clipArchive[clip.id] = clip
+        if clipArchive.count > 32, let oldest = clipArchive.keys.first {
+            clipArchive.removeValue(forKey: oldest)
+        }
+    }
+
+    /// Rebuilds the session clips from a restored wire (undo/redo). False
+    /// when a wire row's source is missing — the caller then re-syncs the
+    /// session list into the wire (sticky fallback) instead of dropping.
+    private func rebuildClipsFromWire() -> Bool {
+        guard isVideoMode else { return true }
+        let rows = wireClipEntries()
+        var rebuilt: [EditorClip] = []
+        rebuilt.reserveCapacity(rows.count)
+        for row in rows {
+            guard let base = clipArchive[row.id] else { return false }
+            let start = min(row.startMs, base.probe.durationMs)
+            let end = min(row.endMs, base.probe.durationMs)
+            guard end > start else { return false }
+            rebuilt.append(
+                EditorClip(
+                    id: row.id, data: base.data, url: base.url, probe: base.probe,
+                    startMs: start, endMs: end, volume: row.volume, lookId: row.lookId
+                )
+            )
+        }
+        clips = rebuilt
+        selectedClipIndex = min(selectedClipIndex, max(0, clips.count - 1))
+        videoRevision += 1
+        return true
+    }
+
     /** Fresh unique clip ids survive splits/removals. */
     private func maxClipCounter() -> Int {
         clips.compactMap { Int($0.id.dropFirst().prefix { $0.isNumber }) }.max() ?? 0
@@ -714,8 +758,9 @@ final class MemeEditorStore {
 
     /// Appends a source as a new timeline clip (cut rules applied; the
     /// reason surfaces as a notice). Returns false when caps refuse it.
+    /// Seeding passes `undoable: false` — a session start is not an edit.
     @discardableResult
-    func appendClip(data: Data) -> Bool {
+    func appendClip(data: Data, undoable: Bool = true) -> Bool {
         guard clips.count < 8 else {
             setNotice("Clip limit reached (8)")
             return false
@@ -730,12 +775,13 @@ final class MemeEditorStore {
         let start = cut?.cut == true ? cut!.startMs : 0
         let end = cut?.cut == true ? cut!.endMs : probe.durationMs
         if cut?.cut == true { setNotice(cut!.message) }
-        clips.append(
-            EditorClip(
-                id: "v\(maxClipCounter() + 1)", data: data, url: url, probe: probe,
-                startMs: start, endMs: end, volume: 1, lookId: nil
-            )
+        if undoable { pushHistory(projectJson) }
+        let clip = EditorClip(
+            id: "v\(maxClipCounter() + 1)", data: data, url: url, probe: probe,
+            startMs: start, endMs: end, volume: 1, lookId: nil
         )
+        clips.append(clip)
+        archiveClip(clip)
         selectedClipIndex = clips.count - 1
         videoRevision += 1
         syncWireClips()
@@ -744,6 +790,7 @@ final class MemeEditorStore {
 
     func removeClip(at index: Int) {
         guard clips.indices.contains(index) else { return }
+        pushHistory(projectJson)
         clips.remove(at: index)
         selectedClipIndex = min(selectedClipIndex, max(0, clips.count - 1))
         videoRevision += 1
@@ -760,6 +807,7 @@ final class MemeEditorStore {
     func moveClip(at index: Int, by delta: Int) {
         let target = index + delta
         guard clips.indices.contains(index), clips.indices.contains(target) else { return }
+        pushHistory(projectJson)
         clips.insert(clips.remove(at: index), at: target)
         selectedClipIndex = target
         videoRevision += 1
@@ -768,6 +816,7 @@ final class MemeEditorStore {
 
     func setClipWindow(index: Int, startMs: Int64, endMs: Int64) {
         guard clips.indices.contains(index) else { return }
+        pushHistory(projectJson)
         clips[index].startMs = startMs
         clips[index].endMs = max(startMs + 200, endMs)
         videoRevision += 1
@@ -776,6 +825,7 @@ final class MemeEditorStore {
 
     func setClipVolume(index: Int, volume: Float) {
         guard clips.indices.contains(index) else { return }
+        pushHistory(projectJson)
         clips[index].volume = min(2, max(0, volume))
         videoRevision += 1
         syncWireClips()
@@ -783,6 +833,7 @@ final class MemeEditorStore {
 
     func setClipLook(index: Int, lookId: String?) {
         guard clips.indices.contains(index) else { return }
+        pushHistory(projectJson)
         clips[index].lookId = lookId
         videoRevision += 1
         syncWireClips()
@@ -806,11 +857,14 @@ final class MemeEditorStore {
                 setNotice("Too close to a clip edge to split")
                 return false
             }
+            pushHistory(projectJson)
             var second = clip
             second.id = "v\(maxClipCounter() + 1)"
             second.startMs = splitAt
             clips[index].endMs = splitAt
             clips.insert(second, at: index + 1)
+            archiveClip(clips[index])
+            archiveClip(second)
             selectedClipIndex = index
             videoRevision += 1
             syncWireClips()
@@ -824,15 +878,33 @@ final class MemeEditorStore {
         clips = entries.compactMap { entry in
             guard let data = try? Data(contentsOf: entry.url),
                   let probe = MemeVideoExportIos.probe(url: entry.url) else { return nil }
-            return EditorClip(
+            let start = min(entry.startMs, probe.durationMs)
+            let end = min(entry.endMs, probe.durationMs)
+            // A probe that disagrees with the wire enough to collapse the
+            // window would render a zero-length segment — drop it instead.
+            guard end > start else { return nil }
+            let clip = EditorClip(
                 id: entry.id, data: data, url: entry.url, probe: probe,
-                startMs: min(entry.startMs, probe.durationMs),
-                endMs: min(entry.endMs, probe.durationMs),
+                startMs: start,
+                endMs: end,
                 volume: entry.volume, lookId: entry.lookId
             )
+            archiveClip(clip)
+            return clip
         }
         selectedClipIndex = 0
         videoRevision += 1
+    }
+
+    /// Wire clips that a resume could NOT bring back (missing file,
+    /// unreadable bytes, probe/wire mismatch). While > 0 the session is an
+    /// incomplete view of the slot and autosave must not persist over the
+    /// last good copy — a partial save erases the dropped clips' asset rows
+    /// and the timeline becomes unrecoverable.
+    private(set) var timelineRestoreDroppedClips = 0
+
+    func setTimelineRestoreDroppedClips(_ count: Int) {
+        timelineRestoreDroppedClips = count
     }
 
     /// The wire's clip rows (resume source): id/start/end/vol/look.
@@ -1734,7 +1806,6 @@ struct MemeEditorView: View {
             } else {
                 editorLayout
             }
-            nextButton
         }
     }
 
@@ -1924,7 +1995,8 @@ struct MemeEditorView: View {
            store.assets.isEmpty, store.gifFramesCount == 0 {
             store.switchModeToVideo()
             for seed in videoSeeds {
-                store.appendClip(data: seed)
+                // Seeding IS the session start, not a user edit step.
+                store.appendClip(data: seed, undoable: false)
             }
             return
         }
@@ -1942,13 +2014,26 @@ struct MemeEditorView: View {
             if store.isVideoMode {
             // M5: the wire's clip list + slot asset files rebuild the
             // whole timeline (v1 slots migrate into a single clip).
-            let entries = store.wireClipEntries().compactMap { entry -> (id: String, url: URL, startMs: Int64, endMs: Int64, volume: Float, lookId: String?)? in
+            let wireEntries = store.wireClipEntries()
+            let entries = wireEntries.compactMap { entry -> (id: String, url: URL, startMs: Int64, endMs: Int64, volume: Float, lookId: String?)? in
                 guard let url = resumeSlot.assetFiles[entry.id] else { return nil }
                 return (entry.id, url, entry.startMs, entry.endMs, entry.volume, entry.lookId)
             }
-            let videoClipIds = Set(entries.map(\.id))
             if !entries.isEmpty {
                 store.restoreClips(from: entries)
+            }
+            // Every wire clip that did not come back marks the session
+            // incomplete (file/probe failure) — visible to the user, and
+            // autosave stands down so the last good slot survives.
+            store.setTimelineRestoreDroppedClips(wireEntries.count - store.clips.count)
+            if store.timelineRestoreDroppedClips > 0 {
+                store.setNotice(
+                    "\(store.timelineRestoreDroppedClips) timeline clip(s) could not be restored — "
+                        + "the last saved draft is kept; reopen it to retry"
+                )
+            }
+            let videoClipIds = Set(store.clips.map(\.id))
+            if !store.clips.isEmpty {
                 // IMAGE layers resume with the slot (their PNG assets
                 // ride the same assetFiles map; GIF-inserts stay still).
                 for asset in resumeSlot.document.assets where !videoClipIds.contains(asset.id) {
@@ -2079,6 +2164,7 @@ struct MemeEditorView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(BitOSTheme.textPrimary)
             Spacer(minLength: 0)
+            headerNextButton
             Button {
                 Task {
                     await saveDraftNow()
@@ -2130,6 +2216,27 @@ struct MemeEditorView: View {
             .background(Capsule().fill(BitOSTheme.surface))
             .overlay(Capsule().strokeBorder(BitOSTheme.border, lineWidth: 1))
             Spacer(minLength: 0)
+            // Source add (frame/image/clip per mode) lives here with undo so
+            // the pick affordance isn't buried in the tray.
+            if store.isVideoMode {
+                Button {
+                    isPickingVideo = true
+                } label: {
+                    AppIcons.image(for: AppIcons.video)
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                }
+                .accessibilityLabel("Add clip")
+            }
+            Button {
+                isPicking = true
+            } label: {
+                AppIcons.image(for: AppIcons.photo)
+                    .foregroundStyle(BitOSTheme.textPrimary)
+            }
+            .accessibilityLabel(
+                store.isGifMode ? "Add frames"
+                    : (store.isVideoMode ? "Add image layer" : "Add image")
+            )
             Button {
                 store.undo()
             } label: {
@@ -2434,13 +2541,10 @@ struct MemeEditorView: View {
                 onClose: { suiteMode = false }
             )
         } else if store.isGifMode {
-            GifFrameTrayView(store: store) {
-                isPicking = true
-            }
+            GifFrameTrayView(store: store)
         } else {
             // Video mode: the tray holds IMAGE layer sources; image mode
             // holds the background candidates.
-            let assetCap = store.isVideoMode ? MemeEditorStore.videoLayerCap : MemeEditorStore.imageAssetCap
             ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 ForEach(store.assets) { asset in
@@ -2469,19 +2573,8 @@ struct MemeEditorView: View {
                     }
                     .accessibilityLabel(store.isVideoMode ? "Layer \(asset.id)" : "Asset \(asset.id)")
                 }
-                if store.assets.count < assetCap {
-                    PhotosPicker(
-                        selection: $pickerItems,
-                        maxSelectionCount: assetCap,
-                        matching: .images
-                    ) {
-                        RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(BitOSTheme.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                            .frame(width: 56, height: 56)
-                            .overlay(AppIcons.image(for: AppIcons.add).foregroundStyle(BitOSTheme.textSecondary))
-                    }
-                    .accessibilityLabel(store.isVideoMode ? "Insert image layer" : "Add image")
-                }
+                // Adding lives in the mode row beside undo (single
+                // source-add affordance) — the tray only selects.
             }
             .padding(.horizontal, BitOSTheme.Spacing.md)
         }
@@ -2587,7 +2680,9 @@ struct MemeEditorView: View {
             }
             panelBody(panel)
         }
-        .padding(BitOSTheme.Spacing.md)
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.sm)
+        .padding(.bottom, BitOSTheme.Spacing.lg)
         .background(BitOSTheme.background)
     }
 
@@ -2874,33 +2969,28 @@ struct MemeEditorView: View {
         String(format: "%02d:%02d", Int(ms / 1000) / 60, Int(ms / 1000) % 60)
     }
 
-    /** Primary exit into the publish flow (prototype "Next · post details"). */
-    private var nextButton: some View {
+    /// Header publish entry (prototype "Next · post details") — inline with
+    /// draft save so the bottom stack stays tool-only.
+    private var headerNextButton: some View {
         let hasMedia = store.activeAsset != nil || store.gifFramesCount > 0 ||
             store.videoClipData != nil
         let busy = store.publishState == .uploading || store.publishState == .publishing
+        // An incompletely restored timeline must not publish — the post
+        // would be an irreversible partial video.
+        let restoreIncomplete = store.isVideoMode && store.timelineRestoreDroppedClips > 0
         return Button {
             activePanel = nil
             showDetailsFlow = true
         } label: {
-            Text("Next · post details")
+            Text("Next")
                 .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, BitOSTheme.Spacing.sm)
+                .padding(.vertical, 4)
         }
         .buttonStyle(.borderedProminent)
         .tint(BitOSTheme.accent)
-        .disabled(!hasMedia || busy)
-        .padding(.horizontal, BitOSTheme.Spacing.md)
-        .padding(.vertical, BitOSTheme.Spacing.xs)
-        .padding(.bottom, !hasMedia ? 0 : BitOSTheme.Spacing.xs)
-        .overlay(alignment: .bottom) {
-            if !hasMedia {
-                Text("pick a clip, image or frames first")
-                    .font(.caption2)
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                    .offset(y: 14)
-            }
-        }
+        .disabled(!hasMedia || busy || restoreIncomplete)
+        .accessibilityLabel("Next — post details")
     }
 
     private func loadPicked(_ items: [PhotosPickerItem]) async {
@@ -2980,6 +3070,16 @@ struct MemeEditorView: View {
     private func saveDraftNow() async {
         guard let slotStore else {
             store.draftSaveState = .saved
+            return
+        }
+        // An incompletely restored timeline must never persist: the slot
+        // save rewrites the asset list from this session, so a partial one
+        // would erase the dropped clips' files from the draft for good.
+        if store.isVideoMode && store.timelineRestoreDroppedClips > 0 {
+            store.draftSaveState = .failed
+            store.setNotice(
+                "Timeline incompletely restored — the last saved draft is kept; reopen it to retry"
+            )
             return
         }
         store.draftSaveState = .saving
@@ -3388,7 +3488,6 @@ private extension View {
 
 private struct GifFrameTrayView: View {
     let store: MemeEditorStore
-    let onAddFrames: () -> Void
     @State private var draggingIndex: Int?
 
     var body: some View {
@@ -3426,15 +3525,8 @@ private struct GifFrameTrayView: View {
                                 .accessibilityLabel("Frame \(index + 1) — drag to reorder")
                         }
                     }
-                    if store.gifFramesCount < 60 {
-                        Button(action: onAddFrames) {
-                            RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(BitOSTheme.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                                .frame(width: 56, height: 56)
-                                .overlay(AppIcons.image(for: AppIcons.add).foregroundStyle(BitOSTheme.textSecondary))
-                        }
-                        .accessibilityLabel("Add frames")
-                    }
+                    // Adding lives in the mode row beside undo (single
+                    // source-add affordance) — the tray only reorders/selects.
                 }
                 .padding(.horizontal, BitOSTheme.Spacing.md)
             }
@@ -3856,7 +3948,6 @@ private struct MemePanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Meme generator").font(.subheadline.weight(.semibold))
             BitosField("TOP TEXT", text: $top)
                 
                 .autocorrectionDisabled()
@@ -3901,7 +3992,6 @@ private struct TextPanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Add text").font(.subheadline.weight(.semibold))
             BitosField("Type something…", text: $text)
                 
                 .onSubmit(addText)
@@ -3942,7 +4032,6 @@ private struct StickerPanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Stickers").font(.subheadline.weight(.semibold))
             if !store.recents.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: BitOSTheme.Spacing.xs) {
@@ -3988,7 +4077,6 @@ private struct SoundPanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Sound").font(.subheadline.weight(.semibold))
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cueCount == 0 ? "Original clip audio" : "\(cueCount) synth cue\(cueCount == 1 ? "" : "s")")
@@ -4028,7 +4116,6 @@ private struct FxPanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            Text("Looks & effects").font(.subheadline.weight(.semibold))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
                     ForEach(lookRows, id: \.id) { look in

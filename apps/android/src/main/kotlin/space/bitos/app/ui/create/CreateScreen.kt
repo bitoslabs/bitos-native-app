@@ -247,6 +247,18 @@ fun CreateScreen(
     // Recomputed whenever a batch session closes (mass flips back to null).
     val batchSummary = remember(mass) { massSummary(massFiles) }
 
+    // The editor's resume handle must be identity-stable across
+    // recompositions: loading it inline handed MemeEditorScreen a fresh
+    // SavedSlot every time (each editor autosave bumps slotsRevision here,
+    // and the new document's updatedAtMs breaks SavedSlot equality), so the
+    // screen's remember(resume) seed block re-ran and appended every
+    // timeline clip a second time — the "auto split on resume" bug — plus
+    // main-thread disk reads per frame. Keyed by the slot id: loaded once
+    // per editor session.
+    val resumeSlot = remember(resumeSlotId) {
+        resumeSlotId?.let { slotStore.loadSlot(it) }
+    }
+
     if (showMeme) {
         space.bitos.app.ui.create.meme.MemeEditorScreen(
             onClose = {
@@ -256,7 +268,7 @@ fun CreateScreen(
             sharedContent = sharedSeed?.second,
             mediaPublishViewModel = mediaPublishViewModel,
             store = slotStore,
-            resume = resumeSlotId?.let { slotStore.loadSlot(it) },
+            resume = resumeSlot,
             template = templateSeed,
             videoSeeds = memeSeeds,
             onSlotsChanged = { slotsRevision += 1 },

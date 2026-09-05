@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Editor stage surface: the stage player runs setVideoEffects (color
+     grade), whose processed frames require the decoder-output renderer —
+     the default surface_view renders black. -->
+<androidx.media3.ui.PlayerView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:use_controller="false"
+    app:resize_mode="fit"
+    app:surface_type="video_decoder_gl_surface_view" />

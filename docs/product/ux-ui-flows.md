@@ -383,14 +383,22 @@ Back behavior:
 
 Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-details`
 → `#/create-review` parity): the editor screen follows the prototype layout —
-"Editor" header with draft save, VIDEO/GIF/IMAGE pills + undo, circular quick tools
+"Editor" header with draft save and the "Next" publish entry inline with it
+(the bottom stack stays tool-only; a slim notice replaces the bottom button
+while no source exists), VIDEO/GIF/IMAGE pills with source-add buttons
+(frame/image/clip per mode, Solar icons) beside undo, circular quick tools
 (Meme · Text · Stickers · Sound · Effects) opening native BOTTOM SHEETS
 (panel contents per the prototype; sheets are the platform idiom and keep
-the canvas visible above),
+the canvas visible above; each sheet shows exactly one title — the sheet
+header — and one content inset, so panel bodies drop their own titles and
+padding),
 a single compact clip timeline with Split/Delete/Mute/Speed/Layer in video mode
 (clip and layer insertion stays in the expanded Timeline workspace, avoiding a
-second source strip in the basic editor), a
-per-mode bottom bar, and a primary "Next · post details" button. Post details
+second source strip in the basic editor) — timeline clip edits (split, delete,
+move, mute/volume, trim, per-clip look, picker-added clips) are UNDOABLE and
+interleave correctly with overlay/style edits through one undo affordance
+(seeding a session from the camera is not an undo step), and a
+per-mode bottom bar. Post details
 collects caption, explicit t-tags (≤ 8), cover/audience/zap/remix toggles,
 content warning and the license chip (CC0 / CC-BY / Nostr-only — rides the
 `license` tag). Its preview/caption row and tag entry use the compact, flat

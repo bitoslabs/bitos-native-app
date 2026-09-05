@@ -267,4 +267,74 @@ class MemeEditorStateTest {
         assertEquals(1, state.addMemeCaptions("", "only bottom", MemeFontSlot.SANS).size)
         assertEquals(0, state.addMemeCaptions("   ", "", MemeFontSlot.SANS).size, "blank adds nothing")
     }
+
+    @Test
+    fun undoDoesNotResurrectAnOlderClipList() {
+        val state = MemeEditorState()
+        state.switchMode(space.bitos.core.studio.MemeMode.VIDEO)
+        // One clip, then an undoable overlay edit, then a split via the
+        // session sync (clips live OUTSIDE the command history).
+        state.syncClips(listOf(space.bitos.core.studio.MemeClip("v1", 0, 4000)))
+        state.addOverlay(MemeOverlayKind.TEXT, "gm")
+        state.syncClips(
+            listOf(
+                space.bitos.core.studio.MemeClip("v1", 0, 2000),
+                space.bitos.core.studio.MemeClip("v2", 2000, 4000),
+            ),
+        )
+        assertTrue(state.undo())
+        assertEquals(0, state.project.overlays.size, "the overlay edit reverts")
+        assertEquals(
+            listOf("v1", "v2"),
+            state.project.clips.map { it.id },
+            "the split survives undo — a snapshot must not drop clip edits an autosave would then persist",
+        )
+        assertTrue(state.redo())
+        assertEquals(listOf("v1", "v2"), state.project.clips.map { it.id })
+    }
+
+    @Test
+    fun clipEditsAreUndoableAndInterleaveWithCommands() {
+        val state = MemeEditorState()
+        state.switchMode(space.bitos.core.studio.MemeMode.VIDEO)
+        state.syncClips(listOf(space.bitos.core.studio.MemeClip("v1", 0, 4000)))
+        // Overlay edit, then split, then delete — three undo steps.
+        state.addOverlay(MemeOverlayKind.TEXT, "gm")
+        state.beginClipsEdit()
+        state.syncClips(
+            listOf(
+                space.bitos.core.studio.MemeClip("v1", 0, 2000),
+                space.bitos.core.studio.MemeClip("v2", 2000, 4000),
+            ),
+        )
+        state.beginClipsEdit()
+        state.syncClips(listOf(space.bitos.core.studio.MemeClip("v1", 0, 2000)))
+
+        assertTrue(state.undo())
+        assertEquals(listOf("v1", "v2"), state.project.clips.map { it.id }, "delete reverts first")
+        assertTrue(state.undo())
+        assertEquals(listOf("v1"), state.project.clips.map { it.id }, "split reverts second")
+        assertEquals(4000L, state.project.clips.single().endMs, "the pre-split window comes back whole")
+        assertTrue(state.undo())
+        assertEquals(0, state.project.overlays.size, "the command edit is the oldest step")
+        assertFalse(state.undo())
+        assertTrue(state.canRedo)
+
+        // Redo walks forward through both kinds in order.
+        assertTrue(state.redo())
+        assertEquals(1, state.project.overlays.size)
+        assertTrue(state.redo())
+        assertEquals(listOf("v1", "v2"), state.project.clips.map { it.id })
+        assertTrue(state.redo())
+        assertEquals(listOf("v1"), state.project.clips.map { it.id })
+        assertFalse(state.redo())
+
+        // A new clip edit clears the redo branch (standard undo contract).
+        state.undo()
+        state.beginClipsEdit()
+        state.syncClips(emptyList())
+        assertFalse(state.canRedo)
+        assertTrue(state.undo())
+        assertEquals(listOf("v1", "v2"), state.project.clips.map { it.id })
+    }
 }

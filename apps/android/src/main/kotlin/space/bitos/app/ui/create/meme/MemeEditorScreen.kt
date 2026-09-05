@@ -261,6 +261,15 @@ fun MemeEditorScreen(
         )
     }
 
+    /** Undoable-clips support: id → (bytes, probe) so a restored wire clip
+     *  list can rebuild the session after undo/redo (bounded; ≤8 ids are
+     *  live per session, removed halves linger for their redo step). */
+    val clipArchive = remember { mutableMapOf<String, Pair<ByteArray, MemeVideoExport.Probe>>() }
+    fun archiveClip(clip: SessionClip) {
+        clipArchive[clip.id] = clip.bytes to clip.probe
+        while (clipArchive.size > 32) clipArchive.remove(clipArchive.keys.first())
+    }
+
     /**
      * Fresh unique clip ids survive splits/removals (never reuse a wire id).
      * Declared before its callers among the local helpers below.
@@ -270,7 +279,7 @@ fun MemeEditorScreen(
     } ?: 0
 
     /** Appends a probed source as a new timeline clip (cut rules applied). */
-    fun appendClip(bytes: ByteArray, probe: MemeVideoExport.Probe) {
+    fun appendClip(bytes: ByteArray, probe: MemeVideoExport.Probe, undoable: Boolean = true) {
         if (videoClips.size >= MAX_TIMELINE_CLIPS) {
             exportStatus = "Clip limit reached ($MAX_TIMELINE_CLIPS)"
             return
@@ -282,14 +291,18 @@ fun MemeEditorScreen(
         val cut = space.bitos.core.studio.MemeVideoCutRules.cutForDuration(probe.durationMs)
         if (cut.cut) exportStatus = cut.message
         val id = "v${maxClipCounter() + 1}"
+        if (undoable) state.beginClipsEdit()
         state.addAssets(listOf(id), kind = MemeMode.VIDEO)
-        videoClips += SessionClip(id, bytes, probe, cut.startMs, cut.endMs)
+        val clip = SessionClip(id, bytes, probe, cut.startMs, cut.endMs)
+        videoClips += clip
+        archiveClip(clip)
         selectedClipIndex = videoClips.lastIndex
         syncWireClips()
     }
 
     fun removeClip(index: Int) {
         if (index !in videoClips.indices) return
+        state.beginClipsEdit()
         videoClips.removeAt(index)
         selectedClipIndex = selectedClipIndex.coerceIn(0, (videoClips.size - 1).coerceAtLeast(0))
         syncWireClips()
@@ -298,6 +311,7 @@ fun MemeEditorScreen(
     fun moveClip(index: Int, delta: Int) {
         val target = index + delta
         if (index !in videoClips.indices || target !in videoClips.indices) return
+        state.beginClipsEdit()
         val clip = videoClips.removeAt(index)
         videoClips.add(target, clip)
         selectedClipIndex = target
@@ -331,8 +345,10 @@ fun MemeEditorScreen(
                 id = "v${maxClipCounter() + 1}",
                 startMs = splitAt,
             )
+            state.beginClipsEdit()
             videoClips[index] = clip.copy(endMs = splitAt)
             videoClips.add(index + 1, second)
+            archiveClip(second)
             selectedClipIndex = index
             syncWireClips()
             return
@@ -344,10 +360,53 @@ fun MemeEditorScreen(
     /** MST-032: separately-uploaded cover URL (session-only in V1). */
     var coverThumbUrl by remember { mutableStateOf<String?>(null) }
     val videoMode = state.project.mode == MemeMode.VIDEO
+
+    /** Rebuilds the session clip list from the wire after undo/redo. Full
+     *  rebuild only — a partial match keeps the session list (sticky
+     *  fallback) rather than dropping clips silently. */
+    fun reconcileClipsFromWire() {
+        if (!videoMode) return
+        val wire = state.project.clips
+        val rebuilt = wire.mapNotNull { row ->
+            clipArchive[row.id]?.let { (bytes, probe) ->
+                val start = row.startMs.coerceIn(0, probe.durationMs)
+                val end = row.endMs.coerceAtMost(probe.durationMs)
+                if (end > start) SessionClip(row.id, bytes, probe, start, end, row.volume, row.lookId) else null
+            }
+        }
+        if (rebuilt.size == wire.size) {
+            videoClips.clear()
+            videoClips += rebuilt
+            rebuilt.forEach(::archiveClip)
+            selectedClipIndex = selectedClipIndex.coerceIn(0, (videoClips.size - 1).coerceAtLeast(0))
+        }
+    }
+
+    /** ONE undo affordance: steps back the newest action of either kind
+     *  (command or clip-list edit), then re-hydrates the session clips. */
+    fun undoEdit(): Boolean {
+        val undone = state.undo()
+        if (undone) reconcileClipsFromWire()
+        return undone
+    }
+
+    fun redoEdit(): Boolean {
+        val redone = state.redo()
+        if (redone) reconcileClipsFromWire()
+        return redone
+    }
+
     var gifPreviewIndex by remember { mutableIntStateOf(0) }
     var gifUniformDelayMs by remember { mutableStateOf(0) } // 0 = keep source delays
     var confirmModeSwitch by remember { mutableStateOf(false) }
     var pendingModeSwitch by remember { mutableStateOf(MemeMode.IMAGE) }
+
+    // Resume integrity: wire clips that rehydration could NOT bring back
+    // (missing file / unreadable bytes / probe mismatch). While > 0 the
+    // session is an incomplete view of the slot — autosave stands down so
+    // the last good copy survives (a partial save would erase the dropped
+    // clips' asset rows and the timeline would be unrecoverable).
+    var resumeDroppedClips by remember { mutableIntStateOf(0) }
 
     val assets = remember(resume) {
         mutableStateListOf<EditorAsset>().apply {
@@ -356,24 +415,51 @@ fun MemeEditorScreen(
                     // M5 resume: the wire's clip list + slot asset files
                     // rebuild the full timeline (windows from the wire; a
                     // v1 slot migrates into a single clip server-side).
-                    saved.document.project.clips.forEach { wireClip ->
-                        val file = saved.assetFiles[wireClip.id] ?: return@forEach
-                        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return@forEach
-                        val probe = MemeVideoExport.probe(
-                            context.contentResolver,
-                            android.net.Uri.fromFile(file),
-                        )
-                        if (probe != null) {
-                            videoClips += SessionClip(
+                    //
+                    // Re-run guard: this block re-executes whenever the
+                    // `resume` identity changes (a fresh SavedSlot breaks
+                    // SavedSlot equality on its updatedAtMs), while the
+                    // unkeyed `videoClips` remember still holds the first
+                    // restore — appending again doubled the timeline on
+                    // screen ("auto split on resume") and the next
+                    // syncWireClips persisted the duplicate. Seed once;
+                    // the IMAGE-layer tray below still re-seeds because
+                    // the `assets` list itself is rebuilt by this block.
+                    if (videoClips.isEmpty()) {
+                        var dropped = 0
+                        saved.document.project.clips.forEach { wireClip ->
+                            val file = saved.assetFiles[wireClip.id]
+                            if (file == null) { dropped++; return@forEach }
+                            val bytes = runCatching { file.readBytes() }.getOrNull()
+                            if (bytes == null) { dropped++; return@forEach }
+                            val probe = MemeVideoExport.probe(
+                                context.contentResolver,
+                                android.net.Uri.fromFile(file),
+                            )
+                            if (probe == null) { dropped++; return@forEach }
+                            val start = wireClip.startMs.coerceIn(0, probe.durationMs)
+                            val end = wireClip.endMs.coerceAtMost(probe.durationMs)
+                            // A probe that disagrees with the wire enough to
+                            // collapse the window would render a zero-length
+                            // segment — count it dropped, don't add it.
+                            if (end <= start) { dropped++; return@forEach }
+                            val restored = SessionClip(
                                 wireClip.id, bytes, probe,
-                                wireClip.startMs.coerceIn(0, probe.durationMs),
-                                wireClip.endMs.coerceAtMost(probe.durationMs),
+                                start,
+                                end,
                                 wireClip.volume,
                                 wireClip.lookId,
                             )
+                            videoClips += restored
+                            archiveClip(restored)
                         }
+                        if (dropped > 0) {
+                            resumeDroppedClips = dropped
+                            exportStatus = "$dropped timeline clip(s) could not be restored — " +
+                                "the last saved draft is kept; reopen it to retry"
+                        }
+                        selectedClipIndex = 0
                     }
-                    selectedClipIndex = 0
                     // IMAGE layers resume with the slot (their assets ride
                     // the same assetFiles map the image mode uses).
                     saved.document.project.assets
@@ -389,12 +475,16 @@ fun MemeEditorScreen(
                 } else if (saved.document.project.mode == MemeMode.GIF) {
                     // GIF resume: slot files decode back into the frame tray
                     // (holds collapse to a uniform 100 ms — source delays are
-                    // not part of the slot wire in V1).
-                    saved.document.assets.sortedBy { it.id }.forEach { asset ->
-                        saved.assetFiles[asset.id]?.let { file ->
-                            android.graphics.BitmapFactory.decodeFile(file.absolutePath)?.let { bitmap ->
-                                gifFrames += bitmap
-                                gifDelays += GifFrameSource.STILL_DELAY_MS
+                    // not part of the slot wire in V1). Same re-run guard as
+                    // the video branch: the unkeyed `gifFrames` remember must
+                    // not take a second copy when the block re-executes.
+                    if (gifFrames.isEmpty()) {
+                        saved.document.assets.sortedBy { it.id }.forEach { asset ->
+                            saved.assetFiles[asset.id]?.let { file ->
+                                android.graphics.BitmapFactory.decodeFile(file.absolutePath)?.let { bitmap ->
+                                    gifFrames += bitmap
+                                    gifDelays += GifFrameSource.STILL_DELAY_MS
+                                }
                             }
                         }
                     }
@@ -445,7 +535,8 @@ fun MemeEditorScreen(
             var failed = false
             for ((seed, probe) in probed) {
                 if (probe != null) {
-                    appendClip(seed, probe)
+                    // Seeding IS the session start, not a user edit step.
+                    appendClip(seed, probe, undoable = false)
                 } else {
                     failed = true
                 }
@@ -575,6 +666,13 @@ fun MemeEditorScreen(
     LaunchedEffect(store, slotId, dataRevision, assets.size, activeAssetId, gifFrames.size, videoClips.size) {
         val slotStore = store ?: return@LaunchedEffect
         if (state.isEmpty && assets.isEmpty() && gifFrames.isEmpty() && videoClips.isEmpty()) {
+            return@LaunchedEffect
+        }
+        // An incompletely restored timeline must never persist: the slot
+        // save rewrites the asset list from this session, so a partial one
+        // would erase the dropped clips' files from the draft for good.
+        if (videoMode && resumeDroppedClips > 0) {
+            draftSaveState = DraftSaveState.FAILED
             return@LaunchedEffect
         }
         kotlinx.coroutines.delay(space.bitos.core.studio.MemeSlots.AUTOSAVE_DEBOUNCE_MS)
@@ -958,6 +1056,28 @@ fun MemeEditorScreen(
                 color = BitOSColors.textPrimary,
             )
             Spacer(Modifier.weight(1f))
+            // Publish entry (prototype "Next · post details") lives in the
+            // header beside draft save so the bottom stack stays tool-only.
+            val headerHasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo
+            val headerPublishBusy = memePublishState?.phase.let {
+                it == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
+                    it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
+            }
+            // An incompletely restored timeline must not publish — the post
+            // would be an irreversible partial video.
+            val headerRestoreIncomplete = videoMode && resumeDroppedClips > 0
+            TextButton(
+                onClick = {
+                    activePanel = null
+                    showPublish = true
+                },
+                enabled = mediaPublishViewModel != null && headerHasMedia &&
+                    !headerPublishBusy && !headerRestoreIncomplete,
+                colors = ButtonDefaults.textButtonColors(contentColor = BitOSColors.primary),
+                modifier = Modifier.semantics { contentDescription = "Next — post details" },
+            ) {
+                Text("Next", fontWeight = FontWeight.W600)
+            }
             IconButton(
                 onClick = { exportStatus = when (draftSaveState) {
                     DraftSaveState.SAVING -> "Saving draft…"
@@ -1260,8 +1380,8 @@ fun MemeEditorScreen(
                 transport = videoTransport,
                 canUndo = state.canUndo,
                 canRedo = state.canRedo,
-                onUndo = { state.undo() },
-                onRedo = { state.redo() },
+                onUndo = ::undoEdit,
+                onRedo = ::redoEdit,
                 onOpenLayers = { showLayers = true },
                 looksEnabled = (videoMode && hasVideo) || activeAsset != null,
                 onOpenLooks = { showLooks = true },
@@ -1310,7 +1430,20 @@ fun MemeEditorScreen(
                             pendingModeSwitch = mode
                         }
                     },
-                    onUndo = { state.undo() },
+                    onAddClip = {
+                        videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                    },
+                    onAddImage = {
+                        // launchPicker() is video-mode-aware (clips) — the
+                        // inline image button always means IMAGES: frames in
+                        // GIF mode, background in IMAGE mode, layers in VIDEO.
+                        if (gifMode) {
+                            gifPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        } else {
+                            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    },
+                    onUndo = ::undoEdit,
                 )
                 QuickToolsRow(
                     canAddOverlay = state.canAddOverlay,
@@ -1346,7 +1479,6 @@ fun MemeEditorScreen(
                     }
                 },
                 onDelayChange = { gifUniformDelayMs = it },
-                onAddFrames = ::launchPicker,
             )
         } else if (videoMode) {
             // The compact prototype uses the timeline itself as the clip
@@ -1365,25 +1497,8 @@ fun MemeEditorScreen(
                     onClick = { activeAssetId = asset.id },
                 )
             }
-            if (assets.size < MemeProjectContract.maxAssets(MemeMode.IMAGE)) {
-                item(key = "add") {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color.Transparent,
-                        border = BorderStroke(1.dp, BitOSColors.border),
-                        onClick = ::launchPicker,
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                AppIcons.Add,
-                                contentDescription = "Add image",
-                                tint = BitOSColors.textSecondary,
-                            )
-                        }
-                    }
-                }
-            }
+            // Adding lives in the mode row beside undo (single source-add
+            // affordance) — the tray only selects among what exists.
         }
         }
                 if (videoMode && hasVideo) {
@@ -1405,6 +1520,7 @@ fun MemeEditorScreen(
                         },
                         onMute = {
                             videoClips.getOrNull(selectedClipIndex)?.let { clip ->
+                                state.beginClipsEdit()
                                 videoClips[selectedClipIndex] = clip.copy(
                                     volume = if (clip.volume == 0f) 1f else 0f,
                                 )
@@ -1586,6 +1702,7 @@ fun MemeEditorScreen(
                                     onPick = { id ->
                                         val index = videoClips.indexOf(clip)
                                         if (index >= 0) {
+                                            state.beginClipsEdit()
                                             videoClips[index] = clip.copy(
                                                 lookId = space.bitos.core.studio.MemeLooks.normalize(id),
                                             )
@@ -1614,32 +1731,18 @@ fun MemeEditorScreen(
             it == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
                 it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
         }
-        Button(
-            onClick = {
-                activePanel = null
-                showPublish = true
-            },
-            enabled = mediaPublishViewModel != null && hasMedia && !publishBusy,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = BitOSColors.primary,
-                contentColor = androidx.compose.ui.graphics.Color.White,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs)
-                .navigationBarsPadding(),
-        ) {
-            Text("Next · post details", fontWeight = FontWeight.W600)
-        }
-        if (!hasMedia) {
+        // Bottom keeps a slim disabled-state notice only; the action itself
+        // is the header Next button.
+        if (!hasMedia || publishBusy) {
             Text(
-                "pick a clip, image or frames first",
+                if (hasMedia) "publishing…" else "pick a clip, image or frames first",
                 style = MaterialTheme.typography.labelSmall,
                 color = BitOSColors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = BitOSSpacing.xs),
+                    .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs)
+                    .navigationBarsPadding(),
             )
         }
     }
@@ -1784,37 +1887,47 @@ fun MemeEditorScreen(
 
     if (showLooks) {
         ModalBottomSheet(onDismissRequest = { showLooks = false }) {
-            if (videoMode && hasVideo) {
-                // M5: the grade applies to the SELECTED clip; "none" clears
-                // the override (the project grade shows through again). The
-                // adjust sliders stay project-wide (prototype semantics).
-                val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
-                LooksSheetContent(
-                    active = clip.lookId ?: state.project.lookId
-                        ?: space.bitos.core.studio.MemeLooks.NONE,
-                    onPick = { id ->
-                        val index = videoClips.indexOf(clip)
-                        if (index >= 0) {
-                            videoClips[index] = clip.copy(
-                                lookId = space.bitos.core.studio.MemeLooks.normalize(id),
-                            )
-                            syncWireClips()
-                        }
-                        showLooks = false
-                    },
-                    adjust = state.project.adjust,
-                    onAdjust = { state.setAdjust(it) },
-                )
-            } else {
-                LooksSheetContent(
-                    active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
-                    onPick = { id ->
-                        state.setLook(id)
-                        showLooks = false
-                    },
-                    adjust = state.project.adjust,
-                    onAdjust = { state.setAdjust(it) },
-                )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = BitOSSpacing.base)
+                    .padding(bottom = BitOSSpacing.lg),
+                verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            ) {
+                Text("Color look", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+                if (videoMode && hasVideo) {
+                    // M5: the grade applies to the SELECTED clip; "none" clears
+                    // the override (the project grade shows through again). The
+                    // adjust sliders stay project-wide (prototype semantics).
+                    val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
+                    LooksSheetContent(
+                        active = clip.lookId ?: state.project.lookId
+                            ?: space.bitos.core.studio.MemeLooks.NONE,
+                        onPick = { id ->
+                            val index = videoClips.indexOf(clip)
+                            if (index >= 0) {
+                                state.beginClipsEdit()
+                                videoClips[index] = clip.copy(
+                                    lookId = space.bitos.core.studio.MemeLooks.normalize(id),
+                                )
+                                syncWireClips()
+                            }
+                            showLooks = false
+                        },
+                        adjust = state.project.adjust,
+                        onAdjust = { state.setAdjust(it) },
+                    )
+                } else {
+                    LooksSheetContent(
+                        active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
+                        onPick = { id ->
+                            state.setLook(id)
+                            showLooks = false
+                        },
+                        adjust = state.project.adjust,
+                        onAdjust = { state.setAdjust(it) },
+                    )
+                }
             }
         }
     }
@@ -1860,6 +1973,7 @@ fun MemeEditorScreen(
                 onApply = { start, end ->
                     val index = videoClips.indexOf(clip)
                     if (index >= 0) {
+                        state.beginClipsEdit()
                         videoClips[index] = clip.copy(startMs = start, endMs = end)
                         syncWireClips()
                     }
@@ -1878,6 +1992,7 @@ fun MemeEditorScreen(
                 onApply = { volume ->
                     val index = videoClips.indexOf(clip)
                     if (index >= 0) {
+                        state.beginClipsEdit()
                         videoClips[index] = clip.copy(volume = volume)
                         syncWireClips()
                     }
@@ -2127,6 +2242,8 @@ private fun ModePillsRow(
     activeMode: MemeMode,
     canUndo: Boolean,
     onPickMode: (MemeMode) -> Unit,
+    onAddClip: () -> Unit,
+    onAddImage: () -> Unit,
     onUndo: () -> Unit,
 ) {
     Row(
@@ -2164,6 +2281,28 @@ private fun ModePillsRow(
             }
         }
         Spacer(Modifier.weight(1f))
+        // Source add (frame/image/clip per mode) lives here with undo so the
+        // pick affordance isn't buried in the tray.
+        if (activeMode == MemeMode.VIDEO) {
+            IconButton(onClick = onAddClip) {
+                SolarStudioIconImage(
+                    SolarStudioIcon.VideoCamera,
+                    contentDescription = "Add clip",
+                    tint = BitOSColors.textPrimary,
+                )
+            }
+        }
+        IconButton(onClick = onAddImage) {
+            SolarStudioIconImage(
+                SolarStudioIcon.Gallery,
+                contentDescription = when (activeMode) {
+                    MemeMode.GIF -> "Add frames"
+                    MemeMode.VIDEO -> "Add image layer"
+                    MemeMode.IMAGE -> "Add image"
+                },
+                tint = BitOSColors.textPrimary,
+            )
+        }
         IconButton(onClick = onUndo, enabled = canUndo) {
             SolarStudioIconImage(
                 SolarStudioIcon.UndoLeft,
@@ -2318,7 +2457,6 @@ private fun TextPanelContent(onAdd: (String, MemeFontSlot) -> Unit) {
     var text by remember { mutableStateOf("") }
     var slot by remember { mutableStateOf(MemeFontSlot.SANS) }
     Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-        Text("Add text", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
         space.bitos.app.ui.components.BitosTextField(
             value = text,
             onValueChange = { text = it },
@@ -2839,7 +2977,6 @@ private fun GifFrameTray(
     onPickFrame: (Int) -> Unit,
     onReorder: (Int, Int) -> Unit,
     onDelayChange: (Int) -> Unit,
-    onAddFrames: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
         LazyRow(
@@ -2901,25 +3038,8 @@ private fun GifFrameTray(
                     )
                 }
             }
-            if (frames.size < MemeProjectContract.maxAssets(MemeMode.GIF)) {
-                item(key = "add-frame") {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color.Transparent,
-                        border = BorderStroke(1.dp, BitOSColors.border),
-                        onClick = onAddFrames,
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                AppIcons.Add,
-                                contentDescription = "Add frames",
-                                tint = BitOSColors.textSecondary,
-                            )
-                        }
-                    }
-                }
-            }
+            // Adding lives in the mode row beside undo (single source-add
+            // affordance) — the tray only selects/reorders frames.
         }
         LabeledSlider(
             label = "Frame delay",
@@ -3449,14 +3569,11 @@ private fun LabeledSlider(
 @Composable
 private fun StickerSheetContent(recents: List<String>, onPick: (String) -> Unit) {
     var packId by remember { mutableStateOf(StickerCatalog.PACKS.first().id) }
+    // No outer padding/title here — the tool-panel sheet provides both.
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.base)
-            .padding(bottom = BitOSSpacing.lg),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        Text("Stickers", style = MaterialTheme.typography.titleMedium)
         if (recents.isNotEmpty()) {
             Text("Recent", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
@@ -4491,13 +4608,12 @@ private fun LooksSheetContent(
     adjust: space.bitos.core.studio.MemeAdjust? = null,
     onAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit = {},
 ) {
-    Column(Modifier.padding(BitOSSpacing.base)) {
-        Text("Color look", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+    // No outer padding/title here — the presenting sheet provides both.
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
         Text(
             "Applies to the media only — captions stay crisp. Undo works.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
-            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
         )
         space.bitos.core.studio.MemeLooks.ALL.chunked(4).forEach { rowLooks ->
             Row(
@@ -4634,13 +4750,12 @@ private fun MemeCaptionSheetContent(
         MemeFontSlot.SERIF to "Comic",
         MemeFontSlot.SANS to "Modern",
     )
-    Column(Modifier.padding(BitOSSpacing.base)) {
-        Text("Meme generator", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+    // No outer padding/title here — the tool-panel sheet provides both.
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
         Text(
             "Classic top/bottom captions. Drag on the stage to fine-tune.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
-            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
         )
         space.bitos.app.ui.components.BitosTextField(
             value = top,
