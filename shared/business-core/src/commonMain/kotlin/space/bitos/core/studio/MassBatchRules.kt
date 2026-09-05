@@ -410,12 +410,77 @@ object MassBatchRules {
      * case-insensitive); unmapped columns are ignored with a note. Rows
      * cap at [MassBatch.MAX_ROWS].
      */
+    /** Dry-run CSV analysis (MUX-07): what import WOULD do — mapping,
+     *  gaps, row count vs the operational cap — without touching the batch. */
+    data class CsvPreview(
+        val headers: List<String>,
+        /** Column index → slot id (null = no slot matched). */
+        val mapping: List<String?>,
+        val missingRequired: List<String>,
+        val unknownColumns: List<String>,
+        val dataRows: Int,
+        val overCap: Boolean,
+        val cap: Int,
+        /** ≤3 data rows × ≤6 cells, cells clipped for display. */
+        val sample: List<List<String>>,
+        val notes: List<String>,
+    )
+
+    fun csvPreview(text: String, recipe: MassRecipe): CsvPreview {
+        if (text.length > MassBatch.MAX_CSV_BYTES) {
+            return CsvPreview(emptyList(), emptyList(), emptyList(), emptyList(), 0, false,
+                MassBatch.MAX_NEW_ROWS, emptyList(), listOf("CSV exceeds ${MassBatch.MAX_CSV_BYTES / 1024} KB — import refused"))
+        }
+        val table = parseCsvTable(text)
+        if (table.isEmpty()) {
+            return CsvPreview(emptyList(), emptyList(), emptyList(), emptyList(), 0, false,
+                MassBatch.MAX_NEW_ROWS, emptyList(), listOf("CSV is empty"))
+        }
+        val header = table.first()
+        val mapping = header.mapIndexed { _, column ->
+            val clean = column.trim()
+            recipe.slots.firstOrNull { it.id.equals(clean, ignoreCase = true) }?.id
+                ?: recipe.slots.firstOrNull { it.name.equals(clean, ignoreCase = true) }?.id
+        }
+        val unknown = header.mapIndexedNotNull { index, column ->
+            val clean = column.trim()
+            if (mapping.getOrNull(index) == null && clean.isNotBlank()) clean.take(24) else null
+        }
+        val missing = recipe.slots.filter { it.required }
+            .filter { slot -> !mapping.contains(slot.id) }
+            .map { it.name }
+        val dataRows = table.drop(1).count { cells -> cells.any { it.isNotBlank() } }
+        val sample = table.drop(1)
+            .filter { cells -> cells.any { it.isNotBlank() } }
+            .take(3)
+            .map { cells -> cells.take(6).map { cell -> cell.trim().take(24) } }
+        return CsvPreview(
+            headers = header.map { it.trim().take(24) },
+            mapping = mapping,
+            missingRequired = missing,
+            unknownColumns = unknown,
+            dataRows = dataRows,
+            overCap = dataRows > MassBatch.MAX_NEW_ROWS,
+            cap = MassBatch.MAX_NEW_ROWS,
+            sample = sample,
+            notes = emptyList(),
+        )
+    }
+
     fun importCsv(text: String, recipe: MassRecipe, rowIdPrefix: String = "r"): CsvImport {
         if (text.length > MassBatch.MAX_CSV_BYTES) {
             return CsvImport(emptyList(), listOf("CSV exceeds ${MassBatch.MAX_CSV_BYTES / 1024} KB — import refused"))
         }
         val table = parseCsvTable(text)
         if (table.isEmpty()) return CsvImport(emptyList(), listOf("CSV is empty"))
+        val dataRowCount = table.drop(1).count { cells -> cells.any { it.isNotBlank() } }
+        if (dataRowCount > MassBatch.MAX_NEW_ROWS) {
+            // UX-14: no silent truncation — refuse with the split instruction.
+            return CsvImport(
+                emptyList(),
+                listOf("$dataRowCount rows found — the cap is ${MassBatch.MAX_NEW_ROWS} per import. Split the CSV and import in parts."),
+            )
+        }
         val header = table.first()
         val notes = mutableListOf<String>()
         val mapping = header.mapIndexed { index, column ->

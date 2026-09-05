@@ -61,12 +61,15 @@ object MemeRaster {
         return out
     }
 
-    /** Media paint with the look's composed color matrix (identity = none). */
+    /** Media paint with the composed look+adjust color matrix (identity =
+     * none + defaults — RgbMatrix stays absent so nothing regresses). */
     private fun basePaint(project: MemeProject): Paint =
         Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-            if (project.lookId != null) {
+            if (project.lookId != null || project.adjust != null) {
                 colorFilter = android.graphics.ColorMatrixColorFilter(
-                    android.graphics.ColorMatrix(space.bitos.core.studio.MemeLooks.matrixFor(project.lookId)),
+                    android.graphics.ColorMatrix(
+                        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(project.lookId, project.adjust),
+                    ),
                 )
             }
         }

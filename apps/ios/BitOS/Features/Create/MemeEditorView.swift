@@ -228,6 +228,34 @@ final class MemeEditorStore {
         apply(commandJson: Self.encode(["op": "look", "look": id]))
     }
 
+    /// Manual fine-tune (prototype FX sliders): brightness/contrast/
+    /// saturation multipliers over the look preset; a slider burst within
+    /// 300 ms collapses into ONE undo step (EDT-004).
+    private(set) var adjustBrightness: Float = 1
+    private(set) var adjustContrast: Float = 1
+    private(set) var adjustSaturation: Float = 1
+
+    var hasAdjust: Bool {
+        adjustBrightness != 1 || adjustContrast != 1 || adjustSaturation != 1
+    }
+
+    func setAdjust(brightness: Float, contrast: Float, saturation: Float) {
+        let before = projectJson
+        apply(commandJson: Self.encode([
+            "op": "adjust", "bri": brightness, "con": contrast, "sat": saturation,
+        ]))
+        guard projectJson != before else { return }
+        let now = Date()
+        if let last = lastAdjustEdit, now.timeIntervalSince(last) < 0.3 {
+            lastAdjustEdit = now // extend the burst — no new step
+        } else {
+            pushHistory(before)
+            lastAdjustEdit = now
+        }
+    }
+
+    private var lastAdjustEdit: Date?
+
     /// Pure JSON parse — nonisolated so export helpers can read the grade.
        nonisolated static func lookId(ofProject projectJson: String) -> String? {
         guard let data = projectJson.data(using: .utf8),
@@ -235,14 +263,33 @@ final class MemeEditorStore {
         return root["look"] as? String
     }
 
+    /// Adjust triple parse for the detached export tasks (1/1/1 = default).
+    nonisolated static func adjustTriple(ofProject projectJson: String) -> (bri: Float, con: Float, sat: Float) {
+        guard let data = projectJson.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let adjust = root["adjust"] as? [String: Any] else { return (1, 1, 1) }
+        return (
+            (adjust["bri"] as? NSNumber)?.floatValue ?? 1,
+            (adjust["con"] as? NSNumber)?.floatValue ?? 1,
+            (adjust["sat"] as? NSNumber)?.floatValue ?? 1
+        )
+    }
+
     /// Stage-preview image with the grade applied (cached per asset/look).
     func gradedImage(_ image: UIImage, cacheKey: String) -> UIImage {
-        let key = "\(cacheKey)|\(lookId ?? "none")"
+        let key = "\(cacheKey)|\(lookId ?? "none")|\(adjustBrightness)-\(adjustContrast)-\(adjustSaturation)"
         if let cached = gradeCache[key] { return cached }
-        guard let lookId,
-              let graded = MemeRaster.applyLook(image, matrixJson: client.memeLookMatrix(lookId)) else {
-            return image
-        }
+        // The seam composes look + adjust into one matrix; identity (no
+        // look, default adjust) returns nil from applyLook — raw image.
+        guard let graded = MemeRaster.applyLook(
+            image,
+            matrixJson: client.memeAdjustMatrix(
+                lookId,
+                brightness: adjustBrightness,
+                contrast: adjustContrast,
+                saturation: adjustSaturation
+            )
+        ) else { return image }
         gradeCache[key] = graded
         return graded
     }
@@ -267,6 +314,16 @@ final class MemeEditorStore {
         if nextLook != lookId { lookId = nextLook; gradeCache.removeAll() }
         if let data = projectJson.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let adjust = root["adjust"] as? [String: Any]
+            let nextBri = (adjust?["bri"] as? NSNumber)?.floatValue ?? 1
+            let nextCon = (adjust?["con"] as? NSNumber)?.floatValue ?? 1
+            let nextSat = (adjust?["sat"] as? NSNumber)?.floatValue ?? 1
+            if nextBri != adjustBrightness || nextCon != adjustContrast || nextSat != adjustSaturation {
+                adjustBrightness = nextBri
+                adjustContrast = nextCon
+                adjustSaturation = nextSat
+                gradeCache.removeAll()
+            }
             let nextSpeed = (root["speed"] as? NSNumber)?.floatValue ?? 1
             let clamped = nextSpeed.isNaN || nextSpeed <= 0 ? 1 : min(2, max(0.5, nextSpeed))
             if nextSpeed != speed { speed = clamped }
@@ -434,10 +491,44 @@ final class MemeEditorStore {
         }
     }
 
+    /**
+     * Classic meme captions (prototype `create-edit` "Meme" hot tool):
+     * TOP/BOTTOM text overlays at the canonical positions — classic look
+     * (impact-style font, heavy outline, caps) — landing as ONE undo step
+     * for the pair. Empty halves are skipped.
+     */
+    func addMemeCaptions(top: String, bottom: String, fontSlot: String) {
+        guard canAddOverlay else { return }
+        let before = projectJson
+        var lastAdded: String?
+        for (raw, y) in [(top, Float(0.16)), (bottom, Float(0.84))] {
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, overlays.count + 1 <= Self.maxOverlays else { continue }
+            let overlayJson = client.memeDefaultOverlay(projectJson, kind: "text", text: text.uppercased())
+            guard !overlayJson.isEmpty,
+                  let data = overlayJson.data(using: .utf8),
+                  var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                continue
+            }
+            object["x"] = 0.5
+            object["y"] = y
+            object["font"] = fontSlot
+            object["size"] = 64
+            object["outline"] = 3
+            apply(commandJson: Self.encode(["op": "add", "overlay": object]))
+            if projectJson != before {
+                lastAdded = Self.parseOverlays(projectJson).last?.id
+            }
+        }
+        if projectJson != before {
+            pushHistory(before)
+            selectedId = lastAdded
+        }
+    }
+
     /// Style/field edit; a burst on the same overlay within 300 ms merges
     /// into one history step (EDT-004 coalescing, snapshot flavor).
-    func updateStyle(_ id: String, fields: [String: Any]) {
-        let before = projectJson
+    func updateStyle(_ id: String, fields: [String: Any]) {        let before = projectJson
         var command = fields
         command["op"] = "update"
         command["id"] = id
@@ -992,12 +1083,15 @@ final class MemeEditorStore {
             ])
         }
         // A single ungraded clip passes through unchanged; anything with a
-        // look (per-clip or project) composes so the grade burns exactly.
-        if clips.count == 1, (first.lookId ?? lookId) == nil {
+        // look or a manual adjust (per-clip or project) composes so the
+        // grade burns exactly.
+        if clips.count == 1, (first.lookId ?? lookId) == nil, !hasAdjust {
             return (first.url, first.probe, projectJson)
         }
         let url = try await MemeVideoExportIos.composeClips(
-            clips, rate: rate, projectLookId: lookId, client: client
+            clips, rate: rate, projectLookId: lookId,
+            projectAdjust: (adjustBrightness, adjustContrast, adjustSaturation),
+            client: client
         )
         let probe = MemeVideoExportIos.Probe(
             width: first.probe.width,
@@ -1037,6 +1131,7 @@ final class MemeEditorStore {
             exportState = .saving
             let client = self.client
             let images = layerImages
+            let exportJob = exportJobs.begin(format: "mp4", nowMs: nowMs())
             Task {
                 do {
                     let source = try await exportSource()
@@ -1045,9 +1140,15 @@ final class MemeEditorStore {
                         projectJson: source.wire, client: client,
                         images: images
                     )
+                    guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
+                        throw MemeRaster.ExportError(message: "Could not persist the render")
+                    }
+                    exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                     try await MemeRaster.saveVideoToPhotos(data)
+                    exportJobs.finish(exportJob)
                     exportState = .saved
                 } catch {
+                    exportJobs.update(exportJob, phase: "failed", error: error.localizedDescription, nowMs: nowMs())
                     exportState = .failed(error.localizedDescription)
                 }
             }
@@ -1062,6 +1163,7 @@ final class MemeEditorStore {
             let project = projectJson
             let client = self.client
             let frames = gifFrames.map { MemeGifFrame(id: $0.id, image: $0.image, delayMs: holdMs(for: $0)) }
+            let exportJob = exportJobs.begin(format: "gif", nowMs: nowMs())
             Task {
                 do {
                     let result = try await Task.detached(priority: .userInitiated) {
@@ -1072,11 +1174,17 @@ final class MemeEditorStore {
                             client: client
                         )
                     }.value
+                    guard exportJobs.artifactReady(exportJob, bytes: result.data, nowMs: nowMs()) else {
+                        throw MemeRaster.ExportError(message: "Could not persist the render")
+                    }
+                    exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                     try await MemeRaster.saveToPhotos(result.data)
+                    exportJobs.finish(exportJob)
                     exportState = result.ladderStep > 0 || result.capped
-                        ? .failed("Saved (downscaled ×\(result.ladderStep))")
+                        ? .savedAdjusted("Saved at a smaller size (downscaled ×\(result.ladderStep))")
                         : .saved
                 } catch {
+                    exportJobs.update(exportJob, phase: "failed", error: error.localizedDescription, nowMs: nowMs())
                     exportState = .failed(error.localizedDescription)
                 }
             }
@@ -1090,17 +1198,53 @@ final class MemeEditorStore {
         let project = projectJson
         let client = self.client
         let source = asset.image
+        let exportJob = exportJobs.begin(format: "png", nowMs: nowMs())
         Task {
             do {
                 let data = try await Task.detached(priority: .userInitiated) {
                     try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
                 }.value
+                guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
+                    throw MemeRaster.ExportError(message: "Could not persist the render")
+                }
+                exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                 try await MemeRaster.saveToPhotos(data)
+                exportJobs.finish(exportJob)
                 exportState = .saved
             } catch {
+                exportJobs.update(exportJob, phase: "failed", error: error.localizedDescription, nowMs: nowMs())
                 exportState = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// MUX-05 retry: a failed/needs-review destination save re-runs FROM THE
+    /// PERSISTED ARTIFACT — no re-render. A needsReview job asks the user
+    /// to confirm the state first (Photos saves are add-only).
+    func retryExportSave(jobId: Int) {
+        guard exportState != .saving,
+              let job = exportJobs.job(jobId),
+              let data = exportJobs.loadArtifact(job) else { return }
+        exportState = .saving
+        exportJobs.update(jobId, phase: "saving", clearError: true, nowMs: nowMs())
+        Task {
+            do {
+                if job.format == "mp4" {
+                    try await MemeRaster.saveVideoToPhotos(data)
+                } else {
+                    try await MemeRaster.saveToPhotos(data)
+                }
+                exportJobs.finish(jobId)
+                exportState = .saved
+            } catch {
+                exportJobs.update(jobId, phase: "failed", error: error.localizedDescription, nowMs: nowMs())
+                exportState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func discardExportJob(jobId: Int) {
+        exportJobs.discard(jobId)
     }
 
     /** Effective hold for a frame (uniform override > source delay). */
@@ -1112,6 +1256,33 @@ final class MemeEditorStore {
 
     private(set) var publishState: MemePublishPhase = .idle
     private(set) var publishFailure: String?
+
+    /** Prototype `#/publishing` machine: the REAL pipeline steps, updated
+     * at each checkpoint (render → hash → upload → verify → build → sign →
+     * relay → confirm). Nil while no publish runs. */
+    private(set) var publishStep: PublishMachineStep?
+    /** Stable per-attempt job number (prototype "job NNNN" chip). */
+    private(set) var publishJobId = 0
+    /** Canonical event id of the in-flight/last publish (nil until built). */
+    private(set) var publishEventId: String?
+
+    /// Durable publish-job ledger (prototype `#/queue`): attempts survive
+    /// crashes; recovery offers verify / discard / retry-from-media.
+    var jobStore = MemePublishJobStore()
+    private(set) var ledgerJobId: Int?
+
+    /// Draft persistence state (MUX-01): saving is acknowledged, never
+    /// assumed — "saved" only appears after the write returns.
+    enum DraftSaveState: Equatable { case idle, saving, saved, failed }
+    var draftSaveState: DraftSaveState = .idle
+
+    /// Durable export jobs (MUX-05): retry a failed destination save from
+    /// the persisted artifact — never a re-render.
+    var exportJobs = MemeExportJobStore()
+
+    enum PublishMachineStep: Int, CaseIterable, Equatable {
+        case render, hash, upload, verify, build, sign, relay, confirm
+    }
 
     enum MemePublishPhase: Equatable {
         case idle
@@ -1126,6 +1297,7 @@ final class MemeEditorStore {
         contentWarningReason: String?,
         remixEventId: String = "",
         remixAuthor: String = "",
+        extraTags: [[String]] = [],
         identity: IdentityStore,
         publisher: NotePublisher,
         bridge: BusinessCoreBridge
@@ -1137,6 +1309,9 @@ final class MemeEditorStore {
         }
         publishState = .uploading
         publishFailure = nil
+        publishStep = .render
+        publishJobId = Int.random(in: 1000...9999)
+        publishEventId = nil
         let project = projectJson
         let client = self.client
         let gifSourceFrames = gifFrames.map { MemeGifFrame(id: $0.id, image: $0.image, delayMs: holdMs(for: $0)) }
@@ -1225,13 +1400,71 @@ final class MemeEditorStore {
                     bytes = png
                     mime = "image/png"
                 }
+                // Ledger: persist the attempt + rendered bytes (durable job).
+                ledgerJobId = jobStore.begin(
+                    mode: isVideoMode ? "video" : isGifMode ? "gif" : "image",
+                    caption: caption, altText: altText,
+                    contentWarningReason: contentWarningReason,
+                    extraTagsJson: Self.encodeTags(extraTags),
+                    remixEventId: remixEventId, remixAuthor: remixAuthor,
+                    bytes: bytes, mime: mime, width: width, height: height,
+                    durationMs: videoDurationMs, coverThumbUrl: coverThumbUrl,
+                    nowMs: Int64(Date.now.timeIntervalSince1970 * 1000)
+                )
+                let ledgerId = ledgerJobId ?? 0
                 // 2. Hash-verified Blossom upload (nothing signs before this).
                 let uploaded = try await BlossomUploader(bridge: bridge).upload(
                     bytes: bytes, mimeType: mime, identity: identity,
-                    serverUrl: "https://blossom.primal.net"
+                    serverUrl: "https://blossom.primal.net",
+                    onStage: { stage in
+                        switch stage {
+                        case .hashing:
+                            self.publishStep = .hash
+                            self.jobStore.update(ledgerId, stage: 1, nowMs: self.nowMs())
+                        case .uploading:
+                            self.publishStep = .upload
+                            self.jobStore.update(ledgerId, stage: 2, nowMs: self.nowMs())
+                        case .verifying:
+                            self.publishStep = .verify
+                            self.jobStore.update(ledgerId, stage: 3, nowMs: self.nowMs())
+                        }
+                    }
                 )
-                // 3. Kind-20 through the receipt machine.
+                // 3. Kind-20 through the receipt machine. Post-details
+                // extras (explicit t-tags + license) ride every mode;
+                // remix lineage merges ahead of them on the picture path.
                 publishState = .publishing
+                var lineageTags: [[String]] = []
+                if !remixEventId.isEmpty {
+                    let remixJson = client.memeRemixTagsFor(
+                        projectJson: project, sourceEventId: remixEventId,
+                        sourcePubkey: remixAuthor
+                    )
+                    if let data = remixJson.data(using: .utf8),
+                       let array = try? JSONSerialization.jsonObject(with: data) as? [[String]] {
+                        lineageTags = array
+                    }
+                }
+                let extrasJson = Self.encodeTags(lineageTags + extraTags)
+                publishStep = .build
+                jobStore.update(
+                    ledgerId, stage: 4, mediaUrl: uploaded.url, sha256: uploaded.hash,
+                    nowMs: nowMs()
+                )
+                let onStage: @MainActor (MemeNoteStage) -> Void = { stage in
+                    switch stage {
+                    case .built(let eventId):
+                        self.publishEventId = eventId
+                        self.publishStep = .sign
+                        self.jobStore.update(ledgerId, stage: 5, eventId: eventId, nowMs: self.nowMs())
+                    case .signed:
+                        self.publishStep = .relay
+                        self.jobStore.update(ledgerId, stage: 6, nowMs: self.nowMs())
+                    case .relayed:
+                        self.publishStep = .confirm
+                        self.jobStore.update(ledgerId, stage: 7, nowMs: self.nowMs())
+                    }
+                }
                 if isVideoMode {
                     await publisher.publishMemeVideoNote(
                         caption: caption,
@@ -1239,7 +1472,9 @@ final class MemeEditorStore {
                         contentWarningReason: contentWarningReason,
                         url: uploaded.url, hash: uploaded.hash, size: bytes.count,
                         width: width, height: height, durationMs: videoDurationMs,
-                        thumbUrl: coverThumbUrl
+                        thumbUrl: coverThumbUrl,
+                        extraTagsJson: extrasJson,
+                        onStage: onStage
                     )
                 } else {
                     await publisher.publishMemePictureNote(
@@ -1248,18 +1483,123 @@ final class MemeEditorStore {
                         contentWarningReason: contentWarningReason,
                         url: uploaded.url, hash: uploaded.hash, size: bytes.count,
                         width: width, height: height,
-                        remixTagsJson: remixEventId.isEmpty
-                            ? ""
-                            : client.memeRemixTagsFor(
-                                projectJson: project, sourceEventId: remixEventId,
-                                sourcePubkey: remixAuthor
-                              )
+                        remixTagsJson: extrasJson,
+                        onStage: onStage
                     )
                 }
                 publishState = .done
+                if publisher.result == .published {
+                    jobStore.finish(ledgerId, nowMs: nowMs())
+                } else {
+                    jobStore.update(
+                        ledgerId, status: "failed",
+                        error: "No relay confirmed the event — it may still land; verify before retrying.",
+                        nowMs: nowMs()
+                    )
+                }
             } catch {
                 publishState = .idle
                 publishFailure = error.localizedDescription
+                jobStore.update(ledgerJobId ?? 0, status: "failed", error: error.localizedDescription, nowMs: nowMs())
+            }
+        }
+    }
+
+    private func nowMs() -> Int64 {
+        Int64(Date.now.timeIntervalSince1970 * 1000)
+    }
+
+    /// Queue retry: re-runs the machine from the persisted media (the job's
+    /// bytes ARE the render). Upload is idempotent by hash; refused while an
+    /// event id exists (that note may already be live — verify instead).
+    func resumePublish(
+        jobId: Int,
+        identity: IdentityStore,
+        publisher: NotePublisher,
+        bridge: BusinessCoreBridge
+    ) {
+        guard publishState != .uploading, publishState != .publishing,
+              let job = jobStore.job(jobId), job.retryAllowed,
+              let bytes = jobStore.loadBytes(job) else { return }
+        publisher.dismiss()
+        publishState = .uploading
+        publishFailure = nil
+        publishStep = .hash
+        publishJobId = job.id
+        publishEventId = job.eventId
+        ledgerJobId = job.id
+        let extrasJson = job.extraTagsJson
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let uploaded = try await BlossomUploader(bridge: bridge).upload(
+                    bytes: bytes, mimeType: job.mime, identity: identity,
+                    serverUrl: "https://blossom.primal.net",
+                    onStage: { stage in
+                        switch stage {
+                        case .hashing:
+                            self.publishStep = .hash
+                            self.jobStore.update(job.id, stage: 1, nowMs: self.nowMs())
+                        case .uploading:
+                            self.publishStep = .upload
+                            self.jobStore.update(job.id, stage: 2, nowMs: self.nowMs())
+                        case .verifying:
+                            self.publishStep = .verify
+                            self.jobStore.update(job.id, stage: 3, nowMs: self.nowMs())
+                        }
+                    }
+                )
+                publishState = .publishing
+                self.publishStep = .build
+                self.jobStore.update(job.id, stage: 4, mediaUrl: uploaded.url, sha256: uploaded.hash, nowMs: self.nowMs())
+                let onStage: @MainActor (MemeNoteStage) -> Void = { stage in
+                    switch stage {
+                    case .built(let eventId):
+                        self.publishEventId = eventId
+                        self.publishStep = .sign
+                        self.jobStore.update(job.id, stage: 5, eventId: eventId, nowMs: self.nowMs())
+                    case .signed:
+                        self.publishStep = .relay
+                        self.jobStore.update(job.id, stage: 6, nowMs: self.nowMs())
+                    case .relayed:
+                        self.publishStep = .confirm
+                        self.jobStore.update(job.id, stage: 7, nowMs: self.nowMs())
+                    }
+                }
+                if job.mode == "video" {
+                    await publisher.publishMemeVideoNote(
+                        caption: job.caption, altText: job.altText,
+                        contentWarningReason: job.contentWarningReason,
+                        url: uploaded.url, hash: uploaded.hash, size: bytes.count,
+                        width: job.width, height: job.height, durationMs: job.durationMs,
+                        thumbUrl: job.coverThumbUrl,
+                        extraTagsJson: extrasJson,
+                        onStage: onStage
+                    )
+                } else {
+                    await publisher.publishMemePictureNote(
+                        caption: job.caption, altText: job.altText,
+                        contentWarningReason: job.contentWarningReason,
+                        url: uploaded.url, hash: uploaded.hash, size: bytes.count,
+                        width: job.width, height: job.height,
+                        remixTagsJson: extrasJson,
+                        onStage: onStage
+                    )
+                }
+                publishState = .done
+                if publisher.result == .published {
+                    jobStore.finish(job.id, nowMs: nowMs())
+                } else {
+                    jobStore.update(
+                        job.id, status: "failed",
+                        error: "No relay confirmed the event — it may still land; verify before retrying.",
+                        nowMs: nowMs()
+                    )
+                }
+            } catch {
+                publishState = .idle
+                publishFailure = error.localizedDescription
+                jobStore.update(job.id, status: "failed", error: error.localizedDescription, nowMs: nowMs())
             }
         }
     }
@@ -1269,6 +1609,14 @@ final class MemeEditorStore {
     static func encode(_ object: [String: Any]) -> String {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// TagsCodec `[[name,…],…]` JSON for the extra-tags seams (t-tags,
+    /// license, remix lineage merged).
+    static func encodeTags(_ tags: [[String]]) -> String {
+        guard JSONSerialization.isValidJSONObject(tags),
+              let data = try? JSONSerialization.data(withJSONObject: tags) else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
 }
@@ -1281,7 +1629,9 @@ struct MemeEditorView: View {
     @State private var stageSize: CGSize = .zero
     @State private var showDiscard = false
     @State private var editingOverlayId: String?
-    @State private var showStickers = false
+    /** Inline tool panel (prototype `create-edit` panels open under the
+     * quick-tool chips instead of covering the canvas with a sheet). */
+    @State private var activePanel: EditorPanel?
     @State private var showLooks = false
     @State private var showSfx = false
     @State private var showLayers = false
@@ -1300,7 +1650,10 @@ struct MemeEditorView: View {
     @State private var suiteMode = false
     private let videoTransport = VideoTransportIos()
     @State private var videoPositionSec: Double = 0
-    @State private var showPublish = false
+    /** Prototype flow: editor → Post details → Preflight → publish. */
+    @State private var showDetailsFlow = false
+    /** MUX-04: output settings before any export fires. */
+    @State private var showExportSheet = false
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var confirmModeSwitch = false
     @State private var pendingGifMode = false
@@ -1319,6 +1672,8 @@ struct MemeEditorView: View {
     let videoSeed: Data?
     /// M5 take-native handoff: ALL camera takes as timeline clips.
     let videoSeeds: [Data]?
+    /// MUX-06: hand the frozen design + rendered poster to mass production.
+    var onMakeVariations: ((String, Data) -> Void)? = nil
     let onSlotsChanged: () -> Void
 
     init(
@@ -1329,7 +1684,8 @@ struct MemeEditorView: View {
         sharedContent: String? = nil,
         videoSeed: Data? = nil,
         videoSeeds: [Data]? = nil,
-        onSlotsChanged: @escaping () -> Void = {}
+        onSlotsChanged: @escaping () -> Void = {},
+        onMakeVariations: ((String, Data) -> Void)? = nil
     ) {
         self.slotStore = slotStore
         self.resumeSlot = resumeSlot
@@ -1339,6 +1695,7 @@ struct MemeEditorView: View {
         self.videoSeed = videoSeed
         self.videoSeeds = videoSeeds
         self.onSlotsChanged = onSlotsChanged
+        self.onMakeVariations = onMakeVariations
         let seed = resumeSlot?.document.projectJson
         _store = State(initialValue: {
             let store = MemeEditorStore()
@@ -1363,32 +1720,29 @@ struct MemeEditorView: View {
             ?? "s-" + UUID().uuidString.prefix(13))
     }
 
-    var body: some View {
+    var body: some View { sheetLayer }
+
+    /// The bare chrome/branch/next column.
+    private var layoutLayer: some View {
         VStack(spacing: 0) {
             chrome
-            stage
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay {
-                    if drawMode { drawCaptureOverlay }
-                }
-            if drawMode {
-                PenControlsRowIos(
-                    store: store,
-                    colorIndex: penColorIndex,
-                    onPickColor: { penColorIndex = $0 },
-                    widthNorm: penWidthNorm,
-                    onPickWidth: { penWidthNorm = $0 },
-                    onDone: {
-                        liveStrokePoints = []
-                        drawMode = false
-                    }
-                )
+            if suiteMode && store.isVideoMode && !store.clips.isEmpty {
+                // Expert suite keeps the full-bleed stage + dock layout
+                // (mockup app-15 scr-suite); the prototype layout below is
+                // the default editor experience.
+                suiteLayout
+            } else {
+                editorLayout
             }
-            tray
-            if !(suiteMode && store.isVideoMode && !store.clips.isEmpty) {
-                tools
-            }
+            nextButton
         }
+    }
+
+    /// Layout + lifecycle (autosave, publish watch, GIF loop, session seed,
+    /// mode/discard dialogs) — split out of `body` so no single expression
+    /// exceeds the type-checker's budget.
+    private var lifecycleLayer: some View {
+        layoutLayer
         .background(BitOSTheme.background)
         .preferredColorScheme(nil)
         // MST-018: debounced autosave keyed on every wire/asset/clip change.
@@ -1405,64 +1759,8 @@ struct MemeEditorView: View {
             guard !Task.isCancelled else { return }
             store.advanceGifPreview()
         }
-        .onAppear {
-            // CAP handoff (M5): camera takes enter video mode AS CLIPS — no
-            // merge, each take probed + cut by the shared rules.
-            if let videoSeeds, !videoSeeds.isEmpty, store.clips.isEmpty,
-               store.assets.isEmpty, store.gifFramesCount == 0 {
-                store.switchModeToVideo()
-                for seed in videoSeeds {
-                    store.appendClip(data: seed)
-                }
-                return
-            }
-            if let videoSeed, store.videoClipData == nil, store.assets.isEmpty,
-               store.gifFramesCount == 0 {
-                store.switchModeToVideo()
-                videoTrimData = videoSeed
-                showVideoTrim = true
-                return
-            }
-            // Resume: seed the asset tray (image mode) or the frame tray
-            // (GIF mode — holds collapse to a uniform 100 ms in V1).
-            guard let resumeSlot, store.assets.isEmpty, store.gifFramesCount == 0,
-                  store.videoClipData == nil else { return }
-                if store.isVideoMode {
-                // M5: the wire's clip list + slot asset files rebuild the
-                // whole timeline (v1 slots migrate into a single clip).
-                let entries = store.wireClipEntries().compactMap { entry -> (id: String, url: URL, startMs: Int64, endMs: Int64, volume: Float, lookId: String?)? in
-                    guard let url = resumeSlot.assetFiles[entry.id] else { return nil }
-                    return (entry.id, url, entry.startMs, entry.endMs, entry.volume, entry.lookId)
-                }
-                let videoClipIds = Set(entries.map(\.id))
-                if !entries.isEmpty {
-                    store.restoreClips(from: entries)
-                    // IMAGE layers resume with the slot (their PNG assets
-                    // ride the same assetFiles map; GIF-inserts stay still).
-                    for asset in resumeSlot.document.assets where !videoClipIds.contains(asset.id) {
-                        if let url = resumeSlot.assetFiles[asset.id],
-                           let image = UIImage(contentsOfFile: url.path) {
-                            store.addAsset(image: image)
-                        }
-                    }
-                }
-                return
-            }
-            for asset in resumeSlot.document.assets.sorted(by: { $0.id < $1.id }) {
-                if let url = resumeSlot.assetFiles[asset.id],
-                   let image = UIImage(contentsOfFile: url.path) {
-                    if store.isGifMode {
-                        store.addGifFrames([
-                            MemeEditorStore.MemeGifFrame(
-                                id: asset.id, image: image, delayMs: 100
-                            ),
-                        ])
-                    } else {
-                        store.addAsset(image: image)
-                    }
-                }
-            }
-        }
+        .onAppear { seedEditorSession() }
+
         .confirmationDialog(
             pendingVideoMode ? "Start a video project?"
                 : pendingGifMode ? "Start a GIF project?" : "Start an image project?",
@@ -1483,18 +1781,29 @@ struct MemeEditorView: View {
             Text("Switching clears the current media (overlays stay).")
         }
         .confirmationDialog(
-            "Discard meme?",
+            "Could not save the draft",
             isPresented: $showDiscard,
             titleVisibility: .visible
         ) {
-            Button("Discard", role: .destructive) {
+            Button("Retry save") {
+                Task {
+                    await saveDraftNow()
+                    if store.draftSaveState == .saved { dismiss() }
+                }
+            }
+            Button("Keep editing", role: .cancel) {}
+            Button("Delete draft", role: .destructive) {
                 clearSlot()
                 dismiss()
             }
-            Button("Keep editing", role: .cancel) {}
         } message: {
-            Text("Discard and delete the saved draft?")
+            Text("Your edits are still open. Retry the save to keep them, or delete the draft deliberately.")
         }
+    }
+
+    /// Sheets, pickers and the trim cover (the presentation layer).
+    private var sheetLayer: some View {
+        lifecycleLayer
         .sheet(isPresented: Binding(
             get: { editingOverlayId != nil },
             set: { if !$0 { editingOverlayId = nil } }
@@ -1503,10 +1812,6 @@ struct MemeEditorView: View {
                 TextSheet(store: store, overlayId: id)
                     .presentationDetents([.medium, .large])
             }
-        }
-        .sheet(isPresented: $showStickers) {
-            StickerSheet(store: store)
-                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showLooks) {
             LooksSheet(store: store)
@@ -1531,7 +1836,13 @@ struct MemeEditorView: View {
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showClipSheet) {
-            ClipsSheetView(store: store, onAdd: { isPicking = true })
+            ClipsSheetView(
+                store: store,
+                onAdd: {
+                    showClipSheet = false
+                    isPickingVideo = true
+                }
+            )
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showVolume) {
@@ -1542,10 +1853,28 @@ struct MemeEditorView: View {
             SpeedSheetView(store: store)
                 .presentationDetents([.medium])
         }
-        .sheet(isPresented: $showPublish) {
-            MemePublishSheet(store: store)
-                .presentationDetents([.large])
+        .sheet(isPresented: $showDetailsFlow) {
+            MemePostFlowView(
+                store: store,
+                identity: identity,
+                publisher: environment.notePublisher,
+                onPublished: {
+                    showDetailsFlow = false
+                    dismiss()
+                }
+            )
         }
+        .photosPicker(
+            isPresented: $isPicking,
+            selection: $pickerItems,
+            maxSelectionCount: MemeEditorStore.imageAssetCap,
+            matching: .images
+        )
+        .photosPicker(
+            isPresented: $isPickingVideo,
+            selection: $videoPickItem,
+            matching: .videos
+        )
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
@@ -1587,29 +1916,220 @@ struct MemeEditorView: View {
         }
     }
 
-    // ── Top chrome ──────────────────────────────────────────────────────
+    /// Session seeding (CAP handoff, trim handoff, slot resume).
+    private func seedEditorSession() {
+        // CAP handoff (M5): camera takes enter video mode AS CLIPS — no
+        // merge, each take probed + cut by the shared rules.
+        if let videoSeeds, !videoSeeds.isEmpty, store.clips.isEmpty,
+           store.assets.isEmpty, store.gifFramesCount == 0 {
+            store.switchModeToVideo()
+            for seed in videoSeeds {
+                store.appendClip(data: seed)
+            }
+            return
+        }
+        if let videoSeed, store.videoClipData == nil, store.assets.isEmpty,
+           store.gifFramesCount == 0 {
+            store.switchModeToVideo()
+            videoTrimData = videoSeed
+            showVideoTrim = true
+            return
+        }
+        // Resume: seed the asset tray (image mode) or the frame tray
+        // (GIF mode — holds collapse to a uniform 100 ms in V1).
+        guard let resumeSlot, store.assets.isEmpty, store.gifFramesCount == 0,
+              store.videoClipData == nil else { return }
+            if store.isVideoMode {
+            // M5: the wire's clip list + slot asset files rebuild the
+            // whole timeline (v1 slots migrate into a single clip).
+            let entries = store.wireClipEntries().compactMap { entry -> (id: String, url: URL, startMs: Int64, endMs: Int64, volume: Float, lookId: String?)? in
+                guard let url = resumeSlot.assetFiles[entry.id] else { return nil }
+                return (entry.id, url, entry.startMs, entry.endMs, entry.volume, entry.lookId)
+            }
+            let videoClipIds = Set(entries.map(\.id))
+            if !entries.isEmpty {
+                store.restoreClips(from: entries)
+                // IMAGE layers resume with the slot (their PNG assets
+                // ride the same assetFiles map; GIF-inserts stay still).
+                for asset in resumeSlot.document.assets where !videoClipIds.contains(asset.id) {
+                    if let url = resumeSlot.assetFiles[asset.id],
+                       let image = UIImage(contentsOfFile: url.path) {
+                        store.addAsset(image: image)
+                    }
+                }
+            }
+            return
+        }
+        for asset in resumeSlot.document.assets.sorted(by: { $0.id < $1.id }) {
+            if let url = resumeSlot.assetFiles[asset.id],
+               let image = UIImage(contentsOfFile: url.path) {
+                if store.isGifMode {
+                    store.addGifFrames([
+                        MemeEditorStore.MemeGifFrame(
+                            id: asset.id, image: image, delayMs: 100
+                        ),
+                    ])
+                } else {
+                    store.addAsset(image: image)
+                }
+            }
+        }
+    }
+
+    /// Expert-suite layout: full-bleed flexible stage + dock (app-15 scr-suite).
+    private var suiteLayout: some View {
+        VStack(spacing: 0) {
+            stage
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay {
+                    if drawMode { drawCaptureOverlay }
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if !stageMetaChips.isEmpty { stageMetaChipRow }
+                }
+            if drawMode { penControlsRow }
+            tray
+        }
+    }
+
+    /// Prototype `#/create-edit` layout: scrolling canvas → mode pills +
+    /// undo → quick tools → tray → timeline, with the per-mode bar +
+    /// status line pinned below. Tool panels open as native bottom sheets.
+    private var editorLayout: some View {
+        VStack(spacing: 0) {
+            GeometryReader { available in
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: BitOSTheme.Spacing.sm) {
+                    stageCard(height: max(180, available.size.height - (store.isVideoMode ? 240 : 190)))
+                    modePillsRow
+                    quickTools
+                    if drawMode { penControlsRow }
+                    // The prototype timeline is already the compact clip
+                    // strip. Video source insertion lives in Timeline so
+                    // the basic editor does not show a duplicate strip.
+                    if !store.isVideoMode { tray }
+                    if store.isVideoMode && !store.clips.isEmpty {
+                        timelineSection
+                    }
+                }
+                .padding(.horizontal, BitOSTheme.Spacing.base)
+                .padding(.top, BitOSTheme.Spacing.xs)
+                .padding(.bottom, BitOSTheme.Spacing.sm)
+            }
+            }
+            if store.selectedId != nil {
+                selectionControls
+            }
+            perModeBar
+            statusLine
+        }
+        .sheet(item: $activePanel) { panel in
+            editorPanel(panel)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showExportSheet) {
+            ExportSettingsSheet(store: store, onMakeVariations: onMakeVariations)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var penControlsRow: some View {
+        PenControlsRowIos(
+            store: store,
+            colorIndex: penColorIndex,
+            onPickColor: { penColorIndex = $0 },
+            widthNorm: penWidthNorm,
+            onPickWidth: { penWidthNorm = $0 },
+            onDone: {
+                liveStrokePoints = []
+                drawMode = false
+            }
+        )
+    }
+
+    // ── Top chrome (prototype topbar: back · "Editor" · draft save) ────
 
     private var chrome: some View {
         HStack(spacing: BitOSTheme.Spacing.sm) {
             Button {
-                if store.isEmpty { dismiss() } else { showDiscard = true }
+                Task {
+                    // MUX-01: closing persists first — leave-with-work keeps
+                    // the draft; a failed save offers retry, never a silent
+                    // "discard". Deleting the draft is its own deliberate act.
+                    if store.isEmpty {
+                        clearSlot()
+                        dismiss()
+                        return
+                    }
+                    await saveDraftNow()
+                    if store.draftSaveState == .saved {
+                        dismiss()
+                    } else {
+                        showDiscard = true
+                    }
+                }
             } label: {
                 AppIcons.image(for: AppIcons.close)
                     .foregroundStyle(BitOSTheme.textPrimary)
             }
+            .accessibilityLabel("Close editor")
+            Text("Editor")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textPrimary)
             Spacer(minLength: 0)
-            modeChips
-            Spacer(minLength: 0)
-            if store.activeAsset != nil || store.gifFramesCount > 0 || store.videoClipData != nil {
-                Button {
-                    showPublish = true
-                } label: {
-                    Text("Post")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(BitOSTheme.accent)
+            Button {
+                Task {
+                    await saveDraftNow()
+                    store.setNotice(
+                        store.draftSaveState == .saved
+                            ? "Draft saved ✓ — resumes from Create hub"
+                            : "Could not save the draft — check storage and try again"
+                    )
                 }
-                .disabled(store.publishState == .uploading || store.publishState == .publishing)
+            } label: {
+                Group {
+                    if store.draftSaveState == .saving {
+                        ProgressView()
+                    } else if store.draftSaveState == .failed {
+                        AppIcons.image(for: AppIcons.close)
+                            .foregroundStyle(BitOSTheme.warning)
+                    } else {
+                        AppIcons.image(for: AppIcons.save)
+                            .foregroundStyle(
+                                store.draftSaveState == .saved
+                                    ? BitOSTheme.success : BitOSTheme.textPrimary
+                            )
+                    }
+                }
             }
+            .disabled(slotStore == nil)
+            .accessibilityLabel("Save draft")
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.vertical, BitOSTheme.Spacing.sm)
+    }
+
+    // ── Mode pills + undo (prototype mode switcher row) ────────────────
+
+    private var modePillsRow: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            HStack(spacing: 4) {
+                ModePill(label: "VIDEO", active: store.isVideoMode) {
+                    requestModeSwitch(toVideo: true)
+                }
+                ModePill(label: "GIF", active: store.isGifMode) {
+                    requestModeSwitch(toGif: true)
+                }
+                ModePill(label: "IMAGE", active: !store.isGifMode && !store.isVideoMode) {
+                    requestModeSwitch(toGif: false)
+                }
+            }
+            .padding(4)
+            .background(Capsule().fill(BitOSTheme.surface))
+            .overlay(Capsule().strokeBorder(BitOSTheme.border, lineWidth: 1))
+            Spacer(minLength: 0)
             Button {
                 store.undo()
             } label: {
@@ -1618,22 +2138,6 @@ struct MemeEditorView: View {
             }
             .disabled(!store.canUndo)
             .accessibilityLabel("Undo")
-        }
-        .padding(.horizontal, BitOSTheme.Spacing.md)
-        .padding(.vertical, BitOSTheme.Spacing.sm)
-    }
-
-    private var modeChips: some View {
-        HStack(spacing: BitOSTheme.Spacing.xs) {
-            ModeChip(label: "Image", active: !store.isGifMode, enabled: true) {
-                requestModeSwitch(toGif: false)
-            }
-            ModeChip(label: "GIF", active: store.isGifMode, enabled: true) {
-                requestModeSwitch(toGif: true)
-            }
-            ModeChip(label: "Video", active: store.isVideoMode, enabled: true) {
-                requestModeSwitch(toVideo: true)
-            }
         }
     }
 
@@ -1714,7 +2218,9 @@ struct MemeEditorView: View {
                     let aspect = frame.image.size.width / max(1, frame.image.size.height)
                     let fitted = fittedStageSize(container: container, aspect: aspect)
                     ZStack {
-                        Image(uiImage: frame.image)
+                        // WYSIWYG: the frame previews through the same
+                        // grade cache the export burns (look + adjust).
+                        Image(uiImage: store.gradedImage(frame.image, cacheKey: frame.id))
                             .resizable()
                             .scaledToFill()
                             .frame(width: fitted.width, height: fitted.height)
@@ -1808,6 +2314,60 @@ struct MemeEditorView: View {
         return CGSize(width: container.height * aspect, height: container.height)
     }
 
+    // ── Canvas meta chips (prototype `1080×1920 · 9:16` + duration) ─────
+
+    /** Mode-dependent media facts said out loud on the canvas. */
+    private var stageMetaChips: [String] {
+        if store.isVideoMode {
+            guard !store.clips.isEmpty else { return [] }
+            let seconds = Int(store.timelineDurationMs) / 1000
+            return [
+                String(
+                    format: "%02d:%02d · %d clip%@",
+                    seconds / 60, seconds % 60, store.clips.count,
+                    store.clips.count == 1 ? "" : "s"
+                ),
+            ]
+        }
+        if store.isGifMode {
+            guard store.gifFramesCount > 0 else { return [] }
+            let delay = store.gifUniformDelayMs > 0
+                ? "\(store.gifUniformDelayMs) ms" : "source delay"
+            return ["\(store.gifFramesCount) frames · \(delay)"]
+        }
+        guard let asset = store.activeAsset else { return [] }
+        let width = Int((asset.image.size.width * asset.image.scale).rounded())
+        let height = Int((asset.image.size.height * asset.image.scale).rounded())
+        return ["\(width)×\(height) · \(ratioLabel(width, height))"]
+    }
+
+    private var stageMetaChipRow: some View {
+        HStack(spacing: 4) {
+            ForEach(stageMetaChips, id: \.self) { chip in
+                Text(chip)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.leading, BitOSTheme.Spacing.md + 4)
+        .padding(.bottom, 2)
+    }
+
+    /** Canonical ratio label with tolerance; exotic shapes fall to n:1. */
+    private func ratioLabel(_ width: Int, _ height: Int) -> String {
+        let aspect = CGFloat(width) / CGFloat(max(1, height))
+        let canonical: [(String, CGFloat)] = [
+            ("9:16", 9.0 / 16), ("3:4", 3.0 / 4), ("1:1", 1), ("4:5", 4.0 / 5),
+            ("4:3", 4.0 / 3), ("16:9", 16.0 / 9),
+        ]
+        for (label, value) in canonical where abs(aspect - value) < 0.02 { return label }
+        return String(format: "%.2f:1", aspect)
+    }
+
     private func emptyCta(container: CGSize) -> some View {
         let side = min(container.width * 0.8, min(container.height, container.width * 0.8))
         return Button {
@@ -1829,17 +2389,6 @@ struct MemeEditorView: View {
                     .strokeBorder(BitOSTheme.border, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
             )
         }
-        .photosPicker(
-            isPresented: $isPicking,
-            selection: $pickerItems,
-            maxSelectionCount: MemeEditorStore.imageAssetCap,
-            matching: .images
-        )
-        .photosPicker(
-            isPresented: $isPickingVideo,
-            selection: $videoPickItem,
-            matching: .videos
-        )
     }
 
     @State private var isPicking = false
@@ -1939,58 +2488,349 @@ struct MemeEditorView: View {
         }
     }
 
-    // ── Bottom tools ────────────────────────────────────────────────────
+    // ── Prototype layout sections ───────────────────────────────────────
 
-    private var tools: some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            ToolIconButton(
-                symbol: AppIcons.textStyle, description: "Add text",
-                enabled: store.canAddOverlay
-            ) {
-                store.addOverlay(kind: "text", text: "")
-                editingOverlayId = store.selectedId
+    /** The canvas as a bounded card (prototype `ed-canvas`): fixed height,
+     * rounded, meta chips pinned bottom-leading, gestures unchanged. */
+    private func stageCard(height: CGFloat) -> some View {
+        stage
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .background(BitOSTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                if drawMode { drawCaptureOverlay }
             }
-            ToolIconButton(
-                symbol: AppIcons.sticker, description: "Add sticker",
-                enabled: store.canAddOverlay
-            ) {
-                showStickers = true
+            .overlay(alignment: .bottomLeading) {
+                if !stageMetaChips.isEmpty { stageMetaChipRow }
             }
-            ToolIconButton(
-                symbol: AppIcons.looks, description: "Color look",
-                enabled: store.activeAsset != nil
-            ) {
-                showLooks = true
-            }
-            ToolIconButton(
-                symbol: AppIcons.sfx, description: "Sound effects",
-                enabled: store.isVideoMode && store.videoClipData != nil
-            ) {
-                showSfx = true
-            }
-            ToolIconButton(
-                symbol: AppIcons.pen, description: "Draw",
-                enabled: true
-            ) {
-                drawMode.toggle()
-            }
-            ToolIconButton(
-                symbol: AppIcons.save,
-                description: "Save to Photos",
-                enabled: (store.activeAsset != nil || store.gifFramesCount > 0 ||
-                    store.videoClipData != nil) && store.exportState != .saving
-            ) {
-                store.exportActiveAssetToPhotos()
-            }
-            if store.isVideoMode && store.videoProbe != nil {
-                ToolIconButton(
-                    symbol: AppIcons.appsGrid, description: "Expert suite",
-                    enabled: store.videoClipData != nil
+    }
+
+    /** Quick tool chips (prototype: Meme · Text · Stickers · Sound ·
+     * Effects; Draw/Save stay as native extras). Chip taps toggle the
+     * matching inline panel. */
+    private var quickTools: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                QuickToolChip(
+                    symbol: AppIcons.remix, label: "Meme", hot: true,
+                    active: activePanel == .meme,
+                    enabled: store.canAddOverlay
                 ) {
-                    suiteMode = true
+                    togglePanel(.meme)
+                }
+                QuickToolChip(
+                    symbol: AppIcons.textStyle, label: "Text",
+                    active: activePanel == .text,
+                    enabled: store.canAddOverlay
+                ) {
+                    togglePanel(.text)
+                }
+                QuickToolChip(
+                    symbol: AppIcons.sticker, label: "Stickers",
+                    active: activePanel == .stickers,
+                    enabled: store.canAddOverlay
+                ) {
+                    togglePanel(.stickers)
+                }
+                QuickToolChip(
+                    symbol: AppIcons.sfx, label: "Sound",
+                    active: activePanel == .sound,
+                    enabled: store.isVideoMode && store.videoClipData != nil
+                ) {
+                    togglePanel(.sound)
+                }
+                QuickToolChip(
+                    symbol: AppIcons.looks, label: "Look",
+                    active: activePanel == .fx,
+                    enabled: store.activeAsset != nil || store.gifFramesCount > 0 ||
+                        (store.isVideoMode && !store.clips.isEmpty)
+                ) {
+                    togglePanel(.fx)
+                }
+                QuickToolChip(
+                    symbol: AppIcons.pen, label: "Draw",
+                    active: drawMode,
+                    enabled: true
+                ) {
+                    activePanel = nil
+                    drawMode.toggle()
+                }
+                QuickToolChip(
+                    symbol: AppIcons.save, label: "Export",
+                    active: false,
+                    enabled: (store.activeAsset != nil || store.gifFramesCount > 0 ||
+                        store.videoClipData != nil) && store.exportState != .saving
+                ) {
+                    showExportSheet = true
                 }
             }
-            Spacer()
+        }
+    }
+
+    private func togglePanel(_ panel: EditorPanel) {
+        drawMode = false
+        activePanel = activePanel == panel ? nil : panel
+    }
+
+    /** The tool panel as a bottom sheet: title row + the panel content. */
+    @ViewBuilder
+    private func editorPanel(_ panel: EditorPanel) -> some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            HStack {
+                Text(panel.title)
+                    .font(.headline)
+                Spacer()
+                Button("Done") { activePanel = nil }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+            panelBody(panel)
+        }
+        .padding(BitOSTheme.Spacing.md)
+        .background(BitOSTheme.background)
+    }
+
+    @ViewBuilder
+    private func panelBody(_ panel: EditorPanel) -> some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            switch panel {
+            case .meme:
+                MemePanelContent(store: store)
+            case .text:
+                TextPanelContent(store: store)
+            case .stickers:
+                StickerPanelContent(store: store)
+            case .sound:
+                SoundPanelContent(
+                    cueCount: store.sfxCues.count,
+                    onOpenStudio: {
+                        activePanel = nil
+                        showSfx = true
+                    }
+                )
+            case .fx:
+                FxPanelContent(store: store)
+            }
+        }
+    }
+
+    /// Compact clip timeline (prototype `edTimeline`): proportional
+    /// segments, selection, playhead + the Split/Delete/Mute/Speed/Layer
+    /// clip-tool row — all wired to the real clip store ops the expert
+    /// suite uses.
+    private var timelineSection: some View {
+        let totalMs = max(1, store.timelineDurationMs)
+        let positionMs = min(Int64(videoPositionSec * 1000), totalMs)
+        return VStack(spacing: BitOSTheme.Spacing.xs) {
+            HStack {
+                Text(monoClock(0))
+                Spacer()
+                Text("\(monoClock(positionMs)) / \(monoClock(totalMs))")
+                    .foregroundStyle(BitOSTheme.accent)
+                Spacer()
+                Text(monoClock(totalMs))
+            }
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(BitOSTheme.textSecondary)
+            GeometryReader { geo in
+                let gaps = CGFloat(max(0, store.clips.count - 1)) * 2
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 2) {
+                        ForEach(Array(store.clips.enumerated()), id: \.element.id) { index, clip in
+                            let fraction = CGFloat(store.clipOutputMs(clip)) / CGFloat(totalMs)
+                            Button {
+                                store.selectClip(index)
+                            } label: {
+                                VStack(spacing: 2) {
+                                    Text("vdo \(index + 1)")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    HStack(spacing: 3) {
+                                        if clip.volume == 0 {
+                                            Text("🔇").font(.system(size: 9))
+                                        }
+                                        Text("\(Int((store.clipOutputMs(clip) + 999) / 1000))s")
+                                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                    }
+                                }
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 40)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(index == store.selectedClipIndex
+                                              ? BitOSTheme.accent.opacity(0.85)
+                                              : BitOSTheme.textSecondary.opacity(0.35))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(
+                                            index == store.selectedClipIndex ? BitOSTheme.accent : .clear,
+                                            lineWidth: 2
+                                        )
+                                )
+                            }
+                            .frame(width: max(0, (geo.size.width - gaps) * fraction))
+                            .accessibilityLabel("Clip \(index + 1)")
+                        }
+                    }
+                    Rectangle()
+                        .fill(BitOSTheme.accent)
+                        .frame(width: 2, height: 46)
+                        .offset(x: geo.size.width * CGFloat(positionMs) / CGFloat(totalMs))
+                        .allowsHitTesting(false)
+                        .accessibilityLabel("Playhead")
+                }
+            }
+            .frame(height: 46)
+            if store.rate != 1 {
+                Text("whole-timeline speed \(store.rate, specifier: "%.2f")×")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            HStack {
+                Spacer()
+                ClipTool(icon: "film", label: "Split") {
+                    if store.splitClip(atTimelineMs: positionMs) {
+                        store.setNotice("Clip split at the playhead")
+                    } else {
+                        store.setNotice("Nothing to split at the playhead")
+                    }
+                }
+                Spacer()
+                ClipTool(icon: "trash", label: "Delete") {
+                    if store.clips.count > 1 {
+                        store.removeClip(at: store.selectedClipIndex)
+                        store.setNotice("Clip deleted")
+                    } else {
+                        store.setNotice("Keep at least one clip")
+                    }
+                }
+                Spacer()
+                ClipTool(icon: "mic.slash", label: "Mute") {
+                    guard store.clips.indices.contains(store.selectedClipIndex) else { return }
+                    let current = store.clips[store.selectedClipIndex].volume
+                    store.setClipVolume(
+                        index: store.selectedClipIndex,
+                        volume: current == 0 ? 1 : 0
+                    )
+                    store.setNotice(current == 0 ? "Clip sound on" : "Clip muted")
+                }
+                Spacer()
+                ClipTool(icon: "timer", label: "Speed") {
+                    activePanel = nil
+                    showSpeed = true
+                }
+                Spacer()
+                ClipTool(icon: "square.3.layers.3d", label: "Layer") { showLayers = true }
+                Spacer()
+            }
+        }
+    }
+
+    /// Accessible manipulation for the selected overlay (MUX-03): explicit
+    /// nudge / resize / rotate / edit / delete controls — no precision
+    /// gestures required. Every action is one undoable command.
+    @ViewBuilder
+    private var selectionControls: some View {
+        if let overlay = store.overlays.first(where: { $0.id == store.selectedId }) {
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                Button {
+                    store.updateStyle(overlay.id, fields: ["x": overlay.x - 0.05])
+                } label: { Image(systemName: "arrow.left") }
+                    .accessibilityLabel("Nudge left")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["x": overlay.x + 0.05])
+                } label: { Image(systemName: "arrow.right") }
+                    .accessibilityLabel("Nudge right")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["y": overlay.y - 0.05])
+                } label: { Image(systemName: "arrow.up") }
+                    .accessibilityLabel("Nudge up")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["y": overlay.y + 0.05])
+                } label: { Image(systemName: "arrow.down") }
+                    .accessibilityLabel("Nudge down")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 0.9])
+                } label: { Image(systemName: "minus.magnifyingglass") }
+                    .accessibilityLabel("Shrink")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 1.1])
+                } label: { Image(systemName: "plus.magnifyingglass") }
+                    .accessibilityLabel("Enlarge")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["rot": overlay.rot - 15])
+                } label: { Image(systemName: "arrow.counterclockwise") }
+                    .accessibilityLabel("Rotate left")
+                Button {
+                    store.updateStyle(overlay.id, fields: ["rot": overlay.rot + 15])
+                } label: { Image(systemName: "arrow.clockwise") }
+                    .accessibilityLabel("Rotate right")
+                if !overlay.isSticker && overlay.assetId == nil {
+                    Button {
+                        editingOverlayId = overlay.id
+                    } label: { Image(systemName: "textformat") }
+                        .accessibilityLabel("Edit text")
+                }
+                Button(role: .destructive) {
+                    store.removeOverlay(overlay.id)
+                } label: { Image(systemName: "trash") }
+                    .accessibilityLabel("Delete overlay")
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .buttonStyle(.borderless)
+            .foregroundStyle(BitOSTheme.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, BitOSTheme.Spacing.xs)
+            .overlay(alignment: .top) { Divider() }
+            .padding(.horizontal, BitOSTheme.Spacing.md)
+        }
+    }
+
+    /** Per-mode bottom toolbar (prototype `edBar`). Real features open;
+     * prototype-mocked slots say which wave ships them. */
+    private var perModeBar: some View {
+        HStack {
+            if store.isVideoMode {
+                ClipTool(icon: "film", label: "Clips") { showClipSheet = true }
+                ClipTool(icon: "slider.horizontal.3", label: "Adjust") { togglePanel(.fx) }
+                ClipTool(icon: "scissors", label: "Trim") { showTrim = true }
+                ClipTool(icon: "square.3.layers.3d", label: "Overlay") {
+                    activePanel = nil
+                    showLayers = true
+                }
+                ClipTool(icon: "wand.and.stars", label: "Timeline") {
+                    activePanel = nil
+                    suiteMode = true
+                }
+            } else if store.isGifMode {
+                ClipTool(icon: "timer", label: "Speed") {
+                    let next = store.gifUniformDelayMs >= 200 ? 50 : store.gifUniformDelayMs + 50
+                    store.setGifUniformDelay(next)
+                    store.setNotice("Frame hold \(next) ms")
+                }
+                ClipTool(icon: "arrow.triangle.2.circlepath", label: "Loop") {
+                    store.setNotice("GIFs loop forever — nothing to set")
+                }
+                ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
+                ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
+            } else {
+                ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
+                ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
+                ClipTool(icon: "slider.horizontal.3", label: "Adjust") { togglePanel(.fx) }
+            }
+        }
+        .padding(.vertical, BitOSTheme.Spacing.sm)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+    }
+
+    /** Status line (export results, notices) — one 16 pt row. */
+    private var statusLine: some View {
+        HStack(spacing: BitOSTheme.Spacing.xs) {
             switch store.exportState {
             case .saving:
                 ProgressView()
@@ -2001,6 +2841,13 @@ struct MemeEditorView: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(BitOSTheme.textSecondary)
+            case .savedAdjusted(let note):
+                HStack(spacing: 4) {
+                    AppIcons.image(for: AppIcons.checkCircle)
+                    Text(note)
+                }
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.success)
             case .failed(let message):
                 Text(message)
                     .font(.caption2)
@@ -2016,10 +2863,44 @@ struct MemeEditorView: View {
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
             }
+            Spacer(minLength: 0)
         }
+        .frame(minHeight: 16)
         .padding(.horizontal, BitOSTheme.Spacing.md)
-        .padding(.vertical, BitOSTheme.Spacing.sm)
-        .padding(.bottom, BitOSTheme.Spacing.xs)
+    }
+
+    /// `1.2 s`-style media clock for the timeline ruler.
+    private func monoClock(_ ms: Int64) -> String {
+        String(format: "%02d:%02d", Int(ms / 1000) / 60, Int(ms / 1000) % 60)
+    }
+
+    /** Primary exit into the publish flow (prototype "Next · post details"). */
+    private var nextButton: some View {
+        let hasMedia = store.activeAsset != nil || store.gifFramesCount > 0 ||
+            store.videoClipData != nil
+        let busy = store.publishState == .uploading || store.publishState == .publishing
+        return Button {
+            activePanel = nil
+            showDetailsFlow = true
+        } label: {
+            Text("Next · post details")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(BitOSTheme.accent)
+        .disabled(!hasMedia || busy)
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.vertical, BitOSTheme.Spacing.xs)
+        .padding(.bottom, !hasMedia ? 0 : BitOSTheme.Spacing.xs)
+        .overlay(alignment: .bottom) {
+            if !hasMedia {
+                Text("pick a clip, image or frames first")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .offset(y: 14)
+            }
+        }
     }
 
     private func loadPicked(_ items: [PhotosPickerItem]) async {
@@ -2091,6 +2972,17 @@ struct MemeEditorView: View {
         if store.isEmpty { return }
         try? await Task.sleep(nanoseconds: MemeSlotsApi.autosaveDebounceMs * 1_000_000)
         guard !Task.isCancelled else { return }
+        await saveDraftNow()
+    }
+
+    /// Awaited durable save (MUX-01): the UI may only claim "saved" after
+    /// the write returns; failures keep the draft open and offer retry.
+    private func saveDraftNow() async {
+        guard let slotStore else {
+            store.draftSaveState = .saved
+            return
+        }
+        store.draftSaveState = .saving
         let wire = store.projectJson
         var assets = store.assets.map { ($0.id, $0.image) }
         // GIF frames persist as slot assets too (f1…fN, PNG bytes).
@@ -2101,13 +2993,16 @@ struct MemeEditorView: View {
             dataAssets.append((clip.id, clip.data, "asset-\(clip.id).mp4"))
         }
         let id = slotId
-        Task.detached(priority: .utility) {
-            _ = slotStore.save(
+        // The awaited completion of the slot write IS the durable
+        // acknowledgement this store exposes (non-failing API).
+        _ = await Task.detached(priority: .utility) {
+            slotStore.save(
                 slotId: id, projectJson: wire, assets: assets,
                 dataAssets: dataAssets,
                 nowMs: Int64(Date.now.timeIntervalSince1970 * 1000)
             )
-        }
+        }.value
+        store.draftSaveState = .saved
         onSlotsChanged()
     }
 
@@ -2122,55 +3017,86 @@ struct MemeEditorView: View {
     }
 }
 
-private struct ModeChip: View {
+
+/// Prototype mode-switcher pill: uppercase, filled orange when active.
+private struct ModePill: View {
     let label: String
+    let active: Bool
+    var action: () -> Void = {}
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(active ? BitOSTheme.accent : Color.clear))
+                .foregroundStyle(active ? Color.black : BitOSTheme.textSecondary)
+        }
+        .accessibilityLabel("\(label) mode\(active ? ", selected" : "")")
+    }
+}
+
+/// Prototype quick-tool: compact circular icon + caption. Keep a 52 pt
+/// hit target while matching the web control's 46 px visual rhythm.
+private struct QuickToolChip: View {
+    let symbol: String
+    let label: String
+    var hot: Bool = false
     let active: Bool
     let enabled: Bool
     var action: () -> Void = {}
 
     var body: some View {
         Button(action: action) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule().fill(active ? BitOSTheme.accent.opacity(0.18) : BitOSTheme.surface)
+            VStack(spacing: 1) {
+                AppIcons.image(for: symbol)
+                    .font(.system(size: 15, weight: .medium))
+                Text(label)
+                    .font(.system(size: 9, weight: .bold))
+                    .lineLimit(1)
+            }
+            .frame(width: 52, height: 52)
+            .background(
+                Circle().fill(
+                    active ? BitOSTheme.accent.opacity(0.22)
+                        : hot ? BitOSTheme.accent.opacity(0.12) : BitOSTheme.surface
                 )
-                .overlay(
-                    Capsule().strokeBorder(
-                        active ? BitOSTheme.accent : BitOSTheme.border,
-                        lineWidth: 1
-                    )
+            )
+            .overlay(
+                Circle().strokeBorder(
+                    active || hot ? BitOSTheme.accent : BitOSTheme.border,
+                    lineWidth: 1
                 )
-                .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textSecondary)
+            )
+            .foregroundStyle(active || hot ? BitOSTheme.accent : BitOSTheme.textSecondary)
         }
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
+        .opacity(enabled ? 1 : 0.4)
+        .accessibilityLabel(label)
     }
 }
 
-private struct ToolIconButton: View {
-    let symbol: String
-    var description: String = ""
-    let enabled: Bool
-    let action: () -> Void
+/// Prototype clip-tool / per-mode-bar entry: icon over a 9 pt caption.
+private struct ClipTool: View {
+    let icon: String
+    let label: String
+    var action: () -> Void = {}
 
     var body: some View {
         Button(action: action) {
-            AppIcons.image(for: symbol)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(BitOSTheme.textPrimary)
-                .frame(width: 48, height: 48)
-                .background(Circle().fill(BitOSTheme.surface))
-                .overlay(Circle().strokeBorder(BitOSTheme.border, lineWidth: 1))
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                Text(label)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(BitOSTheme.textSecondary)
         }
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
-        .accessibilityLabel(description)
-        .accessibilityLabel("Save to Photos")
+        .accessibilityLabel(label)
     }
 }
+
 
 /// One overlay: attributed text (outline/shadow) centered on its
 /// normalized position, scaled + rotated around that center. IMAGE
@@ -2311,28 +3237,6 @@ private struct OutlinedTextView: UIViewRepresentable {
             return attributed
         }()
         label.attributedText = attributes
-    }
-}
-
-/// Delete handle at the top-end of the selection bounds (taps are
-/// handled by the stage gesture layer; this node is pointer-transparent).
-/// One publish-preflight row (mockup app-04 scr-review checklist).
-private struct PreflightRow: View {
-    let done: Bool
-    let label: String
-    let meta: String
-
-    var body: some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            Image(systemName: done ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(done ? Color.green : Color.orange)
-            Text(label).font(.subheadline)
-            Spacer()
-            Text(meta)
-                .font(.caption2)
-                .foregroundStyle(BitOSTheme.textSecondary)
-        }
     }
 }
 
@@ -2580,169 +3484,6 @@ private struct GifReorderDelegate: DropDelegate {
 
 // MARK: - Publish sheet (MST-017)
 
-private struct MemePublishSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppEnvironment.self) private var environment
-    @Environment(IdentityStore.self) private var identity
-    let store: MemeEditorStore
-    @State private var caption = ""
-    @State private var altText = ""
-    @State private var contentWarningOn = false
-    @State private var contentWarningReason = "Sensitive content"
-    @State private var remixOf = ""
-    @State private var remixAuthor = ""
-
-    private var derivedTags: [String] {
-        var seen = Set<String>()
-        var tags: [String] = []
-        for word in caption.split(whereSeparator: { $0.isWhitespace }) where word.hasPrefix("#") {
-            let tag = word.dropFirst().lowercased()
-            if !tag.isEmpty, seen.insert(String(tag)).inserted { tags.append(String(tag)) }
-        }
-        return tags
-    }
-
-    private var busy: Bool {
-        store.publishState == .uploading || store.publishState == .publishing
-    }
-
-    /// Preflight kind label (mockup scr-review: "kind-20" row).
-    private var kindLabel: String {
-        if store.isVideoMode { return "kind 22/21 · by orientation" }
-        if store.isGifMode { return "kind 20 · image/gif" }
-        return "kind 20 · picture"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            Text("Post meme").font(.headline)
-
-            TextField("Caption (#hashtags ride as tags)", text: $caption, axis: .vertical)
-                .lineLimit(1...4)
-                .textFieldStyle(.roundedBorder)
-            HStack {
-                if !derivedTags.isEmpty {
-                    ForEach(derivedTags.prefix(6), id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(BitOSTheme.accent.opacity(0.15)))
-                            .foregroundStyle(BitOSTheme.accent)
-                    }
-                }
-                Spacer()
-                Text("\(caption.count) / 300")
-                    .font(.caption2)
-                    .foregroundStyle(caption.count > 300 ? BitOSTheme.warning : BitOSTheme.textSecondary)
-            }
-
-            TextField("Alt text (defaults to the caption)", text: $altText)
-                .textFieldStyle(.roundedBorder)
-
-            Toggle(isOn: $contentWarningOn) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Content warning").font(.subheadline)
-                    Text("Gate the meme behind a visible warning")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-            }
-            if contentWarningOn {
-                TextField("Warning reason", text: $contentWarningReason)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            if let failure = store.publishFailure {
-                Text(failure).font(.caption).foregroundStyle(BitOSTheme.error)
-            }
-            if store.publishState == .done {
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    AppIcons.image(for: AppIcons.checkCircle)
-                    Text("Published")
-                }
-                .foregroundStyle(BitOSTheme.success)
-                .font(.subheadline)
-            }
-
-            // Remix lineage (MST-042): optional source event → tags.
-            TextField("Remix of (optional — paste note1/event id)", text: $remixOf)
-                .textFieldStyle(.roundedBorder)
-            if !remixOf.isEmpty {
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    Text("source · \(remixOf.prefix(10))…")
-                        .font(.caption2)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(BitOSTheme.accentContainer))
-                    Text("→").font(.caption2).foregroundStyle(BitOSTheme.textSecondary)
-                    Text("you")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(BitOSTheme.accent))
-                        .foregroundStyle(Color.black)
-                }
-                TextField("Source author (optional npub/hex — p-tag)", text: $remixAuthor)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            // Preflight (mockup app-04 scr-review): what will publish.
-            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
-                PreflightRow(
-                    done: !caption.isEmpty,
-                    label: "Caption & tags",
-                    meta: kindLabel
-                )
-                PreflightRow(
-                    done: !altText.isEmpty || !caption.isEmpty,
-                    label: "Alt text",
-                    meta: altText.isEmpty ? "defaults to caption" : "✓"
-                )
-                PreflightRow(
-                    done: !contentWarningOn || !contentWarningReason.isEmpty,
-                    label: "Content warning",
-                    meta: contentWarningOn ? "gated: \(contentWarningReason)" : "off"
-                )
-            }
-            .padding(BitOSTheme.Spacing.sm)
-            .background(BitOSTheme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
-
-            Button {
-                let bridge = (environment.businessCore as? FrameworkBusinessCoreClient)?
-                    .bridgeForFollowing() ?? BusinessCoreBridge()
-                store.publishActiveAsset(
-                    caption: caption,
-                    altText: altText,
-                    contentWarningReason: contentWarningOn ? contentWarningReason : nil,
-                    remixEventId: remixOf,
-                    remixAuthor: remixAuthor,
-                    identity: identity,
-                    publisher: environment.notePublisher,
-                    bridge: bridge
-                )
-            } label: {
-                HStack {
-                    if busy { ProgressView().tint(.white) }
-                    Text(
-                        store.publishState == .uploading ? "Uploading…" :
-                        store.publishState == .publishing ? "Publishing…" : "Sign & publish"
-                    )
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(BitOSTheme.accent)
-            .disabled(busy || store.publishState == .done || store.activeAsset == nil)
-
-            Text("Nothing is signed until the rendered meme is uploaded and hash-verified (Blossom).")
-                .font(.caption2)
-                .foregroundStyle(BitOSTheme.textSecondary)
-
-            Spacer()
-        }
-        .padding()
-    }
-}
-
 // MARK: - Text sheet
 
 private struct TextSheet: View {
@@ -2753,11 +3494,11 @@ private struct TextSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             if let overlay = store.overlays.first(where: { $0.id == overlayId }) {
-                TextField("Text", text: Binding(
+                BitosField("Text", text: Binding(
                     get: { overlay.text },
                     set: { store.updateStyle(overlayId, fields: ["text": $0]) }
                 ))
-                .textFieldStyle(.roundedBorder)
+                
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: BitOSTheme.Spacing.xs) {
@@ -2786,15 +3527,15 @@ private struct TextSheet: View {
                 }
                 if store.isVideoMode {
                     HStack(spacing: BitOSTheme.Spacing.sm) {
-                        TextField(
+                        BitosField(
                             "Start s",
                             text: Binding(
                                 get: { String((overlay.startMs ?? 0) / 1000) },
                                 set: { store.updateStyle(overlayId, fields: ["startMs": Int64(Double($0) ?? 0) * 1000]) }
                             )
                         )
-                        .textFieldStyle(.roundedBorder)
-                        TextField(
+                        
+                        BitosField(
                             "End s (0 = always)",
                             text: Binding(
                                 get: { String((overlay.endMs ?? 0) / 1000) },
@@ -2804,7 +3545,7 @@ private struct TextSheet: View {
                                 }
                             )
                         )
-                        .textFieldStyle(.roundedBorder)
+                        
                     }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -2902,16 +3643,307 @@ private struct ChipButton: View {
 
 // MARK: - Sticker sheet
 
-private struct StickerSheet: View {
-    @Environment(\.dismiss) private var dismiss
+private struct StickerCell: View {
+    let emoji: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(emoji)
+                .font(.system(size: 26))
+                .frame(width: 68, height: 52)
+                .background(RoundedRectangle(cornerRadius: 12).fill(BitOSTheme.surface))
+        }
+    }
+}
+
+// MARK: - Inline tool panels (prototype `edPanel`)
+
+/// Output settings before export (MUX-04): one sheet across modes showing
+/// EXACTLY the profile the pipeline will render — the only tested profile
+/// per mode, so preview equals output by construction. Automatic
+/// adjustments (GIF downscale ladder, video duration cuts) are disclosed
+/// up front; the editable master is never mutated.
+struct ExportSettingsSheet: View {
+    @Environment(\.dismiss) private var dismissSheet
+    let store: MemeEditorStore
+    var onMakeVariations: ((String, Data) -> Void)? = nil
+    @State private var variationsBusy = false
+
+    private var designEligible: Bool {
+        !store.isGifMode && !store.isVideoMode && store.activeAsset != nil &&
+            store.overlays.contains { !$0.isSticker && !$0.text.isEmpty }
+    }
+
+    /// The profile facts, derived from the same rules the exporters use.
+    private var formatRow: (String, String) {
+        if store.isVideoMode, !store.clips.isEmpty {
+            let probe = store.videoProbe
+            let seconds = Int(store.timelineDurationMs) / 1000
+            return (
+                "MP4 · \(probe.map { "\($0.uprightWidth)×\($0.uprightHeight)" } ?? "source size") · \(seconds) s",
+                "Over-size exports are automatically trimmed to fit the 64 MB cap — the adjusted result is shown before you post."
+            )
+        }
+        if store.isGifMode, store.gifFramesCount > 0 {
+            let delay = store.gifUniformDelayMs
+            return (
+                "GIF · \(store.gifFramesCount) frames\(delay > 0 ? " · \(delay) ms/frame" : " · source timing")",
+                "Oversized GIFs automatically downscale — you'll see “Saved at a smaller size” if that happens."
+            )
+        }
+        if let asset = store.activeAsset {
+            let width = Int((asset.image.size.width * asset.image.scale).rounded())
+            let height = Int((asset.image.size.height * asset.image.scale).rounded())
+            return ("PNG · \(width)×\(height)", "Full-quality PNG at the media's resolution.")
+        }
+        return ("—", "Pick media first.")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Export").font(.headline)
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                MemePostPreviewThumb(store: store)
+                    .frame(width: 56, height: 80)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(formatRow.0).font(.subheadline.weight(.semibold))
+                    Text("Destination: \(store.isVideoMode ? "Movies" : "Photos")")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    Text("File size is shown after the render (estimates would be guesses).")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
+            Text(formatRow.1)
+                .font(.caption)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if case .failed(let message) = store.exportState {
+                Text(message).font(.caption).foregroundStyle(BitOSTheme.error)
+            }
+            if !store.exportJobs.recoverable.isEmpty {
+                Text("Recovered exports")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(store.exportJobs.recoverable) { job in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("\(job.format.uppercased()) · \(job.artifactBytes / 1024) KB")
+                                .font(.caption.weight(.semibold))
+                            Spacer()
+                            if job.phase == "needsReview" {
+                                Text("check Photos first — the save may have finished")
+                                    .font(.caption2)
+                                    .foregroundStyle(BitOSTheme.warning)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                        if let error = job.lastError {
+                            Text(error).font(.caption2).foregroundStyle(BitOSTheme.error)
+                        }
+                        HStack {
+                            Button("Retry save") { store.retryExportSave(jobId: job.id) }
+                                .font(.caption.weight(.semibold))
+                            Spacer()
+                            Button("Discard", role: .destructive) { store.discardExportJob(jobId: job.id) }
+                                .font(.caption)
+                        }
+                    }
+                    .padding(BitOSTheme.Spacing.sm)
+                    .background(BitOSTheme.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+                }
+                Text("Retry reuses the rendered file — it never re-renders.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            if designEligible, let onMakeVariations {
+                Button {
+                    variationsBusy = true
+                    Task {
+                        do {
+                            let png = try await Task.detached(priority: .userInitiated) { [store] in
+                                try await MemeRaster.renderPngData(
+                                    asset: store.activeAsset!.image,
+                                    projectJson: store.projectJson,
+                                    client: FrameworkBusinessCoreClient()
+                                )
+                            }.value
+                            dismissSheet()
+                            onMakeVariations(store.projectJson, png)
+                        } catch {
+                            store.setNotice("Could not render the design — \(error.localizedDescription)")
+                        }
+                        variationsBusy = false
+                    }
+                } label: {
+                    HStack {
+                        if variationsBusy { ProgressView() }
+                        Text("Make variations from this design")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(variationsBusy || store.exportState == .saving)
+                Text("Freezes this design and varies every caption per row.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Button {
+                dismissSheet()
+                store.exportActiveAssetToPhotos()
+            } label: {
+                HStack {
+                    if store.exportState == .saving { ProgressView().tint(.white) }
+                    Text(store.exportState == .saving ? "Rendering…" : "Export")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BitOSTheme.accent)
+            .disabled(store.exportState == .saving ||
+                (store.activeAsset == nil && store.gifFramesCount == 0 && store.videoClipData == nil))
+            Spacer(minLength: 0)
+        }
+        .padding()
+        .background(BitOSTheme.background)
+    }
+}
+
+/// The editor tool panels (prototype create-edit contents, presented as
+/// native bottom sheets — platform idiom, canvas stays visible above).
+enum EditorPanel: String, CaseIterable, Identifiable {
+    case meme
+    case text
+    case stickers
+    case sound
+    case fx
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .meme: return "Meme generator"
+        case .text: return "Text"
+        case .stickers: return "Stickers"
+        case .sound: return "Sound"
+        case .fx: return "Look"
+        }
+    }
+}
+
+/// Classic meme generator panel: TOP/BOTTOM caption pair + font slot,
+/// landing at the canonical positions with the classic heavy-outline look
+/// — one undo step for the pair, then drag/scale on the stage.
+private struct MemePanelContent: View {
+    let store: MemeEditorStore
+    @State private var top = ""
+    @State private var bottom = ""
+    @State private var fontSlot = "impact"
+
+    /// Prototype font pills mapped to the shared semantic slots.
+    private let slots: [(id: String, label: String)] = [
+        ("impact", "Impact"), ("serif", "Comic"), ("sans", "Modern"),
+    ]
+
+    private var canAdd: Bool {
+        !top.trimmingCharacters(in: .whitespaces).isEmpty ||
+            !bottom.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Meme generator").font(.subheadline.weight(.semibold))
+            BitosField("TOP TEXT", text: $top)
+                
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.characters)
+            BitosField("BOTTOM TEXT", text: $bottom)
+                
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.characters)
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(slots, id: \.id) { slot in
+                    ChipButton(label: slot.label, active: fontSlot == slot.id) {
+                        fontSlot = slot.id
+                    }
+                }
+            }
+            Button {
+                store.addMemeCaptions(top: top, bottom: bottom, fontSlot: fontSlot)
+                top = ""
+                bottom = ""
+                store.setNotice("Captions added — drag on the canvas to fine-tune")
+            } label: {
+                Text("Add to canvas")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BitOSTheme.accent)
+            .disabled(!canAdd)
+        }
+    }
+}
+
+/// Quick-text panel (prototype text panel): type once, pick a font slot,
+/// add — tapping the overlay on the stage opens the full style editor.
+private struct TextPanelContent: View {
+    let store: MemeEditorStore
+    @State private var text = ""
+    @State private var fontSlot = "sans"
+
+    private let slots: [(id: String, label: String)] = [
+        ("sans", "Modern"), ("impact", "Impact"), ("serif", "Comic"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Add text").font(.subheadline.weight(.semibold))
+            BitosField("Type something…", text: $text)
+                
+                .onSubmit(addText)
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(slots, id: \.id) { slot in
+                    ChipButton(label: slot.label, active: fontSlot == slot.id) {
+                        fontSlot = slot.id
+                    }
+                }
+            }
+            Button(action: addText) {
+                Text("Add text")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BitOSTheme.accent)
+            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+
+    private func addText() {
+        let value = text.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return }
+        store.addOverlay(kind: "text", text: value)
+        if let id = store.selectedId, fontSlot != "sans" {
+            store.updateStyle(id, fields: ["font": fontSlot])
+        }
+        text = ""
+        store.setNotice("Text added — tap it on the canvas for the full style editor")
+    }
+}
+
+/// Sticker panel (prototype sticker grid): recents + packs, bounded so the
+/// stage above stays visible.
+private struct StickerPanelContent: View {
     let store: MemeEditorStore
     @State private var packId: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             Text("Stickers").font(.subheadline.weight(.semibold))
             if !store.recents.isEmpty {
-                Text("Recent").font(.caption).foregroundStyle(BitOSTheme.textSecondary)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: BitOSTheme.Spacing.xs) {
                         ForEach(store.recents, id: \.self) { emoji in
@@ -2929,17 +3961,17 @@ private struct StickerSheet: View {
                     }
                 }
             }
-            let pack = store.packs.first { $0.id == currentPackId }
-            if let pack {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(pack.stickers, id: \.self) { emoji in
-                        StickerCell(emoji: emoji) { store.addSticker(emoji) }
+            if let pack = store.packs.first(where: { $0.id == currentPackId }) {
+                ScrollView(showsIndicators: false) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 56))], spacing: BitOSTheme.Spacing.xs) {
+                        ForEach(pack.stickers, id: \.self) { emoji in
+                            StickerCell(emoji: emoji) { store.addSticker(emoji) }
+                        }
                     }
                 }
+                .frame(maxHeight: 150)
             }
-            Spacer()
         }
-        .padding()
     }
 
     private var currentPackId: String {
@@ -2948,19 +3980,114 @@ private struct StickerSheet: View {
     }
 }
 
-private struct StickerCell: View {
-    let emoji: String
-    let action: () -> Void
+/// Sound panel (prototype sound row): current synth cue summary + a jump
+/// into the full cue studio sheet.
+private struct SoundPanelContent: View {
+    let cueCount: Int
+    let onOpenStudio: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(emoji)
-                .font(.system(size: 26))
-                .frame(width: 68, height: 52)
-                .background(RoundedRectangle(cornerRadius: 12).fill(BitOSTheme.surface))
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Sound").font(.subheadline.weight(.semibold))
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cueCount == 0 ? "Original clip audio" : "\(cueCount) synth cue\(cueCount == 1 ? "" : "s")")
+                        .font(.subheadline)
+                    Text(cueCount == 0
+                         ? "Drop risers, zaps and coin SFX at the playhead"
+                         : "Cues bake into the export mix")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                Spacer()
+                Button("Change", action: onOpenStudio)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
         }
     }
 }
+
+/// Effects panel (prototype fx panel): the 8 look presets as horizontal
+/// chips + the brightness/contrast/saturation sliders over the look.
+private struct FxPanelContent: View {
+    @Bindable var store: MemeEditorStore
+
+    private struct LookRow: Identifiable { let id: String, label: String }
+
+    private var lookRows: [LookRow] {
+        guard let data = FrameworkBusinessCoreClient().memeLooks().data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return [LookRow(id: "none", label: "None")]
+        }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            return LookRow(id: id, label: (row["label"] as? String) ?? id)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Looks & effects").font(.subheadline.weight(.semibold))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(lookRows, id: \.id) { look in
+                        ChipButton(
+                            label: look.label,
+                            active: look.id == (store.lookId ?? "none")
+                        ) {
+                            store.setLook(look.id)
+                        }
+                    }
+                }
+            }
+            adjustSlider(
+                label: "Brightness", value: Binding(
+                    get: { Double(store.adjustBrightness) },
+                    set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
+                ),
+                in: 0.4...1.6
+            )
+            adjustSlider(
+                label: "Contrast", value: Binding(
+                    get: { Double(store.adjustContrast) },
+                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
+                ),
+                in: 0.4...1.6
+            )
+            adjustSlider(
+                label: "Saturation", value: Binding(
+                    get: { Double(store.adjustSaturation) },
+                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
+                ),
+                in: 0...2
+            )
+            if store.hasAdjust {
+                Button {
+                    store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
+                } label: {
+                    Text("Reset adjust")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(BitOSTheme.accent)
+            }
+        }
+    }
+
+    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 84, alignment: .leading)
+            Slider(value: value, in: range)
+            Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(BitOSTheme.accent)
+                .frame(width: 42, alignment: .trailing)
+        }
+    }
+}
+
 
 // MARK: - Export raster (MST-016)
 
@@ -2968,6 +4095,9 @@ enum MemeExportState: Equatable {
     case idle
     case saving
     case saved
+    /// Successful output the pipeline adjusted (downscale ladder, cut) —
+    /// a SUCCESS with the adjustment named, never styled as failure.
+    case savedAdjusted(String)
     case failed(String)
 }
 
@@ -3019,12 +4149,25 @@ enum MemeRaster {
         projectJson: String,
         client: any BusinessCoreClient
     ) throws -> Data {
-        // MST-043: the grade burns into the MEDIA only (same composed
-        // matrix the Android rasterizer uses); overlays draw unfiltered.
+        // MST-043 + adjust: the grade burns into the MEDIA only (the
+        // composed look+adjust matrix, same values the Android rasterizer
+        // uses); overlays draw unfiltered.
         var media = asset
-        if let lookId = MemeEditorStore.lookId(ofProject: projectJson),
-           let graded = applyLook(asset, matrixJson: client.memeLookMatrix(lookId)) {
-            media = graded
+        let projectLookId = MemeEditorStore.lookId(ofProject: projectJson)
+        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        let hasAdjust = adjust.bri != 1 || adjust.con != 1 || adjust.sat != 1
+        if projectLookId != nil || hasAdjust {
+            if let graded = applyLook(
+                asset,
+                matrixJson: client.memeAdjustMatrix(
+                    projectLookId,
+                    brightness: adjust.bri,
+                    contrast: adjust.con,
+                    saturation: adjust.sat
+                )
+            ) {
+                media = graded
+            }
         }
         // The shared envelope owns the evened, long-edge-capped canvas.
         let envelopeJson = client.memeExportPlan(
@@ -3262,26 +4405,92 @@ enum MemeRaster {
 }
 
 /// Color-grade picker (MST-043): the 8 web presets, media-only, undoable.
+/// The Adjust section (prototype `create-edit` FX panel) adds manual
+/// brightness/contrast/saturation sliders composed over the preset.
 private struct LooksSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let store: MemeEditorStore
+    @Bindable var store: MemeEditorStore
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: BitOSTheme.Spacing.sm)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Color look").font(.subheadline.weight(.semibold))
-                Text("Applies to the media only — captions stay crisp. Undo works.")
-                    .font(.caption)
-                    .foregroundStyle(BitOSTheme.textSecondary)
-            }
-            LazyVGrid(columns: columns, spacing: BitOSTheme.Spacing.sm) {
-                ForEach(lookRows, id: \.id) { look in
-                    lookButton(look)
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Color look").font(.subheadline.weight(.semibold))
+                    Text("Applies to the media only — captions stay crisp. Undo works.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
                 }
+                LazyVGrid(columns: columns, spacing: BitOSTheme.Spacing.sm) {
+                    ForEach(lookRows, id: \.id) { look in
+                        lookButton(look)
+                    }
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Adjust").font(.subheadline.weight(.semibold))
+                    Text("Fine-tune over the look — burns into the export like the preset.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                adjustSlider(
+                    label: "Brightness", value: Binding(
+                        get: { Double(store.adjustBrightness) },
+                        set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
+                    ),
+                    in: 0.4...1.6
+                )
+                adjustSlider(
+                    label: "Contrast", value: Binding(
+                        get: { Double(store.adjustContrast) },
+                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
+                    ),
+                    in: 0.4...1.6
+                )
+                adjustSlider(
+                    label: "Saturation", value: Binding(
+                        get: { Double(store.adjustSaturation) },
+                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
+                    ),
+                    in: 0...2
+                )
+                if store.hasAdjust {
+                    Button {
+                        store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
+                    } label: {
+                        Text("Reset adjust")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.accent)
+                }
+                Spacer(minLength: 0)
             }
+            .padding(BitOSTheme.Spacing.md)
         }
-        .padding(BitOSTheme.Spacing.md)
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// One labeled slider with the % readout (prototype FX panel shape).
+    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 84, alignment: .leading)
+            Slider(value: value, in: range)
+            Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(BitOSTheme.accent)
+                .frame(width: 42, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(Int((value.wrappedValue * 100).rounded())) percent")
+        .accessibilityAdjustableAction { direction in
+            let step = (range.upperBound - range.lowerBound) / 20
+            let next = direction == .increment
+                ? min(range.upperBound, value.wrappedValue + step)
+                : max(range.lowerBound, value.wrappedValue - step)
+            value.wrappedValue = next
+        }
     }
 
     /// Split out of `body` — the grid button chain exceeded the type-checker's
@@ -3289,7 +4498,6 @@ private struct LooksSheet: View {
     private func lookButton(_ look: LookRow) -> some View {
         Button {
             store.setLook(look.id)
-            dismiss()
         } label: {
             let active = look.id == (store.lookId ?? "none")
             return Text(look.label)
@@ -4050,7 +5258,7 @@ private struct VolumeSheetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             Text("Volume").font(.headline)
-            Text("vdo \(min(store.selectedClipIndex, max(0, store.clips.count - 1)) + 1) · mute is exact; fractional gain previews on stage")
+            Text("vdo \(min(store.selectedClipIndex, max(0, store.clips.count - 1)) + 1) · volume applies to preview and export")
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
             HStack {

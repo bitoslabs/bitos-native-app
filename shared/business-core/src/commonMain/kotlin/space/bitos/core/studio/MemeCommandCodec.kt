@@ -74,6 +74,13 @@ object MemeCommandCodec {
                 put("look", command.lookId)
             }
 
+            is MemeCommand.SetAdjust -> {
+                put("op", "adjust")
+                put("bri", command.adjust.brightness)
+                put("con", command.adjust.contrast)
+                put("sat", command.adjust.saturation)
+            }
+
             is MemeCommand.AddSfxCue -> {
                 put("op", "cue-add")
                 put("cue", buildJsonObject {
@@ -160,6 +167,14 @@ object MemeCommandCodec {
 
                 "look" -> obj["look"]?.jsonPrimitive?.content
                     ?.let(MemeCommand::SetLook)
+
+                "adjust" -> MemeCommand.SetAdjust(
+                    MemeAdjust(
+                        brightness = floatOf(obj, "bri") ?: 1f,
+                        contrast = floatOf(obj, "con") ?: 1f,
+                        saturation = floatOf(obj, "sat") ?: 1f,
+                    ),
+                )
 
                 "cue-add" -> obj["cue"]?.jsonObject?.let { cue ->
                     val sfx = (cue["sfx"] as? kotlinx.serialization.json.JsonPrimitive)?.content

@@ -10,6 +10,9 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
 
     struct UploadFailure: Error { let message: String }
 
+    /** Real pipeline checkpoints (drives the publish machine stepper). */
+    enum UploadStage { case hashing, uploading, verifying }
+
     private let bridge: BusinessCoreBridge
 
     init(bridge: BusinessCoreBridge = BusinessCoreBridge()) {
@@ -21,14 +24,17 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
     }
 
     /// Uploads the bytes and returns the verified (url, hash, mime, size).
+    /// `onStage` receives the REAL checkpoints (hash → upload → verify).
     func upload(
         bytes: Data,
         mimeType: String,
         identity: IdentityStore,
         serverUrl: String,
-        nowSeconds: Int64 = Int64(Date.now.timeIntervalSince1970)
+        nowSeconds: Int64 = Int64(Date.now.timeIntervalSince1970),
+        onStage: ((UploadStage) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         guard !bytes.isEmpty, bytes.count <= 64 * 1024 * 1024 else { throw UploadFailure(message: "file out of bounds") }
+        onStage?(.hashing)
         let localHash = sha256Hex(bytes)
         let account = await identity.account
         guard let account else { throw UploadFailure(message: "signing refused") }
@@ -59,6 +65,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         ) else { throw UploadFailure(message: "auth header rejected") }
 
         // 2. Authenticated PUT /upload (BUD-02: 201 new, 200 already stored).
+        onStage?(.uploading)
         var authed = URLRequest(url: URL(string: endpoint)!)
         authed.httpMethod = "PUT"
         authed.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -70,6 +77,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             throw UploadFailure(message: "upload failed: \(code)")
         }
+        onStage?(.verifying)
         return try verified(from: String(data: data, encoding: .utf8), localHash: localHash, mime: mimeType, size: bytes.count)
     }
 

@@ -123,6 +123,9 @@ object MassBatch {
     const val MAX_CW = 120
     const val MAX_ASSET_FILE_LENGTH = 128
     const val MAX_BATCHES = 6
+    /** UX-14: operational cap for NEW imports (schema decode keeps
+     *  [MAX_ROWS] = 200 so existing large batches stay readable). */
+    const val MAX_NEW_ROWS = 100
     const val MAX_CSV_BYTES = 512 * 1024
 
     /** Canonical starter project every new batch begins from: master asset
@@ -143,6 +146,48 @@ object MassBatch {
             ),
         ),
     )
+
+    /**
+     * MUX-06 "Make variations": derive a recipe from an ARBITRARY editor
+     * design. One LONG_TEXT slot per non-blank TEXT overlay (id `t:<overlay
+     * id>`, friendly name = the current text); a blank row value renders
+     * that caption empty in the variant (deliberate drop, not an error).
+     * IMAGE-mode designs only — GIF/video stay renderer-gated. Returns
+     * null when the project is not an eligible image design.
+     */
+    fun designRecipe(project: MemeProject): MassRecipe? {
+        if (project.mode != MemeMode.IMAGE || project.assets.isEmpty()) return null
+        val texts = project.overlays
+            .filter { it.kind == MemeOverlayKind.TEXT && it.text.isNotBlank() }
+        if (texts.isEmpty()) return null
+        val slots = texts.map { overlay ->
+            MassSlot(
+                id = "t:${overlay.id}",
+                name = overlay.text.take(14),
+                type = MassSlotType.LONG_TEXT,
+                required = false,
+            )
+        }
+        // The frozen design carries `{t:<id>}` placeholders where captions
+        // lived — the existing substitution engine then replaces each with
+        // the row value (blank row value → caption dropped, not an error).
+        val placeholderProject = project.copy(
+            overlays = project.overlays.map { overlay ->
+                if (overlay.kind == MemeOverlayKind.TEXT && overlay.text.isNotBlank()) {
+                    overlay.copy(text = "{t:${overlay.id}}")
+                } else {
+                    overlay
+                }
+            },
+        )
+        return MassRecipe(
+            version = 1,
+            slots = slots,
+            project = placeholderProject,
+            naming = "variant-{i}",
+            caption = "",
+        )
+    }
 
     /** The canonical starter recipe (mockup scr-batch: name/sats/bg/img). */
     fun defaultRecipe(project: MemeProject): MassRecipe = MassRecipe(

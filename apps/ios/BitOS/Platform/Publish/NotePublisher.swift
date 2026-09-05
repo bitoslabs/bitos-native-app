@@ -18,6 +18,15 @@ enum PublishResult: Sendable, Equatable {
     case invalid
 }
 
+/** Real meme-publish checkpoints (drives the publish machine stepper):
+ * built → signed → relayed (first OK or timeout resolved the send). The
+ * String payload is the canonical event id. */
+enum MemeNoteStage: Sendable {
+    case built(String)
+    case signed(String)
+    case relayed(String)
+}
+
 @MainActor
 @Observable
 final class NotePublisher {
@@ -518,7 +527,8 @@ final class NotePublisher {
         contentWarningReason: String?,
         url: String, hash: String, size: Int,
         width: Int, height: Int,
-        remixTagsJson: String = ""
+        remixTagsJson: String = "",
+        onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
         busy = true
@@ -547,7 +557,10 @@ final class NotePublisher {
             result = .invalid
             return
         }
+        onStage?(.built(eventId))
+        onStage?(.signed(eventId))
         await send(eventId: eventId, frame: frame)
+        onStage?(.relayed(eventId))
     }
 
     /// Video meme from a verified upload (MST-034): kind 22 portrait /
@@ -558,7 +571,9 @@ final class NotePublisher {
         contentWarningReason: String?,
         url: String, hash: String, size: Int,
         width: Int, height: Int, durationMs: Int64,
-        thumbUrl: String? = nil
+        thumbUrl: String? = nil,
+        extraTagsJson: String = "",
+        onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
         busy = true
@@ -576,7 +591,8 @@ final class NotePublisher {
                   url: url, sha256Hex: hash, mimeType: "video/mp4",
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
                   durationMs: durationMs, nowSeconds: now,
-                  thumbUrl: thumbUrl
+                  thumbUrl: thumbUrl,
+                  extraTagsJson: extraTagsJson
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.memeVideoPublishMessage(
@@ -586,12 +602,16 @@ final class NotePublisher {
                   url: url, sha256Hex: hash, mimeType: "video/mp4",
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
                   durationMs: durationMs, createdAtSeconds: now, signatureHex: signature,
-                  thumbUrl: thumbUrl
+                  thumbUrl: thumbUrl,
+                  extraTagsJson: extraTagsJson
               ) else {
             result = .invalid
             return
         }
+        onStage?(.built(eventId))
+        onStage?(.signed(eventId))
         await send(eventId: eventId, frame: frame)
+        onStage?(.relayed(eventId))
     }
 
     /// Kind-0 profile metadata publish through the receipt machine.

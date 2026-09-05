@@ -28,6 +28,38 @@ data class MemeLook(
     data class Filter(val op: Op, val amount: Float)
 }
 
+/**
+ * Manual fine-tune over the look preset (prototype `create-edit` FX panel):
+ * brightness/contrast/saturation multipliers, 1 = unchanged. Composes ON
+ * TOP of a look preset (pixel: look first, then the adjust chain) into the
+ * same 4×5 matrix the rasterizers already burn in — preview and export
+ * stay single-source.
+ */
+data class MemeAdjust(
+    val brightness: Float = 1f,
+    val contrast: Float = 1f,
+    val saturation: Float = 1f,
+) {
+    val isDefault: Boolean get() = brightness == 1f && contrast == 1f && saturation == 1f
+
+    companion object {
+        /** Prototype slider bounds: bri/con 40–160 %, sat 0–200 %. */
+        const val MIN_BRIGHTNESS = 0.4f
+        const val MAX_BRIGHTNESS = 1.6f
+        const val MIN_CONTRAST = 0.4f
+        const val MAX_CONTRAST = 1.6f
+        const val MIN_SATURATION = 0f
+        const val MAX_SATURATION = 2f
+
+        fun clamp(brightness: Float, contrast: Float, saturation: Float): MemeAdjust =
+            MemeAdjust(
+                if (brightness.isNaN()) 1f else brightness.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS),
+                if (contrast.isNaN()) 1f else contrast.coerceIn(MIN_CONTRAST, MAX_CONTRAST),
+                if (saturation.isNaN()) 1f else saturation.coerceIn(MIN_SATURATION, MAX_SATURATION),
+            )
+    }
+}
+
 object MemeLooks {
 
     const val NONE = "none"
@@ -95,6 +127,26 @@ object MemeLooks {
 
     /** Convenience: the composed matrix for a wire id (none = identity). */
     fun matrixFor(lookId: String?): FloatArray = matrix(lookOf(lookId))
+
+    /**
+     * Look preset + manual adjust composed into ONE 4×5 matrix: the pixel
+     * takes the look chain first, then brightness → contrast → saturation
+     * (the prototype FX panel's slider order). Default adjust = the plain
+     * look matrix.
+     */
+    fun adjustedMatrixFor(lookId: String?, adjust: MemeAdjust?): FloatArray {
+        val look = lookOf(lookId)
+        if (adjust == null || adjust.isDefault) return matrix(look)
+        var composed = matrix(look)
+        listOf(
+            MemeLook.Filter(MemeLook.Op.BRIGHTNESS, adjust.brightness),
+            MemeLook.Filter(MemeLook.Op.CONTRAST, adjust.contrast),
+            MemeLook.Filter(MemeLook.Op.SATURATE, adjust.saturation),
+        ).forEach { filter ->
+            composed = multiply(opMatrix(filter), composed)
+        }
+        return composed
+    }
 
     // ── CSS filter-spec matrices (values in 0..255 space) ───────────────
 

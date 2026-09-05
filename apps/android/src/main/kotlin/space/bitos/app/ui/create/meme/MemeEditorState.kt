@@ -169,6 +169,65 @@ class MemeEditorState(
         commit(MemeCommand.SetLook(lookId))
     }
 
+    /**
+     * Manual fine-tune over the look (prototype `create-edit` FX sliders)
+     * — one undoable command; slider bursts coalesce via
+     * [MemeRules.coalesce] like every other continuous control.
+     */
+    fun setAdjust(adjust: space.bitos.core.studio.MemeAdjust) {
+        if (project.adjust == adjust) return
+        commit(MemeCommand.SetAdjust(adjust))
+    }
+
+    /**
+     * Classic meme captions (prototype "Meme" hot tool): TOP/BOTTOM pair
+     * at the canonical positions with the classic outline look — landing
+     * as ONE undo step for the pair. Returns the ids added (empty halves
+     * are skipped; the overlay cap bounds the pair).
+     */
+    fun addMemeCaptions(top: String, bottom: String, fontSlot: MemeFontSlot): List<String> {
+        val halves = listOf(
+            top.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.16f,
+            bottom.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.84f,
+        ).mapNotNull { (text, y) -> text?.let { it to y } }
+        if (halves.isEmpty()) return emptyList()
+        if (!canAddOverlay) return emptyList()
+        val before = project
+        val added = ArrayList<String>()
+        for ((text, y) in halves) {
+            if (project.overlays.size >= MemeProjectContract.MAX_OVERLAYS) break
+            val overlay = MemeRules.defaultOverlay(project, MemeOverlayKind.TEXT, text).copy(
+                x = 0.5f,
+                y = y,
+                font = fontSlot,
+                size = 64,
+                outline = 3,
+            )
+            project = MemeRules.apply(project, MemeCommand.AddOverlay(overlay))
+            added.add(overlay.id)
+        }
+        if (project != before) {
+            selectedOverlayId = added.lastOrNull()
+            revision += 1
+            redoStack.clear()
+            // Composite step: gesture-flavored so it never coalesces, and
+            // undo restores `projectBefore` directly (the command field is
+            // informational for replay tooling only).
+            undoStack.addLast(
+                UndoEntry(
+                    projectBefore = before,
+                    command = MemeCommand.AddOverlay(
+                        MemeRules.defaultOverlay(before, MemeOverlayKind.TEXT, ""),
+                    ),
+                    atMs = clockMs(),
+                    fromGesture = true,
+                ),
+            )
+            trimUndo()
+        }
+        return added
+    }
+
     /** SFX cues (MST-041): schedule synth sounds at media time. */
     fun addSfxCue(sfx: String, atMs: Long) {
         val id = "c" + (project.sfxCues.size + 1) + "-" + (System.currentTimeMillis() % 1000)
@@ -244,6 +303,27 @@ class MemeEditorState(
      * Style/field edit (text sheet). Bursts within the coalesce window
      * merge into a single undo step (slider drags, palette taps).
      */
+    /** Accessible manipulation (MUX-03): explicit nudge / resize / rotate
+     *  for the selection — one undoable command, no gestures required. */
+    fun nudgeOverlay(
+        id: String,
+        dx: Float = 0f,
+        dy: Float = 0f,
+        dRot: Float = 0f,
+        scaleFactor: Float = 1f,
+    ) {
+        val overlay = project.overlays.firstOrNull { it.id == id } ?: return
+        commit(
+            MemeCommand.UpdateOverlay(
+                id = id,
+                x = MemeRules.clampCoordinate(overlay.x + dx).takeIf { dx != 0f },
+                y = MemeRules.clampCoordinate(overlay.y + dy).takeIf { dy != 0f },
+                rotationDeg = MemeRules.clampRotation(overlay.rotationDeg + dRot).takeIf { dRot != 0f },
+                scale = MemeRules.clampScale(overlay.scale * scaleFactor).takeIf { scaleFactor != 1f },
+            ),
+        )
+    }
+
     fun updateStyle(
         id: String,
         text: String? = null,

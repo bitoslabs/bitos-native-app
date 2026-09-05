@@ -31,6 +31,10 @@ data class PublishUiState(
 
 enum class PublishResult { PUBLISHED, REJECTED, TIMEOUT, SIGNING_REFUSED, INVALID }
 
+/** Real meme-publish checkpoints (drives the publish machine stepper):
+ * BUILT → SIGNED → RELAYED; the String payload is the canonical event id. */
+enum class MemeNoteStage { BUILT, SIGNED, RELAYED }
+
 /**
  * Text-note publish pipeline (PUB-001 note path): compose (canonical ID) →
  * sign (signer refusal fails without sending) → targeted fan-out to write
@@ -402,6 +406,7 @@ class NotePublisher(
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
+        onStage: ((MemeNoteStage, String) -> Unit)? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
@@ -415,7 +420,8 @@ class NotePublisher(
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
             }
-            publishUnsigned(note, signer, writeRelays)
+            onStage?.invoke(MemeNoteStage.BUILT, note.idHex)
+            publishUnsigned(note, signer, writeRelays, onStage)
         }
     }
 
@@ -433,6 +439,7 @@ class NotePublisher(
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
+        onStage: ((MemeNoteStage, String) -> Unit)? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
@@ -446,7 +453,8 @@ class NotePublisher(
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
             }
-            publishUnsigned(note, signer, writeRelays)
+            onStage?.invoke(MemeNoteStage.BUILT, note.idHex)
+            publishUnsigned(note, signer, writeRelays, onStage)
         }
     }
 
@@ -570,12 +578,18 @@ class NotePublisher(
         }
     }
 
-    private suspend fun publishUnsigned(note: space.bitos.core.publish.UnsignedNote, signer: IdentitySigner, writeRelays: List<RelayUrl>) {
+    private suspend fun publishUnsigned(
+        note: space.bitos.core.publish.UnsignedNote,
+        signer: IdentitySigner,
+        writeRelays: List<RelayUrl>,
+        onStage: ((MemeNoteStage, String) -> Unit)? = null,
+    ) {
         val signature = signer.sign(note.messageBytes())
             ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
                 return
             }
+        onStage?.invoke(MemeNoteStage.SIGNED, note.idHex)
         val frame = composer.publishMessage(note, signatureHex = signature)
                 ?: run {
                     mutableState.value = PublishUiState(result = PublishResult.INVALID)
@@ -609,6 +623,7 @@ class NotePublisher(
                 receipts.values.isNotEmpty() -> final.copy(result = PublishResult.REJECTED)
                 else -> final.copy(result = PublishResult.TIMEOUT)
             }
+            onStage?.invoke(MemeNoteStage.RELAYED, note.idHex)
             // Card actions share this publisher with the full composer. A
             // terminal receipt is useful feedback, but it must not leave the
             // action rail permanently unable to publish its next mutation.

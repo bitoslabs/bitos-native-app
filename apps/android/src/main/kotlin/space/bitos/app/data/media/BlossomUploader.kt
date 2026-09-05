@@ -29,6 +29,9 @@ class BlossomUploader(
 
     class UploadFailure(reason: String) : Exception(reason)
 
+    /** Real pipeline checkpoints (drives the publish machine stepper). */
+    enum class UploadStage { HASHING, UPLOADING, VERIFYING }
+
     /**
      * Uploads [bytes] and returns the verified descriptor. The SHA-256 is
      * computed locally first and checked against the server's response.
@@ -44,8 +47,10 @@ class BlossomUploader(
         signer: IdentitySigner,
         serverUrl: String,
         nowSeconds: Long = System.currentTimeMillis() / 1000,
+        onStage: ((UploadStage) -> Unit)? = null,
     ): UploadedMedia = withContext(Dispatchers.IO) {
         if (bytes.isEmpty() || bytes.size > Blossom.MAX_FILE_BYTES) throw UploadFailure("file out of bounds")
+        onStage?.invoke(UploadStage.HASHING)
         val localHash = Sha256EventHasher.sha256(bytes)
             .joinToString("") { ((it.toInt() and 0xf0) ushr 4).toString(16) + (it.toInt() and 0x0f).toString(16) }
         val endpoint = Blossom.uploadUrl(serverUrl)
@@ -69,6 +74,7 @@ class BlossomUploader(
         ) ?: throw UploadFailure("auth header rejected")
 
         // 2. Authenticated PUT /upload (BUD-02: 201 new, 200 already stored).
+        onStage?.invoke(UploadStage.UPLOADING)
         val body = http.newCall(
             Request.Builder()
                 .url(endpoint)
@@ -84,6 +90,7 @@ class BlossomUploader(
             response.body?.string()?.takeIf { it.length <= 65_536 } ?: throw UploadFailure("empty server response")
         }
 
+        onStage?.invoke(UploadStage.VERIFYING)
         verifiedDescriptor(body, localHash, mimeType, bytes)
     }
 

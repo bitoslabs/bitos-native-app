@@ -1,6 +1,7 @@
 package space.bitos.core.studio
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -141,6 +142,8 @@ data class MemeProject(
     val tags: List<String> = emptyList(),
     /** Source-media color grade (MST-043; [MemeLooks] id; null = none). */
     val lookId: String? = null,
+    /** Manual fine-tune over the look (prototype FX sliders; null = default). */
+    val adjust: MemeAdjust? = null,
     /** Synth SFX cues in media time (MST-041; ≤ [SfxSynth.MAX_CUES]). */
     val sfxCues: List<MemeSfxCue> = emptyList(),
 ) {
@@ -262,6 +265,15 @@ object MemeProjectContract {
         // Optional grade (MST-043): written only when set, so older wires
         // (and `none`) stay byte-identical.
         MemeLooks.normalize(project.lookId)?.let { put("look", it) }
+        // Manual adjust (prototype FX sliders): same additive-key rule.
+        val adjust = project.adjust
+        if (adjust != null && !adjust.isDefault) {
+            put("adjust", buildJsonObject {
+                put("bri", adjust.brightness)
+                put("con", adjust.contrast)
+                put("sat", adjust.saturation)
+            })
+        }
         if (project.sfxCues.isNotEmpty()) {
             put("sfx", buildJsonArray {
                 project.sfxCues.take(SfxSynth.MAX_CUES).forEach { cue ->
@@ -375,6 +387,7 @@ object MemeProjectContract {
                 contentWarningReason = cwRaw.take(MAX_CW_LENGTH).ifBlank { null },
                 altText = ((root["alt"] as? JsonPrimitive)?.content ?: "").take(MAX_ALT_LENGTH),
                 lookId = MemeLooks.normalize((root["look"] as? JsonPrimitive)?.content),
+                adjust = decodeAdjust(root["adjust"]),
                 sfxCues = (root["sfx"] as? kotlinx.serialization.json.JsonArray)
                     ?.mapNotNull { element ->
                         val obj = element.jsonObject
@@ -437,6 +450,22 @@ object MemeProjectContract {
         decodeClips(lenientJson.parseToJsonElement(json))
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * Adjust triple decode (prototype FX sliders): lenient + clamped; a
+     * default/all-junk row decodes to null (missing = untouched).
+     */
+    internal fun decodeAdjust(element: JsonElement?): MemeAdjust? {
+        val obj = (element as? kotlinx.serialization.json.JsonObject) ?: return null
+        fun valueOf(key: String): Float? =
+            (obj[key] as? JsonPrimitive)?.content?.toFloatOrNull()
+        val adjust = MemeAdjust.clamp(
+            brightness = valueOf("bri") ?: 1f,
+            contrast = valueOf("con") ?: 1f,
+            saturation = valueOf("sat") ?: 1f,
+        )
+        return if (adjust.isDefault) null else adjust
     }
 
     /** Unknown kinds/fonts/colors degrade to safe defaults; junk rows drop. */

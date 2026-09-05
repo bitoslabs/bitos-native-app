@@ -211,4 +211,60 @@ class MemeEditorStateTest {
             layered.size,
         )
     }
+
+    @Test
+    fun adjustIsAnUndoableCommandThatCoalescesLikeSliderBursts() {
+        val clock = Clock()
+        val state = clock.state()
+        assertNull(state.project.adjust, "fresh projects carry no adjust")
+
+        state.setAdjust(space.bitos.core.studio.MemeAdjust(brightness = 1.2f, saturation = 0.5f))
+        assertEquals(
+            space.bitos.core.studio.MemeAdjust(brightness = 1.2f, saturation = 0.5f),
+            state.project.adjust,
+        )
+        val depthAfterFirst = state.undoDepth
+
+        // A burst inside the coalesce window merges into ONE step.
+        clock.now += 100
+        state.setAdjust(space.bitos.core.studio.MemeAdjust(brightness = 1.4f, saturation = 0.5f))
+        assertEquals(depthAfterFirst, state.undoDepth, "slider bursts coalesce")
+        assertEquals(1.4f, state.project.adjust!!.brightness)
+
+        // Default triple CLEARS the field (wire stays minimal).
+        clock.now += 100
+        state.setAdjust(space.bitos.core.studio.MemeAdjust())
+        assertNull(state.project.adjust)
+
+        // One undo returns to the pre-adjust project.
+        assertTrue(state.undo())
+        assertNull(state.project.adjust)
+    }
+
+    @Test
+    fun memeCaptionsLandAsAPositionedPairInOneUndoStep() {
+        val state = MemeEditorState()
+        val added = state.addMemeCaptions(
+            top = "when the fee",
+            bottom = "drops",
+            fontSlot = MemeFontSlot.IMPACT,
+        )
+        assertEquals(2, added.size)
+        val overlays = state.project.overlays
+        assertEquals(0.5f, overlays[0].x)
+        assertEquals(0.16f, overlays[0].y, "top caption at the canonical band")
+        assertEquals(0.84f, overlays[1].y, "bottom caption at the canonical band")
+        assertEquals("WHEN THE FEE", overlays[0].text, "caps styling applies")
+        assertEquals(3, overlays[0].outline, "classic heavy outline")
+        assertEquals(MemeFontSlot.IMPACT, overlays[0].font)
+        assertEquals(added.last(), state.selectedOverlayId)
+
+        // The pair undoes as ONE step back to empty.
+        assertTrue(state.undo())
+        assertEquals(0, state.project.overlays.size)
+
+        // Empty halves are skipped; a single bottom caption still lands.
+        assertEquals(1, state.addMemeCaptions("", "only bottom", MemeFontSlot.SANS).size)
+        assertEquals(0, state.addMemeCaptions("   ", "", MemeFontSlot.SANS).size, "blank adds nothing")
+    }
 }

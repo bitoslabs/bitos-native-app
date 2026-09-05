@@ -10,6 +10,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -20,6 +21,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.offset
@@ -30,6 +32,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,10 +49,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -73,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -123,12 +132,15 @@ import space.bitos.core.studio.MemeProjectContract
 import space.bitos.core.studio.MemeRules
 import space.bitos.core.studio.StickerCatalog
 
-/** A session asset: project id + platform image ref + decoded aspect. */
+/** A session asset: project id + platform image ref + decoded bounds. */
 private data class EditorAsset(
     val id: String,
     val uri: Uri,
     /** width / height of the decoded image. */
     val aspect: Float,
+    /** Decoded pixel bounds (0 = unknown; the meta chip falls back). */
+    val width: Int = 0,
+    val height: Int = 0,
 )
 
 /**
@@ -175,6 +187,8 @@ fun MemeEditorScreen(
     /** CAP handoff (M5): camera record-screen takes that seed video mode. */
     videoSeeds: List<ByteArray>? = null,
     onSlotsChanged: () -> Unit = {},
+    /** MUX-06: hand the frozen design + rendered poster to mass production. */
+    onMakeVariations: ((String, ByteArray) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -446,8 +460,8 @@ fun MemeEditorScreen(
     var stagePx by remember { mutableStateOf(IntSize.Zero) }
     var showDiscard by remember { mutableStateOf(false) }
     var editingOverlayId by remember { mutableStateOf<String?>(null) }
-    var showStickers by remember { mutableStateOf(false) }
     var showLooks by remember { mutableStateOf(false) }
+    /** Classic meme generator (prototype "Meme" hot tool). */
     var showSfx by remember { mutableStateOf(false) }
     var showLayers by remember { mutableStateOf(false) }
     var showTrim by remember { mutableStateOf(false) }
@@ -467,6 +481,51 @@ fun MemeEditorScreen(
     val videoTransport = remember { VideoTransport() }
     val recentStickers = remember { mutableStateListOf<String>() }
     var showPublish by remember { mutableStateOf(false) }
+    /** Inline tool panel (prototype tool panels open under the chips). */
+    var activePanel by remember { mutableStateOf<MemeEditorPanel?>(null) }
+
+    /** MUX-01: draft persistence is acknowledged, never assumed. */
+    var draftSaveState by remember { mutableStateOf<DraftSaveState>(DraftSaveState.IDLE) }
+    /** MUX-02: typed export outcome — display copy can't change state. */
+    var exportOutcome by remember { mutableStateOf<ExportOutcome?>(null) }
+    /** MUX-04: output settings before export fires. */
+    var showExportSheet by remember { mutableStateOf(false) }
+    /** MUX-05: durable export jobs — retry reuses the persisted artifact. */
+    val exportJobs = remember { MemeExportJobStore(context) }
+    var exportJobsRevision by remember { mutableIntStateOf(0) }
+
+    fun retryExportSave(jobId: Int) {
+        if (exporting) return
+        val (bytes, format) = exportJobs.loadArtifact(jobId) ?: return
+        exporting = true
+        exportStatus = null
+        exportJobs.update(jobId, phase = "saving")
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    when (format) {
+                        "mp4" -> MemeRaster.saveVideoFile(context, bytes, "bitos-meme-${System.currentTimeMillis()}")
+                        "gif" -> MemeRaster.saveMediaFile(context, bytes, "image/gif", "bitos-meme-${System.currentTimeMillis()}")
+                        else -> MemeRaster.savePng(context, android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size), "bitos-meme-${System.currentTimeMillis()}")
+                    }
+                }
+            }
+            exporting = false
+            exportJobsRevision += 1
+            result.onSuccess { exportJobs.finish(jobId) }
+                .onFailure { exportJobs.update(jobId, phase = "failed", error = it.message) }
+            exportOutcome = result.fold(
+                onSuccess = { ExportOutcome.Success("Saved ✓ (reused the rendered file)") },
+                onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
+            )
+            exportStatus = when (val outcome = exportOutcome) {
+                is ExportOutcome.Success -> outcome.detail
+                is ExportOutcome.SuccessAdjusted -> outcome.detail
+                is ExportOutcome.Failure -> outcome.message
+                null -> null
+            }
+        }
+    }
     val gifMode = state.project.mode == MemeMode.GIF
     val memePublishState = mediaPublishViewModel?.memeState?.collectAsStateWithLifecycle()?.value
 
@@ -483,12 +542,20 @@ fun MemeEditorScreen(
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         scope.launch {
             val decoded = withContext(Dispatchers.IO) {
-                uris.mapNotNull { uri -> decodeAspect(context.contentResolver, uri)?.let { uri to it } }
+                uris.mapNotNull { uri ->
+                    decodeBounds(context.contentResolver, uri)?.let { (w, h) ->
+                        uri to EditorAsset("pending", uri, w.toFloat() / h, w, h)
+                    }
+                }
             }
             val existing = assets.map { it.id }.toSet()
-            val candidates = decoded.mapIndexedNotNull { index, (uri, aspect) ->
+            val candidates = decoded.mapIndexedNotNull { index, (uri, decoded0) ->
                 val id = "a${assets.size + index + 1}"
-                if (id in existing) null else EditorAsset(id, uri, aspect)
+                if (id in existing) {
+                    null
+                } else {
+                    decoded0.copy(id = id)
+                }
             }
             val accepted = state.addAssets(candidates.map { it.id })
             accepted.forEach { id ->
@@ -511,6 +578,7 @@ fun MemeEditorScreen(
             return@LaunchedEffect
         }
         kotlinx.coroutines.delay(space.bitos.core.studio.MemeSlots.AUTOSAVE_DEBOUNCE_MS)
+        draftSaveState = DraftSaveState.SAVING
         withContext(Dispatchers.IO) {
             val frameBytes = gifFrameBytes.toMap()
             val clipSources = videoClips.associate { clip -> "mem:${clip.id}" to clip.bytes }
@@ -527,13 +595,17 @@ fun MemeEditorScreen(
             val refs = assets.map { MemeProjectStore.AssetRef(it.id, it.uri.toString()) } +
                 (1..gifFrames.size).map { MemeProjectStore.AssetRef("f$it", "mem:f$it") } +
                 videoClips.map { MemeProjectStore.AssetRef(it.id, "mem:${it.id}") }
-            slotStore.save(
-                slotId = slotId,
-                projectWire = space.bitos.core.studio.MemeProjectContract.encode(state.project),
-                assets = refs,
-                opener = opener,
-                nowMs = System.currentTimeMillis(),
-            )
+            val saved = runCatching {
+                slotStore.save(
+                    slotId = slotId,
+                    projectWire = space.bitos.core.studio.MemeProjectContract.encode(state.project),
+                    assets = refs,
+                    opener = opener,
+                    nowMs = System.currentTimeMillis(),
+                )
+                true
+            }.getOrDefault(false)
+            draftSaveState = if (saved) DraftSaveState.SAVED else DraftSaveState.FAILED
         }
         onSlotsChanged()
     }
@@ -646,8 +718,8 @@ fun MemeEditorScreen(
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val aspect = withContext(Dispatchers.IO) {
-                decodeAspect(context.contentResolver, uri)
+            val bounds = withContext(Dispatchers.IO) {
+                decodeBounds(context.contentResolver, uri)
             } ?: run {
                 exportStatus = "Could not read this image"
                 return@launch
@@ -658,7 +730,9 @@ fun MemeEditorScreen(
                 exportStatus = "Layer limit reached (clip + ${MemeProjectContract.MAX_IMAGE_LAYERS})"
                 return@launch
             }
-            assets += EditorAsset(id, uri, aspect)
+            assets += EditorAsset(
+                id, uri, bounds.first.toFloat() / bounds.second, bounds.first, bounds.second,
+            )
             state.addImageOverlay(id)
         }
     }
@@ -685,6 +759,11 @@ fun MemeEditorScreen(
     /** MST-016/022: render (+ GIF-encode) → MediaStore, off the UI. */
     fun saveToDevice() {
         if (exporting) return
+        val exportProject = state.project
+        val exportClips = videoClips.toList().toClipInputs(videoRate)
+        val exportImages = imageAssetUris.toMap()
+        val exportFrames = gifFrames.toList()
+        val exportDelays = if (gifUniformDelayMs > 0) List(exportFrames.size) { gifUniformDelayMs } else gifDelays.toList()
         if (gifMode) {
             if (gifFrames.isEmpty()) {
                 exportStatus = "Pick frames first"
@@ -693,18 +772,18 @@ fun MemeEditorScreen(
             exporting = true
             showExport = true
             exportStatus = null
+            val exportJob = exportJobs.begin("gif")
             scope.launch {
                 var gifExportInfo: MemeGifExport.Result? = null
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
-                        val delays = if (gifUniformDelayMs > 0) {
-                            List(gifFrames.size) { gifUniformDelayMs }
-                        } else {
-                            gifDelays.toList()
-                        }
-                        val exported = MemeGifExport.export(gifFrames.toList(), delays, state.project)
+                        val exported = MemeGifExport.export(exportFrames, exportDelays, exportProject)
                             ?: error("GIF export failed")
+                        check(exportJobs.artifactReady(exportJob, exported.gifBytes)) {
+                            "Could not persist the render"
+                        }
                         gifExportInfo = exported
+                        exportJobs.update(exportJob, phase = "saving")
                         MemeRaster.saveMediaFile(
                             context,
                             exported.gifBytes,
@@ -714,17 +793,28 @@ fun MemeEditorScreen(
                     }
                 }
                 exporting = false
-                exportStatus = result.fold(
+                exportJobsRevision += 1
+                result.onSuccess { exportJobs.finish(exportJob) }
+                    .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
+                exportOutcome = result.fold(
                     onSuccess = {
                         val exported = gifExportInfo
                         if (exported != null && (exported.ladderStep > 0 || exported.capped)) {
-                            "Saved (downscaled ×${exported.ladderStep})"
+                            ExportOutcome.SuccessAdjusted(
+                                "Saved at a smaller size (downscaled ×${exported.ladderStep})",
+                            )
                         } else {
-                            "Saved to Photos ✓"
+                            ExportOutcome.Success("Saved to Photos ✓")
                         }
                     },
-                    onFailure = { "Save failed: ${it.message}" },
+                    onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
                 )
+                exportStatus = when (val outcome = exportOutcome) {
+                    is ExportOutcome.Success -> outcome.detail
+                    is ExportOutcome.SuccessAdjusted -> outcome.detail
+                    is ExportOutcome.Failure -> outcome.message
+                    null -> null
+                }
             }
             return
         }
@@ -734,24 +824,38 @@ fun MemeEditorScreen(
             exporting = true
             showExport = true
             exportStatus = null
+            val exportJob = exportJobs.begin("mp4")
             scope.launch {
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
                         val exported = MemeVideoExport.exportClips(
-                            context, videoClips.toList().toClipInputs(videoRate), state.project,
-                            sfxMixTimeline(state.project, timelineMs),
-                            imageAssets = imageAssetUris,
+                            context, exportClips, exportProject,
+                            sfxMixTimeline(exportProject, timelineMs),
+                            imageAssets = exportImages,
                         )
+                        check(exportJobs.artifactReady(exportJob, exported)) {
+                            "Could not persist the render"
+                        }
+                        exportJobs.update(exportJob, phase = "saving")
                         MemeRaster.saveVideoFile(
                             context, exported, "bitos-meme-${System.currentTimeMillis()}",
                         )
                     }
                 }
                 exporting = false
-                exportStatus = result.fold(
-                    onSuccess = { "Saved to Movies ✓" },
-                    onFailure = { "Save failed: ${it.message}" },
+                exportJobsRevision += 1
+                result.onSuccess { exportJobs.finish(exportJob) }
+                    .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
+                exportOutcome = result.fold(
+                    onSuccess = { ExportOutcome.Success("Saved to Movies ✓") },
+                    onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
                 )
+                exportStatus = when (val outcome = exportOutcome) {
+                    is ExportOutcome.Success -> outcome.detail
+                    is ExportOutcome.SuccessAdjusted -> outcome.detail
+                    is ExportOutcome.Failure -> outcome.message
+                    null -> null
+                }
             }
             return
         }
@@ -761,24 +865,45 @@ fun MemeEditorScreen(
             return
         }
         exporting = true
+        showExport = true
         exportStatus = null
+        val exportJob = exportJobs.begin("png")
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
                         ?: error("Image could not be read")
+                    val rendered = MemeRaster.render(source, exportProject)
+                    val pngBytes = java.io.ByteArrayOutputStream().also { stream ->
+                        check(rendered.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) {
+                            "PNG encode failed"
+                        }
+                    }.toByteArray()
+                    check(exportJobs.artifactReady(exportJob, pngBytes)) {
+                        "Could not persist the render"
+                    }
+                    exportJobs.update(exportJob, phase = "saving")
                     MemeRaster.savePng(
                         context,
-                        MemeRaster.render(source, state.project),
+                        rendered,
                         "bitos-meme-${System.currentTimeMillis()}",
                     )
                 }
             }
             exporting = false
-            exportStatus = result.fold(
-                onSuccess = { "Saved to Photos ✓" },
-                onFailure = { "Save failed: ${it.message}" },
+            exportJobsRevision += 1
+            result.onSuccess { exportJobs.finish(exportJob) }
+                .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
+            exportOutcome = result.fold(
+                onSuccess = { ExportOutcome.Success("Saved to Photos ✓") },
+                onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
             )
+            exportStatus = when (val outcome = exportOutcome) {
+                is ExportOutcome.Success -> outcome.detail
+                is ExportOutcome.SuccessAdjusted -> outcome.detail
+                is ExportOutcome.Failure -> outcome.message
+                null -> null
+            }
         }
     }
 
@@ -786,8 +911,13 @@ fun MemeEditorScreen(
         if (state.isEmpty) {
             clearSlot()
             onClose()
-        } else {
+        } else if (draftSaveState == DraftSaveState.FAILED) {
             showDiscard = true
+        } else {
+            // MUX-01: leaving keeps the work — the debounced autosave holds
+            // the newest committed revision; deleting the draft stays a
+            // separate deliberate action.
+            onClose()
         }
     }
 
@@ -810,7 +940,7 @@ fun MemeEditorScreen(
             .background(BitOSColors.background)
             .statusBarsPadding(),
     ) {
-        // ── Top chrome: exit · mode chips · undo ─────────────────────────
+        // ── Top chrome (prototype topbar: close · "Editor" · draft) ─────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -821,74 +951,47 @@ fun MemeEditorScreen(
                 Icon(AppIcons.Close, contentDescription = "Close editor", tint = BitOSColors.textPrimary)
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
-            ModeChips(
-                modifier = Modifier.weight(1f),
-                activeMode = state.project.mode,
-                onPickMode = { mode ->
-                    if (mode == state.project.mode) return@ModeChips
-                    if (state.isEmpty && gifFrames.isEmpty()) {
-                        state.switchMode(mode)
-                    } else {
-                        confirmModeSwitch = true
-                        pendingModeSwitch = mode
-                    }
-                },
+            Text(
+                "Editor",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.W600,
+                color = BitOSColors.textPrimary,
             )
-            if (mediaPublishViewModel != null && (activeAssetId != null || gifFrames.isNotEmpty() || videoBytes != null)) {
-                TextButton(
-                    onClick = { showPublish = true },
-                    enabled = memePublishState?.phase.let {
-                        it != space.bitos.app.ui.feed.MemePublishPhase.UPLOADING &&
-                            it != space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
-                    },
-                ) {
-                    Text("Post", color = BitOSColors.primary, fontWeight = FontWeight.W600)
-                }
-            }
+            Spacer(Modifier.weight(1f))
             IconButton(
-                onClick = { state.undo() },
-                enabled = state.canUndo,
-                modifier = Modifier.semantics { contentDescription = "Undo" },
+                onClick = { exportStatus = when (draftSaveState) {
+                    DraftSaveState.SAVING -> "Saving draft…"
+                    DraftSaveState.SAVED -> "Draft saved ✓ — resumes from Create hub"
+                    DraftSaveState.FAILED -> "Could not save the draft — check storage; edits stay open"
+                    DraftSaveState.IDLE -> "Draft autosaves as you edit"
+                } },
+                modifier = Modifier.semantics { contentDescription = "Save draft" },
             ) {
-                SolarStudioIconImage(
-                    SolarStudioIcon.UndoLeft,
-                    contentDescription = null,
-                    tint = BitOSColors.textPrimary,
-                )
+                when (draftSaveState) {
+                    DraftSaveState.SAVING -> CircularProgressIndicator(
+                        strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = BitOSColors.primary,
+                    )
+                    DraftSaveState.FAILED -> Icon(AppIcons.Close, contentDescription = null, tint = BitOSColors.warning)
+                    else -> Icon(AppIcons.SaveDraft, contentDescription = null, tint = BitOSColors.textPrimary)
+                }
             }
         }
 
         // ── Stage: media + overlays, single gesture target ───────────────
+        // Prototype `create-edit`: the stage renders into a fixed-height
+        // card that scrolls with the tools; the expert suite keeps the
+        // legacy full-bleed weight(1f) stage.
+        val suiteActive = suiteMode && videoMode && hasVideo
+        val stageArea: @Composable (Modifier) -> Unit = { stageBoxModifier ->
         val stageWidth = stagePx.width.coerceAtLeast(1)
         val stageHeight = stagePx.height.coerceAtLeast(1)
         Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+            modifier = stageBoxModifier,
             contentAlignment = Alignment.Center,
         ) {
             val current = if (gifMode || videoMode) null else activeAsset
             if (videoMode && hasVideo) {
-                // WYSIWYG grade preview: the whole-project look rides the
-                // stage as a hardware layer color filter (the same shared
-                // matrix the exporter burns; per-clip overrides stay
-                // export-exact). Overlays sit above, un-graded, like the
-                // export composition.
-                val lookFilter = space.bitos.core.studio.MemeLooks.normalize(state.project.lookId)?.let { lookId ->
-                    androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-                        androidx.compose.ui.graphics.ColorMatrix(
-                            space.bitos.core.studio.MemeLooks.matrixFor(lookId),
-                        ),
-                    )
-                }
-                Box(
-                    modifier = if (lookFilter != null) {
-                        Modifier.fillMaxSize().graphicsLayer { colorFilter = lookFilter }
-                    } else {
-                        Modifier.fillMaxSize()
-                    },
-                ) {
+                Box(Modifier.fillMaxSize()) {
                 VideoStage(
                     clips = videoClips.toList(),
                     project = state.project,
@@ -943,6 +1046,20 @@ fun MemeEditorScreen(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.FillBounds,
+                        // WYSIWYG: the frame previews the same composed
+                        // look + adjust grade the encoder burns per frame.
+                        colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
+                            androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                                androidx.compose.ui.graphics.ColorMatrix(
+                                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                        state.project.lookId,
+                                        state.project.adjust,
+                                    ),
+                                ),
+                            )
+                        } else {
+                            null
+                        },
                     )
                     state.project.overlays.forEach { overlay ->
                         OverlayNode(
@@ -979,14 +1096,19 @@ fun MemeEditorScreen(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.FillBounds,
-                        // WYSIWYG: the stage shows the same composed grade
-                        // the rasterizer burns into exports (MST-043).
-                        colorFilter = state.project.lookId?.let { lookId ->
+                        // WYSIWYG: the stage shows the same composed look +
+                        // adjust grade the rasterizer burns (MST-043 + FX).
+                        colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
                             androidx.compose.ui.graphics.ColorFilter.colorMatrix(
                                 androidx.compose.ui.graphics.ColorMatrix(
-                                    space.bitos.core.studio.MemeLooks.matrixFor(lookId),
+                                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                        state.project.lookId,
+                                        state.project.adjust,
+                                    ),
                                 ),
                             )
+                        } else {
+                            null
                         },
                     )
                     state.project.overlays.forEach { overlay ->
@@ -1026,10 +1148,40 @@ fun MemeEditorScreen(
                     onStroke = { points -> state.addStroke(penColorIndex, penWidthNorm, points) },
                 )
             }
+            // ── Canvas meta chips (prototype `1080×1920 · 9:16` + duration)
+            val metaChips = stageMetaChips(
+                project = state.project,
+                activeAsset = activeAsset,
+                gifFrames = gifFrames,
+                videoClips = videoClips,
+            )
+            if (metaChips.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = BitOSSpacing.base + 4.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    metaChips.forEach { chip ->
+                        Text(
+                            chip,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = androidx.compose.ui.graphics.Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
         }
 
-        // V2 Draw mode: pen controls sit between the stage and the tray.
-        if (drawMode) {
+        }
+
+        val penControls: @Composable () -> Unit = {
+
             PenControlsRow(
                 colorIndex = penColorIndex,
                 onPickColor = { penColorIndex = it },
@@ -1043,104 +1195,10 @@ fun MemeEditorScreen(
                     drawMode = false
                 },
             )
+
         }
 
-        // ── Media tray / V2 suite dock (mockup app-15 scr-suite) ────────
-        if (videoMode && suiteMode && hasVideo) {
-            SuiteDock(
-                project = state.project,
-                clips = videoClips.toList(),
-                rate = videoRate,
-                selectedClipIndex = selectedClipIndex,
-                onSelectClip = { selectedClipIndex = it },
-                positionMs = videoPositionMs,
-                transport = videoTransport,
-                canUndo = state.canUndo,
-                canRedo = state.canRedo,
-                onUndo = { state.undo() },
-                onRedo = { state.redo() },
-                onOpenLayers = { showLayers = true },
-                looksEnabled = (videoMode && hasVideo) || activeAsset != null,
-                onOpenLooks = { showLooks = true },
-                onOpenSfx = { showSfx = true },
-                onOpenDraw = { drawMode = true },
-                onOpenTrim = { showTrim = true },
-                onOpenClip = { showClipSheet = true },
-                onOpenVolume = { showVolume = true },
-                onSplit = ::splitAtPlayhead,
-                onOpenSpeed = { showSpeed = true },
-                onExport = ::saveToDevice,
-                exporting = exporting,
-                onClose = { suiteMode = false },
-            )
-        } else {
-        if (gifMode) {
-            GifFrameTray(
-                frames = gifFrames,
-                activeIndex = gifPreviewIndex.coerceIn(0, (gifFrames.size - 1).coerceAtLeast(0)),
-                uniformDelayMs = gifUniformDelayMs,
-                onPickFrame = { gifPreviewIndex = it },
-                onReorder = { from, to ->
-                    if (from != to && from in gifFrames.indices && to in gifFrames.indices) {
-                        val frame = gifFrames.removeAt(from)
-                        val delay = gifDelays.removeAt(from)
-                        gifFrames.add(to.coerceIn(0, gifFrames.size), frame)
-                        gifDelays.add(to.coerceIn(0, gifDelays.size), delay)
-                        gifPreviewIndex = to
-                    }
-                },
-                onDelayChange = { gifUniformDelayMs = it },
-                onAddFrames = ::launchPicker,
-            )
-        } else if (videoMode) {
-            // M5 source tray: the timeline's clips + inserted image/GIF layers.
-            VideoSourceTray(
-                clips = videoClips.toList(),
-                selectedClipIndex = selectedClipIndex,
-                assets = assets,
-                onSelectClip = { selectedClipIndex = it },
-                onAddClip = {
-                    videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
-                },
-                onPickLayer = { layerPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            )
-        } else {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = BitOSSpacing.base),
-            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-        ) {
-            rowItems(assets, key = { it.id }) { asset ->
-                TrayTile(
-                    asset = asset,
-                    active = asset.id == activeAssetId,
-                    onClick = { activeAssetId = asset.id },
-                )
-            }
-            if (assets.size < MemeProjectContract.maxAssets(MemeMode.IMAGE)) {
-                item(key = "add") {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color.Transparent,
-                        border = BorderStroke(1.dp, BitOSColors.border),
-                        onClick = ::launchPicker,
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                AppIcons.Add,
-                                contentDescription = "Add image",
-                                tint = BitOSColors.textSecondary,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        // ── Status line: a full-width row of its own so long messages
-        // (size-limit cuts, save results) never wrap into a letter column.
+        val statusLine: @Composable () -> Unit = {
         when {
                 exporting -> Row(
                 Modifier
@@ -1182,89 +1240,431 @@ fun MemeEditorScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        // ── Bottom tools: text · sticker · save (scrollable — 48dp targets
-        // never compress or push each other off-screen) ────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
+        }
+
+        if (suiteActive) {
+            stageArea(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+            )
+            if (drawMode) penControls()
+            SuiteDock(
+                project = state.project,
+                clips = videoClips.toList(),
+                rate = videoRate,
+                selectedClipIndex = selectedClipIndex,
+                onSelectClip = { selectedClipIndex = it },
+                positionMs = videoPositionMs,
+                transport = videoTransport,
+                canUndo = state.canUndo,
+                canRedo = state.canRedo,
+                onUndo = { state.undo() },
+                onRedo = { state.redo() },
+                onOpenLayers = { showLayers = true },
+                looksEnabled = (videoMode && hasVideo) || activeAsset != null,
+                onOpenLooks = { showLooks = true },
+                onOpenSfx = { showSfx = true },
+                onOpenDraw = { drawMode = true },
+                onOpenTrim = { showTrim = true },
+                onOpenClip = { showClipSheet = true },
+                onOpenVolume = { showVolume = true },
+                onSplit = ::splitAtPlayhead,
+                onOpenSpeed = { showSpeed = true },
+                onExport = ::saveToDevice,
+                exporting = exporting,
+                onClose = { suiteMode = false },
+            )
+        } else {
+            // Give spare height to the preview, keeping editing controls next to the action bar.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f)) {
+            val previewHeight = (maxHeight - 240.dp).coerceAtLeast(180.dp)
+            val imagePreviewHeight = (maxHeight - 190.dp).coerceAtLeast(180.dp)
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Bottom,
+            ) {
+                stageArea(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = BitOSSpacing.base)
+                        .height(
+                            when {
+                                gifMode -> 320.dp
+                                videoMode -> previewHeight
+                                else -> imagePreviewHeight
+                            },
+                        )
+                        .clip(RoundedCornerShape(16.dp)),
+                )
+                ModePillsRow(
+                    activeMode = state.project.mode,
+                    canUndo = state.canUndo,
+                    onPickMode = { mode ->
+                        if (mode == state.project.mode) return@ModePillsRow
+                        if (state.isEmpty && gifFrames.isEmpty()) {
+                            state.switchMode(mode)
+                        } else {
+                            confirmModeSwitch = true
+                            pendingModeSwitch = mode
+                        }
+                    },
+                    onUndo = { state.undo() },
+                )
+                QuickToolsRow(
+                    canAddOverlay = state.canAddOverlay,
+                    looksEnabled = activeAsset != null || gifFrames.isNotEmpty() || (videoMode && hasVideo),
+                    soundEnabled = videoMode && hasVideo,
+                    saveEnabled = (activeAssetId != null || gifFrames.isNotEmpty() || hasVideo) && !exporting,
+                    activePanel = activePanel,
+                    drawActive = drawMode,
+                    onPanel = { panel ->
+                        drawMode = false
+                        activePanel = if (activePanel == panel) null else panel
+                    },
+                    onDraw = {
+                        activePanel = null
+                        drawMode = !drawMode
+                    },
+                    onSave = { showExportSheet = true },
+                )
+                if (drawMode) penControls()
+        if (gifMode) {
+            GifFrameTray(
+                frames = gifFrames,
+                activeIndex = gifPreviewIndex.coerceIn(0, (gifFrames.size - 1).coerceAtLeast(0)),
+                uniformDelayMs = gifUniformDelayMs,
+                onPickFrame = { gifPreviewIndex = it },
+                onReorder = { from, to ->
+                    if (from != to && from in gifFrames.indices && to in gifFrames.indices) {
+                        val frame = gifFrames.removeAt(from)
+                        val delay = gifDelays.removeAt(from)
+                        gifFrames.add(to.coerceIn(0, gifFrames.size), frame)
+                        gifDelays.add(to.coerceIn(0, gifDelays.size), delay)
+                        gifPreviewIndex = to
+                    }
+                },
+                onDelayChange = { gifUniformDelayMs = it },
+                onAddFrames = ::launchPicker,
+            )
+        } else if (videoMode) {
+            // The compact prototype uses the timeline itself as the clip
+            // source strip. Clip/layer insertion remains in Timeline so the
+            // basic editor does not render two competing timelines.
+        } else {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = BitOSSpacing.base),
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
         ) {
-            ToolButton(
-                icon = SolarStudioIcon.Text,
-                description = "Add text",
-                enabled = state.canAddOverlay,
-                onClick = {
-                    val id = state.addOverlay(MemeOverlayKind.TEXT, "")
-                    if (id != null) editingOverlayId = id
-                },
-            )
-            ToolButton(
-                icon = SolarStudioIcon.Sticker,
-                description = "Add sticker",
-                enabled = state.canAddOverlay,
-                onClick = { showStickers = true },
-            )
-            ToolButton(
-                icon = SolarStudioIcon.Palette,
-                description = "Color look",
-                enabled = activeAsset != null,
-                onClick = { showLooks = true },
-            )
-            ToolButton(
-                icon = SolarStudioIcon.Soundwave,
-                description = "Sound effects",
-                enabled = videoMode && videoBytes != null,
-                onClick = { showSfx = true },
-            )
-            ToolButton(
-                icon = SolarStudioIcon.Pen,
-                description = "Draw",
-                enabled = true,
-                onClick = { drawMode = !drawMode },
-            )
-            ToolIconButton(
-                icon = AppIcons.Download,
-                description = "Save to Photos",
-                enabled = (activeAsset != null || gifFrames.isNotEmpty() || videoBytes != null) && !exporting,
-                onClick = ::saveToDevice,
-            )
-            if (videoMode && videoProbe != null) {
-                ToolIconButton(
-                    icon = AppIcons.AppsGrid,
-                    description = "Expert suite",
-                    enabled = videoBytes != null,
-                    onClick = { suiteMode = true },
+            rowItems(assets, key = { it.id }) { asset ->
+                TrayTile(
+                    asset = asset,
+                    active = asset.id == activeAssetId,
+                    onClick = { activeAssetId = asset.id },
                 )
+            }
+            if (assets.size < MemeProjectContract.maxAssets(MemeMode.IMAGE)) {
+                item(key = "add") {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.Transparent,
+                        border = BorderStroke(1.dp, BitOSColors.border),
+                        onClick = ::launchPicker,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                AppIcons.Add,
+                                contentDescription = "Add image",
+                                tint = BitOSColors.textSecondary,
+                            )
+                        }
+                    }
+                }
             }
         }
         }
+                if (videoMode && hasVideo) {
+                    TimelineStrip(
+                        clips = videoClips.toList(),
+                        selectedClipIndex = selectedClipIndex,
+                        positionMs = videoPositionMs,
+                        totalMs = timelineDurationMs,
+                        rate = videoRate,
+                        onSelectClip = { selectedClipIndex = it },
+                        onSplit = ::splitAtPlayhead,
+                        onDelete = {
+                            if (videoClips.size > 1) {
+                                removeClip(selectedClipIndex)
+                                exportStatus = "Clip deleted"
+                            } else {
+                                exportStatus = "Keep at least one clip"
+                            }
+                        },
+                        onMute = {
+                            videoClips.getOrNull(selectedClipIndex)?.let { clip ->
+                                videoClips[selectedClipIndex] = clip.copy(
+                                    volume = if (clip.volume == 0f) 1f else 0f,
+                                )
+                                syncWireClips()
+                                exportStatus = if (clip.volume == 0f) "Clip sound on" else "Clip muted"
+                            }
+                        },
+                        onSpeed = {
+                            activePanel = null
+                            showSpeed = true
+                        },
+                        onLayer = { showLayers = true },
+                    )
+                }
+                Spacer(Modifier.height(BitOSSpacing.sm))
+            }
+            }
+            state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }?.let { selected ->
+                SelectionControlsRow(
+                    selectedId = selected.id,
+                    isText = selected.kind != space.bitos.core.studio.MemeOverlayKind.STICKER &&
+                        selected.kind != space.bitos.core.studio.MemeOverlayKind.IMAGE,
+                    onNudge = { dx, dy -> state.nudgeOverlay(selected.id, dx = dx, dy = dy) },
+                    onScale = { factor -> state.nudgeOverlay(selected.id, scaleFactor = factor) },
+                    onRotate = { degrees -> state.nudgeOverlay(selected.id, dRot = degrees) },
+                    onEdit = { editingOverlayId = selected.id },
+                    onDelete = { state.removeOverlay(selected.id) },
+                )
+            }
+            PerModeBar(
+                videoMode = videoMode,
+                gifMode = gifMode,
+                onNotice = { exportStatus = it },
+                onOpenClips = { showClipSheet = true },
+                onOpenTrim = { showTrim = true },
+                onOpenFx = {
+                    drawMode = false
+                    activePanel = MemeEditorPanel.FX
+                },
+                onOpenText = {
+                    drawMode = false
+                    activePanel = MemeEditorPanel.TEXT
+                },
+                onOpenLayers = {
+                    activePanel = null
+                    showLayers = true
+                },
+                onOpenSuite = {
+                    activePanel = null
+                    suiteMode = true
+                },
+                onCycleGifSpeed = {
+                    val next = if (gifUniformDelayMs >= 200) 50 else gifUniformDelayMs + 50
+                    gifUniformDelayMs = next
+                    exportStatus = "Frame hold $next ms"
+                },
+            )
+            statusLine()
+        }
+
+        if (showExportSheet) {
+            ModalBottomSheet(onDismissRequest = { showExportSheet = false }) {
+                ExportSettingsContent(
+                    designEligible = !gifMode && !videoMode && activeAsset != null &&
+                        state.project.overlays.any {
+                            it.kind == space.bitos.core.studio.MemeOverlayKind.TEXT && it.text.isNotBlank()
+                        },
+                    onMakeVariations = onMakeVariations?.let { callback ->
+                        {
+                            scope.launch {
+                                val result = runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        val source = MemeRaster.decodeForExport(context.contentResolver, activeAsset!!.uri)
+                                            ?: error("Image could not be read")
+                                        MemeRaster.render(source, state.project)
+                                    }
+                                }
+                                result.onSuccess { bitmap ->
+                                    val bytes = java.io.ByteArrayOutputStream().also { stream ->
+                                        check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) { "PNG encode failed" }
+                                    }.toByteArray()
+                                    showExportSheet = false
+                                    callback(space.bitos.core.studio.MemeProjectContract.encode(state.project), bytes)
+                                }.onFailure { exportStatus = "Could not render the design — ${it.message}" }
+                            }
+                        }
+                    },
+                    recoveredJobs = remember(exportJobsRevision) { exportJobs.recoverable() },
+                    onJobRetry = ::retryExportSave,
+                    onJobDiscard = { exportJobs.discard(it); exportJobsRevision += 1 },
+                    isVideo = videoMode && hasVideo,
+                    isGif = gifMode && gifFrames.isNotEmpty(),
+                    hasImage = !gifMode && !videoMode && activeAsset != null,
+                    dims = when {
+                        videoMode && hasVideo ->
+                            videoClips.firstOrNull()?.probe?.let { "${it.uprightWidth}×${it.uprightHeight}" } ?: "source size"
+                        gifMode && gifFrames.isNotEmpty() -> "${gifFrames.size} frames"
+                        else -> activeAsset?.let { "${it.width}×${it.height}" } ?: "—"
+                    },
+                    durationSeconds = (timelineDurationMs / 1000).toInt(),
+                    gifDelayMs = gifUniformDelayMs,
+                    exporting = exporting,
+                    failure = (exportOutcome as? ExportOutcome.Failure)?.message,
+                    onExport = {
+                        showExportSheet = false
+                        saveToDevice()
+                    },
+                )
+            }
+        }
+
+        // Tool panels present as native bottom sheets (canvas stays
+        // visible above; drag or scrim dismisses).
+        activePanel?.let { panel ->
+            ModalBottomSheet(onDismissRequest = { activePanel = null }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = BitOSSpacing.base)
+                        .padding(bottom = BitOSSpacing.lg),
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                ) {
+                    Text(
+                        when (panel) {
+                            MemeEditorPanel.MEME -> "Meme generator"
+                            MemeEditorPanel.TEXT -> "Text"
+                            MemeEditorPanel.STICKERS -> "Stickers"
+                            MemeEditorPanel.SOUND -> "Sound"
+                            MemeEditorPanel.FX -> "Look"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.W700,
+                    )
+
+                        when (panel) {
+                            MemeEditorPanel.MEME -> MemeCaptionSheetContent(
+                                enabled = state.canAddOverlay,
+                                onAdd = { top, bottom, slot ->
+                                    state.addMemeCaptions(top, bottom, slot)
+                                    exportStatus = "Captions added — drag to fine-tune"
+                                },
+                            )
+                            MemeEditorPanel.TEXT -> TextPanelContent(
+                                onAdd = { text, slot ->
+                                    val id = state.addOverlay(MemeOverlayKind.TEXT, text)
+                                    if (id != null && slot != MemeFontSlot.SANS) {
+                                        state.updateStyle(id, font = slot)
+                                    }
+                                    exportStatus = "Text added — tap it for the style editor"
+                                },
+                            )
+                            MemeEditorPanel.STICKERS -> StickerSheetContent(
+                                recents = recentStickers.toList(),
+                                onPick = { emoji ->
+                                    val id = state.addOverlay(MemeOverlayKind.STICKER, emoji)
+                                    if (id != null) {
+                                        recentStickers.removeAll { it == emoji }
+                                        recentStickers.add(0, emoji)
+                                        if (recentStickers.size > StickerCatalog.MAX_RECENT_STICKERS) {
+                                            recentStickers.removeAt(recentStickers.lastIndex)
+                                        }
+                                    }
+                                },
+                            )
+                            MemeEditorPanel.SOUND -> SoundPanelContent(
+                                cueCount = state.project.sfxCues.size,
+                                onOpenStudio = {
+                                    activePanel = null
+                                    showSfx = true
+                                },
+                            )
+                            MemeEditorPanel.FX -> if (videoMode && hasVideo) {
+                                // M5: the grade applies to the SELECTED clip;
+                                // the adjust sliders stay project-wide.
+                                val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
+                                LooksSheetContent(
+                                    active = clip.lookId ?: state.project.lookId
+                                        ?: space.bitos.core.studio.MemeLooks.NONE,
+                                    onPick = { id ->
+                                        val index = videoClips.indexOf(clip)
+                                        if (index >= 0) {
+                                            videoClips[index] = clip.copy(
+                                                lookId = space.bitos.core.studio.MemeLooks.normalize(id),
+                                            )
+                                            syncWireClips()
+                                        }
+                                    },
+                                    adjust = state.project.adjust,
+                                    onAdjust = { state.setAdjust(it) },
+                                )
+                            } else {
+                                LooksSheetContent(
+                                    active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
+                                    onPick = { id -> state.setLook(id) },
+                                    adjust = state.project.adjust,
+                                    onAdjust = { state.setAdjust(it) },
+                                )
+                            }
+                        }
+                    }
+            }
+        }
+
+        // ── Next: into the publish flow (prototype "Next · post details").
+        val hasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo
+        val publishBusy = memePublishState?.phase.let {
+            it == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
+                it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
+        }
+        Button(
+            onClick = {
+                activePanel = null
+                showPublish = true
+            },
+            enabled = mediaPublishViewModel != null && hasMedia && !publishBusy,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BitOSColors.primary,
+                contentColor = androidx.compose.ui.graphics.Color.White,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs)
+                .navigationBarsPadding(),
+        ) {
+            Text("Next · post details", fontWeight = FontWeight.W600)
+        }
+        if (!hasMedia) {
+            Text(
+                "pick a clip, image or frames first",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = BitOSSpacing.xs),
+            )
+        }
     }
+
 
     if (showDiscard) {
         AlertDialog(
             onDismissRequest = { showDiscard = false },
-            title = { Text("Discard meme?") },
+            title = { Text("Could not save the draft") },
             text = {
                 Text(
-                    if (store != null && !state.isEmpty) {
-                        "Your edits live in this session. Discard and delete the saved draft?"
-                    } else {
-                        "Your edits live only in this session. Discard and close the editor?"
-                    },
+                    "Your edits are still open. Retry the save to keep them, or delete the draft deliberately.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    clearSlot()
+                    showDiscard = false
                     onClose()
-                }) { Text("Discard", color = BitOSColors.error) }
+                }) { Text("Keep editing", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
             },
             dismissButton = {
-                TextButton(onClick = { showDiscard = false }) { Text("Keep editing") }
+                TextButton(onClick = {
+                    clearSlot()
+                    onClose()
+                }) { Text("Delete draft", color = BitOSColors.error) }
             },
         )
     }
@@ -1382,29 +1782,12 @@ fun MemeEditorScreen(
         return
     }
 
-    if (showStickers) {
-        ModalBottomSheet(onDismissRequest = { showStickers = false }) {
-            StickerSheetContent(
-                recents = recentStickers.toList(),
-                onPick = { emoji ->
-                    val id = state.addOverlay(MemeOverlayKind.STICKER, emoji)
-                    if (id != null) {
-                        recentStickers.removeAll { it == emoji }
-                        recentStickers.add(0, emoji)
-                        if (recentStickers.size > StickerCatalog.MAX_RECENT_STICKERS) {
-                            recentStickers.removeAt(recentStickers.lastIndex)
-                        }
-                    }
-                },
-            )
-        }
-    }
-
     if (showLooks) {
         ModalBottomSheet(onDismissRequest = { showLooks = false }) {
             if (videoMode && hasVideo) {
                 // M5: the grade applies to the SELECTED clip; "none" clears
-                // the override (the project grade shows through again).
+                // the override (the project grade shows through again). The
+                // adjust sliders stay project-wide (prototype semantics).
                 val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
                 LooksSheetContent(
                     active = clip.lookId ?: state.project.lookId
@@ -1419,6 +1802,8 @@ fun MemeEditorScreen(
                         }
                         showLooks = false
                     },
+                    adjust = state.project.adjust,
+                    onAdjust = { state.setAdjust(it) },
                 )
             } else {
                 LooksSheetContent(
@@ -1427,6 +1812,8 @@ fun MemeEditorScreen(
                         state.setLook(id)
                         showLooks = false
                     },
+                    adjust = state.project.adjust,
+                    onAdjust = { state.setAdjust(it) },
                 )
             }
         }
@@ -1551,19 +1938,24 @@ fun MemeEditorScreen(
     }
 
     if (showPublish && mediaPublishViewModel != null) {
-        MemePublishScreen(
+        MemePostFlowScreen(
             state = state,
             asset = activeAsset,
-            canPublish = activeAsset != null || gifFrames.isNotEmpty() || hasVideo,
+            gifFrameCount = gifFrames.size,
+            hasVideo = hasVideo,
+            timelineSeconds = ((timelineDurationMs + 999) / 1000).toInt(),
+            clipCount = videoClips.size,
+            coverSet = coverThumbUrl != null,
             publishState = memePublishState,
-            onPublish = { caption, altText, cwReason, remixOf, remixAuthor ->
+            onPublish = { caption, altText, cwReason, tags, license, remixOf, remixAuthor ->
                 val project = state.project
                 // Video/GIF modes have no `activeAsset` (their media lives in
                 // session bytes) — the mode itself gates readiness here.
                 val mediaReady = activeAsset != null ||
                     (project.mode == MemeMode.VIDEO && hasVideo) ||
                     (project.mode == MemeMode.GIF && gifFrames.isNotEmpty())
-                if (!mediaReady) return@MemePublishScreen
+                if (!mediaReady) return@MemePostFlowScreen
+                mediaPublishViewModel.markMemeRenderStarted()
                 scope.launch {
                     val rendered = withContext(Dispatchers.IO) {
                         if (project.mode == MemeMode.VIDEO && hasVideo) {
@@ -1572,7 +1964,7 @@ fun MemeEditorScreen(
                             // exports are CUT (duration ladder), not failed —
                             // M5: the ladder trims the LAST clip's window.
                             val probe = videoClips.first().probe
-                            fun exportNow(): ByteArray = MemeVideoExport.exportClips(
+                            suspend fun exportNow(): ByteArray = MemeVideoExport.exportClips(
                                 context, videoClips.toList().toClipInputs(videoRate), state.project,
                                 sfxMixTimeline(state.project, timelineDurationMs),
                                 imageAssets = imageAssetUris,
@@ -1638,6 +2030,13 @@ fun MemeEditorScreen(
                             Triple(bytes, width, height) to "image/png"
                         }
                     }
+                    // Post-details extras ride the same verified machine:
+                    // explicit t-tags + license merge with the remix lineage.
+                    val mergedTags = postExtraTagsJson(
+                        remixTagsFor(state.project, remixOf, remixAuthor),
+                        tags,
+                        license,
+                    )
                     if (project.mode == MemeMode.VIDEO) {
                         // The exported timeline (windows ÷ speed) is the
                         // truth — what actually hit the wire.
@@ -1651,7 +2050,7 @@ fun MemeEditorScreen(
                             altText = altText,
                             contentWarningReason = cwReason,
                             thumbUrl = coverThumbUrl,
-                            remixTagsJson = remixTagsFor(state.project, remixOf, remixAuthor),
+                            remixTagsJson = mergedTags,
                         )
                     } else {
                         mediaPublishViewModel.publishMemePicture(
@@ -1662,18 +2061,26 @@ fun MemeEditorScreen(
                             altText = altText,
                             contentWarningReason = cwReason,
                             mimeType = rendered.second,
-                            remixTagsJson = remixTagsFor(state.project, remixOf, remixAuthor),
+                            remixTagsJson = mergedTags,
                         )
                     }
                 }
             },
             onDismiss = { showPublish = false },
+            onPublished = {
+                showPublish = false
+                onClose()
+            },
+            recoverableJobs = mediaPublishViewModel.memeJobs(),
+            onJobRetry = { mediaPublishViewModel.retryMemeJob(it) },
+            onJobDiscard = { mediaPublishViewModel.discardMemeJob(it) },
+            onJobVerify = { mediaPublishViewModel.verifyMemeJobIntegrity(it) },
         )
     }
 }
 
-/** Decode-only aspect pass (no bitmap allocation); null for unreadable files. */
-private fun decodeAspect(resolver: android.content.ContentResolver, uri: Uri): Float? = try {
+/** Decode-only bounds pass (no bitmap allocation); null for unreadable files. */
+private fun decodeBounds(resolver: android.content.ContentResolver, uri: Uri): Pair<Int, Int>? = try {
     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     resolver.openInputStream(uri)?.use { stream ->
         BitmapFactory.decodeStream(stream, null, options)
@@ -1681,11 +2088,15 @@ private fun decodeAspect(resolver: android.content.ContentResolver, uri: Uri): F
     if (options.outWidth <= 0 || options.outHeight <= 0) {
         null
     } else {
-        options.outWidth.toFloat() / options.outHeight
+        options.outWidth to options.outHeight
     }
 } catch (_: Exception) {
     null
 }
+
+/** Decode-only aspect pass (no bitmap allocation); null for unreadable files. */
+private fun decodeAspect(resolver: android.content.ContentResolver, uri: Uri): Float? =
+    decodeBounds(resolver, uri)?.let { it.first.toFloat() / it.second }
 
 /** Asset bytes for slot persistence: content picks via resolver, restored
  * slot files (file://) straight off disk. */
@@ -1697,34 +2108,674 @@ private fun readAssetBytes(context: android.content.Context, uri: Uri): ByteArra
     }
 }.getOrNull()
 
+/** MUX-01 draft persistence states. */
+enum class DraftSaveState { IDLE, SAVING, SAVED, FAILED }
+
+/** MUX-02 typed export outcomes (success-with-adjustment is a SUCCESS). */
+sealed interface ExportOutcome {
+    data class Success(val detail: String) : ExportOutcome
+    data class SuccessAdjusted(val detail: String) : ExportOutcome
+    data class Failure(val message: String) : ExportOutcome
+}
+
+/** Inline editor panels (prototype create-edit tool panels). */
+private enum class MemeEditorPanel { MEME, TEXT, STICKERS, SOUND, FX }
+
+/** Prototype mode switcher: uppercase pills + the undo button. */
 @Composable
-private fun ModeChips(
-    modifier: Modifier = Modifier,
-    activeMode: MemeMode = MemeMode.IMAGE,
-    onPickMode: (MemeMode) -> Unit = {},
+private fun ModePillsRow(
+    activeMode: MemeMode,
+    canUndo: Boolean,
+    onPickMode: (MemeMode) -> Unit,
+    onUndo: () -> Unit,
 ) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-        ModeChip(label = "Image", active = activeMode == MemeMode.IMAGE, enabled = true) {
-            onPickMode(MemeMode.IMAGE)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(BitOSColors.surface)
+                .border(1.dp, BitOSColors.border, RoundedCornerShape(50))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            listOf(
+                MemeMode.VIDEO to "VIDEO",
+                MemeMode.GIF to "GIF",
+                MemeMode.IMAGE to "IMAGE",
+            ).forEach { (mode, label) ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (activeMode == mode) androidx.compose.ui.graphics.Color.Black else BitOSColors.textSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (activeMode == mode) BitOSColors.primary else androidx.compose.ui.graphics.Color.Transparent,
+                        )
+                        .clickable { onPickMode(mode) }
+                        .padding(horizontal = 14.dp, vertical = 5.dp),
+                )
+            }
         }
-        ModeChip(label = "GIF", active = activeMode == MemeMode.GIF, enabled = true) {
-            onPickMode(MemeMode.GIF)
-        }
-        ModeChip(label = "Video", active = activeMode == MemeMode.VIDEO, enabled = true) {
-            onPickMode(MemeMode.VIDEO)
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onUndo, enabled = canUndo) {
+            SolarStudioIconImage(
+                SolarStudioIcon.UndoLeft,
+                contentDescription = "Undo",
+                tint = if (canUndo) BitOSColors.textPrimary else BitOSColors.textTertiary,
+            )
         }
     }
 }
 
+/** Prototype quick-tool chip shell: label pill with the accent rules (the
+ *  "hot" Meme tool tints, the open panel gets the accent border). */
 @Composable
-private fun ModeChip(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = active,
-        onClick = onClick,
-        enabled = enabled,
-        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-        modifier = Modifier.alpha(if (enabled) 1f else 0.5f),
-    )
+private fun QuickToolChipShell(
+    label: String,
+    hot: Boolean,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    val tint = if (active || hot) BitOSColors.primary else BitOSColors.textSecondary
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .size(52.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    active -> BitOSColors.primary.copy(alpha = 0.22f)
+                    hot -> BitOSColors.primary.copy(alpha = 0.12f)
+                    else -> BitOSColors.surface
+                },
+            )
+            .border(
+                1.dp,
+                if (active || hot) BitOSColors.primary else BitOSColors.border,
+                CircleShape,
+            )
+            .clickable(enabled = enabled) { onClick() }
+            .alpha(if (enabled) 1f else 0.4f)
+            .semantics { contentDescription = label },
+    ) {
+        icon()
+        Text(
+            label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.W700,
+            color = tint,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Quick-tool chip with a Solar studio glyph. */
+@Composable
+private fun QuickToolChip(
+    icon: SolarStudioIcon,
+    label: String,
+    hot: Boolean = false,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) = QuickToolChipShell(label, hot, active, enabled, onClick) {
+    SolarStudioIconImage(icon, contentDescription = null, tint = if (active || hot) BitOSColors.primary else BitOSColors.textSecondary, modifier = Modifier.size(16.dp))
+}
+
+/** Quick-tool chip with a vector glyph. */
+@Composable
+private fun QuickToolChipVector(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) = QuickToolChipShell(label, false, active, enabled, onClick) {
+    Icon(icon, contentDescription = null, tint = if (active) BitOSColors.primary else BitOSColors.textSecondary, modifier = Modifier.size(15.dp))
+}
+
+/** Quick tool chips (prototype: Meme · Text · Stickers · Sound · Effects;
+ *  Draw/Save stay as native extras). */
+@Composable
+private fun QuickToolsRow(
+    canAddOverlay: Boolean,
+    looksEnabled: Boolean,
+    soundEnabled: Boolean,
+    saveEnabled: Boolean,
+    activePanel: MemeEditorPanel?,
+    drawActive: Boolean,
+    onPanel: (MemeEditorPanel) -> Unit,
+    onDraw: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = BitOSSpacing.base),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        QuickToolChip(
+            icon = SolarStudioIcon.MagicWand,
+            label = "Meme",
+            hot = true,
+            active = activePanel == MemeEditorPanel.MEME,
+            enabled = canAddOverlay,
+        ) { onPanel(MemeEditorPanel.MEME) }
+        QuickToolChip(
+            icon = SolarStudioIcon.Text,
+            label = "Text",
+            active = activePanel == MemeEditorPanel.TEXT,
+            enabled = canAddOverlay,
+        ) { onPanel(MemeEditorPanel.TEXT) }
+        QuickToolChip(
+            icon = SolarStudioIcon.Sticker,
+            label = "Stickers",
+            active = activePanel == MemeEditorPanel.STICKERS,
+            enabled = canAddOverlay,
+        ) { onPanel(MemeEditorPanel.STICKERS) }
+        QuickToolChip(
+            icon = SolarStudioIcon.Soundwave,
+            label = "Sound",
+            active = activePanel == MemeEditorPanel.SOUND,
+            enabled = soundEnabled,
+        ) { onPanel(MemeEditorPanel.SOUND) }
+        QuickToolChip(
+            icon = SolarStudioIcon.Palette,
+            label = "Look",
+            active = activePanel == MemeEditorPanel.FX,
+            enabled = looksEnabled,
+        ) { onPanel(MemeEditorPanel.FX) }
+        QuickToolChip(
+            icon = SolarStudioIcon.Pen,
+            label = "Draw",
+            active = drawActive,
+            enabled = true,
+        ) { onDraw() }
+        QuickToolChipVector(
+            icon = AppIcons.Download,
+            label = "Export",
+            active = false,
+            enabled = saveEnabled,
+        ) { onSave() }
+    }
+}
+
+
+/** Quick-text panel (prototype text panel): type once, pick a font slot. */
+@Composable
+private fun TextPanelContent(onAdd: (String, MemeFontSlot) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    var slot by remember { mutableStateOf(MemeFontSlot.SANS) }
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+        Text("Add text", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        space.bitos.app.ui.components.BitosTextField(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = "Type something…",
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            listOf(
+                MemeFontSlot.SANS to "Modern",
+                MemeFontSlot.IMPACT to "Impact",
+                MemeFontSlot.SERIF to "Comic",
+            ).forEach { (candidate, label) ->
+                FilterChip(
+                    selected = slot == candidate,
+                    onClick = { slot = candidate },
+                    label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                )
+            }
+        }
+        Button(
+            onClick = {
+                val value = text.trim()
+                if (value.isNotEmpty()) {
+                    onAdd(value, slot)
+                    text = ""
+                }
+            },
+            enabled = text.isNotBlank(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BitOSColors.primary,
+                contentColor = androidx.compose.ui.graphics.Color.White,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Add text")
+        }
+    }
+}
+
+/** Sound panel (prototype sound row): cue summary + jump to the studio. */
+@Composable
+private fun SoundPanelContent(cueCount: Int, onOpenStudio: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (cueCount == 0) "Original clip audio" else "$cueCount synth cues",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.W600,
+            )
+            Text(
+                if (cueCount == 0) "Drop risers, zaps and coin SFX at the playhead"
+                else "Cues bake into the export mix",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.textSecondary,
+            )
+        }
+        Text(
+            "Change",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W600,
+            color = BitOSColors.primary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .clickable { onOpenStudio() }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** One clip segment in the compact timeline. */
+@Composable
+private fun TimelineClipSegment(
+    index: Int,
+    widthPx: Float,
+    outSec: Int,
+    muted: Boolean,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .padding(start = if (index == 0) 0.dp else 1.dp, end = 1.dp)
+            .width(with(androidx.compose.ui.platform.LocalDensity.current) { widthPx.toDp() })
+            .height(40.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                if (selected) BitOSColors.primary.copy(alpha = 0.85f)
+                else BitOSColors.textTertiary.copy(alpha = 0.35f),
+            )
+            .border(
+                1.5.dp,
+                if (selected) BitOSColors.primary else androidx.compose.ui.graphics.Color.Transparent,
+                RoundedCornerShape(6.dp),
+            )
+            .clickable { onSelect() },
+    ) {
+        Text(
+            "vdo ${index + 1}",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = androidx.compose.ui.graphics.Color.White,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            if (muted) {
+                Text("🔇", fontSize = 9.sp)
+            }
+            Text(
+                "${outSec}s",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                fontWeight = FontWeight.W600,
+                color = androidx.compose.ui.graphics.Color.White,
+            )
+        }
+    }
+}
+
+/** Compact clip timeline (prototype edTimeline): ruler, proportional
+ *  segments, playhead and the Split/Delete/Mute/Speed/Layer tool row. */
+@Composable
+private fun TimelineStrip(
+    clips: List<SessionClip>,
+    selectedClipIndex: Int,
+    positionMs: Long,
+    totalMs: Long,
+    rate: Float,
+    onSelectClip: (Int) -> Unit,
+    onSplit: () -> Unit,
+    onDelete: () -> Unit,
+    onMute: () -> Unit,
+    onSpeed: () -> Unit,
+    onLayer: () -> Unit,
+) {
+    val safeTotal = maxOf(1L, totalMs)
+    fun mmss(ms: Long): String =
+        String.format("%02d:%02d", (ms / 1000) / 60, (ms / 1000) % 60)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.base),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(mmss(0), style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textSecondary)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${mmss(positionMs.coerceAtMost(safeTotal))} / ${mmss(safeTotal)}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = BitOSColors.primary,
+                fontWeight = FontWeight.W600,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(mmss(safeTotal), style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textSecondary)
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().height(44.dp)) {
+            val trackWidth = constraints.maxWidth.toFloat()
+            Row(Modifier.fillMaxHeight()) {
+                clips.forEachIndexed { index, clip ->
+                    key(clip.id) {
+                        TimelineClipSegment(
+                            index = index,
+                            widthPx = trackWidth * clipOutputMsOf(clip, rate) / safeTotal,
+                            outSec = ((clipOutputMsOf(clip, rate) + 999) / 1000).toInt(),
+                            muted = clip.volume == 0f,
+                            selected = index == selectedClipIndex,
+                            onSelect = { onSelectClip(index) },
+                        )
+                    }
+                }
+            }
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) {
+                        (trackWidth * positionMs.coerceAtMost(safeTotal) / safeTotal).toDp()
+                    })
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(BitOSColors.primary),
+            )
+        }
+        if (rate != 1f) {
+            Text(
+                "whole-timeline speed ${rate}×",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceAround,
+        ) {
+            ClipToolButton(AppIcons.Scissors, "Split", onSplit)
+            ClipToolButton(AppIcons.Delete, "Delete", onDelete)
+            ClipToolButton(AppIcons.Mute, "Mute", onMute)
+            ClipToolButton(AppIcons.Speed, "Speed", onSpeed)
+            ClipToolButton(AppIcons.Layer, "Layer", onLayer)
+        }
+    }
+}
+
+/** Output window ms for one clip at the project rate (display math only). */
+private fun clipOutputMsOf(clip: SessionClip, rate: Float): Long =
+    ((maxOf(0L, clip.endMs - clip.startMs)) / maxOf(0.01f, rate)).toLong()
+
+/** Icon-over-caption clip tool / per-mode bar button. */
+@Composable
+private fun ClipToolButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .semantics { contentDescription = label },
+    ) {
+        Icon(icon, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(16.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
+    }
+}
+
+/** Output settings before export (MUX-04): shows EXACTLY the profile the
+ *  pipeline renders — the only tested profile per mode — with automatic
+ *  adjustments disclosed up front and the destination named. */
+@Composable
+private fun ExportSettingsContent(
+    designEligible: Boolean = false,
+    onMakeVariations: (() -> Unit)? = null,
+    recoveredJobs: List<MemeExportJobStore.Job> = emptyList(),
+    onJobRetry: (Int) -> Unit = {},
+    onJobDiscard: (Int) -> Unit = {},
+    isVideo: Boolean,
+    isGif: Boolean,
+    hasImage: Boolean,
+    dims: String,
+    durationSeconds: Int,
+    gifDelayMs: Int,
+    exporting: Boolean,
+    failure: String?,
+    onExport: () -> Unit,
+) {
+    val format = when {
+        isVideo -> "MP4 · $dims · $durationSeconds s"
+        isGif -> "GIF · $dims" + if (gifDelayMs > 0) " · $gifDelayMs ms/frame" else " · source timing"
+        hasImage -> "PNG · $dims"
+        else -> "—"
+    }
+    val adjustmentNote = when {
+        isVideo -> "Save exports the current timeline. Posting checks the 64 MB limit and may offer a shorter version."
+        isGif -> "Oversized GIFs automatically downscale — you'll see “Saved at a smaller size” if that happens."
+        else -> "Full-quality PNG at the media's resolution."
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.base)
+            .padding(bottom = BitOSSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Text("Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text(format, style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Destination: " + (if (isVideo) "Movies" else "Photos") + " · file size is shown after the render (estimates would be guesses).",
+            style = MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+        )
+        Text(
+            adjustmentNote,
+            style = MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+        )
+        failure?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = BitOSColors.error) }
+        if (recoveredJobs.isNotEmpty()) {
+            Text("Recovered exports", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
+            recoveredJobs.forEach { job ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BitOSColors.surface)
+                        .padding(BitOSSpacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            job.format.uppercase() + " · " + (job.artifactBytes / 1024) + " KB",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (job.phase == "needsReview") {
+                            Text("check Photos first", style = MaterialTheme.typography.labelSmall, color = BitOSColors.warning)
+                        }
+                    }
+                    job.lastError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = BitOSColors.error) }
+                    Row {
+                        Button(
+                            onClick = { onJobRetry(job.id) },
+                            colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                        ) { Text("Retry save", fontWeight = FontWeight.W600) }
+                        Spacer(Modifier.width(BitOSSpacing.sm))
+                        OutlinedButton(onClick = { onJobDiscard(job.id) }) { Text("Discard", color = BitOSColors.error) }
+                    }
+                }
+            }
+            Text("Retry reuses the rendered file — it never re-renders.", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+        }
+        if (designEligible && onMakeVariations != null) {
+            OutlinedButton(onClick = onMakeVariations, modifier = Modifier.fillMaxWidth()) {
+                Text("Make variations from this design", fontWeight = FontWeight.W600)
+            }
+            Text(
+                "Freezes this design and varies every caption per row.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+            )
+        }
+        Button(
+            onClick = onExport,
+            enabled = !exporting && (isVideo || isGif || hasImage),
+            colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (exporting) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp), color = androidx.compose.ui.graphics.Color.White)
+                Spacer(Modifier.width(BitOSSpacing.xs))
+            }
+            Text(if (exporting) "Rendering…" else "Export", fontWeight = FontWeight.W600)
+        }
+    }
+}
+
+/** Accessible manipulation for the selection (MUX-03): nudge / resize /
+ *  rotate / edit / delete without precision gestures — 48dp targets. */
+@Composable
+private fun SelectionControlsRow(
+    selectedId: String,
+    isText: Boolean,
+    onNudge: (Float, Float) -> Unit,
+    onScale: (Float) -> Unit,
+    onRotate: (Float) -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val borderColor = BitOSColors.border
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawLine(
+                    color = borderColor,
+                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                    end = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SelectionControlButton("Nudge left", AppIcons.Back, onClick = { onNudge(-0.05f, 0f) })
+        SelectionControlButton("Nudge right", AppIcons.ChevronRight, onClick = { onNudge(0.05f, 0f) })
+        SelectionControlButton("Nudge up", AppIcons.ArrowUp, onClick = { onNudge(0f, -0.05f) })
+        SelectionControlButton("Nudge down", AppIcons.Download, onClick = { onNudge(0f, 0.05f) })
+        SelectionControlButton("Shrink", AppIcons.Filter, onClick = { onScale(0.9f) })
+        SelectionControlButton("Enlarge", AppIcons.Add, onClick = { onScale(1.1f) })
+        SelectionControlButton("Rotate left", AppIcons.Repost, onClick = { onRotate(-15f) })
+        SelectionControlButton("Rotate right", AppIcons.Refresh, onClick = { onRotate(15f) })
+        if (isText) {
+            SelectionControlButton("Edit text", AppIcons.TextGlyph, onClick = onEdit)
+        }
+        SelectionControlButton("Delete overlay", AppIcons.Delete, onClick = onDelete, destructive = true)
+    }
+}
+
+@Composable
+private fun SelectionControlButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    destructive: Boolean = false,
+) {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClickLabel = label) { onClick() }
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (destructive) BitOSColors.error else BitOSColors.textSecondary,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+/** Per-mode bottom toolbar (prototype edBar). */
+@Composable
+private fun PerModeBar(
+    onOpenClips: () -> Unit,
+    onOpenTrim: () -> Unit,
+    videoMode: Boolean,
+    gifMode: Boolean,
+    onNotice: (String) -> Unit,
+    onOpenFx: () -> Unit,
+    onOpenText: () -> Unit,
+    onOpenLayers: () -> Unit,
+    onOpenSuite: () -> Unit,
+    onCycleGifSpeed: () -> Unit,
+) {
+    val borderColor = BitOSColors.border
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawLine(
+                    color = borderColor,
+                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                    end = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+        horizontalArrangement = Arrangement.SpaceAround,
+    ) {
+        if (videoMode) {
+            ClipToolButton(AppIcons.Video, "Clips") { onOpenClips() }
+            ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
+            ClipToolButton(AppIcons.Crop, "Trim") { onOpenTrim() }
+            ClipToolButton(AppIcons.AppsGrid, "Overlay") { onOpenLayers() }
+            ClipToolButton(AppIcons.Sparkles, "Timeline") { onOpenSuite() }
+        } else if (gifMode) {
+            ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
+            ClipToolButton(AppIcons.Loop, "Loop") { onNotice("GIFs loop forever — nothing to set") }
+            ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
+            ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
+        } else {
+            ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
+            ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
+            ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
+        }
+    }
 }
 
 @Composable
@@ -1905,49 +2956,6 @@ private fun TrayTile(asset: EditorAsset, active: Boolean, onClick: () -> Unit) {
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
-    }
-}
-
-@Composable
-private fun ToolButton(icon: SolarStudioIcon, description: String, enabled: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = BitOSColors.surfaceElevated,
-        border = BorderStroke(1.dp, BitOSColors.border),
-        enabled = enabled,
-        onClick = onClick,
-        modifier = Modifier
-            .size(48.dp)
-            .alpha(if (enabled) 1f else 0.5f)
-            .semantics { contentDescription = description },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            SolarStudioIconImage(
-                icon,
-                contentDescription = null,
-                tint = BitOSColors.textPrimary,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ToolIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = BitOSColors.surfaceElevated,
-        border = BorderStroke(1.dp, BitOSColors.border),
-        enabled = enabled,
-        onClick = onClick,
-        modifier = Modifier
-            .size(48.dp)
-            .alpha(if (enabled) 1f else 0.5f)
-            .semantics { contentDescription = description },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null, tint = BitOSColors.textPrimary)
-        }
     }
 }
 
@@ -2285,7 +3293,7 @@ private fun TextSheet(
                 .padding(bottom = BitOSSpacing.lg),
             verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
         ) {
-            OutlinedTextField(
+            space.bitos.app.ui.components.BitosTextField(
                 value = overlay.text,
                 onValueChange = onText,
                 modifier = Modifier
@@ -2364,7 +3372,7 @@ private fun TextSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                 ) {
-                    OutlinedTextField(
+                    space.bitos.app.ui.components.BitosTextField(
                         value = ((overlay.startMs ?: 0L) / 1000L).toString(),
                         onValueChange = { raw ->
                             onWindow((raw.toFloatOrNull()?.times(1000)?.toLong()) ?: 0L, overlay.endMs)
@@ -2373,7 +3381,7 @@ private fun TextSheet(
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
-                    OutlinedTextField(
+                    space.bitos.app.ui.components.BitosTextField(
                         value = ((overlay.endMs ?: 0L) / 1000L).toString(),
                         onValueChange = { raw ->
                             onWindow(overlay.startMs, (raw.toFloatOrNull()?.times(1000)?.toLong()) ?: 0L)
@@ -2509,290 +3517,980 @@ private val MemeFontSlot.label: String
     }
 
 /**
- * Publish page (plan MST-017; mockups app-04 "Post details" + app-15
- * scr-pub "Publish machine" — ONE full-screen form, nothing behind it):
- * caption + counter (meme caps: soft 300 / hard 1000), derived hashtag
- * chips, CW toggle + reason, alt text (defaults to the caption in the
- * event when blank), remix lineage and the preflight checklist.
- * Publishing renders → hash-verified upload → kind-20 (phases in
- * [space.bitos.app.ui.feed.MemePublishPhase]).
+ * Publish flow (prototype `#/create-details` → `#/create-review`): the
+ * editor's "Next · post details" opens step 1 (details), "Review preflight"
+ * opens step 2 (the REAL checklist), Sign & publish runs the existing
+ * render → hash-verified upload → sign machine. Splits/PoW/schedule stay
+ * documented wave-4 work (meme-studio-plan MST-050s).
  */
 @Composable
-private fun MemePublishScreen(
+private fun MemePostFlowScreen(
     state: MemeEditorState,
     asset: EditorAsset?,
-    canPublish: Boolean = false,
+    gifFrameCount: Int,
+    hasVideo: Boolean,
+    timelineSeconds: Int,
+    clipCount: Int,
+    coverSet: Boolean,
     publishState: space.bitos.app.ui.feed.MemePublishUiState?,
     onPublish: (
         caption: String,
         altText: String,
         cwReason: String?,
+        tags: List<String>,
+        license: String,
         remixEventId: String,
         remixAuthor: String,
     ) -> Unit,
     onDismiss: () -> Unit,
+    onPublished: () -> Unit,
+    recoverableJobs: List<space.bitos.app.ui.feed.MemePublishJob> = emptyList(),
+    onJobRetry: (Int) -> Unit = {},
+    onJobDiscard: (Int) -> Unit = {},
+    onJobVerify: (Int) -> Boolean? = { null },
 ) {
+    var step by remember { mutableStateOf(0) } // 0 = details, 1 = preflight, 2 = machine, 3 = queue
     var caption by remember { mutableStateOf("") }
+    var altText by remember { mutableStateOf("") }
+    var tags by remember { mutableStateOf(listOf<String>()) }
+    var tagInput by remember { mutableStateOf("") }
+    var cwOn by remember { mutableStateOf(false) }
+    var cwReason by remember { mutableStateOf("Sensitive content") }
+    var license by remember { mutableStateOf("CC0-1.0") }
     var remixOf by remember { mutableStateOf("") }
     var remixAuthor by remember { mutableStateOf("") }
-    var altText by remember { mutableStateOf("") }
-    var contentWarningOn by remember { mutableStateOf(false) }
-    var contentWarningReason by remember { mutableStateOf("Sensitive content") }
-    val derivedTags = remember(caption) {
-        space.bitos.core.publish.ComposerRules.deriveTags(caption)
-            .filter { it.firstOrNull() == "t" }
-            .mapNotNull { it.getOrNull(1) }
-    }
+
     val phase = publishState?.phase ?: space.bitos.app.ui.feed.MemePublishPhase.IDLE
+    val published = phase == space.bitos.app.ui.feed.MemePublishPhase.DONE
     val busy = phase == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
         phase == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
-    val published = phase == space.bitos.app.ui.feed.MemePublishPhase.DONE
 
-    BackHandler { onDismiss() }
+    fun commitTag() {
+        val tag = tagInput.trim().replace("#", "").lowercase()
+        tagInput = ""
+        if (tag.isNotEmpty() && tag !in tags && tags.size < 8) tags = tags + tag
+    }
+
     Column(
-        modifier = Modifier
+        Modifier
             .fillMaxSize()
             .background(BitOSColors.background)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+            .statusBarsPadding(),
     ) {
-        // ── Header: back · title (scr-pub topnav) ────────────────────────
+        // Header
         Row(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
                 .padding(horizontal = BitOSSpacing.xs, vertical = BitOSSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onDismiss, modifier = Modifier.semantics { contentDescription = "Back to editor" }) {
-                Icon(AppIcons.Back, contentDescription = null, tint = BitOSColors.textPrimary)
+            val machineRunning = step == 2 && busy
+            IconButton(
+                onClick = { if (step > 0) step-- else onDismiss() },
+                enabled = !machineRunning,
+            ) {
+                Icon(
+                    AppIcons.Back,
+                    contentDescription = if (step == 2) "Back to preflight" else if (step == 1) "Back to details" else "Close",
+                    tint = BitOSColors.textPrimary,
+                )
             }
             Text(
-                "Publish",
+                when (step) {
+                    0 -> "Post details"; 1 -> "Preflight"; 2 -> "Publishing"; else -> "Recovery queue"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.W700,
-                modifier = Modifier.weight(1f),
             )
-            if (published) {
-                TextButton(onClick = onDismiss) { Text("Done", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
+            Spacer(Modifier.weight(1f))
+            if (step == 0 && !busy) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         }
 
         Column(
-            modifier = Modifier
+            Modifier
                 .weight(1f)
-                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = BitOSSpacing.base),
-            verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                .padding(horizontal = BitOSSpacing.lg),
+            verticalArrangement = Arrangement.spacedBy(BitOSSpacing.base),
         ) {
-            OutlinedTextField(
-                value = caption,
-                onValueChange = { if (it.length <= 1_000) caption = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Caption") },
-                supportingText = {
-                    Text(
-                        "${caption.length} / 300" + if (caption.length > 300) " · hard cap 1000" else "",
-                        color = if (caption.length > 300) BitOSColors.warning else BitOSColors.textTertiary,
+            if (step == 0) {
+                // ── Preview + caption ────────────────────────────────────
+                val captionBorder = BitOSColors.border
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+                    PostPreviewThumb(
+                        asset = asset,
+                        isVideo = state.project.mode == MemeMode.VIDEO && hasVideo,
+                        isGif = state.project.mode == MemeMode.GIF && gifFrameCount > 0,
+                        timelineSeconds = timelineSeconds,
+                        modifier = Modifier.size(width = 80.dp, height = 112.dp),
                     )
-                },
-                minLines = 2,
-            )
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .height(112.dp),
+                    ) {
+                        space.bitos.app.ui.components.BitosPlainTextField(
+                            value = caption,
+                            onValueChange = { caption = it.take(300) },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = BitOSColors.textPrimary),
+                            singleLine = false,
+                            minLines = 3,
+                            maxLines = 4,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .drawBehind {
+                                    drawLine(
+                                        color = captionBorder,
+                                        start = androidx.compose.ui.geometry.Offset(0f, size.height),
+                                        end = androidx.compose.ui.geometry.Offset(size.width, size.height),
+                                        strokeWidth = 1.dp.toPx(),
+                                    )
+                                }
+                                .padding(horizontal = BitOSSpacing.xs, vertical = BitOSSpacing.sm),
+                            placeholder = "Write a caption… #tag @mention",
+                        )
+                        Text(
+                            "${caption.length} / 300",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (caption.length > 300) BitOSColors.warning else BitOSColors.textSecondary,
+                            modifier = Modifier.align(Alignment.End),
+                        )
+                    }
+                }
 
-            if (derivedTags.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-                    derivedTags.take(6).forEach { tag ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = BitOSColors.primaryContainer,
-                        ) {
-                            Text(
-                                "#$tag",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = BitOSColors.primary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                // ── Tags (nostr t-tags) ──────────────────────────────────
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BitOSColors.surface)
+                        .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                        .padding(BitOSSpacing.base),
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                ) {
+                    Text("Tags · nostr t-tags", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
+                    if (tags.isEmpty()) {
+                        Text("No tags yet — type below", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textTertiary)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            tags.take(4).forEach { tag ->
+                                AssistChip(
+                                    onClick = { tags = tags - tag },
+                                    label = { Text("#$tag", style = MaterialTheme.typography.labelSmall) },
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        Icon(AppIcons.Hash, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(14.dp))
+                        space.bitos.app.ui.components.BitosPlainTextField(
+                            value = tagInput,
+                            onValueChange = { tagInput = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = BitOSColors.textPrimary),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commitTag() }),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp),
+                            placeholder = "Add tag and press space",
+                        )
+                    }
+                }
+
+                // ── Settings rows ────────────────────────────────────────
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BitOSColors.surface)
+                        .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                        .padding(BitOSSpacing.sm),
+                ) {
+                    if (state.project.mode == MemeMode.VIDEO) {
+                        DetailSettingsRow(
+                            icon = AppIcons.Photo,
+                            title = "Cover image",
+                            subtitle = if (coverSet) "custom frame captured" else "first frame (capture on the editor stage)",
+                        )
+                        HorizontalDivider(color = BitOSColors.border)
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = BitOSSpacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DetailSettingsRow(
+                            icon = AppIcons.Globe,
+                            title = "Who can watch",
+                            subtitle = "Published publicly on Nostr",
+                            trailing = "Everyone",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    HorizontalDivider(color = BitOSColors.border)
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DetailSettingsRow(
+                            icon = AppIcons.Lock,
+                            title = "Content warning",
+                            subtitle = "gate the post behind a visible warning",
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(checked = cwOn, onCheckedChange = { cwOn = it })
+                    }
+                    if (cwOn) {
+                        space.bitos.app.ui.components.BitosTextField(
+                            value = cwReason,
+                            onValueChange = { cwReason = it },
+                            placeholder = "Warning reason",
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.xs),
+                        )
+                    }
+                    HorizontalDivider(color = BitOSColors.border)
+                    Column(Modifier.padding(vertical = BitOSSpacing.sm), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        Text("Remix source (optional)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+                        space.bitos.app.ui.components.BitosTextField(
+                            value = remixOf,
+                            onValueChange = { remixOf = it },
+                            placeholder = "note1 / event id",
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (remixOf.isNotEmpty()) {
+                            space.bitos.app.ui.components.BitosTextField(
+                                value = remixAuthor,
+                                onValueChange = { remixAuthor = it },
+                                placeholder = "Source author npub/hex (p-tag)",
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                     }
+                    HorizontalDivider(color = BitOSColors.border)
+                    space.bitos.app.ui.components.BitosTextField(
+                        value = altText,
+                        onValueChange = { altText = it },
+                        placeholder = "Alt text (defaults to the caption)",
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                    )
                 }
-            }
 
-            OutlinedTextField(
-                value = altText,
-                onValueChange = { if (it.length <= 200) altText = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Alt text") },
-                supportingText = {
-                    Text("Screen readers read this; defaults to the caption", color = BitOSColors.textTertiary)
-                },
-                singleLine = true,
-            )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Content warning", style = MaterialTheme.typography.bodyMedium)
+                // ── License ──────────────────────────────────────────────
+                Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    Text("License · imeta license tag", style = MaterialTheme.typography.labelMedium, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        listOf(
+                            "CC0-1.0" to "CC0 (public)",
+                            "CC-BY-4.0" to "CC-BY",
+                            "bitz/all-reserved" to "Nostr only",
+                        ).forEach { (value, label) ->
+                            FilterChip(
+                                selected = license == value,
+                                onClick = { license = value },
+                                label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                            )
+                        }
+                    }
                     Text(
-                        "Gate the meme behind a visible warning",
+                        when (license) {
+                            "CC-BY-4.0" -> "CC-BY — reuse allowed with attribution. The remix chain keeps your npub attached."
+                            "bitz/all-reserved" -> "Nostr only — relays may mirror, but the license tag asks apps to block external reuploads."
+                            else -> "CC0 — anyone can remix, reuse and commercialize. Maximum spread, maximum remixes."
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = BitOSColors.textTertiary,
+                        color = BitOSColors.textSecondary,
                     )
                 }
-                Switch(checked = contentWarningOn, onCheckedChange = { contentWarningOn = it })
-            }
-            if (contentWarningOn) {
-                OutlinedTextField(
-                    value = contentWarningReason,
-                    onValueChange = { if (it.length <= 120) contentWarningReason = it },
+
+                Button(
+                    onClick = { step = 1 },
+                    colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Warning reason") },
-                    singleLine = true,
-                )
-            }
-
-            when {
-                publishState?.failure != null -> Text(
-                    publishState.failure!!,
-                    color = BitOSColors.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-
-                published -> Text(
-                    "Published ✓ — nothing was signed before the upload verified",
-                    color = BitOSColors.success,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            // Remix lineage (MST-042): optional source event → tags.
-            OutlinedTextField(
-                value = remixOf,
-                onValueChange = { if (it.length <= 256) remixOf = it.trim() },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Remix of (optional)") },
-                supportingText = { Text("Paste the source note1/nevent1/event id") },
-                singleLine = true,
-            )
-            if (remixOf.isNotBlank()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
                 ) {
-                    Surface(shape = RoundedCornerShape(50), color = BitOSColors.primaryContainer) {
+                    Text("Review preflight", fontWeight = FontWeight.W600)
+                }
+                Spacer(Modifier.height(BitOSSpacing.lg))
+            } else if (step == 1) {
+                // ── Preflight (prototype create-review) ──────────────────
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+                    PostPreviewThumb(
+                        asset = asset,
+                        isVideo = state.project.mode == MemeMode.VIDEO && hasVideo,
+                        isGif = state.project.mode == MemeMode.GIF && gifFrameCount > 0,
+                        timelineSeconds = timelineSeconds,
+                        modifier = Modifier.size(width = 64.dp, height = 96.dp),
+                    )
+                    Column {
                         Text(
-                            "source · ${remixOf.take(10)}…",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = BitOSColors.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
-                    Text("→", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
-                    Surface(shape = RoundedCornerShape(50), color = BitOSColors.primary) {
-                        Text(
-                            "you",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = androidx.compose.ui.graphics.Color.Black,
+                            when {
+                                state.project.mode == MemeMode.VIDEO -> "Video · $timelineSeconds s · $clipCount clip${if (clipCount == 1) "" else "s"}"
+                                state.project.mode == MemeMode.GIF -> "GIF · $gifFrameCount frames"
+                                else -> "Image meme"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.W700,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                        Text(
+                            "imeta dims + sha256 pinned at upload${if (cwOn) " · CW on" else ""}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BitOSColors.textSecondary,
                         )
                     }
                 }
-                OutlinedTextField(
-                    value = remixAuthor,
-                    onValueChange = { if (it.length <= 64) remixAuthor = it.trim() },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Source author (optional)") },
-                    supportingText = { Text("npub/hex — becomes the p-tag") },
-                    singleLine = true,
-                )
-            }
-
-            // Preflight (mockup app-04 scr-review): what will publish.
-            val kindLabel = when (state.project.mode) {
-                MemeMode.IMAGE -> "kind 20 · picture"
-                MemeMode.GIF -> "kind 20 · image/gif"
-                MemeMode.VIDEO -> "kind 22/21 · by orientation"
-            }
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = BitOSColors.surfaceElevated,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-                    PreflightRow(done = caption.isNotBlank(), label = "Caption & tags", meta = kindLabel)
-                    PreflightRow(
-                        done = altText.isNotBlank() || caption.isNotBlank(),
-                        label = "Alt text",
-                        meta = if (altText.isBlank()) "defaults to caption" else "✓",
-                    )
-                    PreflightRow(
-                        done = !contentWarningOn || contentWarningReason.isNotBlank(),
-                        label = "Content warning",
-                        meta = if (contentWarningOn) "gated: $contentWarningReason" else "off",
-                    )
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BitOSColors.surface)
+                        .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                        .padding(BitOSSpacing.sm),
+                ) {
+                    val captionTags = caption.split(' ').count { it.startsWith("#") && it.length > 1 }
+                    PostPreflightRow(true, "Media ready", when {
+                        state.project.mode == MemeMode.VIDEO -> "MP4 · $timelineSeconds s"
+                        state.project.mode == MemeMode.GIF -> "GIF · $gifFrameCount frames"
+                        else -> "PNG render"
+                    })
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(true, "Caption + tags", "${if (caption.isEmpty()) "(none)" else "✓"} · ${captionTags + tags.size} t-tags")
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(altText.isNotEmpty() || caption.isNotEmpty(), "Alt text", if (altText.isEmpty()) "defaults to caption" else "✓ set")
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(!cwOn || cwReason.isNotEmpty(), "Content warning", if (cwOn) "gated: $cwReason" else "off")
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(true, "License", license)
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(true, "Audience", "Everyone · public post")
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(true, "Relays", "${space.bitos.app.data.feed.DefaultRelays.writeUrls.size} write relays · receipt machine")
+                    HorizontalDivider(color = BitOSColors.border)
+                    PostPreflightRow(false, "Signer", "publish fails fast with a hint if no identity is imported")
                 }
-            }
 
-            Text(
-                "Nothing is signed until the rendered meme is uploaded and hash-verified (Blossom).",
-                style = MaterialTheme.typography.labelSmall,
-                color = BitOSColors.textTertiary,
-            )
-        }
+                publishState?.failure?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = BitOSColors.error)
+                }
+                when (phase) {
+                    space.bitos.app.ui.feed.MemePublishPhase.UPLOADING -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp), color = BitOSColors.primary)
+                        Text("Uploading + hash-verifying media…", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                    }
+                    space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp), color = BitOSColors.primary)
+                        Text("Signing + publishing to relays…", style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                    }
+                    space.bitos.app.ui.feed.MemePublishPhase.DONE -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        Icon(AppIcons.CheckCircle, contentDescription = null, tint = BitOSColors.success, modifier = Modifier.size(14.dp))
+                        Text("Published — nothing was signed before the hash check ✓", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.W600, color = BitOSColors.success)
+                    }
+                    else -> {}
+                }
 
-        // ── Single primary action, pinned below the form (scr-pub) ───────
-        Button(
-            onClick = {
-                onPublish(
-                    caption, altText,
-                    if (contentWarningOn) contentWarningReason else null,
-                    remixOf, remixAuthor,
-                )
-            },
-            enabled = canPublish && !busy && !published,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-            shape = RoundedCornerShape(50),
-        ) {
-            if (busy) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(16.dp),
-                    color = BitOSColors.onPrimary,
-                )
-                Spacer(Modifier.width(BitOSSpacing.sm))
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    OutlinedButton(
+                        onClick = { step = 0 },
+                        enabled = !busy && !published,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Edit") }
+                    if (published) {
+                        Button(
+                            onClick = onPublished,
+                            colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Done", fontWeight = FontWeight.W600) }
+                    } else {
+                        Button(
+                            onClick = {
+                                onPublish(
+                                    caption,
+                                    altText,
+                                    if (cwOn) cwReason else null,
+                                    tags,
+                                    license,
+                                    remixOf,
+                                    remixAuthor,
+                                )
+                                step = 2
+                            },
+                            enabled = !busy,
+                            colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Sign & publish", fontWeight = FontWeight.W600)
+                        }
+                    }
+                }
                 Text(
-                    when (phase) {
-                        space.bitos.app.ui.feed.MemePublishPhase.UPLOADING -> "Uploading…"
-                        else -> "Publishing…"
-                    },
+                    "Order is fixed by protocol: media uploads & hash-verifies before anything is signed.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
                 )
+                Spacer(Modifier.height(BitOSSpacing.lg))
+            } else if (step == 2) {
+                // ── Publishing machine (prototype #/publishing) ──────────
+                PublishMachineSection(
+                    onOpenQueue = { step = 3 },
+                    state = publishState ?: space.bitos.app.ui.feed.MemePublishUiState(),
+                    mode = state.project.mode,
+                    timelineSeconds = timelineSeconds,
+                    clipCount = clipCount,
+                    gifFrameCount = gifFrameCount,
+                    onRetry = {
+                        onPublish(
+                            caption,
+                            altText,
+                            if (cwOn) cwReason else null,
+                            tags,
+                            license,
+                            remixOf,
+                            remixAuthor,
+                        )
+                    },
+                    onLater = onDismiss,
+                    onPublished = onPublished,
+                )
+                Spacer(Modifier.height(BitOSSpacing.lg))
             } else {
-                Text(if (published) "Published ✓" else "Sign & publish")
+                // ── Recovery queue (prototype #/queue) ───────────────────
+                RecoveryQueueSection(
+                    jobs = recoverableJobs,
+                    busy = busy,
+                    onRetry = onJobRetry,
+                    onDiscard = onJobDiscard,
+                    onVerify = onJobVerify,
+                )
+                Spacer(Modifier.height(BitOSSpacing.lg))
             }
         }
     }
 }
 
-/** One publish-preflight row (mockup app-04 scr-review checklist). */
+/** Durable publish-job recovery (prototype `#/queue`): stage, the REAL
+ *  integrity check (stored bytes vs the recorded digest), retry-from-media
+ *  and confirmed discard. */
 @Composable
-private fun PreflightRow(done: Boolean, label: String, meta: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun RecoveryQueueSection(
+    jobs: List<space.bitos.app.ui.feed.MemePublishJob>,
+    busy: Boolean,
+    onRetry: (Int) -> Unit,
+    onDiscard: (Int) -> Unit,
+    onVerify: (Int) -> Boolean?,
+) {
+    var verifyNotes by remember { mutableStateOf(mapOf<Int, String>()) }
+    var discardTarget by remember { mutableStateOf<Int?>(null) }
+    val stageNames = listOf(
+        "render & encode", "content hash", "upload to Blossom", "verify hash",
+        "build event", "sign", "publish to relays", "relay confirms",
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+        if (jobs.isEmpty()) {
+            Text(
+                "Nothing to recover — every publish finished or was discarded. Killing the app mid-publish is safe: the attempt lands here and resumes from the stored media.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.textSecondary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BitOSColors.surface)
+                    .padding(BitOSSpacing.base),
+            )
+        }
+        jobs.forEach { job ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BitOSColors.surface)
+                    .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                    .padding(BitOSSpacing.base),
+                verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                    Text(
+                        "job " + job.id,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = BitOSColors.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(BitOSColors.primary.copy(alpha = 0.15f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                    Text(
+                        job.mode.replaceFirstChar { it.uppercase() } + " · " +
+                            (job.caption.ifBlank { "untitled" }.take(40)),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.W600,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    if (job.status == "failed") {
+                        Text("stalled", style = MaterialTheme.typography.labelSmall, color = BitOSColors.error, fontWeight = FontWeight.W700)
+                    }
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(BitOSColors.surface),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(job.stage.coerceIn(0, 8) / 8f)
+                            .clip(RoundedCornerShape(50))
+                            .background(BitOSColors.primary),
+                    )
+                }
+                Text(
+                    "stuck at " + stageNames[job.stage.coerceIn(0, 7)] +
+                        " · retry re-runs from the stored media · idempotent by content hash",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = BitOSColors.textSecondary,
+                )
+                job.lastError?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = BitOSColors.error)
+                }
+                verifyNotes[job.id]?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = { onRetry(job.id) },
+                        enabled = !busy && job.retryAllowed,
+                        colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                    ) { Text("Retry now", fontWeight = FontWeight.W600) }
+                    OutlinedButton(onClick = {
+                        verifyNotes = verifyNotes + (job.id to when (onVerify(job.id)) {
+                            null -> "Media file missing — retry will fail fast; discard the job."
+                            true -> "Hash matches the original render ✓ — safe to resume."
+                            false -> "Hash MISMATCH — the stored media changed; discard the job."
+                        })
+                    }) { Text("Verify integrity") }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { discardTarget = job.id }) {
+                        Icon(AppIcons.Delete, contentDescription = "Discard job " + job.id, tint = BitOSColors.error)
+                    }
+                }
+                if (!job.retryAllowed) {
+                    Text(
+                        "An event was already signed — it may be live; verify on your profile before re-sending.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.warning,
+                    )
+                }
+            }
+        }
+        Text(
+            "Every background job is durable, idempotent and cancellable. Retries re-run from the stored media — the upload dedupes by content hash, and nothing signs before that hash verifies.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+        )
+    }
+
+    discardTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { discardTarget = null },
+            title = { Text("Discard job?") },
+            text = { Text("The stored media and job record are deleted permanently (uploaded media stays on Blossom until its GC).") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDiscard(target)
+                    discardTarget = null
+                }) { Text("Discard", color = BitOSColors.error, fontWeight = FontWeight.W600) }
+            },
+            dismissButton = { TextButton(onClick = { discardTarget = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * Prototype `#/publishing` machine: 8 REAL pipeline stages as a stepper
+ * with a progress bar, the per-attempt job chip, failure recovery
+ * (Retry / Later) and the confirmed-event result. Rows track the stage
+ * checkpoints the pipeline actually reports — never a timer.
+ */
+@Composable
+private fun PublishMachineSection(
+    state: space.bitos.app.ui.feed.MemePublishUiState,
+    mode: MemeMode,
+    timelineSeconds: Int,
+    clipCount: Int,
+    gifFrameCount: Int,
+    onRetry: () -> Unit,
+    onLater: () -> Unit,
+    onPublished: () -> Unit,
+    onOpenQueue: () -> Unit = {},
+) {
+    val order = listOf(
+        space.bitos.app.ui.feed.MemePublishStage.RENDER,
+        space.bitos.app.ui.feed.MemePublishStage.HASH,
+        space.bitos.app.ui.feed.MemePublishStage.UPLOAD,
+        space.bitos.app.ui.feed.MemePublishStage.VERIFY,
+        space.bitos.app.ui.feed.MemePublishStage.BUILD,
+        space.bitos.app.ui.feed.MemePublishStage.SIGN,
+        space.bitos.app.ui.feed.MemePublishStage.RELAY,
+        space.bitos.app.ui.feed.MemePublishStage.CONFIRM,
+    )
+    val busy = state.phase == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
+        state.phase == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
+    val succeeded = state.terminal && state.confirmedRelayHosts.isNotEmpty()
+    val failed = state.failure != null || (state.terminal && !succeeded)
+    val currentIndex = order.indexOf(state.stage).let { if (it < 0) 0 else it }
+    val doneCount = if (succeeded) 8 else currentIndex
+
+    val renderDetail = when (mode) {
+        MemeMode.VIDEO -> "MP4 · $timelineSeconds s · $clipCount clip${if (clipCount == 1) "" else "s"}"
+        MemeMode.GIF -> "GIF · $gifFrameCount frames"
+        MemeMode.IMAGE -> "PNG render"
+    }
+    val kindDetail = when (mode) {
+        MemeMode.VIDEO -> "kind 22/21 · imeta + tags"
+        MemeMode.GIF -> "kind 20 · imeta (image/gif)"
+        MemeMode.IMAGE -> "kind 20 · imeta + tags"
+    }
+    val confirmDetail = if (state.confirmedRelayHosts.isNotEmpty()) {
+        "OK from " + state.confirmedRelayHosts.take(3).joinToString(", ")
+    } else {
+        "${space.bitos.app.data.feed.DefaultRelays.writeUrls.size} write relays · awaiting first OK"
+    }
+    val rows = listOf(
+        "Render & encode" to renderDetail,
+        "Content hash" to "SHA-256 over the rendered bytes",
+        "Upload to Blossom" to "blossom.primal.net · authed PUT",
+        "Verify hash" to "server hash must match the local one",
+        "Build event" to kindDetail,
+        "Sign" to "key never leaves the device",
+        "Publish to relays" to "${space.bitos.app.data.feed.DefaultRelays.writeUrls.size} write relays",
+        "Relay confirms" to confirmDetail,
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when {
+                    succeeded -> "Published"
+                    failed -> "Publish stalled"
+                    else -> "Publishing…"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.W700,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "job ${state.jobId}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = BitOSColors.textSecondary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .border(1.dp, BitOSColors.border, RoundedCornerShape(50))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+
+        // Progress bar (fraction of completed stages).
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(50))
+                .background(BitOSColors.surface),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(doneCount / 8f)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (failed) BitOSColors.error else BitOSColors.primary),
+            )
+        }
+
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(BitOSColors.surface)
+                .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                .padding(BitOSSpacing.sm),
+        ) {
+            rows.forEachIndexed { index, (label, detail) ->
+                val rowDone = succeeded || index < currentIndex
+                val rowCurrent = !succeeded && !failed && index == currentIndex
+                val rowFailed = failed && index == currentIndex
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(22.dp)
+                            .border(
+                                1.5.dp,
+                                when {
+                                    rowCurrent -> BitOSColors.primary
+                                    rowFailed -> BitOSColors.error
+                                    else -> BitOSColors.border
+                                },
+                                CircleShape,
+                            ),
+                    ) {
+                        when {
+                            rowDone -> Icon(
+                                AppIcons.CheckCircle,
+                                contentDescription = null,
+                                tint = BitOSColors.success,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            rowFailed -> Icon(
+                                AppIcons.Close,
+                                contentDescription = null,
+                                tint = BitOSColors.error,
+                                modifier = Modifier.size(11.dp),
+                            )
+                            else -> Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontWeight = if (rowCurrent) FontWeight.W700 else FontWeight.W500,
+                                color = if (rowCurrent) BitOSColors.primary else BitOSColors.textTertiary,
+                            )
+                        }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (rowDone || rowCurrent || rowFailed) BitOSColors.textPrimary else BitOSColors.textSecondary,
+                        )
+                        Text(
+                            if (index == 7) confirmDetail else detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = BitOSColors.textTertiary,
+                        )
+                    }
+                }
+                if (index < rows.lastIndex) {
+                    HorizontalDivider(color = BitOSColors.border, modifier = Modifier.padding(start = 30.dp))
+                }
+            }
+        }
+
+        if (failed) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BitOSColors.error.copy(alpha = 0.1f))
+                    .padding(BitOSSpacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            ) {
+                Icon(AppIcons.Close, contentDescription = null, tint = BitOSColors.error, modifier = Modifier.size(13.dp).align(Alignment.Top))
+                Text(
+                    state.failure ?: "No relay confirmed within the window — the event may still land; retry is safe.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = BitOSColors.error,
+                )
+            }
+            Text(
+                "The job is recoverable — nothing was signed before the hash check, so retrying never double-publishes media.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                OutlinedButton(onClick = onLater, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Later")
+                }
+                Button(
+                    onClick = onRetry,
+                    enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Retry now", fontWeight = FontWeight.W600)
+                }
+            }
+            TextButton(onClick = onOpenQueue, modifier = Modifier.fillMaxWidth()) {
+                Text("Recovery queue", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+            }
+        }
+
+        if (succeeded) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BitOSColors.success.copy(alpha = 0.1f))
+                    .padding(BitOSSpacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            ) {
+                Icon(AppIcons.CheckCircle, contentDescription = null, tint = BitOSColors.success, modifier = Modifier.size(13.dp).align(Alignment.Top))
+                val idLabel = state.eventId?.takeIf { it.length >= 12 }?.let { "event ${it.take(8)}…${it.takeLast(4)} " } ?: ""
+                Text(
+                    "Published — $idLabel${"confirmed on ${state.confirmedRelayHosts.size} relay"}" +
+                        if (state.confirmedRelayHosts.size == 1) "." else "s.",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.W600,
+                    color = BitOSColors.success,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                OutlinedButton(onClick = onOpenQueue, modifier = Modifier.weight(1f)) {
+                    Text("Recovery queue")
+                }
+                Button(
+                    onClick = onPublished,
+                    colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("View on Bitz", fontWeight = FontWeight.W600)
+                }
+            }
+        }
+
+        if (busy) {
+            Text(
+                "Order is fixed by protocol: media uploads & hash-verifies before anything is signed.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+            )
+        }
+    }
+}
+
+/** TagsCodec `[[name,…],…]` JSON: remix lineage + explicit t-tags + license. */
+private fun postExtraTagsJson(remixJson: String, tags: List<String>, license: String): String {
+    val out = org.json.JSONArray()
+    if (remixJson.isNotBlank()) {
+        runCatching {
+            val parsed = org.json.JSONArray(remixJson)
+            for (i in 0 until parsed.length()) out.put(parsed.getJSONArray(i))
+        }
+    }
+    tags.forEach { out.put(org.json.JSONArray().put("t").put(it)) }
+    out.put(org.json.JSONArray().put("license").put(license))
+    return out.toString()
+}
+
+/** Post preview thumbnail per mode. */
+@Composable
+private fun PostPreviewThumb(
+    asset: EditorAsset?,
+    isVideo: Boolean,
+    isGif: Boolean,
+    timelineSeconds: Int,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(BitOSColors.surface)
+            .border(1.dp, BitOSColors.border, RoundedCornerShape(10.dp)),
+    ) {
+        when {
+            isVideo -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(AppIcons.Play, contentDescription = null, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f))
+            }
+            isGif -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("GIF", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700, color = BitOSColors.textSecondary)
+            }
+            asset != null -> AsyncImage(
+                model = asset.uri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        if (isVideo) {
+            Text(
+                "${timelineSeconds}s",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 3.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+/** One settings row (prototype list-row): icon, title + subtitle, value. */
+@Composable
+private fun DetailSettingsRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: androidx.compose.ui.graphics.Color = BitOSColors.textSecondary,
+    title: String,
+    subtitle: String,
+    trailing: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
         Icon(
-            if (done) AppIcons.Check else AppIcons.Close,
+            icon,
+            contentDescription = null,
+            tint = iconTint,
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(BitOSColors.background)
+                .padding(6.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+        }
+        if (trailing != null) {
+            Text(trailing, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W600, color = BitOSColors.primary)
+        }
+    }
+}
+
+/** One preflight checklist line: green check / amber alert + mono meta. */
+@Composable
+private fun PostPreflightRow(done: Boolean, label: String, meta: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Icon(
+            if (done) AppIcons.CheckCircle else AppIcons.More,
             contentDescription = null,
             tint = if (done) BitOSColors.success else BitOSColors.warning,
-            modifier = Modifier.size(14.dp),
+            modifier = Modifier.size(15.dp),
         )
-        Spacer(Modifier.width(BitOSSpacing.sm))
-        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        Text(meta, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textTertiary)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            Text(meta, style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textTertiary)
+        }
     }
 }
 
 /** Color-grade picker (MST-043): the 8 web presets, media-only, undoable. */
 @Composable
-private fun LooksSheetContent(active: String, onPick: (String) -> Unit) {
+private fun LooksSheetContent(
+    active: String,
+    onPick: (String) -> Unit,
+    adjust: space.bitos.core.studio.MemeAdjust? = null,
+    onAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit = {},
+) {
     Column(Modifier.padding(BitOSSpacing.base)) {
         Text("Color look", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
         Text(
@@ -2836,7 +4534,187 @@ private fun LooksSheetContent(active: String, onPick: (String) -> Unit) {
                 repeat(4 - rowLooks.size) { Spacer(Modifier.weight(1f)) }
             }
         }
+        // ── Adjust (prototype `create-edit` FX sliders): manual fine-tune
+        // composed over the preset into the same burn-in matrix.
+        HorizontalDivider(
+            color = BitOSColors.border,
+            modifier = Modifier.padding(vertical = BitOSSpacing.sm),
+        )
+        Text("Adjust", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
+        Text(
+            "Fine-tune over the look — burns into the export like the preset.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
+        )
+        val current = adjust ?: space.bitos.core.studio.MemeAdjust()
+        AdjustSliderRow(
+            label = "Brightness",
+            value = current.brightness,
+            range = space.bitos.core.studio.MemeAdjust.MIN_BRIGHTNESS..
+                space.bitos.core.studio.MemeAdjust.MAX_BRIGHTNESS,
+        ) { value ->
+            onAdjust(space.bitos.core.studio.MemeAdjust(value, current.contrast, current.saturation))
+        }
+        AdjustSliderRow(
+            label = "Contrast",
+            value = current.contrast,
+            range = space.bitos.core.studio.MemeAdjust.MIN_CONTRAST..
+                space.bitos.core.studio.MemeAdjust.MAX_CONTRAST,
+        ) { value ->
+            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, value, current.saturation))
+        }
+        AdjustSliderRow(
+            label = "Saturation",
+            value = current.saturation,
+            range = space.bitos.core.studio.MemeAdjust.MIN_SATURATION..
+                space.bitos.core.studio.MemeAdjust.MAX_SATURATION,
+        ) { value ->
+            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, current.contrast, value))
+        }
+        if (!current.isDefault) {
+            TextButton(
+                onClick = { onAdjust(space.bitos.core.studio.MemeAdjust()) },
+                modifier = Modifier.padding(top = BitOSSpacing.xs),
+            ) { Text("Reset adjust", color = BitOSColors.primary) }
+        }
     }
+}
+
+/** One labeled adjust slider with the % readout (prototype FX shape). */
+@Composable
+private fun AdjustSliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W600,
+            modifier = Modifier.width(84.dp),
+        )
+        androidx.compose.material3.Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = range,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "${(value * 100).toInt()}%",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W700,
+            color = BitOSColors.primary,
+            modifier = Modifier.width(42.dp),
+        )
+    }
+}
+
+/**
+ * Classic meme generator (prototype `create-edit` "Meme" hot tool):
+ * TOP/BOTTOM caption pair + font slot, landing at the canonical positions
+ * with the classic heavy-outline look — one undo step for the pair.
+ */
+@Composable
+private fun MemeCaptionSheetContent(
+    enabled: Boolean,
+    onAdd: (top: String, bottom: String, slot: MemeFontSlot) -> Unit,
+) {
+    var top by remember { mutableStateOf("") }
+    var bottom by remember { mutableStateOf("") }
+    var slot by remember { mutableStateOf(MemeFontSlot.IMPACT) }
+    val slots = listOf(
+        MemeFontSlot.IMPACT to "Impact",
+        MemeFontSlot.SERIF to "Comic",
+        MemeFontSlot.SANS to "Modern",
+    )
+    Column(Modifier.padding(BitOSSpacing.base)) {
+        Text("Meme generator", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text(
+            "Classic top/bottom captions. Drag on the stage to fine-tune.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
+        )
+        space.bitos.app.ui.components.BitosTextField(
+            value = top,
+            onValueChange = { top = it },
+            label = { Text("TOP TEXT") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.sm),
+        )
+        space.bitos.app.ui.components.BitosTextField(
+            value = bottom,
+            onValueChange = { bottom = it },
+            label = { Text("BOTTOM TEXT") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.sm),
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            modifier = Modifier.padding(bottom = BitOSSpacing.sm),
+        ) {
+            slots.forEach { (candidate, label) ->
+                FilterChip(
+                    selected = slot == candidate,
+                    onClick = { slot = candidate },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Button(
+            onClick = { onAdd(top, bottom, slot) },
+            enabled = enabled && (top.isNotBlank() || bottom.isNotBlank()),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Add to canvas") }
+    }
+}
+
+/**
+ * Mode-dependent media facts said out loud on the canvas (prototype
+ * `1080×1920 · 9:16` + duration chips).
+ */
+private fun stageMetaChips(
+    project: MemeProject,
+    activeAsset: EditorAsset?,
+    gifFrames: List<android.graphics.Bitmap>,
+    videoClips: List<SessionClip>,
+): List<String> {
+    if (project.mode == MemeMode.VIDEO) {
+        if (videoClips.isEmpty()) return emptyList()
+        val rate = maxOf(0.01f, project.speed)
+        val totalMs = videoClips.sumOf { maxOf(0L, it.endMs - it.startMs) } / rate
+        val seconds = (totalMs / 1000L).toInt()
+        val clips = if (videoClips.size == 1) "clip" else "clips"
+        return listOf(
+            String.format(java.util.Locale.US, "%02d:%02d · %d %s", seconds / 60, seconds % 60, videoClips.size, clips),
+        )
+    }
+    if (project.mode == MemeMode.GIF) {
+        if (gifFrames.isEmpty()) return emptyList()
+        val delay = if (project.frameDelayMs > 0) "${project.frameDelayMs} ms" else "source delay"
+        return listOf("${gifFrames.size} frames · $delay")
+    }
+    val asset = activeAsset ?: return emptyList()
+    val ratio = ratioLabel(asset.aspect)
+    return listOf(if (asset.width > 0 && asset.height > 0) "${asset.width}×${asset.height} · $ratio" else ratio)
+}
+
+/** Canonical ratio label with tolerance; exotic shapes fall to n:1. */
+private fun ratioLabel(aspect: Float): String {
+    val canonical = listOf(
+        "9:16" to 9f / 16f, "3:4" to 3f / 4f, "1:1" to 1f, "4:5" to 4f / 5f,
+        "4:3" to 4f / 3f, "16:9" to 16f / 9f,
+    )
+    canonical.firstOrNull { kotlin.math.abs(aspect - it.second) < 0.02f }
+        ?.let { return it.first }
+    return String.format(java.util.Locale.US, "%.2f:1", aspect)
 }
 
 /** One-shot synth preview (MST-041): shared-rendered PCM → AudioTrack. */
@@ -3145,8 +5023,7 @@ private fun VolumeSheetContent(
     Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
         Text("Volume", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
         Text(
-            "$clipLabel · mute is exact; fractional gain previews on stage " +
-                "(exact fractional export lands with the sound wave)",
+            "$clipLabel · volume applies to preview and export",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )
@@ -3162,12 +5039,12 @@ private fun VolumeSheetContent(
             )
         }
         Slider(
-            value = value.coerceIn(0f, 2f),
+            value = value.coerceIn(0f, 1f),
             onValueChange = { value = it },
-            valueRange = 0f..2f,
+            valueRange = 0f..1f,
         )
         Button(
-            onClick = { onApply(value.coerceIn(0f, 2f)) },
+            onClick = { onApply(value.coerceIn(0f, 1f)) },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(50),
         ) {
@@ -3682,9 +5559,11 @@ private fun ClipImportOverlay(done: Int, total: Int) {
 private fun ExportFullScreen(
     exporting: Boolean,
     status: String?,
+    outcome: ExportOutcome? = null,
     onDone: () -> Unit,
 ) {
-    val succeeded = status?.startsWith("Saved") == true
+    val succeeded = outcome?.let { it is ExportOutcome.Success || it is ExportOutcome.SuccessAdjusted }
+        ?: (status?.startsWith("Saved") == true)
     Box(
         modifier = Modifier
             .fillMaxSize()

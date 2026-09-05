@@ -1765,6 +1765,7 @@ class BusinessCoreBridge {
         durationMs: Long,
         nowSeconds: Long,
         thumbUrl: String? = null,
+        extraTagsJson: String = "",
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(
@@ -1774,7 +1775,8 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
-        return composer.composeMemeVideoNote(authorPubkey, caption, altText, contentWarningReason, portrait, media)
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        return composer.composeMemeVideoNote(authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra)
             ?.idHex
     }
 
@@ -1795,6 +1797,7 @@ class BusinessCoreBridge {
         createdAtSeconds: Long,
         signatureHex: String,
         thumbUrl: String? = null,
+        extraTagsJson: String = "",
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(
@@ -1804,8 +1807,9 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
         val unsigned = composer.composeMemeVideoNote(
-            authorPubkey, caption, altText, contentWarningReason, portrait, media,
+            authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra,
         ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
@@ -1928,6 +1932,34 @@ class BusinessCoreBridge {
     // Corrupt wires → "" (the hub never hard-fails on a bad tap).
 
     /** Fresh batch document (canonical starter project + recipe). */
+    /**
+     * MUX-06: a new batch FROM an editor design — the decoded meme project
+     * becomes the frozen recipe via [MassBatch.designRecipe] (one LONG_TEXT
+     * slot per text overlay). Returns the document JSON, or
+     * `{"error":"…"}` for non-image designs / corrupt wires.
+     */
+    fun massBatchFromDesign(
+        projectJson: String,
+        batchId: String,
+        name: String,
+        nowMs: Long,
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+        val recipe = project?.let { space.bitos.core.studio.MassBatch.designRecipe(it) }
+        if (project == null || recipe == null) {
+            return """{"error":"Image designs with at least one caption — GIF and video stay on the renderer roadmap."}"""
+        }
+        val document = space.bitos.core.studio.MassBatchDocument(
+            batchId = batchId.take(40),
+            name = name.take(80).ifBlank { "Variations" },
+            recipe = recipe,
+            rows = emptyList(),
+            createdAtMs = nowMs,
+            updatedAtMs = nowMs,
+        )
+        return space.bitos.core.studio.MassBatchCodec.encode(document)
+    }
+
     fun massBatchNew(name: String, nowMs: Long): String {
         val document = space.bitos.core.studio.MassBatchDocument(
             batchId = "mb-" + nowMs.toString(36),
@@ -2175,6 +2207,37 @@ class BusinessCoreBridge {
     }
 
     /** CSV import: `{"doc":…,"notes":[…]}`; junk CSV → notes-only result. */
+    /**
+     * MUX-07 dry-run CSV analysis: headers, auto-mapping, missing required
+     * slots, unknown columns, row count vs the operational cap, sample
+     * rows. Import NOTHING — the UI confirms before calling
+     * [massBatchImportCsv]. Corrupt doc → `{"error":…}`.
+     */
+    fun massBatchCsvPreview(docJson: String, csv: String): String {
+        val doc = space.bitos.core.studio.MassBatchCodec.decode(docJson)
+            ?: return """{"error":"Batch unreadable — reopen it and try again."}"""
+        val preview = space.bitos.core.studio.MassBatchRules.csvPreview(csv, doc.recipe)
+        return kotlinx.serialization.json.buildJsonObject {
+            put("headers", kotlinx.serialization.json.buildJsonArray { preview.headers.forEach { add(it) } })
+            put("mapping", kotlinx.serialization.json.buildJsonArray {
+                preview.mapping.forEach { slotId ->
+                    if (slotId == null) add(null) else add(slotId)
+                }
+            })
+            put("missingRequired", kotlinx.serialization.json.buildJsonArray { preview.missingRequired.forEach { add(it) } })
+            put("unknownColumns", kotlinx.serialization.json.buildJsonArray { preview.unknownColumns.forEach { add(it) } })
+            put("dataRows", preview.dataRows)
+            put("overCap", preview.overCap)
+            put("cap", preview.cap)
+            put("sample", kotlinx.serialization.json.buildJsonArray {
+                preview.sample.forEach { row ->
+                    add(kotlinx.serialization.json.buildJsonArray { row.forEach { cell -> add(cell) } })
+                }
+            })
+            put("notes", kotlinx.serialization.json.buildJsonArray { preview.notes.forEach { add(it) } })
+        }.toString()
+    }
+
     fun massBatchImportCsv(docJson: String, csv: String): String {
         val document = space.bitos.core.studio.MassBatchCodec.decode(docJson) ?: return ""
         val imported = space.bitos.core.studio.MassBatchRules.importCsv(csv, document.recipe)
@@ -2321,6 +2384,26 @@ class BusinessCoreBridge {
         val look = space.bitos.core.studio.MemeLooks.lookOf(lookId)
         put("matrix", buildJsonArray {
             space.bitos.core.studio.MemeLooks.matrix(look).forEach { value -> add(value) }
+        })
+        put("blur", look.blurPx)
+    }.toString()
+
+    /**
+     * Look preset + manual adjust (prototype FX sliders) composed into ONE
+     * 4×5 matrix — same envelope as [memeLookMatrix]; defaults (1/1/1)
+     * reduce to the plain look matrix.
+     */
+    fun memeAdjustMatrix(
+        lookId: String?,
+        brightness: Float,
+        contrast: Float,
+        saturation: Float,
+    ): String = buildJsonObject {
+        val look = space.bitos.core.studio.MemeLooks.lookOf(lookId)
+        val adjust = space.bitos.core.studio.MemeAdjust.clamp(brightness, contrast, saturation)
+        put("matrix", buildJsonArray {
+            space.bitos.core.studio.MemeLooks.adjustedMatrixFor(lookId, adjust)
+                .forEach { value -> add(value) }
         })
         put("blur", look.blurPx)
     }.toString()

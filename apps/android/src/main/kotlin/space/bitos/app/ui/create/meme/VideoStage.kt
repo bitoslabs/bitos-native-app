@@ -114,8 +114,12 @@ internal fun VideoStage(
         clips.lastOrNull()?.let { last + clipOutputMs(it) }
     } ?: 0L
 
+    val colorMatrix = remember { java.util.concurrent.atomic.AtomicReference(MemeVideoColor.glMatrix(
+        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(project.lookId, project.adjust),
+    )) }
     val player = remember(sourceFiles) {
         ExoPlayer.Builder(context).build().apply {
+            setVideoEffects(listOf(androidx.media3.effect.RgbMatrix { _, _ -> colorMatrix.get() }))
             clips.forEachIndexed { index, clip ->
                 addMediaItem(
                     index,
@@ -138,6 +142,23 @@ internal fun VideoStage(
             playWhenReady = true
         }
     }
+    DisposableEffect(player, project.lookId, project.adjust, clips) {
+        fun updateGrade() {
+            val clip = clips.getOrNull(player.currentMediaItemIndex)
+            colorMatrix.set(MemeVideoColor.glMatrix(
+                space.bitos.core.studio.MemeLooks.adjustedMatrixFor(clip?.lookId ?: project.lookId, project.adjust),
+            ))
+        }
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { updateGrade() }
+        }
+        updateGrade()
+        // Re-render the held frame as well, so paused adjustments are immediately visible.
+        player.setVideoEffects(androidx.media3.common.VideoFrameProcessor.REDRAW)
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(player, rate) { player.setPlaybackSpeed(rate) }
     /** Seeks the timeline clock to [timelineMs] (maps to item + position).
      *  Clipped items address positions RELATIVE to their window start. */
     fun seekTimelineTo(timelineMs: Long) {
@@ -184,30 +205,31 @@ internal fun VideoStage(
             onPositionChange(timelineMs.coerceIn(0L, max(1L, timelineDurationMs)))
             playing = player.isPlaying
             // Per-clip audio follows the playhead (mute/volume preview).
-            player.volume = clips.getOrNull(index)?.volume ?: 1f
+            player.volume = (clips.getOrNull(index)?.volume ?: 1f).coerceIn(0f, 1f)
             kotlinx.coroutines.delay(100)
         }
     }
 
     val aspect = clips.first().probe.uprightWidth.toFloat() / clips.first().probe.uprightHeight
     Column {
-        Box(
+        androidx.compose.foundation.layout.BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
+            val fittedWidth = minOf(maxWidth, maxHeight * aspect)
+            val fittedHeight = fittedWidth / aspect
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f)
+                    .size(fittedWidth, fittedHeight)
                     .onSizeChanged(onStageSized),
             ) {
                 AndroidView(
                     factory = { contextView ->
                         PlayerView(contextView).apply {
                             useController = false
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
                     },
                     // The player is rebuilt whenever the clip list changes

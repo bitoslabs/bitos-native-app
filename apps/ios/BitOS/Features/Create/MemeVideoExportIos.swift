@@ -74,7 +74,7 @@ enum MemeVideoExportIos {
 
     /** 4×5 color-matrix wrapper: Sendable values only, so it can cross
      *  into the CI render handler (CIFilter itself is not Sendable). */
-    private struct MatrixFilter: Sendable {
+    struct MatrixFilter: Sendable {
         let m: [Float]
 
         init(_ m: [Float]) { self.m = m }
@@ -98,7 +98,7 @@ enum MemeVideoExportIos {
                 forKey: "inputAVector"
             )
             filter?.setValue(
-                CIVector(x: CGFloat(m[4]), y: CGFloat(m[9]), z: CGFloat(m[14]), w: CGFloat(m[19])),
+                CIVector(x: CGFloat(m[4] / 255), y: CGFloat(m[9] / 255), z: CGFloat(m[14] / 255), w: CGFloat(m[19] / 255)),
                 forKey: "inputBiasVector"
             )
             let clamped = source.clampedToExtent()
@@ -109,15 +109,24 @@ enum MemeVideoExportIos {
 
     /**
      * Per-clip color grade (M5): renders the clip's source through the
-     * shared 4×5 look matrix (`memeLookMatrix` seam) with a CI-filter
-     * video composition and returns a temp graded file. The graded source
-     * then flows into [composeClips] unchanged. Export-exact — the stage
-     * preview keeps the whole-project look.
+     * shared 4×5 look+adjust matrix (`memeAdjustMatrix` seam) with a
+     * CI-filter video composition and returns a temp graded file. The
+     * graded source then flows into [composeClips] unchanged.
+     * Export-exact — the stage preview keeps the whole-project look.
      */
     static func gradeClip(
-        url: URL, lookId: String, client: any BusinessCoreClient
+        url: URL,
+        lookId: String,
+        adjust: (bri: Float, con: Float, sat: Float)? = nil,
+        client: any BusinessCoreClient
     ) async -> URL? {
-        guard let data = client.memeLookMatrix(lookId).data(using: .utf8),
+        let matrixJson = client.memeAdjustMatrix(
+            lookId,
+            brightness: adjust?.bri ?? 1,
+            contrast: adjust?.con ?? 1,
+            saturation: adjust?.sat ?? 1
+        )
+        guard let data = matrixJson.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = (root["matrix"] as? [NSNumber]), rows.count == 20 else { return nil }
         let m = rows.map(\.floatValue)
@@ -172,6 +181,7 @@ enum MemeVideoExportIos {
         _ clips: [MemeEditorStore.EditorClip],
         rate: Float,
         projectLookId: String? = nil,
+        projectAdjust: (bri: Float, con: Float, sat: Float)? = nil,
         client: (any BusinessCoreClient)? = nil
     ) async throws -> URL {
         guard let first = clips.first else {
@@ -192,9 +202,17 @@ enum MemeVideoExportIos {
         defer { gradedTemps.forEach { try? FileManager.default.removeItem(at: $0) } }
         for clip in clips {
             var sourceURL = clip.url
-            // Per-clip grade: own look, else the project look (export-exact).
-            if let effectiveLook = clip.lookId ?? projectLookId, let client,
-               let graded = await gradeClip(url: clip.url, lookId: effectiveLook, client: client) {
+            // Per-clip grade: own look, else the project look — plus the
+            // project adjust composed over it (export-exact).
+            let effectiveLook = clip.lookId ?? projectLookId
+            let hasAdjust = projectAdjust.map { $0.bri != 1 || $0.con != 1 || $0.sat != 1 } ?? false
+            if (effectiveLook != nil || hasAdjust), let client,
+               let graded = await gradeClip(
+                   url: clip.url,
+                   lookId: effectiveLook ?? "none",
+                   adjust: projectAdjust,
+                   client: client
+               ) {
                 gradedTemps.append(graded)
                 sourceURL = graded
             }
@@ -220,7 +238,7 @@ enum MemeVideoExportIos {
             if clip.volume != 1 {
                 audioParams.setVolume(clip.volume, at: cursor)
             }
-            cursor = CMTimeAdd(cursor, inserted.duration)
+            cursor = CMTimeAdd(cursor, CMTimeMultiplyByFloat64(inserted.duration, multiplier: 1.0 / Double(max(0.01, rate))))
         }
         mix.inputParameters = [audioParams]
         let output = FileManager.default.temporaryDirectory
@@ -662,11 +680,35 @@ struct VideoStageIos: View {
                 audioTrack.scaleTimeRange(inserted, toDuration: scaled)
             }
             audioParams.setVolume(clip.volume, at: cursor)
-            cursor = CMTimeAdd(cursor, inserted.duration)
+            cursor = CMTimeAdd(cursor, CMTimeMultiplyByFloat64(inserted.duration, multiplier: 1.0 / Double(max(0.01, rate))))
         }
         mix.inputParameters = [audioParams]
         _ = first
         return (composition, mix)
+    }
+
+    private var playbackKey: String {
+        "\(rate)|" + clips.map { "\($0.id):\($0.startMs):\($0.endMs):\($0.volume)" }.joined(separator: "|")
+    }
+
+    /// Native video filtering; SwiftUI captions remain above the graded media.
+    private func applyGrade(to item: AVPlayerItem) {
+        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        let projectLook = MemeEditorStore.lookId(ofProject: projectJson)
+        var end = 0.0
+        let grades: [(Double, MemeVideoExportIos.MatrixFilter)] = clips.compactMap { clip in
+            end += Double(max(0, clip.endMs - clip.startMs)) / (1000 * Double(max(0.01, rate)))
+            let json = client.memeAdjustMatrix(clip.lookId ?? projectLook ?? "none",
+                brightness: adjust.bri, contrast: adjust.con, saturation: adjust.sat)
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rows = root["matrix"] as? [NSNumber], rows.count == 20 else { return nil }
+            return (end, MemeVideoExportIos.MatrixFilter(rows.map(\.floatValue)))
+        }
+        item.videoComposition = AVVideoComposition(asset: item.asset) { request in
+            let filter = grades.first { request.compositionTime.seconds < $0.0 }?.1 ?? grades.last?.1
+            request.finish(with: filter?.apply(request.sourceImage) ?? request.sourceImage, context: nil)
+        }
     }
 
     @State private var player: AVPlayer?
@@ -765,10 +807,12 @@ struct VideoStageIos: View {
                 .padding(.horizontal, BitOSTheme.Spacing.md)
             }
         }
-        .onAppear {
+        .task(id: playbackKey) {
+            player?.pause()
             guard let (composition, mix) = buildComposition() else { return }
             let item = AVPlayerItem(asset: composition)
             item.audioMix = mix
+            applyGrade(to: item)
             let avPlayer = AVPlayer(playerItem: item)
             player = avPlayer
             durationSeconds = max(0.01, timelineSeconds)
@@ -785,8 +829,8 @@ struct VideoStageIos: View {
             } playing: { [weak avPlayer] in
                 avPlayer?.timeControlStatus == .playing
             }
-            Task {
-                // Poll the playhead (light; the editor owns the stage).
+            do {
+                // This loop belongs to the view task and ends when the stage disappears.
                 while !Task.isCancelled {
                     if let player {
                         positionSeconds = CMTimeGetSeconds(player.currentTime())
@@ -796,6 +840,9 @@ struct VideoStageIos: View {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
+        }
+        .onChange(of: projectJson) { _, _ in
+            if let item = player?.currentItem { applyGrade(to: item) }
         }
         .onDisappear {
             player?.pause()

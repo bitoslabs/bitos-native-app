@@ -97,15 +97,24 @@ enum MemeGifExportIos {
         ) else {
             throw ExportError(message: "GIF encoder unavailable")
         }
+        // MST-043 + adjust: the media grade burns into every frame the
+        // same way the still rasterizer paints it (identity = fast path,
+        // applyLook returns nil and the raw frame draws).
+        let lookId = MemeEditorStore.lookId(ofProject: projectJson)
+        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        let matrixJson = client.memeAdjustMatrix(
+            lookId, brightness: adjust.bri, contrast: adjust.con, saturation: adjust.sat
+        )
         let size = CGSize(width: width, height: height)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
 
         for stepRow in steps {
             let frame = frameActive(at: stepRow.atSec, frames: frames, delays: delaysMs)
+            let media = MemeRaster.applyLook(frame, matrixJson: matrixJson) ?? frame
             let renderer = UIGraphicsImageRenderer(size: size, format: format)
             let composed = renderer.image { context in
-                frame.draw(in: CGRect(origin: .zero, size: size))
+                media.draw(in: CGRect(origin: .zero, size: size))
                 // Pen ink under the captions on every frame.
                 MemeRaster.paintStrokes(
                     envelope["strokes"] as? [[String: Any]] ?? [],

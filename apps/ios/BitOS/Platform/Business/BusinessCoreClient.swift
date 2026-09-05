@@ -241,12 +241,19 @@ protocol BusinessCoreClient: Sendable {
     // drives the batch document through four JSON seams; corrupt wires
     // decode to "" — never throws.
     /// Fresh batch document (canonical starter project + recipe).
+    /// MUX-06: a new batch FROM an editor design (frozen `{t:<id>}`
+    /// placeholder project). `{"error":…}` when the design is ineligible.
+    func massBatchFromDesign(_ projectJson: String, batchId: String, name: String, nowMs: Int64) -> String
+
     func massBatchNew(_ name: String, nowMs: Int64) -> String
     /// One mutation op on the batch wire (addRow/setValue/approve/…).
     func massBatchOp(_ docJson: String, opJson: String) -> String
     /// Full render plan: per-row severity/notes/approval/publish + counts.
     func massBatchPlan(_ docJson: String, readableJson: String) -> String
     /// CSV import: `{"doc":…,"notes":[…]}`.
+    /// MUX-07 dry-run CSV analysis (headers/mapping/gaps/cap/sample).
+    func massBatchCsvPreview(_ docJson: String, csv: String) -> String
+
     func massBatchImportCsv(_ docJson: String, csv: String) -> String
 
     // APP-019 looks (plan MST-043, web `look.ts` port).
@@ -254,6 +261,11 @@ protocol BusinessCoreClient: Sendable {
     func memeLooks() -> String
     /// Composed 4×5 matrix (20 floats) + `"blur"` px for a look id.
     func memeLookMatrix(_ lookId: String?) -> String
+    /// Look + manual adjust (prototype FX sliders) composed into one
+    /// 4×5 matrix; defaults (1/1/1) reduce to the plain look matrix.
+    func memeAdjustMatrix(
+        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    ) -> String
 
     // APP-019 video cut policy: long clips are CUT with a message, never
     // rejected (shared MemeVideoCutRules, both apps).
@@ -643,6 +655,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func massBatchNew(_ name: String, nowMs: Int64) -> String {
         bridge.massBatchNew(name: name, nowMs: nowMs)
     }
+    func massBatchFromDesign(_ projectJson: String, batchId: String, name: String, nowMs: Int64) -> String {
+        bridge.massBatchFromDesign(projectJson: projectJson, batchId: batchId, name: name, nowMs: nowMs)
+    }
+
 
     func massBatchOp(_ docJson: String, opJson: String) -> String {
         bridge.massBatchOp(docJson: docJson, opJson: opJson)
@@ -655,6 +671,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func massBatchImportCsv(_ docJson: String, csv: String) -> String {
         bridge.massBatchImportCsv(docJson: docJson, csv: csv)
     }
+    func massBatchCsvPreview(_ docJson: String, csv: String) -> String {
+        bridge.massBatchCsvPreview(docJson: docJson, csv: csv)
+    }
+
 
     func memeLooks() -> String {
         bridge.memeLooks()
@@ -662,6 +682,14 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func memeLookMatrix(_ lookId: String?) -> String {
         bridge.memeLookMatrix(lookId: lookId)
+    }
+
+    func memeAdjustMatrix(
+        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    ) -> String {
+        bridge.memeAdjustMatrix(
+            lookId: lookId, brightness: brightness, contrast: contrast, saturation: saturation
+        )
     }
 
     func memeVideoCutFor(durationMs: Int64) -> String {
@@ -948,6 +976,10 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func massBatchNew(_ name: String, nowMs: Int64) -> String {
         FrameworkBusinessCoreClient().massBatchNew(name, nowMs: nowMs)
     }
+    func massBatchFromDesign(_ projectJson: String, batchId: String, name: String, nowMs: Int64) -> String {
+        FrameworkBusinessCoreClient().massBatchFromDesign(projectJson, batchId: batchId, name: name, nowMs: nowMs)
+    }
+
     func massBatchOp(_ docJson: String, opJson: String) -> String {
         FrameworkBusinessCoreClient().massBatchOp(docJson, opJson: opJson)
     }
@@ -957,9 +989,20 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func massBatchImportCsv(_ docJson: String, csv: String) -> String {
         FrameworkBusinessCoreClient().massBatchImportCsv(docJson, csv: csv)
     }
+    func massBatchCsvPreview(_ docJson: String, csv: String) -> String {
+        FrameworkBusinessCoreClient().massBatchCsvPreview(docJson, csv: csv)
+    }
+
     func memeLooks() -> String { FrameworkBusinessCoreClient().memeLooks() }
     func memeLookMatrix(_ lookId: String?) -> String {
         FrameworkBusinessCoreClient().memeLookMatrix(lookId)
+    }
+    func memeAdjustMatrix(
+        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    ) -> String {
+        FrameworkBusinessCoreClient().memeAdjustMatrix(
+            lookId, brightness: brightness, contrast: contrast, saturation: saturation
+        )
     }
     func memeVideoCutFor(durationMs: Int64) -> String {
         FrameworkBusinessCoreClient().memeVideoCutFor(durationMs: durationMs)

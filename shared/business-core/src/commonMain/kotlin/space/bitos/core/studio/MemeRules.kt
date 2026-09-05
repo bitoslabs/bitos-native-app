@@ -41,6 +41,9 @@ sealed interface MemeCommand {
     /** Source-media color grade (MST-043); `"none"` clears the look. */
     data class SetLook(val lookId: String) : MemeCommand
 
+    /** Manual fine-tune over the look (prototype FX sliders); default clears. */
+    data class SetAdjust(val adjust: MemeAdjust) : MemeCommand
+
     /** Synth SFX cue at media time (MST-041); cap 16, junk ids no-op. */
     data class AddSfxCue(val cue: MemeSfxCue) : MemeCommand
     data class RemoveSfxCue(val id: String) : MemeCommand
@@ -244,34 +247,53 @@ object MemeRules {
         )
 
         is MemeCommand.SetLook -> project.copy(lookId = MemeLooks.normalize(command.lookId))
+
+        is MemeCommand.SetAdjust -> {
+            // Clamped again here (commands are hostile input); default = null
+            // so the wire stays minimal and the matrix fast-path holds.
+            val clamped = MemeAdjust.clamp(
+                command.adjust.brightness,
+                command.adjust.contrast,
+                command.adjust.saturation,
+            )
+            project.copy(adjust = if (clamped.isDefault) null else clamped)
+        }
     }
 
     /**
      * Drag/slider coalescing: two updates to the same overlay merge into
      * one (later fields win, nulls keep the earlier values) — a 300 ms
-     * gesture becomes a single undo step. Null when not coalescable.
+     * gesture becomes a single undo step. Adjust slider bursts merge the
+     * same way. Null when not coalescable.
      */
     fun coalesce(earlier: MemeCommand, later: MemeCommand): MemeCommand? {
-        if (earlier !is MemeCommand.UpdateOverlay || later !is MemeCommand.UpdateOverlay) return null
-        if (earlier.id != later.id) return null
-        return MemeCommand.UpdateOverlay(
-            id = later.id,
-            x = later.x ?: earlier.x,
-            y = later.y ?: earlier.y,
-            scale = later.scale ?: earlier.scale,
-            rotationDeg = later.rotationDeg ?: earlier.rotationDeg,
-            text = later.text ?: earlier.text,
-            font = later.font ?: earlier.font,
-            size = later.size ?: earlier.size,
-            colorIndex = later.colorIndex ?: earlier.colorIndex,
-            outline = later.outline ?: earlier.outline,
-            shadow = later.shadow ?: earlier.shadow,
-            fx = later.fx ?: earlier.fx,
-            clearFx = later.clearFx || earlier.clearFx,
-            startMs = later.startMs ?: earlier.startMs,
-            endMs = later.endMs ?: earlier.endMs,
-            clearEndMs = later.clearEndMs || earlier.clearEndMs,
-        )
+        if (earlier is MemeCommand.UpdateOverlay && later is MemeCommand.UpdateOverlay) {
+            if (earlier.id != later.id) return null
+            return MemeCommand.UpdateOverlay(
+                id = later.id,
+                x = later.x ?: earlier.x,
+                y = later.y ?: earlier.y,
+                scale = later.scale ?: earlier.scale,
+                rotationDeg = later.rotationDeg ?: earlier.rotationDeg,
+                text = later.text ?: earlier.text,
+                font = later.font ?: earlier.font,
+                size = later.size ?: earlier.size,
+                colorIndex = later.colorIndex ?: earlier.colorIndex,
+                outline = later.outline ?: earlier.outline,
+                shadow = later.shadow ?: earlier.shadow,
+                fx = later.fx ?: earlier.fx,
+                clearFx = later.clearFx || earlier.clearFx,
+                startMs = later.startMs ?: earlier.startMs,
+                endMs = later.endMs ?: earlier.endMs,
+                clearEndMs = later.clearEndMs || earlier.clearEndMs,
+            )
+        }
+        // Adjust sliders fire continuously — one drag, one undo step. The
+        // command carries the full triple, so the later state wins as-is.
+        if (earlier is MemeCommand.SetAdjust && later is MemeCommand.SetAdjust) {
+            return later
+        }
+        return null
     }
     private fun updateOverlays(project: MemeProject, command: MemeCommand.UpdateOverlay): MemeProject = project.copy(
             overlays = project.overlays.map { overlay ->

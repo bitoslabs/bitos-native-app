@@ -761,6 +761,78 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun csvPreviewMapsColumnsAndCapsRowsBeforeImport() {
+        // MUX-07: dry-run analysis + the operational cap (UX-14) — imports
+        // over 100 rows refuse with the split instruction, never truncate.
+        val fresh = bridge.massBatchNew("Zap batch", nowMs = 1_700_000_000_000)
+        val header = "name,sats,unmapped column"
+        val rows = (1..101).joinToString("\n") { "user$it,${it}k,ignored" }
+        val previewJson = bridge.massBatchCsvPreview(fresh, header + "\n" + rows)
+        assertTrue(previewJson.contains("\"unknownColumns\":[\"unmapped column\"]"), previewJson)
+        assertTrue(previewJson.contains("\"overCap\":true"), previewJson)
+        assertTrue(previewJson.contains("\"dataRows\":101"), previewJson)
+        assertTrue(previewJson.contains("\"missingRequired\":[\"sats\"]").not() && previewJson.contains("\"missingRequired\":["), previewJson)
+
+        // Import over the cap refuses with the actionable note, imports nothing.
+        val refused = bridge.massBatchImportCsv(fresh, header + "\n" + rows)
+        assertTrue(refused.contains("Split the CSV"), refused)
+
+        // ≤100 rows import unchanged; quoted commas + Unicode survive.
+        val small = "name,sats\n\"Satoshi, Jr.\",1k\nヴィタリク,2k"
+        val imported = bridge.massBatchImportCsv(fresh, small)
+        assertTrue(imported.contains("Satoshi, Jr."), imported)
+        assertTrue(imported.contains("ヴィタリク"), imported)
+
+        // Schema decode keeps 200-row documents readable (no truncation).
+        val big = (1..200).joinToString("\n") { "user$it,${'$'}{it}k" }
+        val imported2 = bridge.massBatchImportCsv(fresh, "name,sats\n$big")
+        // 200 > 100 → refused now; decode compatibility is exercised via a
+        // 200-row wire decoded by MassBatchCodec directly:
+        val doc = space.bitos.core.studio.MassBatchCodec.decode(fresh)!!
+        val bigRows = (1..200).map { space.bitos.core.studio.MassRow(id = "r$it", values = mapOf("name" to "u$it")) }
+        val bigDoc = doc.copy(rows = bigRows)
+        val encoded = space.bitos.core.studio.MassBatchCodec.encode(bigDoc)
+        assertEquals(200, space.bitos.core.studio.MassBatchCodec.decode(encoded)!!.rows.size)
+        assertTrue(imported2.contains("Split the CSV"))
+    }
+
+    @Test
+    fun massBatchFromDesignFreezesAnEditorDesign() {
+        // MUX-06: the editor's current image design becomes a batch recipe —
+        // one LONG_TEXT slot per caption; blank row values drop the caption.
+        val design = """{"v":1,"mode":"image","assets":[{"id":"a1"}],"overlays":[
+               {"id":"o1","kind":"text","text":"wen moon #bitcoin","font":"impact",
+                "size":97,"color":0,"outline":2,"shadow":false,"x":0.31,"y":0.77,
+                "scale":1,"rot":0}]}"""
+        val doc = bridge.massBatchFromDesign(design, "mb-design1", "My variations", 1_700_000_000_000)
+        assertTrue(doc.contains("\"id\":\"mb-design1\""), doc)
+        assertTrue(doc.contains("t:o1"), doc)
+        val decoded = space.bitos.core.studio.MassBatchCodec.decode(doc)
+        assertNotNull(decoded)
+        assertEquals(1, decoded!!.recipe.slots.size)
+        assertEquals(space.bitos.core.studio.MassSlotType.LONG_TEXT, decoded.recipe.slots.first().type)
+        // Slot value substitutes into the variant; blank drops the caption.
+        var working = bridge.massBatchOp(doc, """{"op":"addRow"}""")
+        working = bridge.massBatchOp(working, """{"op":"setValue","row":"r1","slot":"t:o1","value":"wen lambo"}""")
+        val filled = space.bitos.core.studio.MassBatchRules.resolveVariant(
+            decoded.recipe,
+            space.bitos.core.studio.MassBatchCodec.decode(working)!!.rows.first(),
+            1,
+        )
+        assertEquals("wen lambo", filled.project.overlays.first().text)
+        val emptyRow = space.bitos.core.studio.MassRow(id = "r1")
+        val dropped = space.bitos.core.studio.MassBatchRules.resolveVariant(decoded.recipe, emptyRow, 1)
+        assertEquals("", dropped.project.overlays.first().text)
+
+        // Non-image designs and corrupt wires get honest errors, not batches.
+        assertTrue(bridge.massBatchFromDesign(design.replace("\"mode\":\"image\"", "\"mode\":\"gif\""), "x", "n", 1).contains("error"))
+        assertTrue(bridge.massBatchFromDesign("junk", "x", "n", 1).contains("error"))
+        // A caption-less design has nothing to vary.
+        val noCaptions = """{"v":1,"mode":"image","assets":[{"id":"a1"}],"overlays":[]}"""
+        assertTrue(bridge.massBatchFromDesign(noCaptions, "x", "n", 1).contains("error"))
+    }
+
+    @Test
     fun massBatchSeamsDriveTheCreateHubFlow() {
         // New → starter recipe with the canonical placeholder pair.
         val fresh = bridge.massBatchNew("Zap batch", nowMs = 1_700_000_000_000)
@@ -838,6 +910,41 @@ class BusinessCoreBridgeTest {
             extraTagsJson = """[["remix","${"b".repeat(64)}"]]""",
         )
         assertTrue(frame!!.contains("remix"), frame)
+    }
+
+    @Test
+    fun memeVideoSeamAcceptsExtraTagsForTagsAndLicense() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val extra = """[["t","plebchain"],["license","CC0-1.0"]]"""
+        val base = { extraTags: String ->
+            bridge.composeMemeVideoEventId(
+                authorPubkey = author, caption = "clip #bitcoin", altText = "",
+                contentWarningReason = null, portrait = true,
+                url = "https://cdn.example/m.mp4", sha256Hex = "a".repeat(64),
+                mimeType = "video/mp4", sizeBytes = 1000L, width = 1080L, height = 1920L,
+                durationMs = 15_000L, nowSeconds = 100,
+                extraTagsJson = extraTags,
+            )
+        }
+        val plain = base("")
+        val tagged = base(extra)
+        assertNotNull(plain)
+        assertNotNull(tagged)
+        assertNotEquals(plain, tagged, "post-details tags + license change the event id")
+
+        // The signed frame carries them, and the default stays byte-identical
+        // to the pre-extraTags composition (old callers unchanged).
+        val frame = bridge.memeVideoPublishMessage(
+            authorPubkey = author, caption = "clip #bitcoin", altText = "",
+            contentWarningReason = null, portrait = true,
+            url = "https://cdn.example/m.mp4", sha256Hex = "a".repeat(64),
+            mimeType = "video/mp4", sizeBytes = 1000L, width = 1080L, height = 1920L,
+            durationMs = 15_000L, createdAtSeconds = 100, signatureHex = "d".repeat(128),
+            extraTagsJson = extra,
+        )
+        assertTrue(frame!!.contains("[\"t\",\"plebchain\"]"), frame)
+        assertTrue(frame.contains("[\"license\",\"CC0-1.0\"]"), frame)
+        assertTrue(frame.contains("\"kind\":22"), frame)
     }
     @Test
     fun memeLookSeamsExposeCatalogAndMatrix() {

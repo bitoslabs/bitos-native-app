@@ -587,6 +587,61 @@ invert math, chain order, wire round-trip, SetLook through the codec) +
 bridge seam battery. Remaining in wave 2: MST-041 (SFX pack + sound seed)
 and MST-044 (per-overlay fx transforms + timed windows on stage).
 
+**Prototype `#/publishing` machine (2026-09-05, BOTH platforms):** the
+publish flow's third screen runs the 8-stage stepper over REAL pipeline
+checkpoints (uploader hashing→PUT→verify callbacks; note BUILT/SIGNED/
+RELAYED; receipt-machine terminal result feeding confirm + accepted relay
+hosts). Job chip, progress fraction, stalled-stage failure with Retry/
+Later (idempotent), success with event id + confirm count + "View on
+Bitz". iOS store: `publishStep`/`publishJobId`/`publishEventId`; Android
+`MemePublishUiState`: stage/jobId/eventId/confirmedRelayHosts/terminal +
+`markMemeRenderStarted()`. All instrumentation params default no-op.
+
+**Prototype FULL create-flow parity (2026-09-05): editor reskin +
+Post details + Preflight, BOTH platforms.** The editor screen now mirrors
+`#/create-edit` — "Editor" header with draft save, mode pills + undo, quick
+chips with INLINE panels, compact clip timeline (Split/Delete/Mute/Speed/
+Layer on real clip ops), per-mode bottom bar, "Next · post details". The
+publish path mirrors `#/create-details` (caption, ≤8 t-tag pills, cover/
+audience/zap/remix rows, CW, remix source, license chips CC0/CC-BY/
+Nostr-only riding the real `license` tag) and `#/create-review` (live
+checklist + phase stepper over the existing render → upload → verify →
+sign machine; done returns to the feed). Shared: video event seams grew an
+additive `extraTagsJson` (TagsCodec-decoded, default empty = byte-identical
+ids) so t-tags + license ride kind 21/22 too — picture paths already had
+them (`MemePublishScreen` retired for `MemePostFlowScreen`/`MemePostFlowView`).
+Zap-scope/splits/PoW/schedule remain wave-4 (MST-050s) and say so in-UI.
+
+**Prototype `#/create-edit` parity pass (2026-09-05): ADJUST +
+meme generator + canvas meta chips + labeled tools, BOTH platforms.**
+Shared: `MemeAdjust` (bri/con/sat multipliers; prototype slider bounds
+0.4–1.6/0.4–1.6/0–2, NaN→1; default ⇒ field null) composes ON TOP of a
+look preset into the SAME one 4×5 matrix (`MemeLooks.adjustedMatrixFor` —
+pixel order look → brightness → contrast → saturation), rides the wire as
+the additive `"adjust":{"bri","con","sat"}` key (default never serializes),
+and lands as the undoable `SetAdjust` command (`{"op":"adjust"}`) with
+slider-burst coalescing in `MemeRules.coalesce`; bridge seam
+`memeAdjustMatrix(lookId,bri,con,sat)` (defaults byte-equal
+`memeLookMatrix`). `MemeAdjustTest` (8 tests) pins matrix goldens, wire
+round-trip/hostile rows, codec, coalescing and the seam. Native: the ✨
+Looks sheet gains the Adjust section (three labeled % sliders + reset;
+video keeps it project-wide per prototype semantics); burn-in composes
+through Android `MemeRaster`/media3 `RgbMatrix` + stage `ColorFilter`, iOS
+`memeAdjustMatrix` through `MemeRaster`/`gradeClip`/`composeClips` +
+grade-cached stage (single-clip video pass-through now composes when only
+adjust is set); classic **meme generator** (prototype hot "Meme" tool):
+TOP/BOTTOM sheet with Impact/Comic/Modern slot pills → positioned pair
+(y 0.16/0.84, caps, size 64, outline 3) landing as ONE undo step
+(`addMemeCaptions` both states); **canvas meta chips** (image
+`WxH · ratio`, gif `N frames · delay`, video `mm:ss · N clips`) bottom-
+leading on both stages; the quick tool row is now labeled (Meme first,
+icon + caption, scrollable). Fixes riding along: iOS `ToolIconButton`
+double `accessibilityLabel` (every tool read "Save to Photos") and the
+Image mode chip staying lit in video mode; Android picker bounds now
+retain pixel size (meta chip source). iOS seam/store battery:
+`testMemeAdjustSeamAndEditingLoop`; Android: `MemeAdjustTest`-mirroring
+`MemeEditorStateTest` cases (coalesced adjust + caption pair).
+
 **Mockup UX-parity pass (2026-09-02, `app-15` scr-quick + `app-04`
 scr-review):** both editors' selection chrome now matches the Honeycomb
 reference — dashed accent bounds plus orange corner dots with a dark rim,

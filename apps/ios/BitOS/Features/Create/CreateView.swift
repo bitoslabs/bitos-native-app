@@ -137,6 +137,12 @@ struct CreateView: View {
                     slotsRevision += 1
                     templateSeed = nil
                     sharedSeed = nil
+                },
+                onMakeVariations: { projectJson, posterPng in
+                    showMeme = false
+                    let flow = MassBatchFlow()
+                    massFlow = flow
+                    flow.createFromDesign(projectJson: projectJson, posterPng: posterPng)
                 }
             )
         }
@@ -544,6 +550,22 @@ private struct MassBatchFiles {
         return load(id)
     }
 
+    /// MUX-06: a batch FROM an editor design — the frozen placeholder
+    /// project rides the recipe; the rendered poster is the master.
+    func createFromDesign(projectJson: String, posterPng: Data, client: any BusinessCoreClient) -> String? {
+        guard UIImage(data: posterPng) != nil else { return nil }
+        let nowMs = Int64(Date.now.timeIntervalSince1970 * 1000)
+        let batchId = "mb-" + String(nowMs, radix: 36)
+        let docJson = client.massBatchFromDesign(projectJson, batchId: batchId, name: "Variations", nowMs: nowMs)
+        guard !docJson.isEmpty, !docJson.contains("\"error\""),
+              let id = Self.batchId(of: docJson) else { return nil }
+        let dir = batchDir(id)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? posterPng.write(to: dir.appendingPathComponent("asset-master.png"))
+        save(docJson)
+        return load(id)
+    }
+
     func save(_ docJson: String) {
         guard let id = Self.batchId(of: docJson),
               let data = docJson.data(using: .utf8) else { return }
@@ -722,7 +744,7 @@ private final class MassBatchFlow {
     }
 
     let files = MassBatchFiles()
-    private let client = FrameworkBusinessCoreClient()
+    let client = FrameworkBusinessCoreClient()
     private(set) var docJson: String?
     private(set) var plan: Plan?
     var phase: Phase = .pick
@@ -738,6 +760,15 @@ private final class MassBatchFlow {
             open(doc)
         } else {
             message = "That image could not be read — pick a PNG or JPEG."
+        }
+    }
+
+    /// MUX-06 "Make variations": open a batch seeded from this design.
+    func createFromDesign(projectJson: String, posterPng: Data) {
+        if let doc = files.createFromDesign(projectJson: projectJson, posterPng: posterPng, client: client) {
+            open(doc)
+        } else {
+            message = "Image designs with at least one caption — GIF and video stay on the renderer roadmap."
         }
     }
 
@@ -808,6 +839,43 @@ private final class MassBatchFlow {
     func approve(_ rowId: String, _ approve: Bool) {
         op(#"{"op":"approve","row":"\#(rowId)","approve":\#(approve ? "true" : "false")","nowMs":\#(Int64(Date.now.timeIntervalSince1970 * 1000))}"#)
     }
+
+    /// MUX-09 bulk local export: per-row results ("" = saved, else the
+    /// error). Successes are never re-exported; Retry re-runs failures only.
+    var exportResults: [String: String] = [:]
+    var exportingBatch = false
+
+    func exportSelected(_ rowIds: [String]) async {
+        guard let plan, generating == false, exportingBatch == false else { return }
+        exportingBatch = true
+        defer { exportingBatch = false }
+        let client = self.client
+        for row in plan.rows where rowIds.contains(row.id) && row.queueable {
+            if exportResults[row.id] == "" { continue } // saved already — never duplicate
+            guard let id = docJson.flatMap({ MassBatchFiles.batchId(of: $0) }),
+                  let source = sourceImage(batchId: id, row: row) else {
+                exportResults[row.id] = "source unreadable"
+                continue
+            }
+            let projectJson = row.projectJson
+            do {
+                let png = try await Task.detached(priority: .userInitiated) {
+                    try await MemeRaster.renderPngData(asset: source, projectJson: projectJson, client: client)
+                }.value
+                try await MemeRaster.saveToPhotos(png)
+                exportResults[row.id] = ""
+            } catch {
+                exportResults[row.id] = error.localizedDescription
+            }
+        }
+    }
+
+    var exportFailedIds: [String] {
+        exportResults.filter { !$0.value.isEmpty }.map(\.key)
+    }
+
+    /// MUX-08: full-preview target row (nil = closed).
+    var previewingRowId: String?
 
     func approveAll() {
         op(#"{"op":"approveAll","nowMs":\#(Int64(Date.now.timeIntervalSince1970 * 1000)),"readable":\#(readableJson())}"#)
@@ -1072,27 +1140,37 @@ private struct MassPickView: View {
 
             List {
                 let _ = flow.pickRevision
-                ForEach(flow.files.listBatches(), id: \.id) { entry in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.name).font(.subheadline.weight(.semibold))
-                            Text(SlotRow.relativeTime(Int64(entry.updatedAt)))
-                                .font(.caption)
-                                .foregroundStyle(BitOSTheme.textSecondary)
+                let batches = flow.files.listBatches()
+                if batches.isEmpty {
+                    Text("No batches yet — pick a master image above to start your first run.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                ForEach(batches, id: \.id) { entry in
+                    Button {
+                        if let doc = flow.files.load(entry.id) { flow.open(doc) }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.name).font(.subheadline.weight(.semibold))
+                                Text(SlotRow.relativeTime(Int64(entry.updatedAt)))
+                                    .font(.caption)
+                                    .foregroundStyle(BitOSTheme.textSecondary)
+                            }
+                            Spacer()
+                            Text("Open")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(BitOSTheme.accent)
                         }
-                        Spacer()
-                        Button("Open") {
-                            if let doc = flow.files.load(entry.id) { flow.open(doc) }
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(BitOSTheme.accent)
-                        Button {
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open batch \(entry.name)")
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
                             flow.deleteBatch(entry.id)
                         } label: {
-                            Image(systemName: "xmark")
-                                .foregroundStyle(BitOSTheme.textSecondary)
+                            Label("Delete", systemImage: "trash")
                         }
-                        .accessibilityLabel("Delete batch")
                     }
                 }
             }
@@ -1104,10 +1182,34 @@ private struct MassPickView: View {
 
 /// Setup (scr-batch): recipe fields, typed slot rows, CSV import,
 /// validity chips, generate-previews action.
+private extension MassSetupView {
+    /// Human summary of the dry-run CSV analysis (MUX-07).
+    static func csvPreviewMessage(
+        _ pending: (text: String, rows: Int, unknown: [String], missing: [String], overCap: Bool)
+    ) -> String {
+        if pending.overCap {
+            return "\(pending.rows) rows found — the cap is 100 per import. Split the CSV and import in parts."
+        }
+        var lines: [String] = []
+        if !pending.missing.isEmpty {
+            lines.append("Missing required columns: \(pending.missing.joined(separator: ", ")) — those rows stay blocked until fixed.")
+        }
+        if !pending.unknown.isEmpty {
+            lines.append("Ignored (no matching field): \(pending.unknown.joined(separator: ", ")).")
+        }
+        if lines.isEmpty {
+            lines.append("Every column maps to a field. Nothing changes until you confirm.")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 private struct MassSetupView: View {
     let flow: MassBatchFlow
     @State private var csvNotes = ""
     @State private var showCsvImporter = false
+    /** MUX-07: analyzed import awaiting confirmation. */
+    @State private var csvPending: (text: String, rows: Int, unknown: [String], missing: [String], overCap: Bool)?
     @State private var assetTarget: (row: String, slot: String)?
     @State private var assetItem: PhotosPickerItem?
     @State private var namingDraft = ""
@@ -1138,11 +1240,11 @@ private struct MassSetupView: View {
 
             List {
                 Section {
-                    TextField("File naming", text: $namingDraft)
+                    TextField("e.g. meme-{i}.png", text: $namingDraft)
                         .onSubmit { flow.editRecipe(naming: namingDraft) }
-                    TextField("Caption template", text: $captionDraft)
+                    TextField("e.g. gm {name} — {sats} sats", text: $captionDraft)
                         .onSubmit { flow.editRecipe(caption: captionDraft) }
-                    Text("{i} = row order · {name}/{sats} slots")
+                    Text("Placeholders: {i} row order · {name} · {sats} — every row renders one variant. Edits apply when you tap Generate (or press return).")
                         .font(.caption2)
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
@@ -1190,6 +1292,8 @@ private struct MassSetupView: View {
                     }
                 }
                 Button {
+                    flow.editRecipe(naming: namingDraft)
+                    flow.editRecipe(caption: captionDraft)
                     Task { await flow.generatePreviews() }
                 } label: {
                     HStack {
@@ -1211,12 +1315,43 @@ private struct MassSetupView: View {
             isPresented: $showCsvImporter,
             allowedContentTypes: [UTType(filenameExtension: "csv") ?? .plainText, .plainText]
         ) { result in
-            if case .success(let url) = result, let text = try? String(contentsOf: url, encoding: .utf8) {
-                flow.importCsv(text)
-                csvNotes = flow.message ?? ""
+            if case .success(let url) = result, let text = try? String(contentsOf: url, encoding: .utf8),
+               let doc = flow.docJson,
+               let data = flow.client.massBatchCsvPreview(doc, csv: text).data(using: .utf8),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // MUX-07: dry-run analysis first — nothing imports until confirmed.
+                csvPending = (
+                    text,
+                    (root["dataRows"] as? NSNumber)?.intValue ?? 0,
+                    (root["unknownColumns"] as? [String]) ?? [],
+                    (root["missingRequired"] as? [String]) ?? [],
+                    (root["overCap"] as? Bool) ?? false
+                )
+            } else if case .success(let url) = result, let text = try? String(contentsOf: url, encoding: .utf8) {
+                csvNotes = "The CSV could not be analyzed — check its encoding and try again."
             }
         }
-        .photosPicker(
+        .confirmationDialog(
+            csvPending?.overCap == true ? "Too many rows" : "Import \(csvPending?.rows ?? 0) rows?",
+            isPresented: Binding(
+                get: { csvPending != nil },
+                set: { if !$0 { csvPending = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pending = csvPending, !pending.overCap {
+                Button("Import \(pending.rows) rows") {
+                    flow.importCsv(pending.text)
+                    csvNotes = flow.message ?? ""
+                    csvPending = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { csvPending = nil }
+        } message: {
+            if let pending = csvPending {
+                Text(Self.csvPreviewMessage(pending))
+            }
+        }        .photosPicker(
             isPresented: Binding(
                 get: { assetTarget != nil && assetItem == nil },
                 set: { if !$0 { assetTarget = nil } }
@@ -1302,6 +1437,8 @@ private struct MassRowEditor: View {
 private struct MassReviewView: View {
     let flow: MassBatchFlow
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: BitOSTheme.Spacing.sm)]
+    @State private var showApproveAll = false
+    @State private var selected: Set<String> = []
 
     var body: some View {
         guard let plan = flow.plan else { return AnyView(EmptyView()) }
@@ -1321,7 +1458,7 @@ private struct MassReviewView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: BitOSTheme.Spacing.sm) {
                     ForEach(plan.rows) { row in
-                        MassVariantTile(row: row, flow: flow)
+                        MassVariantTile(row: row, flow: flow, selected: $selected)
                     }
                 }
                 .padding(.horizontal, BitOSTheme.Spacing.md)
@@ -1333,8 +1470,23 @@ private struct MassReviewView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
+                // MUX-09: export selection is DISTINCT from publish approval.
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    Button(selected.count == plan.ok ? "Deselect all" : "Select all ready") {
+                        selected = selected.count == plan.ok ? [] : Set(plan.rows.filter(\.queueable).map(\.id))
+                    }
+                    .font(.caption)
+                    .disabled(plan.ok == 0)
+                    Text("· \(plan.blocked) blocked excluded")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    Spacer()
+                    Text("\(selected.count) chosen")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                }
                 HStack(spacing: BitOSTheme.Spacing.sm) {
-                    Button("Approve all valid") { flow.approveAll() }
+                    Button("Approve all valid") { showApproveAll = true }
                         .buttonStyle(.bordered)
                     Button("Sign & publish \(approvedCount)") {
                         flow.phase = .publish
@@ -1342,25 +1494,159 @@ private struct MassReviewView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(approvedCount == 0 || flow.publishing)
                 }
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    Button {
+                        Task { await flow.exportSelected(Array(selected)) }
+                    } label: {
+                        HStack {
+                            if flow.exportingBatch { ProgressView() }
+                            Text("Export selected (\(selected.count))")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(BitOSTheme.accent)
+                    .disabled(selected.isEmpty || flow.exportingBatch)
+                    if !flow.exportFailedIds.isEmpty {
+                        Button("Retry failed (\(flow.exportFailedIds.count))") {
+                            Task { await flow.exportSelected(flow.exportFailedIds) }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(flow.exportingBatch)
+                    }
+                }
+                if !flow.exportResults.isEmpty {
+                    let saved = flow.exportResults.values.filter { $0.isEmpty }.count
+                    Text(
+                        saved == flow.exportResults.count
+                            ? "\(saved) saved to Photos ✓"
+                            : "\(saved) saved · \(flow.exportResults.count - saved) need attention"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(saved == flow.exportResults.count ? BitOSTheme.success : BitOSTheme.warning)
+                }
                 Text("Nothing signs until each upload hash-verifies. Approvals bind content hashes — edits invalidate.")
                     .font(.caption2)
                     .foregroundStyle(BitOSTheme.textSecondary)
             }
             .padding(BitOSTheme.Spacing.md)
+        }
+        .sheet(isPresented: Binding(
+            get: { flow.previewingRowId != nil },
+            set: { if !$0 { flow.previewingRowId = nil } }
+        )) {
+            if let rowId = flow.previewingRowId,
+               let row = plan.rows.first(where: { $0.id == rowId }) {
+                MassVariantPreviewView(flow: flow, rows: plan.rows, row: row)
+            }
+        }
+        .confirmationDialog(
+            "Approve \(plan.ok) valid variants?",
+            isPresented: $showApproveAll,
+            titleVisibility: .visible
+        ) {
+            Button("Approve \(plan.ok)") { flow.approveAll() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "\(plan.warn) with warnings included · \(plan.blocked) excluded (blocked) · changed content goes back to unapproved."
+            )
         })
+    }
+}
+
+/// MUX-08 full variant preview: aspect-fit poster, Previous/Next, explicit
+/// approve control and an "Edit this version" jump into setup. Inspecting
+/// never approves.
+private struct MassVariantPreviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    let flow: MassBatchFlow
+    let rows: [MassBatchFlow.RowUi]
+    let row: MassBatchFlow.RowUi
+
+    var body: some View {
+        let poster = flow.docJson.flatMap { MassBatchFiles.batchId(of: $0) }
+            .flatMap { flow.files.posterURL($0, rowId: row.id) }
+            .flatMap { UIImage(contentsOfFile: $0.path) }
+        VStack(spacing: BitOSTheme.Spacing.md) {
+            HStack {
+                Text("Variant #\(row.index)")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            Spacer(minLength: 0)
+            Group {
+                if let poster {
+                    Image(uiImage: poster)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Text(row.blocked ? (row.notes.first ?? "blocked — fix the row in Setup") : "queued — generate previews first")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(BitOSTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md))
+            Spacer(minLength: 0)
+            if !row.notes.isEmpty {
+                Text(row.notes.joined(separator: " · "))
+                    .font(.caption2)
+                    .foregroundStyle(row.blocked ? BitOSTheme.error : BitOSTheme.warning)
+            }
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Button {
+                    if let index = rows.firstIndex(where: { $0.id == row.id }), index > 0 {
+                        flow.previewingRowId = rows[index - 1].id
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(rows.first?.id == row.id)
+                .accessibilityLabel("Previous variant")
+                Button(row.approved ? "Unapprove" : "Approve") {
+                    if !row.blocked { flow.approve(row.id, !row.approved) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(row.approved ? BitOSTheme.error : BitOSTheme.accent)
+                .disabled(row.blocked)
+                Button("Edit this version") {
+                    dismiss()
+                    flow.phase = .setup
+                }
+                .buttonStyle(.bordered)
+                Button {
+                    if let index = rows.firstIndex(where: { $0.id == row.id }),
+                       index + 1 < rows.count {
+                        flow.previewingRowId = rows[index + 1].id
+                    }
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(rows.last?.id == row.id)
+                .accessibilityLabel("Next variant")
+            }
+        }
+        .padding(BitOSTheme.Spacing.md)
+        .background(BitOSTheme.background)
     }
 }
 
 private struct MassVariantTile: View {
     let row: MassBatchFlow.RowUi
     let flow: MassBatchFlow
+    @Binding var selected: Set<String>
 
     var body: some View {
         let poster = flow.docJson.flatMap { MassBatchFiles.batchId(of: $0) }
             .flatMap { flow.files.posterURL($0, rowId: row.id) }
             .flatMap { UIImage(contentsOfFile: $0.path) }
         Button {
-            if !row.blocked { flow.approve(row.id, !row.approved) }
+            // MUX-08: inspecting never approves — the body opens the preview.
+            flow.previewingRowId = row.id
         } label: {
             VStack(spacing: 4) {
                 ZStack {
@@ -1387,6 +1673,22 @@ private struct MassVariantTile: View {
                                 .foregroundStyle(.white)
                                 .clipShape(Capsule())
                             Spacer()
+                            // MUX-09: export selection (distinct from approval).
+                            Button {
+                                if selected.contains(row.id) {
+                                    selected.remove(row.id)
+                                } else if row.queueable {
+                                    selected.insert(row.id)
+                                }
+                            } label: {
+                                Image(systemName: selected.contains(row.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(selected.contains(row.id) ? BitOSTheme.accent : Color.white.opacity(0.85))
+                                    .padding(4)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!row.queueable)
+                            .accessibilityLabel(selected.contains(row.id) ? "Remove variant \(row.index) from export" : "Add variant \(row.index) to export")
                             if row.severity == "warn" {
                                 AppIcons.image(for: AppIcons.warningTriangle)
                                     .font(.system(size: 9, weight: .heavy))
@@ -1415,9 +1717,18 @@ private struct MassVariantTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
 
                 HStack(spacing: 4) {
-                    AppIcons.image(for: row.approved ? AppIcons.checkCircle : "circle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(row.approved ? Color.green : BitOSTheme.textSecondary)
+                    Button {
+                        // Explicit approval control, separate from inspection.
+                        if !row.blocked { flow.approve(row.id, !row.approved) }
+                    } label: {
+                        AppIcons.image(for: row.approved ? AppIcons.checkCircle : "circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(row.approved ? Color.green : BitOSTheme.textSecondary)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(row.blocked)
+                    .accessibilityLabel(row.approved ? "Unapprove variant \(row.index)" : "Approve variant \(row.index)")
                     Text(
                         row.blocked
                             ? (row.notes.first ?? "blocked")

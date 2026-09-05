@@ -149,6 +149,44 @@ final class BusinessCoreClientTests: XCTestCase {
         XCTAssertTrue(store.overlays.isEmpty)
     }
 
+    /// Prototype `create-edit` FX-panel parity: the adjust seam composes
+    /// the look + manual sliders into ONE matrix, and `SetAdjust` lands on
+    /// the wire as an undoable, coalesced step. Mirrors `MemeAdjustTest`.
+    @MainActor
+    func testMemeAdjustSeamAndEditingLoop() {
+        let client = FrameworkBusinessCoreClient()
+        // Defaults reduce to the plain look envelope (byte-identical).
+        XCTAssertEqual(
+            client.memeLookMatrix("vhs"),
+            client.memeAdjustMatrix("vhs", brightness: 1, contrast: 1, saturation: 1)
+        )
+        // A real slider moves the matrix away from the plain look.
+        let composed = client.memeAdjustMatrix("vhs", brightness: 1.5, contrast: 1, saturation: 1)
+        XCTAssertTrue(composed.contains("\"matrix\":"), composed)
+        XCTAssertNotEqual(client.memeLookMatrix("vhs"), composed)
+
+        // Store loop: the triple rides the wire, and a slider burst
+        // collapses to ONE undo step back to the pre-adjust state.
+        let store = MemeEditorStore(client: FixtureBusinessCoreClient())
+        XCTAssertFalse(store.hasAdjust)
+        store.setAdjust(brightness: 1.2, contrast: 1, saturation: 0.5)
+        XCTAssertTrue(store.hasAdjust)
+        XCTAssertTrue(store.projectJson.contains("\"adjust\""), store.projectJson)
+        store.setAdjust(brightness: 1.4, contrast: 1, saturation: 0.5)
+        XCTAssertEqual(1.4, store.adjustBrightness, accuracy: 0.001)
+        store.undo()
+        XCTAssertFalse(store.hasAdjust, "one burst = one step back to pre-adjust")
+
+        // Classic meme captions land as a positioned pair in ONE step.
+        store.addMemeCaptions(top: "when the fee", bottom: "drops", fontSlot: "impact")
+        XCTAssertEqual(2, store.overlays.count)
+        XCTAssertEqual(0.16, store.overlays.first?.y ?? 0, accuracy: 0.001)
+        XCTAssertEqual(0.84, store.overlays.last?.y ?? 0, accuracy: 0.001)
+        XCTAssertEqual("WHEN THE FEE", store.overlays.first?.text)
+        store.undo()
+        XCTAssertTrue(store.overlays.isEmpty, "the pair undoes as one step")
+    }
+
     /// Cold-start account bootstrap (shared `AccountBootstrap` through the
     /// client seam): unresolved heads re-issue while connected and within
     /// budget; grown connectivity opens a new episode.

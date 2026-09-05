@@ -71,7 +71,7 @@ object MemeVideoExport {
      * the stage previews them across the concatenated timeline. The SFX
      * cue mix rides as the usual second sequence.
      */
-    fun exportClips(
+    suspend fun exportClips(
         context: Context,
         clips: List<ClipInput>,
         project: MemeProject,
@@ -120,21 +120,22 @@ object MemeVideoExport {
                     )
                     .build()
                 val builder = EditedMediaItem.Builder(mediaItem)
-                    .setEffects(Effects(emptyList(), buildList {
-                        add(OverlayEffect(listOf(timedOverlay)))
+                    .setEffects(Effects(if (clip.volume > 0f && clip.volume != 1f) listOf(MemeVideoAudio.gain(clip.volume)) else emptyList(), buildList {
                         // Color grade per clip: the clip's own look, else the
-                        // project grade — 4×5 matrix is the shared WYSIWYG one.
-                        space.bitos.core.studio.MemeLooks
-                            .normalize(clip.lookId ?: project.lookId)
-                            ?.let { lookId ->
-                                val matrix = space.bitos.core.studio.MemeLooks.matrixFor(lookId)
-                                add(androidx.media3.effect.RgbMatrix { _, _ -> matrix })
-                            }
+                        // project grade — the manual adjust composes over
+                        // either into the shared WYSIWYG matrix.
+                        val effectiveLook = clip.lookId ?: project.lookId
+                        if (effectiveLook != null || project.adjust != null) {
+                            val matrix = space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                effectiveLook,
+                                project.adjust,
+                            )
+                            add(androidx.media3.effect.RgbMatrix { _, _ -> MemeVideoColor.glMatrix(matrix) })
+                        }
+                        add(OverlayEffect(listOf(timedOverlay)))
                     }))
                 if (clip.volume <= 0f) {
-                    // Mute is exact in export (audio track removed). Fractional
-                    // gain is preview-only until media3 exposes a public audio
-                    // gain hook — never silently half-applied.
+                    // Remove muted audio; fractional gain uses the audio processor above.
                     builder.setRemoveAudio(true)
                 }
                 if (rate != 1f) {
@@ -151,7 +152,6 @@ object MemeVideoExport {
 
             val output = File(context.cacheDir, "meme-video-out-${System.currentTimeMillis()}.mp4")
             files += output
-            val transformer = Transformer.Builder(context).build()
             val sfxFile = sfxPcm16?.let { pcm ->
                 File(context.cacheDir, "meme-sfx-${System.currentTimeMillis()}.wav").also { wav ->
                     runCatching { wav.writeBytes(space.bitos.core.studio.SfxSynth.wav(pcm)) }
@@ -170,17 +170,9 @@ object MemeVideoExport {
             } else {
                 androidx.media3.transformer.Composition.Builder(videoSequence).build()
             }
-            transformer.start(composition, output.absolutePath)
-            val deadline = System.currentTimeMillis() + 120_000 * clips.size.coerceAtMost(4)
-            while (output.length() == 0L && System.currentTimeMillis() < deadline) {
-                Thread.sleep(200)
-            }
-            var stableBytes = output.length()
-            Thread.sleep(600)
-            if (output.length() == stableBytes && stableBytes > 0) {
-                return output.readBytes()
-            }
-            throw ExportFailure("Video export did not finish in time")
+            MemeVideoRender.render(context, composition, output.absolutePath, 120_000L * clips.size.coerceAtMost(4))
+            if (output.length() == 0L) throw ExportFailure("Video export produced an empty file")
+            return output.readBytes()
         } finally {
             files.forEach { runCatching { it.delete() } }
         }
@@ -244,7 +236,7 @@ object MemeVideoExport {
      * (video-mode source inserts) — decoded off-thread, bounded by the
      * raster's 1080-long-edge sampler.
      */
-    fun export(
+    suspend fun export(
         context: Context,
         clipBytes: ByteArray,
         probe: Probe,
@@ -322,7 +314,6 @@ object MemeVideoExport {
                     runCatching { writeBytes(space.bitos.core.studio.SfxSynth.wav(pcm)) }
                 }
             }
-            val transformer = Transformer.Builder(context).build()
             val sfxComposition = sfxFile?.takeIf { it.exists() }?.let { wavFile ->
                 val sfxItem = EditedMediaItem.Builder(
                     MediaItem.Builder().setUri(Uri.fromFile(wavFile)).build(),
@@ -332,24 +323,16 @@ object MemeVideoExport {
                     androidx.media3.transformer.EditedMediaItemSequence.Builder(sfxItem).build(),
                 ).build()
             }
-            if (sfxComposition != null) {
-                transformer.start(sfxComposition, output.absolutePath)
-            } else {
-                transformer.start(edited, output.absolutePath)
-            }
-            // Completion poll (the repo's established Transformer pattern
-            // from VideoPreviewScreen; Transformer listeners vary by version).
-            val deadline = System.currentTimeMillis() + 120_000
-            while (output.length() == 0L && System.currentTimeMillis() < deadline) {
-                Thread.sleep(200)
-            }
-            // Give the muxer a beat to close the file, then drain-check.
-            var stableBytes = output.length()
-            Thread.sleep(600)
-            if (output.length() == stableBytes && stableBytes > 0) {
+            val composition = sfxComposition ?: androidx.media3.transformer.Composition.Builder(
+                androidx.media3.transformer.EditedMediaItemSequence.Builder(edited).build(),
+            ).build()
+            try {
+                MemeVideoRender.render(context, composition, output.absolutePath, 120_000L)
+                if (output.length() == 0L) throw ExportFailure("Video export produced an empty file")
                 return output.readBytes()
+            } finally {
+                sfxFile?.delete()
             }
-            throw ExportFailure("Video export did not finish in time")
         } finally {
             runCatching { input.delete() }
             runCatching { output.delete() }

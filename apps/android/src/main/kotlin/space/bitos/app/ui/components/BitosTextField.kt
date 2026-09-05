@@ -38,6 +38,10 @@ fun BitosTextField(
     textStyle: TextStyle = MaterialTheme.typography.bodyMedium,
     /** Compact: tighter h12/v8 padding (~48 dp) for dense forms. */
     compact: Boolean = false,
+    label: (@Composable () -> Unit)? = null,
+    supportingText: (@Composable () -> Unit)? = null,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
 ) {
     OutlinedTextField(
         value = value,
@@ -45,6 +49,10 @@ fun BitosTextField(
         modifier = if (compact) modifier.height(48.dp) else modifier,
         enabled = enabled,
         readOnly = readOnly,
+        label = label,
+        supportingText = supportingText,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         singleLine = singleLine,
         minLines = minLines,
         maxLines = maxLines,
@@ -79,12 +87,18 @@ fun BitosPlainTextField(
     singleLine: Boolean = true,
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
     textStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+    minLines: Int = 1,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier,
         singleLine = singleLine,
+        minLines = minLines,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         maxLines = maxLines,
         textStyle = textStyle,
         placeholder = {

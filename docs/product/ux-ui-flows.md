@@ -381,6 +381,27 @@ Back behavior:
 - leaving during render/upload offers Continue in background or Cancel safely;
 - awaiting signer can be dismissed and resumed from the queue.
 
+Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-details`
+→ `#/create-review` parity): the editor screen follows the prototype layout —
+"Editor" header with draft save, VIDEO/GIF/IMAGE pills + undo, circular quick tools
+(Meme · Text · Stickers · Sound · Effects) opening native BOTTOM SHEETS
+(panel contents per the prototype; sheets are the platform idiom and keep
+the canvas visible above),
+a single compact clip timeline with Split/Delete/Mute/Speed/Layer in video mode
+(clip and layer insertion stays in the expanded Timeline workspace, avoiding a
+second source strip in the basic editor), a
+per-mode bottom bar, and a primary "Next · post details" button. Post details
+collects caption, explicit t-tags (≤ 8), cover/audience/zap/remix toggles,
+content warning and the license chip (CC0 / CC-BY / Nostr-only — rides the
+`license` tag). Its preview/caption row and tag entry use the compact, flat
+prototype treatment; caption input enforces the displayed 300-character limit.
+Preflight shows the real checklist (media, tags, license,
+audience, relays, signer) and runs the existing render → hash-verified upload →
+sign machine with phase feedback. Zap-scope tags, splits, PoW and schedule
+remain wave-4 work (see `docs/native/meme-studio-plan.md`) and stay out of the
+user flow until functional. The video expert dock stays behind the per-mode
+bar's Timeline slot — progressive disclosure per rule 8.
+
 ## 7. Camera UX
 
 - Permission requested from Record, not launch.
@@ -443,6 +464,21 @@ Checking project -> Rendering -> Securing media hash -> Uploading
 - Partial relay success is success with a details/retry action.
 - Hash mismatch is a blocking integrity error, never an automatic retry loop.
 - Relaunch opens the queue card at the exact durable stage.
+
+Native implementation (2026-09-05, prototype `#/publishing` + `#/queue`
+parity): after Preflight's "Sign & publish", a full publish-machine screen
+runs the 8 REAL stages as a stepper — render → hash → upload → verify →
+build → sign → relay → confirm — with a progress bar, per-attempt job chip
+and stage details reporting facts (accepted relay hosts). Transitions fire
+at actual pipeline checkpoints (uploader hashing/PUT/verify; note
+built/signed/relayed; receipt-machine terminal result) — never timers.
+Failure marks the stalled stage with Retry/Later; success shows the event
+id + confirmed relay count. Publish attempts are DURABLE jobs: a bounded
+ledger persists inputs + stage at every checkpoint, and the Recovery queue
+(from the machine's failure/success blocks) offers verify-integrity
+(stored-bytes SHA-256 vs the recorded digest), retry-from-media (upload
+idempotent by hash; refused once an event id exists — that note may
+already be live) and confirmed discard.
 
 ## 10. Remix and Use Sound
 

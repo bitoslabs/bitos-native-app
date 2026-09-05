@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,7 +31,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -257,6 +260,14 @@ fun CreateScreen(
             template = templateSeed,
             videoSeeds = memeSeeds,
             onSlotsChanged = { slotsRevision += 1 },
+            onMakeVariations = { projectJson, posterBytes ->
+                showMeme = false
+                mass = MassBatchUi(massFiles, scope).also { batch ->
+                    if (batch.createFromDesign(projectJson, posterBytes) == null) {
+                        batch.message = "Image designs with at least one caption — GIF and video stay on the renderer roadmap."
+                    }
+                }
+            },
         )
         return
     }
@@ -706,6 +717,24 @@ private class MassBatchFiles(private val root: File) {
 
     fun batchDir(batchId: String): File = File(root, batchId)
 
+    /** MUX-06: a batch FROM an editor design — the frozen `{t:<id>}`
+     *  placeholder project rides the recipe (image designs with ≥1 caption
+     *  only; null otherwise). */
+    fun createFromDesign(projectJson: String, posterBytes: ByteArray, nowMs: Long): MassBatchDocument? {
+        if (!isImage(posterBytes)) return null
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return null
+        val recipe = space.bitos.core.studio.MassBatch.designRecipe(project) ?: return null
+        val document = MassBatchDocument(
+            batchId = "mb-" + nowMs.toString(36),
+            name = "Variations",
+            recipe = recipe,
+            rows = emptyList(),
+            createdAtMs = nowMs,
+            updatedAtMs = nowMs,
+        )
+        return if (!save(document, nowMs)) null else load(document.batchId)
+    }
+
     /** New batch from a master image; null when the bytes are unreadable. */
     fun create(name: String, masterBytes: ByteArray, nowMs: Long): MassBatchDocument? {
         if (!isImage(masterBytes)) return null
@@ -854,6 +883,50 @@ private class MassBatchUi(
     var publishing by mutableStateOf(false)
         private set
     var message by mutableStateOf<String?>(null)
+    /** MUX-09: per-row export results ("" = saved, else error); successes
+     *  are never re-exported, Retry re-runs failures only. */
+    var exportResults by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    var exportingBatch by mutableStateOf(false)
+        private set
+
+    fun exportSelected(rowIds: Set<String>, validations: Map<String, MassBatchRules.RowValidation>, context: android.content.Context) {
+        if (generating || exportingBatch) return
+        val start = document ?: return
+        val targets = start.rows.withIndex().filter { (index, row) ->
+            row.id in rowIds && validations[row.id]?.queueable == true
+        }
+        if (targets.isEmpty()) return
+        exportingBatch = true
+        scope.launch(Dispatchers.IO) {
+            var doc = start
+            targets.forEachIndexed { position, (index, row) ->
+                if (exportResults[row.id].isNullOrEmpty().not() && exportResults[row.id] == "") {
+                    // already saved — never duplicate
+                } else {
+                    val variant = MassBatchRules.resolveVariant(doc.recipe, row, index + 1)
+                    val source = variantSource(doc, variant.assetOverrides)
+                    val bitmap = source?.let { MemeRaster.render(it, variant.project) }
+                    if (bitmap == null) {
+                        exportResults = exportResults + (row.id to "source unreadable")
+                    } else {
+                        val result = runCatching {
+                            MemeRaster.savePng(context, bitmap, variant.name)
+                        }
+                        exportResults = exportResults + (row.id to (result.exceptionOrNull()?.message ?: ""))
+                    }
+                }
+                progress = position + 1 to targets.size
+            }
+            exportingBatch = false
+        }
+    }
+
+    val exportFailedIds: List<String>
+        get() = exportResults.filterValues { it.isNotEmpty() }.keys.toList()
+
+    /** MUX-08: full-preview target row (null = closed). */
+    var previewingRowId by mutableStateOf<String?>(null)
 
     fun open(document: MassBatchDocument) {
         this.document = document
@@ -871,6 +944,10 @@ private class MassBatchUi(
     // Pick-phase operations share the same on-disk store as the open batch.
     fun createBatch(masterBytes: ByteArray): MassBatchDocument? =
         files.create("New batch", masterBytes, System.currentTimeMillis())
+
+    /** MUX-06 "Make variations": freeze the editor design into a batch. */
+    fun createFromDesign(projectJson: String, posterBytes: ByteArray): MassBatchDocument? =
+        files.createFromDesign(projectJson, posterBytes, System.currentTimeMillis())
 
     fun listBatches() = files.listBatches()
 
@@ -1209,8 +1286,24 @@ private fun MassPickBatch(batch: MassBatchUi, onExit: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = BitOSColors.textSecondary,
         )
+        if (batches.isEmpty()) {
+            Text(
+                "No batches yet — pick a master image above to start your first run.",
+                style = MaterialTheme.typography.bodySmall,
+                color = BitOSColors.textSecondary,
+            )
+        }
+        var deleteTarget by remember { mutableStateOf<String?>(null) }
         batches.forEach { entry ->
-            Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surface, modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = BitOSColors.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClickLabel = "Open batch ${entry.name}") {
+                        batch.loadBatch(entry.batchId)?.let(batch::open)
+                    },
+            ) {
                 Row(Modifier.padding(BitOSSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(entry.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.W600)
@@ -1222,17 +1315,30 @@ private fun MassPickBatch(batch: MassBatchUi, onExit: () -> Unit) {
                             color = BitOSColors.textSecondary,
                         )
                     }
-                    TextButton(onClick = {
-                        batch.loadBatch(entry.batchId)?.let(batch::open)
-                    }) { Text("Open", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
-                    IconButton(onClick = {
-                        batch.deleteBatch(entry.batchId)
-                        revision += 1
-                    }) {
-                        Icon(AppIcons.Close, contentDescription = "Delete batch", tint = BitOSColors.textSecondary)
+                    Text("Open", color = BitOSColors.primary, fontWeight = FontWeight.W700, style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.width(BitOSSpacing.sm))
+                    IconButton(onClick = { deleteTarget = entry.batchId }) {
+                        Icon(AppIcons.Close, contentDescription = "Delete batch ${entry.name}", tint = BitOSColors.textSecondary)
                     }
                 }
             }
+        }
+        deleteTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { deleteTarget = null },
+                title = { Text("Delete batch?") },
+                text = { Text("The recipe, rows and rendered posters are deleted permanently.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        batch.deleteBatch(target)
+                        deleteTarget = null
+                        revision += 1
+                    }) { Text("Delete", color = BitOSColors.error, fontWeight = FontWeight.W600) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+                },
+            )
         }
     }
 }
@@ -1240,19 +1346,75 @@ private fun MassPickBatch(batch: MassBatchUi, onExit: () -> Unit) {
 @Composable
 private fun MassSetup(batch: MassBatchUi) {
     val document = batch.document ?: return
+    // Recipe drafts commit on Done / Generate — NOT per keystroke: recipe
+    // edits fork the version once rows exist (product doc §3), so live
+    // commits would fork on every key.
+    var namingDraft by remember(document.recipe.naming) { mutableStateOf(document.recipe.naming) }
+    var captionDraft by remember(document.recipe.caption) { mutableStateOf(document.recipe.caption) }
+    val commitRecipe = {
+        batch.editRecipe(naming = namingDraft.takeIf { it != document.recipe.naming })
+        batch.editRecipe(caption = captionDraft.takeIf { it != document.recipe.caption })
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     val validations = remember(batch.revision) { batch.validations() }
     var csvNotes by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingAsset by remember { mutableStateOf<Pair<String, String>?>(null) }
 
+    // MUX-07: dry-run analysis first — nothing imports until confirmed.
+    var csvPending by remember { mutableStateOf<Pair<String, space.bitos.core.studio.MassBatchRules.CsvPreview>?>(null) }
     val csvPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val text = runCatching {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
             }.getOrNull()
-            if (text != null) batch.importCsv(text) { notes -> csvNotes = notes }
-            else csvNotes = listOf("The file could not be read.")
+            val doc = batch.document
+            if (text != null && doc != null) {
+                csvPending = text to MassBatchRules.csvPreview(text, doc.recipe)
+            } else {
+                csvNotes = listOf("The file could not be read.")
+            }
         }
+    }
+    csvPending?.let { (text, preview) ->
+        AlertDialog(
+            onDismissRequest = { csvPending = null },
+            title = {
+                Text(if (preview.overCap) "Too many rows" else "Import ${preview.dataRows} rows?")
+            },
+            text = {
+                Text(
+                    buildList {
+                        if (preview.overCap) {
+                            add("${preview.dataRows} rows found — the cap is ${preview.cap} per import. Split the CSV and import in parts.")
+                        }
+                        if (preview.missingRequired.isNotEmpty()) {
+                            add("Missing required columns: ${preview.missingRequired.joinToString()} — those rows stay blocked until fixed.")
+                        }
+                        if (preview.unknownColumns.isNotEmpty()) {
+                            add("Ignored (no matching field): ${preview.unknownColumns.joinToString()}.")
+                        }
+                        if (!preview.overCap && preview.missingRequired.isEmpty() && preview.unknownColumns.isEmpty()) {
+                            add("Every column maps to a field. Nothing changes until you confirm.")
+                        }
+                    }.joinToString("\n"),
+                )
+            },
+            confirmButton = {
+                if (!preview.overCap) {
+                    TextButton(onClick = {
+                        batch.importCsv(text) { notes -> csvNotes = notes }
+                        csvPending = null
+                    }) { Text("Import ${preview.dataRows}", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
+                } else {
+                    TextButton(onClick = { csvPending = null }) { Text("OK") }
+                }
+            },
+            dismissButton = {
+                if (!preview.overCap) {
+                    TextButton(onClick = { csvPending = null }) { Text("Cancel") }
+                }
+            },
+        )
     }
     val rowImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val target = pendingAsset
@@ -1307,18 +1469,34 @@ private fun MassSetup(batch: MassBatchUi) {
                 Surface(shape = RoundedCornerShape(16.dp), color = BitOSColors.surface, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
                         OutlinedTextField(
-                            value = document.recipe.naming,
-                            onValueChange = { batch.editRecipe(naming = it) },
+                            value = namingDraft,
+                            onValueChange = { namingDraft = it },
                             label = { Text("File naming") },
-                            supportingText = { Text("{i} = row order · {name}/{sats} slots") },
+                            placeholder = { Text("e.g. meme-{i}.png") },
+                            supportingText = {
+                                Text("{i} row order · {name} · {sats} — applies on Done / Generate")
+                            },
                             singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onDone = { commitRecipe() },
+                            ),
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(
-                            value = document.recipe.caption,
-                            onValueChange = { batch.editRecipe(caption = it) },
+                            value = captionDraft,
+                            onValueChange = { captionDraft = it },
                             label = { Text("Caption template") },
+                            placeholder = { Text("e.g. gm {name} — {sats} sats") },
                             singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onDone = { commitRecipe() },
+                            ),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -1475,7 +1653,10 @@ private fun MassSetup(batch: MassBatchUi) {
                 )
             }
             Button(
-                onClick = { batch.generatePreviews(validations) },
+                onClick = {
+                    commitRecipe()
+                    batch.generatePreviews(validations)
+                },
                 enabled = queueable > 0 && !batch.generating,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -1496,6 +1677,9 @@ private fun MassSetup(batch: MassBatchUi) {
 private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel) {
     val document = batch.document ?: return
     val validations = remember(batch.revision) { batch.validations() }
+    // MUX-09: export selection lives above the grid so tiles can toggle it.
+    var exportSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Column(modifier = Modifier.fillMaxSize().background(BitOSColors.background)) {
         Row(
@@ -1528,9 +1712,10 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = BitOSColors.surface,
-                    modifier = Modifier
-                        .alpha(if (blocked) 0.5f else 1f)
-                        .clickable(enabled = !blocked) { batch.setApproval(row.id, !approved) },
+                    // MUX-08: inspecting never approves — the body opens the
+                    // full preview; approval is the explicit footer control.
+                    onClick = { batch.previewingRowId = row.id },
+                    modifier = Modifier.alpha(if (blocked) 0.5f else 1f),
                 ) {
                     Column {
                         Box(
@@ -1568,6 +1753,25 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                                     )
                                 }
                             }
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(4.dp)
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f))
+                                    .clickable(enabled = validations[row.id]?.queueable == true) {
+                                        exportSelection = if (row.id in exportSelection) exportSelection - row.id else exportSelection + row.id
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (row.id in exportSelection) AppIcons.CheckCircle else AppIcons.Check,
+                                    contentDescription = if (row.id in exportSelection) "Remove variant $index from export" else "Add variant $index to export",
+                                    tint = if (row.id in exportSelection) BitOSColors.primary else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                             if (state?.publish == MassPublishState.PUBLISHED) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -1588,23 +1792,26 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                             Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = when {
-                                    approved -> BitOSColors.success
-                                    blocked -> BitOSColors.error.copy(alpha = 0.3f)
-                                    else -> BitOSColors.surfaceElevated
-                                },
-                                modifier = Modifier.size(20.dp),
-                            ) {
-                                if (approved) {
-                                    Icon(
-                                        AppIcons.Check,
-                                        contentDescription = "Approved",
-                                        tint = Color.Black,
-                                        modifier = Modifier.padding(3.dp),
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        when {
+                                            approved -> BitOSColors.success
+                                            blocked -> BitOSColors.error.copy(alpha = 0.3f)
+                                            else -> BitOSColors.surfaceElevated
+                                        },
                                     )
-                                }
+                                    .clickable(enabled = !blocked) { batch.setApproval(row.id, !approved) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    AppIcons.Check,
+                                    contentDescription = if (approved) "Unapprove variant $index" else "Approve variant $index",
+                                    tint = if (approved) Color.Black else BitOSColors.textTertiary,
+                                    modifier = Modifier.size(16.dp),
+                                )
                             }
                             Spacer(Modifier.width(6.dp))
                             Text(
@@ -1628,15 +1835,40 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                 document.states[it.id]?.publish != MassPublishState.PUBLISHED
         }
         val publishedCount = document.rows.count { document.states[it.id]?.publish == MassPublishState.PUBLISHED }
+        val readyIds = document.rows.filter { validations[it.id]?.queueable == true }.map { it.id }.toSet()
         Column(Modifier.padding(BitOSSpacing.screen), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
             Text(
                 "$approvedCount approved · $publishedCount published · ${batch.counts(validations).third} excluded (blocked)",
                 style = MaterialTheme.typography.labelSmall,
                 color = BitOSColors.textSecondary,
             )
+            // MUX-09: export selection is DISTINCT from publish approval.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        exportSelection = if (exportSelection == readyIds) emptySet() else readyIds
+                    },
+                    enabled = readyIds.isNotEmpty(),
+                ) {
+                    Text(if (exportSelection == readyIds) "Deselect all" else "Select all ready", color = BitOSColors.primary)
+                }
+                Text(
+                    "· ${document.rows.size - readyIds.size} blocked excluded",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${exportSelection.size} chosen",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.W700,
+                    color = BitOSColors.primary,
+                )
+            }
+            var showApproveAll by remember { mutableStateOf(false) }
             Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
                 OutlinedButton(
-                    onClick = { batch.approveAllQueueable(validations) },
+                    onClick = { showApproveAll = true },
                     modifier = Modifier.weight(1f),
                 ) { Text("Approve all valid") }
                 Button(
@@ -1644,12 +1876,123 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                     enabled = approvedCount > 0 && !batch.publishing,
                     modifier = Modifier.weight(1f),
                 ) { Text("Sign & publish $approvedCount") }
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                Button(
+                    onClick = { batch.exportSelected(exportSelection, validations, context) },
+                    enabled = exportSelection.isNotEmpty() && !batch.exportingBatch,
+                    colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (batch.exportingBatch) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp), color = androidx.compose.ui.graphics.Color.White)
+                        Spacer(Modifier.width(BitOSSpacing.xs))
+                    }
+                    Text("Export selected (${exportSelection.size})", fontWeight = FontWeight.W600)
+                }
+                if (batch.exportFailedIds.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = { batch.exportSelected(batch.exportFailedIds.toSet(), validations, context) },
+                        enabled = !batch.exportingBatch,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Retry failed (${batch.exportFailedIds.size})") }
+                }
+            }
+            if (batch.exportResults.isNotEmpty()) {
+                val saved = batch.exportResults.values.count { it.isEmpty() }
+                Text(
+                    if (saved == batch.exportResults.size) "$saved saved to Photos ✓"
+                    else "$saved saved · ${batch.exportResults.size - saved} need attention",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (saved == batch.exportResults.size) BitOSColors.success else BitOSColors.warning,
+                )
+            }
             }
             Text(
                 "Nothing signs until each upload hash-verifies. Approvals bind content hashes — edits invalidate.",
                 style = MaterialTheme.typography.labelSmall,
                 color = BitOSColors.textSecondary,
             )
+
+        val validCount = document.rows.count { validations[it.id]?.queueable == true }
+        val warnCount = document.rows.count { validations[it.id]?.severity == MassBatchRules.Severity.WARN }
+        val blockedCount = document.rows.count { validations[it.id]?.queueable == false }
+        if (showApproveAll) {
+            AlertDialog(
+                onDismissRequest = { showApproveAll = false },
+                title = { Text("Approve $validCount valid variants?") },
+                text = {
+                    Text(
+                        "$warnCount with warnings included · $blockedCount excluded (blocked) · changed content goes back to unapproved.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        batch.approveAllQueueable(validations)
+                        showApproveAll = false
+                    }) { Text("Approve $validCount", color = BitOSColors.primary, fontWeight = FontWeight.W600) }
+                },
+                dismissButton = { TextButton(onClick = { showApproveAll = false }) { Text("Cancel") } },
+            )
+        }
+        batch.previewingRowId?.let { rowId ->
+            val row = document.rows.firstOrNull { it.id == rowId } ?: return@let
+            val index = document.rows.indexOf(row) + 1
+            val poster = batch.posterFile(row.id)
+            val validation = validations[row.id]
+            val blocked = validation?.queueable == false
+            val approved = batch.approvedNow(row.id)
+            AlertDialog(
+                onDismissRequest = { batch.previewingRowId = null },
+                title = { Text("Variant #$index") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                        if (poster != null) {
+                            AsyncImage(
+                                model = poster,
+                                contentDescription = "Variant $index preview",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                            )
+                        } else {
+                            Text(
+                                if (blocked) validation?.notes?.firstOrNull()?.message ?: "blocked — fix the row in Setup"
+                                else "queued — generate previews first",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                        validation?.notes?.forEach { Text("· " + it.message, style = MaterialTheme.typography.labelSmall, color = if (blocked) BitOSColors.error else BitOSColors.warning) }
+                    }
+                },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        TextButton(
+                            onClick = {
+                                val i = document.rows.indexOf(row)
+                                if (i > 0) batch.previewingRowId = document.rows[i - 1].id
+                            },
+                        ) { Text("‹ Prev") }
+                        TextButton(
+                            onClick = { if (!blocked) batch.setApproval(row.id, !approved) },
+                            enabled = !blocked,
+                        ) { Text(if (approved) "Unapprove" else "Approve", color = if (approved) BitOSColors.error else BitOSColors.primary, fontWeight = FontWeight.W600) }
+                        TextButton(
+                            onClick = {
+                                batch.previewingRowId = null
+                                batch.phase = MassBatchUi.Phase.SETUP
+                            },
+                        ) { Text("Edit") }
+                        TextButton(
+                            onClick = {
+                                val i = document.rows.indexOf(row)
+                                if (i + 1 < document.rows.size) batch.previewingRowId = document.rows[i + 1].id
+                            },
+                        ) { Text("Next ›") }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { batch.previewingRowId = null }) { Text("Close") } },
+            )
+        }
         }
     }
 }

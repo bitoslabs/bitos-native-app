@@ -27,6 +27,14 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Gif
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.Crop
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.Loop
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
@@ -45,6 +53,7 @@ import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.ContentCut
@@ -144,8 +153,17 @@ object AppIcons {
     val Undo = Icons.AutoMirrored.Rounded.Undo  // Solar: undo (editor history)
     val Redo = Icons.AutoMirrored.Rounded.Redo  // Solar: undoRight (suite dock)
     val Download = Icons.Rounded.Download       // Solar: save (editor export)
+    val SaveDraft = Icons.Rounded.Save          // editor project draft (distinct from export)
     val Scissors = Icons.Rounded.ContentCut     // V2 suite: Trim tool chip
     val Speed = Icons.Rounded.Speed             // V2 suite: Speed tool chip
+    val Film = Icons.Rounded.Movie              // prototype editor: Split clip tool
+    val Layer = Icons.Rounded.Layers            // prototype editor: Layer clip tool
+    val Loop = Icons.Rounded.Loop               // prototype editor: GIF loop bar slot
+    val Crop = Icons.Rounded.Crop               // prototype editor: Crop bar slot (wave 2)
+    val Ratio = Icons.Rounded.AspectRatio       // prototype editor: Canvas/Ratio bar slot
+    val Looks = Icons.Rounded.Palette           // prototype editor: Filter/Effects bar slot
+    val TextGlyph = Icons.Rounded.TextFields    // prototype editor: Text bar slot
+    val Wallpaper = Icons.Rounded.Wallpaper     // prototype editor: Background bar slot
 
     // ── Media ────────────────────────────────────────────────────────
     val Camera = Icons.Rounded.CameraAlt

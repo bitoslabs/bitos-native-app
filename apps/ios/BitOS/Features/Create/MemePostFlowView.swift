@@ -1,0 +1,1122 @@
+import SwiftUI
+import BusinessCore
+
+/// Prototype publish flow (`#/create-details` → `#/create-review`): the
+/// editor's "Next · post details" lands here; details collect the post
+/// facts, preflight shows the REAL checklist and runs the existing
+/// upload→sign→relay pipeline. Nothing is signed before the media upload
+/// hash-verifies (repo safety rule) — the preflight copy says so.
+struct MemePostFlowView: View {
+    @Environment(\.dismiss) private var dismissFlow
+    @Environment(AppEnvironment.self) private var environment
+    let store: MemeEditorStore
+    let identity: IdentityStore
+    let publisher: NotePublisher
+    let onPublished: () -> Void
+    @State private var draft = MemePostDraft()
+    @State private var path: [FlowStep] = []
+
+    enum FlowStep: Hashable { case preflight, publishing, queue }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            MemePostDetailsView(draft: $draft, store: store) {
+                path.append(.preflight)
+            }
+            .navigationDestination(for: FlowStep.self) { step in
+                switch step {
+                case .preflight:
+                    MemePreflightView(
+                        store: store,
+                        identity: identity,
+                        draft: draft,
+                        onSignAndPublish: {
+                            beginPublish()
+                            path.append(.publishing)
+                        }
+                    )
+                case .publishing:
+                    MemePublishingView(
+                        store: store,
+                        publisher: publisher,
+                        onRetry: { beginPublish() },
+                        onLater: { dismissFlow() },
+                        onPublished: onPublished,
+                        onOpenQueue: { path.append(.queue) }
+                    )
+                case .queue:
+                    MemeRecoveryQueueView(
+                        store: store,
+                        identity: identity,
+                        publisher: publisher,
+                        onRetry: { job in
+                            let bridge = (environment.businessCore as? FrameworkBusinessCoreClient)?
+                                .bridgeForFollowing() ?? BusinessCoreBridge()
+                            store.resumePublish(jobId: job, identity: identity, publisher: publisher, bridge: bridge)
+                            path = [.publishing]
+                        }
+                    )
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismissFlow() }
+                }
+            }
+        }
+        .preferredColorScheme(nil)
+        .navigationBarBackButtonHidden(!path.isEmpty)
+    }
+
+    /// Runs the REAL pipeline (render → hash-verified upload → sign →
+    /// relay); the publishing screen's stepper tracks store.publishStep.
+    private func beginPublish() {
+        publisher.dismiss()
+        let bridge = (environment.businessCore as? FrameworkBusinessCoreClient)?
+            .bridgeForFollowing() ?? BusinessCoreBridge()
+        store.publishActiveAsset(
+            caption: draft.caption,
+            altText: draft.altText,
+            contentWarningReason: draft.contentWarningOn ? draft.contentWarningReason : nil,
+            remixEventId: draft.remixOf,
+            remixAuthor: draft.remixAuthor,
+            extraTags: draft.extraTags,
+            identity: identity,
+            publisher: publisher,
+            bridge: bridge
+        )
+    }
+}
+
+/// The post facts the details screen collects (prototype CreateJob subset
+/// that ships real protocol effects today; splits/PoW/schedule stay wave 4).
+struct MemePostDraft {
+    var caption = ""
+    var altText = ""
+    /// Explicit t-tags (beyond caption #hashtags), ≤ 8, deduped.
+    var tags: [String] = []
+    var audience: MemeAudience = .everyone
+    var allowZaps = true
+    var allowRemix = true
+    var contentWarningOn = false
+    var contentWarningReason = "Sensitive content"
+    /// Shared `license` tag vocabulary (RemixRules.LICENSES).
+    var license: MemeLicense = .cc0
+    /// Optional remix lineage (MST-042): manual source event + author.
+    var remixOf = ""
+    var remixAuthor = ""
+
+    /// Caption #hashtags (the composer already derives these itself).
+    var captionHashtags: Set<String> {
+        var found = Set<String>()
+        for word in caption.split(whereSeparator: { $0.isWhitespace }) where word.hasPrefix("#") {
+            let tag = word.dropFirst().lowercased()
+            if !tag.isEmpty { found.insert(String(tag)) }
+        }
+        return found
+    }
+
+    /// Extra event tags for the publish call: explicit t-tags the caption
+    /// doesn't already carry, plus the license tag.
+    var extraTags: [[String]] {
+        var seen = captionHashtags
+        var tags: [[String]] = []
+        for tag in self.tags where !seen.contains(tag) {
+            seen.insert(tag)
+            tags.append(["t", tag])
+        }
+        tags.append(["license", license.rawValue])
+        return tags
+    }
+}
+
+enum MemeAudience: String, CaseIterable {
+    case everyone, followers, dm
+
+    var label: String {
+        switch self {
+        case .everyone: return "Everyone"
+        case .followers: return "Followers"
+        case .dm: return "You + DMs"
+        }
+    }
+
+    var next: MemeAudience {
+        switch self {
+        case .everyone: return .followers
+        case .followers: return .dm
+        case .dm: return .everyone
+        }
+    }
+}
+
+enum MemeLicense: String, CaseIterable {
+    case cc0 = "CC0-1.0"
+    case ccBy = "CC-BY-4.0"
+    case nostrOnly = "bitz/all-reserved"
+
+    var label: String {
+        switch self {
+        case .cc0: return "CC0 (public)"
+        case .ccBy: return "CC-BY"
+        case .nostrOnly: return "Nostr only"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .cc0:
+            return "CC0 — anyone can remix, reuse and commercialize. Maximum spread, maximum remixes."
+        case .ccBy:
+            return "CC-BY — reuse allowed with attribution. The remix chain keeps your npub attached."
+        case .nostrOnly:
+            return "Nostr only — relays may mirror, but the license tag asks apps to block external reuploads."
+        }
+    }
+}
+
+// MARK: - Post details (prototype `#/create-details`)
+
+private struct MemePostDetailsView: View {
+    @Binding var draft: MemePostDraft
+    let store: MemeEditorStore
+    let onReview: () -> Void
+    @State private var tagInput = ""
+
+    private static let maxTags = 8
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                previewRow
+                tagsCard
+                settingsCard
+                licenseSection
+                Button {
+                    onReview()
+                } label: {
+                    Text("Review preflight")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(BitOSTheme.accent)
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.lg)
+            .padding(.vertical, BitOSTheme.Spacing.md)
+        }
+        .navigationTitle("Post details")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(BitOSTheme.background)
+    }
+
+    // ── Preview + caption ─────────────────────────────────────────────
+
+    private var previewRow: some View {
+        HStack(alignment: .top, spacing: BitOSTheme.Spacing.md) {
+            MemePostPreviewThumb(store: store)
+                .frame(width: 80, height: 112)
+            VStack(alignment: .trailing, spacing: 4) {
+                BitosField("Write a caption… #tag @mention", text: $draft.caption, axis: .vertical)
+                    .lineLimit(4, reservesSpace: true)
+                    .padding(.horizontal, 4)
+                    .overlay(alignment: .bottom) { Divider() }
+                    .onChange(of: draft.caption) { _, value in
+                        if value.count > 300 { draft.caption = String(value.prefix(300)) }
+                    }
+                Text("\(draft.caption.count) / 300")
+                    .font(.caption2)
+                    .foregroundStyle(
+                        draft.caption.count > 300 ? BitOSTheme.warning : BitOSTheme.textSecondary
+                    )
+            }
+        }
+    }
+
+    // ── Tags (nostr t-tags) ───────────────────────────────────────────
+    private var tagsCard: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Tags · nostr t-tags")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if draft.tags.isEmpty {
+                Text("No tags yet — type below")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary.opacity(0.7))
+            } else {
+                FlowTagRow(
+                    tags: draft.tags,
+                    onRemove: { tag in draft.tags.removeAll { $0 == tag } }
+                )
+            }
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                Image(systemName: "number")
+                    .font(.system(size: 13))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                BitosField("Add tag and press space", text: $tagInput)
+                    .font(.subheadline)
+                    .onSubmit(commitTag)
+                    .onChange(of: tagInput) { _, value in
+                        if value.hasSuffix(" ") { commitTag() }
+                    }
+            }
+            .padding(.top, 4)
+            .overlay(alignment: .top) { Divider() }
+        }
+        .padding(BitOSTheme.Spacing.md)
+        .background(BitOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+    }
+
+    private func commitTag() {
+        let tag = tagInput
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "#", with: "")
+            .lowercased()
+        tagInput = ""
+        guard !tag.isEmpty, !draft.tags.contains(tag),
+              draft.tags.count < Self.maxTags else { return }
+        draft.tags.append(tag)
+    }
+
+    // ── Settings rows ─────────────────────────────────────────────────
+
+    private var settingsCard: some View {
+        VStack(spacing: 0) {
+            if store.isVideoMode {
+                DetailRow(
+                    icon: "photo",
+                    title: "Cover image",
+                    subtitle: store.coverThumbUrl != nil
+                        ? "custom frame captured"
+                        : "first frame (capture on the editor stage)"
+                )
+                Divider().padding(.leading, 48)
+            }
+            DetailRow(icon: "globe", title: "Who can watch",
+                subtitle: "Published publicly on Nostr", trailing: .value("Everyone"))
+            Divider().padding(.leading, 48)
+            Toggle(isOn: $draft.contentWarningOn) {
+                DetailRow(
+                    icon: "eye.slash",
+                    title: "Content warning",
+                    subtitle: "gate the post behind a visible warning"
+                )
+            }
+            .padding(.vertical, 2)
+            if draft.contentWarningOn {
+                Divider().padding(.leading, 48)
+                BitosField("Warning reason", text: $draft.contentWarningReason)
+                    .font(.subheadline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(BitOSTheme.background)
+            }
+            Divider().padding(.leading, 48)
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                Text("Remix source (optional)")
+                    .font(.subheadline.weight(.semibold))
+                BitosField("note1 / event id", text: $draft.remixOf)
+                    
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !draft.remixOf.isEmpty {
+                    BitosField("Source author npub/hex (p-tag)", text: $draft.remixAuthor)
+                        
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            .padding(.vertical, 6)
+        }
+        .padding(BitOSTheme.Spacing.sm)
+        .background(BitOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+    }
+
+    // ── License ───────────────────────────────────────────────────────
+
+    private var licenseSection: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("License · imeta license tag")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(MemeLicense.allCases, id: \.rawValue) { license in
+                    Button {
+                        draft.license = license
+                    } label: {
+                        Text(license.label)
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                draft.license == license
+                                    ? BitOSTheme.accent.opacity(0.18)
+                                    : Color.clear
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(
+                                        draft.license == license ? BitOSTheme.accent : BitOSTheme.border
+                                    )
+                            )
+                            .foregroundStyle(
+                                draft.license == license ? BitOSTheme.accent : BitOSTheme.textSecondary
+                            )
+                    }
+                }
+            }
+            Text(draft.license.note)
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Preflight (prototype `#/create-review`)
+
+private struct MemePreflightView: View {
+    @Environment(\.dismiss) private var dismissFlow
+    let store: MemeEditorStore
+    let identity: IdentityStore
+    let draft: MemePostDraft
+    let onSignAndPublish: () -> Void
+
+    private var busy: Bool {
+        store.publishState == .uploading || store.publishState == .publishing
+    }
+
+    /// Kind + media facts for the summary card.
+    private var mediaSummary: String {
+        if store.isVideoMode {
+            return "Video · \(clock(store.timelineDurationMs)) · \(store.clips.count) clip\(store.clips.count == 1 ? "" : "s")"
+        }
+        if store.isGifMode {
+            return "GIF · \(store.gifFramesCount) frames"
+        }
+        return "Image meme"
+    }
+
+    private func clock(_ ms: Int64) -> String {
+        String(format: "%d:%02d", Int(ms / 1000) / 60, Int(ms / 1000) % 60)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                // Summary card: thumb + kind + imeta facts.
+                HStack(spacing: BitOSTheme.Spacing.md) {
+                    MemePostPreviewThumb(store: store)
+                        .frame(width: 64, height: 96)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(mediaSummary)
+                            .font(.subheadline.weight(.bold))
+                        Text("kind \(kindLabel) · imeta dims + sha256 pinned at upload\(draft.contentWarningOn ? " · CW on" : "")")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(BitOSTheme.Spacing.md)
+                .background(BitOSTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+
+                VStack(spacing: 0) {
+                    PreflightLine(done: true, label: "Media ready", meta: mediaSummary)
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: true,
+                        label: "Caption + tags",
+                        meta: "\(draft.caption.isEmpty ? "(none)" : "✓") · \(draft.captionHashtags.count + draft.tags.count) t-tags"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: !draft.altText.isEmpty || !draft.caption.isEmpty,
+                        label: "Alt text",
+                        meta: draft.altText.isEmpty ? "defaults to caption" : "✓ set"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: !draft.contentWarningOn || !draft.contentWarningReason.isEmpty,
+                        label: "Content warning",
+                        meta: draft.contentWarningOn ? "gated: \(draft.contentWarningReason)" : "off"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: true,
+                        label: "License",
+                        meta: "\(draft.license.label) · license tag"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(done: true, label: "Audience", meta: "Everyone · public post")
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: true,
+                        label: "Relays",
+                        meta: "\(DefaultRelays.writeUrls.count) write relays · receipt machine"
+                    )
+                    Divider().padding(.leading, 32)
+                    PreflightLine(
+                        done: identity.account != nil,
+                        label: "Signer",
+                        meta: identity.account != nil ? "device key ready" : "import an identity first (Profile tab)"
+                    )
+                }
+                .padding(BitOSTheme.Spacing.sm)
+                .background(BitOSTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+
+                if let failure = store.publishFailure {
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.error)
+                }
+                switch store.publishState {
+                case .uploading, .publishing:
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(store.publishState == .uploading
+                             ? "Uploading + hash-verifying media…"
+                             : "Signing + publishing to relays…")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                case .done:
+                    HStack(spacing: 6) {
+                        AppIcons.image(for: AppIcons.checkCircle)
+                        Text("Published — nothing was signed before the hash check ✓")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.success)
+                case .idle:
+                    EmptyView()
+                }
+
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    Button {
+                        dismissFlow()
+                    } label: {
+                        Text("Edit")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(busy)
+                    publishButton
+                }
+                Text("Order is fixed by protocol: media uploads & hash-verifies before anything is signed.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .padding(BitOSTheme.Spacing.md)
+        }
+        .navigationTitle("Preflight")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(BitOSTheme.background)
+    }
+
+    private var kindLabel: String {
+        if store.isVideoMode { return "22/21 by orientation" }
+        if store.isGifMode { return "20 · image/gif" }
+        return "20 · picture"
+    }
+
+    private var publishButton: some View {
+        Button {
+            onSignAndPublish()
+        } label: {
+            Text("Sign & publish")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(BitOSTheme.accent)
+        .disabled(busy || identity.account == nil)
+    }
+}
+
+// MARK: - Publishing machine (prototype `#/publishing`)
+
+/// The publish machine: 8 REAL pipeline stages as a stepper with a
+/// progress bar, the per-attempt job chip, failure recovery (Retry /
+/// Later) and the confirmed-event result. Rows track
+/// `store.publishStep` — set at actual checkpoints, never simulated.
+private struct MemePublishingView: View {
+    let store: MemeEditorStore
+    let publisher: NotePublisher
+    let onRetry: () -> Void
+    let onLater: () -> Void
+    let onPublished: () -> Void
+    var onOpenQueue: () -> Void = {}
+
+    private var publisherFailed: Bool {
+        switch publisher.result {
+        case .rejected, .timeout, .signingRefused, .invalid: return true
+        default: return false
+        }
+    }
+
+    private var succeeded: Bool { publisher.result == .published }
+    private var failed: Bool { store.publishFailure != nil || publisherFailed }
+    private var running: Bool {
+        store.publishState == .uploading || store.publishState == .publishing
+    }
+
+    private var currentStep: MemeEditorStore.PublishMachineStep {
+        store.publishStep ?? .confirm
+    }
+
+    private var doneCount: Double {
+        if succeeded { return Double(MemeEditorStore.PublishMachineStep.allCases.count) }
+        return Double(currentStep.rawValue)
+    }
+
+    private func rowState(_ index: Int) -> MemePublishingViewRowState {
+        if succeeded { return .done }
+        let current = currentStep.rawValue
+        if failed {
+            if index < current { return .done }
+            if index == current { return .failed }
+            return .pending
+        }
+        if index < current { return .done }
+        if index == current { return .current }
+        return .pending
+    }
+
+    /// Mode-specific facts for the render row + summary.
+    private var renderDetail: String {
+        if store.isVideoMode {
+            return "MP4 · \(monoClock(store.timelineDurationMs)) · \(store.clips.count) clip\(store.clips.count == 1 ? "" : "s")"
+        }
+        if store.isGifMode {
+            return "GIF · \(store.gifFramesCount) frames"
+        }
+        if let asset = store.activeAsset {
+            let width = Int((asset.image.size.width * asset.image.scale).rounded())
+            let height = Int((asset.image.size.height * asset.image.scale).rounded())
+            return "PNG · \(width)×\(height)"
+        }
+        return "final media"
+    }
+
+    private var kindDetail: String {
+        if store.isVideoMode { return "kind 22/21 · imeta + tags" }
+        if store.isGifMode { return "kind 20 · imeta (image/gif)" }
+        return "kind 20 · imeta + tags"
+    }
+
+    private var confirmDetail: String {
+        let accepted = publisher.receipts.filter { $0.accepted == true }.map(\.relayHost)
+        if !accepted.isEmpty {
+            return "OK from " + accepted.prefix(3).joined(separator: ", ")
+        }
+        return "\(DefaultRelays.writeUrls.count) write relays · awaiting first OK"
+    }
+
+    private var rows: [(String, String)] {
+        [
+            ("Render & encode", renderDetail),
+            ("Content hash", "SHA-256 over the rendered bytes"),
+            ("Upload to Blossom", "blossom.primal.net · authed PUT"),
+            ("Verify hash", "server hash must match the local one"),
+            ("Build event", kindDetail),
+            ("Sign", "key never leaves the device"),
+            ("Publish to relays", "\(DefaultRelays.writeUrls.count) write relays"),
+            ("Relay confirms", confirmDetail),
+        ]
+    }
+
+    private func monoClock(_ ms: Int64) -> String {
+        String(format: "%d:%02d", Int(ms / 1000) / 60, Int(ms / 1000) % 60)
+    }
+
+    private var eventIdLabel: String? {
+        guard let id = store.publishEventId ?? publisher.inFlightId, id.count >= 12 else { return nil }
+        return "\(id.prefix(8))…\(id.suffix(4))"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                HStack {
+                    Text(succeeded ? "Published" : failed ? "Publish stalled" : "Publishing…")
+                        .font(.headline)
+                    Spacer()
+                    Text("job \(store.publishJobId)")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(BitOSTheme.surface))
+                        .overlay(Capsule().strokeBorder(BitOSTheme.border))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+
+                // Progress bar (fraction of completed stages).
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(BitOSTheme.surface)
+                        Capsule()
+                            .fill(failed ? BitOSTheme.error : BitOSTheme.accent)
+                            .frame(width: max(6, geo.size.width * doneCount / 8))
+                    }
+                }
+                .frame(height: 6)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        MachineRowView(
+                            number: index + 1,
+                            label: row.0,
+                            detail: index == 7 ? confirmDetail : row.1,
+                            state: rowState(index)
+                        )
+                        if index < rows.count - 1 {
+                            Divider().padding(.leading, 32)
+                        }
+                    }
+                }
+                .padding(BitOSTheme.Spacing.sm)
+                .background(BitOSTheme.surface)
+                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+
+                if failed {
+                    HStack(alignment: .top, spacing: BitOSTheme.Spacing.xs) {
+                        AppIcons.image(for: AppIcons.close)
+                            .font(.system(size: 13, weight: .bold))
+                        Text(failureText)
+                            .font(.caption)
+                    }
+                    .foregroundStyle(BitOSTheme.error)
+                    .padding(BitOSTheme.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(BitOSTheme.error.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+
+                    Text("The job is recoverable — nothing was signed before the hash check, so retrying never double-publishes media.")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        Button {
+                            onLater()
+                        } label: {
+                            Text("Later")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        Button {
+                            onRetry()
+                        } label: {
+                            Text("Retry now")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BitOSTheme.accent)
+                        .disabled(running)
+                    }
+                    Button("Recovery queue", action: onOpenQueue)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                        .frame(maxWidth: .infinity)
+                }
+
+                if succeeded {
+                    HStack(alignment: .top, spacing: BitOSTheme.Spacing.xs) {
+                        AppIcons.image(for: AppIcons.checkCircle)
+                            .font(.system(size: 13))
+                        Text(successText)
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.success)
+                    .padding(BitOSTheme.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(BitOSTheme.success.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        Button("Recovery queue", action: onOpenQueue)
+                            .frame(maxWidth: .infinity)
+                            .buttonStyle(.bordered)
+                        Button {
+                            onPublished()
+                        } label: {
+                            Text("View on Bitz")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BitOSTheme.accent)
+                    }
+                }
+
+                if running {
+                    Text("Order is fixed by protocol: media uploads & hash-verifies before anything is signed.")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
+            .padding(BitOSTheme.Spacing.md)
+        }
+        .navigationTitle("Publishing")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(BitOSTheme.background)
+    }
+
+    private var failureText: String {
+        if let failure = store.publishFailure { return failure }
+        switch publisher.result {
+        case .rejected(let detail): return "A relay rejected the event\(detail.map { " — \($0)" } ?? "")."
+        case .timeout: return "No relay confirmed within the window — the event may still land; retry is safe."
+        case .signingRefused: return "Signing refused — import an identity first (Profile tab)."
+        case .invalid: return "The event could not be composed."
+        default: return "Publish failed."
+        }
+    }
+
+    private var successText: String {
+        let accepted = publisher.receipts.filter { $0.accepted == true }.count
+        let id = eventIdLabel.map { "event \($0) " } ?? ""
+        return "Published — \(id)confirmed on \(accepted) relay\(accepted == 1 ? "" : "s")."
+    }
+}
+
+/// One stepper row: numbered dot (✓ done · ring current · ✗ failed) +
+/// label + mono detail.
+private struct MachineRowView: View {
+    let number: Int
+    let label: String
+    let detail: String
+    let state: MemePublishingViewRowState
+
+    var body: some View {
+        HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
+            ZStack {
+                Circle()
+                    .strokeBorder(
+                        state == .current ? BitOSTheme.accent :
+                            state == .failed ? BitOSTheme.error : BitOSTheme.border,
+                        lineWidth: state == .current ? 2 : 1
+                    )
+                    .frame(width: 22, height: 22)
+                switch state {
+                case .done:
+                    AppIcons.image(for: AppIcons.checkCircle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.success)
+                case .failed:
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(BitOSTheme.error)
+                case .current:
+                    Text("\(number)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.accent)
+                case .pending:
+                    Text("\(number)")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(state == .pending ? BitOSTheme.textSecondary : BitOSTheme.textPrimary)
+                Text(detail)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label), \(state == .done ? "done" : state == .failed ? "failed" : state == .current ? "in progress" : "pending")")
+    }
+}
+
+// MARK: - Recovery queue (prototype `#/queue`)
+
+/// Durable publish-job recovery: every non-terminal attempt from the
+/// ledger with its stage, the REAL integrity check (stored bytes vs the
+/// recorded digest), retry-from-media and discard.
+private struct MemeRecoveryQueueView: View {
+    let store: MemeEditorStore
+    let identity: IdentityStore
+    let publisher: NotePublisher
+    let onRetry: (Int) -> Void
+    @State private var verifyResults: [Int: String] = [:]
+    @State private var discardTarget: MemePublishJob?
+
+    private static let stageNames = [
+        "render & encode", "content hash", "upload to Blossom", "verify hash",
+        "build event", "sign", "publish to relays", "relay confirms",
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                let jobs = store.jobStore.recoverable
+                if jobs.isEmpty {
+                    Text("Nothing to recover — every publish finished or was discarded. Killing the app mid-publish is safe: the attempt lands here and resumes from the stored media.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                        .padding(BitOSTheme.Spacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(BitOSTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+                }
+                ForEach(jobs) { job in
+                    jobCard(job)
+                }
+                Text("Every background job is durable, idempotent and cancellable. Retries re-run from the stored media — the upload dedupes by content hash, and nothing signs before that hash verifies.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .padding(BitOSTheme.Spacing.md)
+        }
+        .navigationTitle("Recovery queue")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(BitOSTheme.background)
+        .confirmationDialog(
+            "Discard job?",
+            isPresented: Binding(
+                get: { discardTarget != nil },
+                set: { if !$0 { discardTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Discard (media stays on Blossom until GC)", role: .destructive) {
+                if let job = discardTarget {
+                    store.jobStore.discard(job.id)
+                }
+                discardTarget = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func jobCard(_ job: MemePublishJob) -> some View {
+        let fraction = CGFloat(min(8, max(0, job.stage))) / 8
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                Text("job \(job.id)")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(BitOSTheme.accent.opacity(0.15)))
+                    .foregroundStyle(BitOSTheme.accent)
+                Text("\(job.mode.capitalized) · \(job.caption.isEmpty ? "untitled" : String(job.caption.prefix(40)))")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                if job.status == "failed" {
+                    Text("stalled").font(.caption2.weight(.bold)).foregroundStyle(BitOSTheme.error)
+                }
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(BitOSTheme.surfaceOverlay)
+                    Capsule().fill(BitOSTheme.accent).frame(width: proxy.size.width * fraction)
+                }
+            }
+            .frame(height: 5)
+            Text("stuck at \(Self.stageNames[min(7, max(0, job.stage))]) · retry re-runs from the stored media · idempotent by content hash")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if let error = job.lastError {
+                Text(error).font(.caption2).foregroundStyle(BitOSTheme.error)
+            }
+            if let verified = verifyResults[job.id] {
+                Text(verified).font(.caption2).foregroundStyle(BitOSTheme.textSecondary)
+            }
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Button {
+                    onRetry(job.id)
+                } label: {
+                    Text("Retry now").font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(BitOSTheme.accent)
+                .disabled(!job.retryAllowed)
+                Button {
+                    let ok = store.jobStore.integrityOK(job)
+                    verifyResults[job.id] = ok == nil
+                        ? "Media file missing — retry will fail fast; discard the job."
+                        : (ok! ? "Hash matches the original render ✓ — safe to resume." : "Hash MISMATCH — the stored media changed; discard the job.")
+                } label: {
+                    Label("Verify integrity", systemImage: "checkmark.shield")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button(role: .destructive) {
+                    discardTarget = job
+                } label: {
+                    Label("Discard", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .tint(BitOSTheme.error)
+            }
+            if !job.retryAllowed {
+                Text("An event was already signed — it may be live; verify on your profile before re-sending.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.warning)
+            }
+        }
+        .padding(BitOSTheme.Spacing.md)
+        .background(BitOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+    }
+}
+
+/// Row state shared by the machine rows (named for file scope).
+enum MemePublishingViewRowState { case done, current, pending, failed }
+
+// MARK: - Shared bits
+
+/// Post preview thumbnail per mode: graded still (image), first frame
+/// (GIF), cover URL or poster tile (video) + duration badge.
+struct MemePostPreviewThumb: View {
+    let store: MemeEditorStore
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if store.isVideoMode {
+                if let url = store.coverThumbUrl, let target = URL(string: url) {
+                    AsyncImage(url: target) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            posterFallback
+                        }
+                    }
+                } else {
+                    posterFallback
+                }
+            } else if store.isGifMode, let frame = store.gifFrames.first {
+                Image(uiImage: store.gradedImage(frame.image, cacheKey: "poster-\(frame.id)"))
+                    .resizable()
+                    .scaledToFill()
+            } else if let asset = store.activeAsset {
+                Image(uiImage: store.gradedImage(asset.image, cacheKey: "poster-\(asset.id)"))
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.black.opacity(0.2)
+            }
+            if store.isVideoMode, !store.clips.isEmpty {
+                Text("\(Int((store.timelineDurationMs + 999) / 1000))s")
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .padding(3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(BitOSTheme.border))
+    }
+
+    private var posterFallback: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            Image(systemName: "play.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+    }
+}
+
+private struct FlowTagRow: View {
+    let tags: [String]
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 88), spacing: BitOSTheme.Spacing.xs)],
+            alignment: .leading,
+            spacing: BitOSTheme.Spacing.xs
+        ) {
+            ForEach(tags, id: \.self) { tag in
+                HStack(spacing: 4) {
+                    Text("#\(tag)")
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                    Button {
+                        onRemove(tag)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                    .accessibilityLabel("Remove \(tag)")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(BitOSTheme.accent.opacity(0.15)))
+                .foregroundStyle(BitOSTheme.accent)
+            }
+        }
+    }
+}
+
+/// One settings row (prototype list-row): plate icon, title + subtitle and
+/// an optional trailing value or chevron.
+private struct DetailRow: View {
+    enum Trailing { case value(String) }
+    let icon: String
+    var tint: Color = BitOSTheme.textSecondary
+    let title: String
+    let subtitle: String
+    var trailing: Trailing?
+
+    var body: some View {
+        HStack(spacing: BitOSTheme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(BitOSTheme.background))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Spacer(minLength: 0)
+            if case .value(let value) = trailing {
+                Text(value)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// One preflight checklist line: green check / amber alert + mono meta.
+private struct PreflightLine: View {
+    let done: Bool
+    let label: String
+    let meta: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
+            Image(systemName: done ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(done ? BitOSTheme.success : BitOSTheme.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.subheadline.weight(.semibold))
+                Text(meta)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+    }
+}
