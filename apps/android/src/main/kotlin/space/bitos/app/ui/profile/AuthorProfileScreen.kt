@@ -474,7 +474,16 @@ fun AuthorProfileScreen(
                     }
                 }
             } else if (content.isEmpty()) {
-                item(key = "empty") { AuthorTabEmptyState(tab) }
+                item(key = "empty") {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        AuthorTabEmptyState(tab)
+                        // A timed-out page is not proof the author has no
+                        // notes — offer an explicit re-issue.
+                        androidx.compose.material3.TextButton(onClick = { authorRepository.retryFirstPage() }) {
+                            Text("Retry", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                        }
+                    }
+                }
             } else if (tab == 2) {
                 item(key = "bitz-grid") {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {

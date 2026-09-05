@@ -287,4 +287,36 @@ class FeedAggregatorTest {
         assertEquals(200, aggregator.size())
         assertEquals(200, aggregator.snapshot().map { it.id }.toSet().size)
     }
+
+    private fun authoredNote(idHex: String, authorHex: String, createdAt: Long): FeedNote =
+        FeedNote.from(
+            NostrEvent(
+                id = EventId.parse(idHex)!!,
+                pubkey = Pubkey.parse(authorHex)!!,
+                createdAt = createdAt,
+                kind = NostrKinds.SHORT_TEXT_NOTE,
+                tags = emptyList(),
+                content = "note-$idHex",
+                signature = null,
+                receivedFromRelay = null,
+            ),
+        )
+
+    @Test
+    fun retainWhereDropsNonMatchingNotesAndKeepsOrder() {
+        val window = FeedAggregator(maxItems = 10)
+        val authorA = "aa".repeat(32)
+        val authorB = "bb".repeat(32)
+        val a = authoredNote("11".repeat(32), authorA, createdAt = 30)
+        val b = authoredNote("22".repeat(32), authorB, createdAt = 20)
+        val c = authoredNote("33".repeat(32), authorA, createdAt = 10)
+        window.insert(a)
+        window.insert(b)
+        window.insert(c)
+        window.retainWhere { it.pubkey == authorA }
+        assertEquals(listOf(a.id, c.id), window.snapshot().map { it.id })
+        // Idempotent: a second pass with the same predicate is a no-op.
+        window.retainWhere { it.pubkey == authorA }
+        assertEquals(listOf(a.id, c.id), window.snapshot().map { it.id })
+    }
 }

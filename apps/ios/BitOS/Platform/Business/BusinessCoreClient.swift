@@ -61,6 +61,17 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     var remixOfPubkey: String? = nil
     /** APP-007 `license` tag (remix advisory gate); nil = permissive. */
     var license: String? = nil
+    /** Safe image-only previews for allowlisted external providers. */
+    var externalVideoPreviews: [ExternalVideoPreview] = []
+}
+
+/// Safe image-only preview for an allowlisted external video provider
+/// (mirror of the shared `ExternalVideoPreview` — never loads an embed).
+struct ExternalVideoPreview: Sendable, Equatable, Identifiable {
+    let url: String
+    let providerName: String
+    let thumbnailUrl: String
+    var id: String { url }
 }
 
 /// Display-oriented media attachment (mirror of the shared `MediaMetadata`).
@@ -115,6 +126,8 @@ protocol FeedWindowing: AnyObject {
     func insertOlder(_ note: FeedNote) -> Bool
     func snapshot() -> [FeedNote]
     func count() -> Int
+    /// Drops notes by non-kept authors (contact-list replace parity).
+    func retainAuthors(_ keepPubkeys: Set<String>)
 }
 
 /// Feature seam over the shared BusinessCore bridge. Views and stores depend
@@ -152,6 +165,9 @@ protocol BusinessCoreClient: Sendable {
     func accountBootstrapShouldOpenEpisode(previousConnected: Int, currentConnected: Int) -> Bool
     /// APP-004 pagination: one older page — feed kinds before `until`.
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String
+    /// APP-004 pagination, follow-scoped: one older page for the Following
+    /// lane so the walk does not spend its budget on unrelated events.
+    func olderFeedRequestForAuthors(subscriptionId: String, until: Int64, limit: Int, authors: [String]) -> String
     /// FED-004 walk budget: fresh playable notes one load-more targets.
     func bitzWalkPageBudget() -> Int
     /// FED-004 near-edge buffer that starts the next walk.
@@ -460,6 +476,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.olderFeedRequest(subscriptionId: subscriptionId, until: until, limit: Int32(limit))
     }
 
+    func olderFeedRequestForAuthors(subscriptionId: String, until: Int64, limit: Int, authors: [String]) -> String {
+        bridge.olderFeedRequestForAuthors(subscriptionId: subscriptionId, until: until, limit: Int32(limit), authors: authors)
+    }
+
     func bitzWalkPageBudget() -> Int {
         Int(bridge.bitzWalkPageBudget())
     }
@@ -516,7 +536,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
             pollOptions: note.pollOptions.map { $0 as String },
             remixOfEventId: note.remixOfEventId,
             remixOfPubkey: note.remixOfPubkey,
-            license: note.license
+            license: note.license,
+            externalVideoPreviews: note.externalVideoPreviews.map {
+                ExternalVideoPreview(url: $0.url, providerName: $0.providerName, thumbnailUrl: $0.thumbnailUrl)
+            }
         )
     }
 
@@ -774,6 +797,10 @@ private final class SharedFeedWindow: FeedWindowing {
     func count() -> Int {
         Int(window.size())
     }
+
+    func retainAuthors(_ keepPubkeys: Set<String>) {
+        window.retainAuthors(keepPubkeys: keepPubkeys)
+    }
 }
 
 private extension FeedNote {
@@ -804,7 +831,8 @@ private extension FeedNote {
             remixOfPubkey: remixOfPubkey,
             license: license,
             fallbackUrls: video?.fallbackUrls ?? [],
-            renditionSpecs: video?.renditionSpecs ?? []
+            renditionSpecs: video?.renditionSpecs ?? [],
+            externalVideoPreviews: []
         )
     }
 }
@@ -866,6 +894,7 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         FrameworkBusinessCoreClient().accountBootstrapShouldOpenEpisode(previousConnected: previousConnected, currentConnected: currentConnected)
     }
     func olderFeedRequest(subscriptionId: String, until: Int64, limit: Int) -> String { "" }
+    func olderFeedRequestForAuthors(subscriptionId: String, until: Int64, limit: Int, authors: [String]) -> String { "" }
     func bitzWalkPageBudget() -> Int { 10 }
     func bitzWalkPrefetchThreshold() -> Int { 10 }
     func profile(from event: VerifiedEvent) -> ProfileMetadata? { nil }
@@ -988,4 +1017,5 @@ private final class NoopWindow: FeedWindowing {
     func insertOlder(_ note: FeedNote) -> Bool { true }
     func snapshot() -> [FeedNote] { [] }
     func count() -> Int { 0 }
+    func retainAuthors(_ keepPubkeys: Set<String>) {}
 }

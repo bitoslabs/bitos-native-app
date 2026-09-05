@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,6 +107,10 @@ fun ProfileScreen(
     /** Profile-mention tap in a card body → the mentioned user's page. */
     onOpenMentionProfile: (String) -> Unit = {},
     profileLookup: space.bitos.app.data.feed.ProfileLookupStore,
+    /** Own-profile content source: a dedicated author-scoped REQ so the
+     *  You tabs stop depending on whichever Home timeline window happens
+     *  to be loaded (global head or Following-filtered). */
+    ownAuthorRepository: space.bitos.app.data.feed.AuthorRepository,
 ) {
     var showSettings by remember { mutableStateOf(false) }
     if (showSettings) {
@@ -160,11 +165,17 @@ fun ProfileScreen(
         val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
         val profile = feedState.profiles[account.pubkeyHex]
         var tab by remember(account.pubkeyHex) { mutableStateOf(0) }
-        val own = feedState.notes.filter { it.pubkey == account.pubkeyHex || it.repostedBy == account.pubkeyHex }
-        val tabNotes = own.filter { it.replyTo == null && it.repostedBy == null }
-        val tabReplies = own.filter { it.replyTo != null && it.repostedBy == null }
+        // Author-scoped own content (dedicated REQ, paginated); reposts stay
+        // on the feed window's best-effort kind-6 projection.
+        androidx.compose.runtime.LaunchedEffect(account.pubkeyHex) {
+            ownAuthorRepository.open(account.pubkeyHex)
+        }
+        val ownAuthorState by ownAuthorRepository.state.collectAsStateWithLifecycle()
+        val own = ownAuthorState.notes
+        val tabNotes = own.filter { it.replyTo == null }
+        val tabReplies = own.filter { it.replyTo != null }
         val tabBitz = own.filter { it.video != null || it.mediaUrls.isNotEmpty() }
-        val tabReposts = own.filter { it.repostedBy == account.pubkeyHex }
+        val tabReposts = feedState.notes.filter { it.repostedBy == account.pubkeyHex }
         // Web full-page profile parity: a Zaps tab fed by the same merged
         // ledger as the zap wallet (local sent + verified received 9735).
         val notificationsState by notifications.state.collectAsStateWithLifecycle()
@@ -495,8 +506,38 @@ fun ProfileScreen(
                         }
                     }
                 }
+            } else if (content.isEmpty() && tab != 3 && ownAuthorState.isLoading) {
+                // Own author REQ still in flight — distinguish loading from empty.
+                item(key = "own-loading") {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.5.dp,
+                                color = BitOSColors.textSecondary,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "Loading from relays…",
+                                fontSize = 12.sp,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                    }
+                }
             } else if (content.isEmpty()) {
-                item(key = "empty") { TabEmptyState(tab) }
+                item(key = "empty") {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        TabEmptyState(tab)
+                        // Own tabs come from a dedicated REQ; an empty result
+                        // can be a relay timeout, so offer a re-issue.
+                        if (tab != 3 && !ownAuthorState.isLoading) {
+                            androidx.compose.material3.TextButton(onClick = { ownAuthorRepository.retryFirstPage() }) {
+                                Text("Retry", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
             } else if (tab == 2) {
                 item(key = "bitz-grid") {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
@@ -554,6 +595,13 @@ fun ProfileScreen(
                             rawEventJson = { homeViewModel.rawEventJson(note.id) },
                         )
                     }
+                }
+            }
+            // Own tabs paginated by the dedicated author REQ: crossing the
+            // rendered cap while more pages exist pulls the next page.
+            if (tab != 4 && content.size > 50 && ownAuthorState.canLoadMore && !ownAuthorState.isLoadingMore) {
+                item(key = "own-load-more") {
+                    LaunchedEffect(content.size) { ownAuthorRepository.loadMoreNotes() }
                 }
             }
             item(key = "bottom-space") { Spacer(Modifier.height(32.dp)) }

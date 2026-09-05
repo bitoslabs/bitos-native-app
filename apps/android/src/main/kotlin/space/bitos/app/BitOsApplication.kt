@@ -127,6 +127,13 @@ class BitOsApplication : Application() {
         space.bitos.app.data.feed.AuthorRepository(applicationScope, relayPool)
     }
 
+    /** Dedicated author store for the You tab so its author-scoped REQ is
+     *  never clobbered by the shared sheet/page repository opening another
+     *  author while the own profile is still composed underneath. */
+    val ownAuthorRepository: space.bitos.app.data.feed.AuthorRepository by lazy {
+        space.bitos.app.data.feed.AuthorRepository(applicationScope, relayPool)
+    }
+
     val settingsStore: space.bitos.app.data.settings.SettingsStore by lazy {
         space.bitos.app.data.settings.SettingsStore(this)
     }

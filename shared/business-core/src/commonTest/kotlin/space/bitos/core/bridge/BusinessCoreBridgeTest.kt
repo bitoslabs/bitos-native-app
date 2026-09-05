@@ -255,6 +255,11 @@ class BusinessCoreBridgeTest {
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)
         assertTrue(profileRequest.contains(""""authors":[""" + "\"" + "a".repeat(64)), profileRequest)
         assertTrue(profileRequest.contains(""""limit":1"""), profileRequest)
+        // NIP-01 hashtag recall: `#tag` queries classify into a bounded `#t`
+        // filter (NIP-50 leaves `#` undefined in search strings).
+        val tagRequest = bridge.searchTagRequest("tag1", "#LaoStr", listOf(1, 21, 22), 50)!!
+        assertEquals("""["REQ","tag1",{"kinds":[1,21,22],"#t":["laostr"],"limit":50}]""", tagRequest)
+        assertEquals(null, bridge.searchTagRequest("tag2", "two words", listOf(1), 50))
     }
 
     @Test

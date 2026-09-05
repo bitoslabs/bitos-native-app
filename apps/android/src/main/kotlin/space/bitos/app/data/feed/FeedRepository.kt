@@ -570,8 +570,15 @@ class FeedRepository(
             delay(BitzTimelinePolicy.PAGE_MAX_WAIT_MS)
             completeOlderBatch(subId)
         }
+        // Following walks author-scoped: the global walk spends its batch
+        // budget on unrelated events and filters client-side.
+        val olderAuthors = if (timeline == FeedTimeline.FOLLOWING) {
+            followingAuthors.toList().take(space.bitos.core.model.ContactList.MAX_FOLLOWS)
+        } else {
+            null
+        }
         pool.broadcast(
-            NostrEventCodec.encodeRequest(subId, BitzTimelinePolicy.batchFilters(cursor)),
+            NostrEventCodec.encodeRequest(subId, BitzTimelinePolicy.batchFilters(cursor, olderAuthors)),
         )
     }
 
@@ -685,6 +692,7 @@ class FeedRepository(
         val updated = if (add) followingAuthors + author else followingAuthors - author
         followingAuthors.clear()
         followingAuthors.addAll(updated)
+        if (!add) followingWindow.retainWhere { it.pubkey in followingAuthors }
         persistFollowingProjection()
         followingSubscribed = false
         subscribeFollowing()
@@ -814,8 +822,22 @@ class FeedRepository(
     }
 
     /** Account lifecycle: non-null activates the Following timeline, null clears it. */
+    /** Monotonic activation epoch: an in-flight async restore from a
+     *  superseded setAccount must not land over a newer account. */
+    @Volatile
+    private var accountEpoch = 0
+
+    /** Last pubkey setAccount fully activated (the identity collector calls
+     *  setAccount on EVERY state emission — busy/preview/profile edits —
+     *  and re-running the reset+restore+head-REQ storm on an unchanged
+     *  account cleared Following and re-hydrated it repeatedly). */
+    private var lastActivatedAccount: String? = null
+
     fun setAccount(pubkey: String?) {
+        if (pubkey != null && pubkey == lastActivatedAccount) return
+        val epoch = ++accountEpoch
         accountPubkey = pubkey
+        lastActivatedAccount = pubkey
         followingAuthors.clear()
         contactCandidates.clear()
         bookmarkCandidates.clear()
@@ -834,15 +856,34 @@ class FeedRepository(
             followingResolved = pubkey == null,
         )
         if (pubkey != null) {
-            cachedContactHeads[pubkey]?.let { absorbContactList(it, persistHead = false) }
-            restoreFollowingProjection(pubkey)
-            // The signed-in profile is not necessarily an author in the feed.
-            // Request its kind-0 head explicitly so the You surface has a
-            // fresh projection on a cold start and after account switching.
-            requestProfile(pubkey, force = true)
-            requestContactHead(pubkey)
-            requestBookmarkHead(pubkey)
-            requestBlockHead(pubkey)
+            // Restore runs on the ordered intent lane: the projection store
+            // read (first SharedPreferences load hits disk) and the cached
+            // head parse never block the caller's main thread. The epoch
+            // guard drops a restore superseded by another account switch.
+            scope.launch(intentPublishes) {
+                if (accountEpoch != epoch) return@launch
+                cachedContactHeads[pubkey]?.let { absorbContactList(it, persistHead = false, deferPublish = true) }
+                restoreFollowingProjection(pubkey)
+                // Cache hydration ran BEFORE the account activated, so
+                // hydrated notes skipped the followingAuthors gate and
+                // Following rendered empty until relays re-answered.
+                // Re-project the hydrated window now that the follow set
+                // is known (≤200 lookups, once).
+                reprojectFollowingFromHydratedWindow()
+                if (accountEpoch != epoch) return@launch
+                // The signed-in profile is not necessarily an author in the
+                // feed. Request its kind-0 head explicitly so the You
+                // surface has a fresh projection on a cold start and after
+                // account switching. Counted toward the episode budget: the
+                // async restore can race the connectivity watcher, and the
+                // total per episode must stay bounded.
+                accountHeadAttempts[HEAD_PROFILE] += 1
+                requestProfile(pubkey, force = true)
+                requestContactHead(pubkey)
+                requestBookmarkHead(pubkey)
+                requestBlockHead(pubkey)
+                publishState()
+            }
         }
         publishFromIntent()
     }
@@ -1274,13 +1315,16 @@ class FeedRepository(
         publishFromIntent()
     }
 
-    private fun absorbContactList(event: NostrEvent, persistHead: Boolean = true) {
+    private fun absorbContactList(event: NostrEvent, persistHead: Boolean = true, deferPublish: Boolean = false) {
         val account = accountPubkey ?: return
         if (event.pubkey.value != account) return
         contactCandidates.add(event)
         val newest = ContactList.newest(contactCandidates) ?: return
         followingAuthors.clear()
         followingAuthors.addAll(ContactList.followedPubkeys(newest))
+        // Unfollowed authors' notes leave the window with the follow set —
+        // they used to linger until bound-eviction churn.
+        followingWindow.retainWhere { it.pubkey in followingAuthors }
         // A contact list can contain people that have not posted in the
         // current feed window. Resolve their kind-0 metadata for connection
         // surfaces rather than showing anonymous placeholder rows.
@@ -1293,7 +1337,7 @@ class FeedRepository(
         // can render it during cold start before relays answer.
         if (persistHead) persist(event)
         persistFollowingProjection()
-        publishState()
+        if (!deferPublish) publishState()
     }
 
     private fun cacheContactHead(event: NostrEvent) {
@@ -1312,6 +1356,16 @@ class FeedRepository(
         followingProjectionStore.write(account, followingAuthors)
     }
 
+    /** Cold-start Following fix: move already-hydrated notes by followed
+     *  authors from the For-You window into the Following window. Idempotent
+     *  — the aggregator drops duplicates by verified event id. */
+    private fun reprojectFollowingFromHydratedWindow() {
+        if (followingAuthors.isEmpty()) return
+        aggregator.snapshot()
+            .filter { it.pubkey in followingAuthors }
+            .forEach(followingWindow::insert)
+    }
+
     private fun restoreFollowingProjection(account: String) {
         val follows = followingProjectionStore.read(account)
             .filter { space.bitos.core.model.Pubkey.parse(it) != null }
@@ -1328,10 +1382,15 @@ class FeedRepository(
     private fun subscribeFollowing() {
         if (followingSubscribed || followingAuthors.isEmpty()) return
         followingSubscribed = true
-        val authors = followingAuthors.take(ContactList.MAX_FOLLOWS)
-            .joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-        val filter = FOLLOWING_FILTER_PREFIX + authors + FOLLOWING_FILTER_SUFFIX
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-following", filter))
+        // Chunked filters (100 authors each): several relays cap author-array
+        // length and would silently truncate a single 200-author filter.
+        val filters = followingAuthors.take(ContactList.MAX_FOLLOWS)
+            .chunked(FOLLOWING_FILTER_AUTHORS)
+            .map { authors ->
+                val joined = authors.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
+                FOLLOWING_FILTER_PREFIX + joined + FOLLOWING_FILTER_SUFFIX
+            }
+        pool.broadcast(NostrEventCodec.encodeRequest("bitos-following", filters))
     }
 
     private fun absorbProfile(event: NostrEvent) {
@@ -1513,10 +1572,22 @@ class FeedRepository(
                 profileRequestCounter += 1
                 profileRequestCounter
             }
-            pool.broadcast(bridge.profileRequest("bitos-profile-head-$requestId", listOf(pubkey)))
+            broadcastOneShot(bridge.profileRequest("bitos-profile-head-$requestId", listOf(pubkey)), "bitos-profile-head-$requestId")
             return
         }
         enqueueProfile(pubkey)
+    }
+
+    /** One-shot REQ discipline: a pure head/lookup fetch has no live
+     *  semantics, so CLOSE it once the answer (or the deadline) passed.
+     *  Leaked subscriptions keep every relay streaming matches for the
+     *  socket's lifetime and crowd out frames the UI cares about. */
+    private fun broadcastOneShot(request: String, subscriptionId: String, closeAfterMs: Long = PROFILE_CLOSE_MS) {
+        pool.broadcast(request)
+        scope.launch {
+            delay(closeAfterMs)
+            pool.broadcast(space.bitos.core.nostr.NostrEventCodec.encodeClose(subscriptionId))
+        }
     }
 
     private fun enqueueProfile(pubkey: String) {
@@ -1556,8 +1627,13 @@ class FeedRepository(
             profileRequestCounter
         }
         val primary = pool.primaryRelay()
-        val request = bridge.profileRequest("bitos-profiles-$requestId", batch)
+        val subId = "bitos-profiles-$requestId"
+        val request = bridge.profileRequest(subId, batch)
         if (primary == null) pool.broadcast(request) else pool.sendTo(listOf(primary), request)
+        scope.launch {
+            delay(PROFILE_CLOSE_MS)
+            pool.broadcast(space.bitos.core.nostr.NostrEventCodec.encodeClose(subId))
+        }
 
         val fallback = scope.launch {
             delay(PROFILE_FALLBACK_DELAY_MS)
@@ -1568,7 +1644,17 @@ class FeedRepository(
                     profileRequestCounter += 1
                     profileRequestCounter
                 }
-                pool.sendTo(relays, bridge.profileRequest("bitos-profiles-fallback-$fallbackRequestId", unresolved))
+                val fallbackSubId = "bitos-profiles-fallback-$fallbackRequestId"
+                pool.sendTo(relays, bridge.profileRequest(fallbackSubId, unresolved))
+                delay(PROFILE_CLOSE_MS)
+                pool.broadcast(space.bitos.core.nostr.NostrEventCodec.encodeClose(fallbackSubId))
+                // Re-arm lookups that both attempts failed to resolve, so a
+                // later enqueue can retry instead of staying "Anonymous"
+                // for the whole session.
+                val stillUnresolved = batch.filterNot(::hasProfile)
+                if (stillUnresolved.isNotEmpty()) {
+                    synchronized(profileLock) { requestedProfiles.removeAll(stillUnresolved.toSet()) }
+                }
             }
         }
         synchronized(profileLock) { profileFallbackJobs += fallback }
@@ -1687,6 +1773,7 @@ class FeedRepository(
         const val PROFILE_BATCH = 48
         const val PROFILE_DRAIN_DELAY_MS = 250L
         const val PROFILE_FALLBACK_DELAY_MS = 900L
+        const val PROFILE_CLOSE_MS = 5_000L
         const val OLDER_WATCHDOG_MS = 8_000L
         const val OLDER_SUBSCRIPTION_PREFIX = "bitos-older-"
 
@@ -1694,7 +1781,9 @@ class FeedRepository(
         const val OLDER_EMPTY_EXHAUST = 2
         const val CONTACT_FILTER_PREFIX = """{"kinds":[3],"authors":["""
         const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
-        const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":["""
+        /** Authors per following filter chunk (relay author-cap headroom). */
+        const val FOLLOWING_FILTER_AUTHORS = 100
+        const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":[""""
         const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
         const val COMMENT_FILTER_PREFIX = """{"kinds":[1,1111,7,6,9735],"#e":["""
     /** NIP-22 companion: kind-1111 comments root-tagged with UPPERCASE `E`. */

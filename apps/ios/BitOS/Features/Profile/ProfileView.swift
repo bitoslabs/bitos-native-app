@@ -20,6 +20,11 @@ struct ProfileView: View {
     @State private var showQr = false
     @State private var npubCopied = false
     @State private var ownTab = 0
+    /// Own-profile content source: a dedicated author-scoped REQ (shared
+    /// `authorRequest`) instead of filtering the Home feed window, which
+    /// missed the account's notes whenever they weren't in the global
+    /// head window or Home sat on the Following timeline.
+    @State private var ownStore: AuthorStore?
     @State private var sentZaps = SentZapsStore()
     /** Web `/bitz?author=<npub>#bitz=<id>` parity: Bitz-tab tile → the
      *  shared reels player scoped to this account. */
@@ -158,6 +163,14 @@ struct ProfileView: View {
         // the verified responses arrive and persist.
         .onAppear {
             environment.feedStore.refreshProfileAndFollowing()
+            if let pubkey = store.account?.pubkeyHex {
+                let own = ownStore ?? AuthorStore(
+                    pool: environment.relayPool,
+                    client: environment.businessCore
+                )
+                ownStore = own
+                own.open(authorPubkey: pubkey)
+            }
         }
     }
 
@@ -207,12 +220,15 @@ struct ProfileView: View {
     private func accountPanel(_ account: AccountIdentity) -> some View {
         let feed = environment.feedStore
         let profile = feed.profiles[account.pubkeyHex]
-        let own = feed.notes.filter { $0.pubkey == account.pubkeyHex || $0.repostedBy == account.pubkeyHex }
+        // Author-scoped content (dedicated REQ) — falls back to the feed
+        // window only before the own store exists.
+        let own = ownStore?.notes ?? []
+        let reposts = feed.notes.filter { $0.repostedBy == account.pubkeyHex }
         let tabs: [(String, [FeedNote])] = [
-            ("Notes", own.filter { $0.replyTo == nil && $0.repostedBy == nil }),
-            ("Replies", own.filter { $0.replyTo != nil && $0.repostedBy == nil }),
+            ("Notes", own.filter { $0.replyTo == nil }),
+            ("Replies", own.filter { $0.replyTo != nil }),
             ("Bitz", own.filter { $0.video != nil || !$0.mediaUrls.isEmpty }),
-            ("Reposts", own.filter { $0.repostedBy == account.pubkeyHex }),
+            ("Reposts", reposts),
             // Web parity: merged zap ledger (wallet rule — no fork).
             ("Zaps", []),
         ]
@@ -724,6 +740,16 @@ struct ProfileView: View {
         if ownTab == 4 {
             // Zaps — merged ledger entries (sent + received), wallet parity.
             zapTabContent
+        } else if ownTab != 3, ownStore?.isLoading == true, notes.isEmpty {
+            // Own REQ still in flight — distinguish "loading" from "empty".
+            VStack(spacing: BitOSTheme.Spacing.md) {
+                ProgressView()
+                Text("Loading from relays…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, BitOSTheme.Spacing.xxl)
         } else if notes.isEmpty {
             tabEmptyState
         } else if ownTab == 2 {
@@ -754,6 +780,22 @@ struct ProfileView: View {
                     repostHeader(note)
                 }
                 ProfileNoteCard(note: note, profile: profile)
+            }
+            if notes.count > 50, let own = ownStore, own.canLoadMore, !own.isLoadingMore {
+                Button {
+                    own.loadMoreNotes()
+                } label: {
+                    HStack(spacing: 8) {
+                        if own.isLoadingMore {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(own.isLoadingMore ? "Loading…" : "Load more")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(BitOSTheme.accent)
             }
         }
     }
@@ -822,6 +864,17 @@ struct ProfileView: View {
             Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(BitOSTheme.textSecondary)
+            // Own tabs come from a dedicated REQ; an empty result can be a
+            // relay timeout, so offer an explicit re-issue (web parity with
+            // the feed's retry affordance).
+            if ownTab != 3, ownTab != 4, let own = ownStore, !own.isLoading {
+                Button("Retry") {
+                    own.retryFirstPage()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BitOSTheme.accent)
+                .accessibilityLabel("Retry loading from relays")
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, BitOSTheme.Spacing.xxl)

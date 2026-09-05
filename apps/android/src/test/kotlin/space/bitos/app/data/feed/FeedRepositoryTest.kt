@@ -806,30 +806,31 @@ class FeedRepositoryTest {
     }
 
     @Test
-    fun searchRepositoryIssuesNip50AndFansInVerifiedResults() = runBlocking {
+    fun localSearchFansInVerifiedMatchesAndResolvesNpub() = runBlocking {
+        // Local Discover search (f5fdd81): NO relay REQ — results fan in from
+        // verified frames already matching the ACTIVE query.
         val search = space.bitos.app.data.feed.SearchRepository(scope, pool)
         kotlinx.coroutines.delay(100) // collector subscribes
 
         search.search("hello bitos")
-        withTimeout(20_000) {
-            while (transport.sent.none { it.contains("bitos-search") && it.contains("hello bitos") }) {
-                kotlinx.coroutines.delay(10)
-            }
-        }
+        // isSearching flips only AFTER the debounce, when activeQuery is
+        // armed — emitting before this point races the local matcher.
+        withTimeout(20_000) { search.state.first { it.isSearching && it.query == "hello bitos" } }
 
-        // A verified note matching the query arrives -> result fans in.
-        transport.emit(VALID_TEXT_NOTE_MESSAGE)
+        // A signed note whose CONTENT matches the active query -> result.
+        val signer = DeterministicTestSigner("4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d")
+        val composer = space.bitos.core.publish.NoteComposer(clock = { 1_710_000_900 })
+        val unsigned = composer.composeTextNote(signer.publicKeyHex(), "hello bitos from the test author")!!
+        val signature = signer.sign(unsigned.messageBytes())!!
+        val frame = composer.publishMessage(unsigned, signature)!!
+        transport.emit(frame.replaceFirst("[\"EVENT\",", "[\"EVENT\",\"sub1\","))
+
         val state = withTimeout(20_000) { search.state.first { it.results.isNotEmpty() } }
-        assertEquals(listOf("gm from BitOS"), state.results.map { it.content })
+        assertTrue(state.results.any { it.content == "hello bitos from the test author" })
         assertEquals("hello bitos", state.query)
 
-        // npub resolution triggers a targeted profile REQ.
+        // npub resolution is local (NostrKeyCodec) — no profile REQ.
         search.search("npub194667yy2sqh4h4vlwssg7g5smhmqx4x9hgtfdjun8e46l30kxqqselzc9y")
-        withTimeout(20_000) {
-            while (transport.sent.none { it.contains("bitos-search-profile") && it.contains("2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001") }) {
-                kotlinx.coroutines.delay(10)
-            }
-        }
         val resolved = withTimeout(20_000) { search.state.first { it.resolvedNpub != null } }
         assertEquals("2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001", resolved.resolvedNpub)
     }

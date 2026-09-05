@@ -86,7 +86,11 @@ class ContactListTest {
     @Test
     fun ignoresWrongKindAndBoundsFollows() {
         assertTrue(ContactList.followedPubkeys(contactEvent(emptyList(), kind = NostrKinds.SHORT_TEXT_NOTE)).isEmpty())
-        val many = (0 until ContactList.MAX_FOLLOWS + 10).map { listOf("p", it.toString(16).padStart(64, '0')) }
+        // Probe at the codec edge: the tag count can never exceed
+        // NostrLimits.MAX_TAGS (the codec rejects such lists outright), so
+        // the follow bound is exercised with the largest legal list.
+        val tagCount = minOf(ContactList.MAX_FOLLOWS + 10, space.bitos.core.model.NostrLimits.MAX_TAGS)
+        val many = (0 until tagCount).map { listOf("p", it.toString(16).padStart(64, '0')) }
         assertEquals(ContactList.MAX_FOLLOWS, ContactList.followedPubkeys(contactEvent(many)).size)
         // The codec itself rejects tag lists beyond its hard bound.
         assertTrue(ContactList.followedPubkeys(contactEvent(emptyList())).isEmpty() || true)

@@ -508,7 +508,17 @@ final class FeedStore {
                 guard !Task.isCancelled else { return }
                 self?.completeOlderBatch(subscriptionId: subId)
             }
-            let request = self.client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
+            // Following walks author-scoped: the global walk spends its
+            // batch budget on unrelated events and filters client-side.
+            let request: String
+            if timeline == .following {
+                request = self.client.olderFeedRequestForAuthors(
+                    subscriptionId: subId, until: cursor, limit: 60,
+                    authors: Array(self.followingAuthors)
+                )
+            } else {
+                request = self.client.olderFeedRequest(subscriptionId: subId, until: cursor, limit: 60)
+            }
             await pool.broadcast(request)
         }
     }
@@ -1009,7 +1019,7 @@ final class FeedStore {
         return nil
     }
 
-    private static func isLowercaseHex64(_ value: String) -> Bool {
+    nonisolated private static func isLowercaseHex64(_ value: String) -> Bool {
         value.count == 64 && value.allSatisfy { "0123456789abcdef".contains($0) }
     }
 
@@ -1024,6 +1034,8 @@ final class FeedStore {
             followingAuthors.insert(author)
         } else {
             followingAuthors.remove(author)
+            // Unfollowed author's notes leave the window immediately.
+            followingWindow?.retainAuthors(followingAuthors)
         }
         persistFollowingProjection()
         followingSubscribed = false
@@ -1207,6 +1219,12 @@ final class FeedStore {
             // newer relay head reconciles it.
             restoreCachedContactHead(for: pubkey)
             restoreFollowingProjection(for: pubkey)
+            // Cold-start Following fix: cache hydration ran BEFORE the
+            // account activated, so hydrated notes skipped the
+            // followingAuthors gate and Following rendered empty until
+            // relays re-answered. Re-project the hydrated window now that
+            // the follow set is known (≤200 lookups, once).
+            reprojectFollowingFromHydratedWindow()
             requestAccountHeads(for: pubkey)
         }
         bookmarked.removeAll()
@@ -1256,11 +1274,12 @@ final class FeedStore {
             let end = min(start + Self.profileBatchSize, profilesToRequest.count)
             let batch = Array(profilesToRequest[start..<end])
             profileRequestCounter += 1
+            let subId = "bitos-following-profiles-\(profileRequestCounter)"
             let request = client.profileRequest(
-                subscriptionId: "bitos-following-profiles-\(profileRequestCounter)",
+                subscriptionId: subId,
                 authors: batch
             )
-            Task { await pool.broadcast(request) }
+            broadcastOneShot(request, subscriptionId: subId)
         }
     }
 
@@ -1336,6 +1355,9 @@ final class FeedStore {
               let authors = (bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) else { return }
         guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
         followingAuthors = Set(authors)
+        // Unfollowed authors' notes leave the window with the follow set —
+        // they used to linger until bound-eviction churn.
+        followingWindow?.retainAuthors(followingAuthors)
         contactHeadAt = event.createdAt
         persistFollowingProjection()
         followingAuthors.forEach { enqueueProfile($0) }
@@ -1358,6 +1380,9 @@ final class FeedStore {
               ) as? [String] else { return }
         guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
         followingAuthors = Set(authors)
+        // Unfollowed authors' notes leave the window with the follow set —
+        // they used to linger until bound-eviction churn.
+        followingWindow?.retainAuthors(followingAuthors)
         contactHeadAt = event.createdAt
         persistFollowingProjection()
         followingAuthors.forEach { enqueueProfile($0) }
@@ -1374,6 +1399,17 @@ final class FeedStore {
         if cachedContactHeads.count > 8 {
             let oldest = cachedContactHeads.min { $0.value.createdAt < $1.value.createdAt }?.key
             if let oldest { cachedContactHeads.removeValue(forKey: oldest) }
+        }
+    }
+
+    /// Cold-start Following fix: move already-hydrated notes by followed
+    ///  authors from the For-You window into the Following window. Idempotent
+    ///  — the window drops duplicates by verified event id.
+    private func reprojectFollowingFromHydratedWindow() {
+        guard !followingAuthors.isEmpty else { return }
+        guard let window else { return }
+        for note in window.snapshot() where followingAuthors.contains(note.pubkey) {
+            followingWindow?.insert(note)
         }
     }
 
@@ -1397,6 +1433,9 @@ final class FeedStore {
         let authors = stored.filter(Self.isLowercaseHex64).prefix(500)
         guard !authors.isEmpty else { return }
         followingAuthors = Set(authors)
+        // Unfollowed authors' notes leave the window with the follow set —
+        // they used to linger until bound-eviction churn.
+        followingWindow?.retainAuthors(followingAuthors)
         followingAuthors.forEach { enqueueProfile($0) }
         followingSubscribed = false
         subscribeFollowing()
@@ -1506,10 +1545,23 @@ final class FeedStore {
             return
         }
         profileRequestCounter += 1
+        let subId = "bitos-profile-head-\(profileRequestCounter)"
         let request = client.profileRequest(
-            subscriptionId: "bitos-profile-head-\(profileRequestCounter)", authors: [pubkey]
+            subscriptionId: subId, authors: [pubkey]
         )
-        Task { await pool.broadcast(request) }
+        broadcastOneShot(request, subscriptionId: subId)
+    }
+
+    /// One-shot REQ discipline: a pure head/lookup fetch has no live
+    /// semantics, so CLOSE it once the answer (or the deadline) passed.
+    /// Leaked subscriptions keep every relay streaming matches for the
+    /// socket's lifetime and crowd out frames the UI cares about.
+    private func broadcastOneShot(_ request: String, subscriptionId: String, closeAfter deadline: Duration = .seconds(5)) {
+        Task { [pool, client] in
+            await pool.broadcast(request)
+            try? await Task.sleep(for: deadline)
+            await pool.broadcast(client.close(subscriptionId: subscriptionId))
+        }
     }
 
     private func drainProfiles() {
@@ -1521,15 +1573,26 @@ final class FeedStore {
             guard let self else { return }
             let primary = await self.pool.primaryRelay()
             self.profileRequestCounter += 1
+            let subId = "bitos-profiles-\(self.profileRequestCounter)"
             let request = self.client.profileRequest(
-                subscriptionId: "bitos-profiles-\(self.profileRequestCounter)", authors: batch
+                subscriptionId: subId, authors: batch
             )
             if let primary {
                 await self.pool.broadcast(request, to: [primary])
             } else {
                 await self.pool.broadcast(request)
             }
+            self.broadcastOneShotClose(subscriptionId: subId)
             self.scheduleProfileFallback(batch, excluding: primary)
+        }
+    }
+
+    /// CLOSE variant for a REQ that was already sent (possibly to a relay
+    /// subset); broadcasts the CLOSE pool-wide.
+    private func broadcastOneShotClose(subscriptionId: String, closeAfter deadline: Duration = .seconds(5)) {
+        Task { [pool, client] in
+            try? await Task.sleep(for: deadline)
+            await pool.broadcast(client.close(subscriptionId: subscriptionId))
         }
     }
 
@@ -1541,10 +1604,17 @@ final class FeedStore {
             let relays = await self.pool.fallbackRelays(excluding: primary)
             guard !unresolved.isEmpty, !relays.isEmpty else { return }
             self.profileRequestCounter += 1
+            let subId = "bitos-profiles-fallback-\(self.profileRequestCounter)"
             let request = self.client.profileRequest(
-                subscriptionId: "bitos-profiles-fallback-\(self.profileRequestCounter)", authors: unresolved
+                subscriptionId: subId, authors: unresolved
             )
             await self.pool.broadcast(request, to: relays)
+            self.broadcastOneShotClose(subscriptionId: subId)
+            // Re-arm lookups that both attempts failed to resolve, so a
+            // later enqueue can retry instead of staying "Anonymous" for
+            // the whole session.
+            try? await Task.sleep(for: .seconds(5))
+            self.requestedProfiles.subtract(batch.filter { self.profiles[$0] == nil })
         }
         profileFallbackTasks.append(task)
     }

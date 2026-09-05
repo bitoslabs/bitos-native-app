@@ -47,6 +47,25 @@ class FeedAggregator(private val maxItems: Int = 200) {
 
     fun size(): Int = window.load().notes.size
 
+    /**
+     * Drops every note failing [keep] in one window revision (contact-list
+     * replace: unfollowed authors' notes must leave the Following window —
+     * they used to linger until bound-eviction churn). Order and the
+     * snapshot cache follow the surviving revision.
+     */
+    fun retainWhere(keep: (FeedNote) -> Boolean) {
+        while (true) {
+            val current = window.load()
+            val keptIds = current.orderedIds.filter { id ->
+                current.notes[id]?.let(keep) ?: false
+            }
+            if (keptIds.size == current.orderedIds.size) return
+            val notes = buildMap(keptIds.size) { keptIds.forEach { id -> current.notes[id]?.let { put(id, it) } } }
+            val next = Window(notes = notes, orderedIds = keptIds)
+            if (window.compareAndSet(current, next)) return
+        }
+    }
+
     /** Insert an event; returns false when it was a duplicate. */
     fun insert(note: FeedNote): Boolean {
         while (true) {

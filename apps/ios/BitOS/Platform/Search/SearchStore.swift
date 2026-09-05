@@ -32,6 +32,7 @@ final class SearchStore {
     private var seen = Set<String>()
     private var activeQuery: String?
     private var activeScope: SearchScope = .general
+    private var subscriptionCounter = 0
 
     init(pool: RelayPool, client: any BusinessCoreClient, bridge: BusinessCoreBridge = BusinessCoreBridge()) {
         self.pool = pool
@@ -92,6 +93,20 @@ final class SearchStore {
         let npub = query.hasPrefix("npub1") ? (bridge.resolveNpub(query: query) as? String) : nil
         resolvedNpub = npub
 
+        // NIP-01 hashtag recall: `#` has no defined meaning in a NIP-50
+        // search string, so `#tag` queries broadcast the standard `#t`
+        // filter instead — indexed by every conforming relay. Matching
+        // stays local + verified via `matchesSearch`.
+        subscriptionCounter += 1
+        if let request = (bridge.searchTagRequest(
+            subscriptionId: "bitos-search-\(subscriptionCounter)",
+            query: query,
+            kinds: scope.kinds.map { KotlinInt(value: Int32($0)) },
+            limit: 50
+        ) as String?) {
+            Task { await pool.broadcast(request) }
+        }
+
         activeQuery = query
         activeScope = scope
 
@@ -111,7 +126,7 @@ final class SearchStore {
                 profiles[metadata.pubkey] = metadata
             }
         } else if client.isFeedKind(event.kind) {
-            guard let query = activeQuery, activeScope.includes(event.kind),
+            guard let query = activeQuery, activeScope.kinds.contains(event.kind),
                   client.matchesSearch(event: event, query: query) else { return }
             guard !seen.contains(event.id) else { return }
             seen.insert(event.id)
@@ -125,10 +140,11 @@ final class SearchStore {
 }
 
 private extension SearchScope {
-    func includes(_ kind: Int) -> Bool {
+    /// The queried kind set (Discover general vs Bitz media-only).
+    var kinds: [Int] {
         switch self {
-        case .general: [1, 21, 22].contains(kind)
-        case .bitzMedia: [20, 21, 22, 34235, 34236].contains(kind)
+        case .general: [1, 21, 22]
+        case .bitzMedia: [20, 21, 22, 34235, 34236]
         }
     }
 }

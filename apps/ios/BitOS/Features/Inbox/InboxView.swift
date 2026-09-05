@@ -370,7 +370,7 @@ struct InboxView: View {
                     onMarkRead: { store.markRead(group.itemIds) },
                     onCopyId: { UIPasteboard.general.string = group.targetEventId ?? "" },
                     onShowRaw: {
-                        rawJson = group.itemIds.compactMap { store.rawEvents[$0] }.first.map(RawEvent.init)
+                        rawJson = group.itemIds.compactMap { store.rawEvents[$0] }.first.map { RawEvent(value: $0) }
                     },
                     onViewProfile: viewProfile,
                     onToggleMute: toggleMute,
@@ -388,7 +388,7 @@ struct InboxView: View {
                     onMarkRead: { store.markRead(group.itemIds) },
                     onCopyId: { UIPasteboard.general.string = group.targetEventId ?? "" },
                     onShowRaw: {
-                        rawJson = group.itemIds.compactMap { store.rawEvents[$0] }.first.map(RawEvent.init)
+                        rawJson = group.itemIds.compactMap { store.rawEvents[$0] }.first.map { RawEvent(value: $0) }
                     },
                     onViewProfile: viewProfile,
                     onToggleMute: toggleMute,

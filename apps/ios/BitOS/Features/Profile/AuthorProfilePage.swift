@@ -655,6 +655,15 @@ struct AuthorProfilePage: View {
             Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(BitOSTheme.textSecondary)
+            // A timed-out page is not proof the author has no notes —
+            // offer an explicit re-issue.
+            if let store, !store.isLoading {
+                Button("Retry") {
+                    store.retryFirstPage()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BitOSTheme.accent)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, BitOSTheme.Spacing.xxl)

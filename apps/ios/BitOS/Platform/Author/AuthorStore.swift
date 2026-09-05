@@ -97,13 +97,31 @@ final class AuthorStore {
         Task { await requestPage(untilSeconds: until) }
     }
 
+    /// Re-issues the first page after an empty result — a timed-out or
+    /// relay-less page is not proof the author has no notes.
+    func retryFirstPage() {
+        guard pubkey != nil, notes.isEmpty else { return }
+        isLoading = true
+        canLoadMore = true
+        Task { await requestPage(untilSeconds: nil) }
+    }
+
     private func requestPage(untilSeconds: Int64?) async {
         guard let target = pubkey else { return }
         let subId = untilSeconds == nil ? "bitos-author" : "bitos-author-\(page)"
         closeActivePage()
+        var expectedRelays = await pool.connectedRelays()
+        if expectedRelays.isEmpty {
+            // Cold start: `pool.start()` returns before sockets connect, and
+            // an empty expected set can never settle on ALL-EOSE — the page
+            // would always ride the full deadline. Give connects a short
+            // grace instead (the deadline still bounds the total wait).
+            try? await Task.sleep(for: .milliseconds(400))
+            expectedRelays = await pool.connectedRelays()
+        }
         var batch = PageBatch(
             subId: subId,
-            expectedRelays: await pool.connectedRelays(),
+            expectedRelays: expectedRelays,
             startedAtCount: notes.count
         )
         batch.timeoutTask = Task { [weak self] in

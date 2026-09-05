@@ -167,6 +167,32 @@ fan-out above therefore fires on the provisional account and self-corrects
 when restore replaces or clears it — the same `.task(id: pubkey)` race
 window, now explicitly bounded by the registry pointer.
 
+### 6.2 Profile / "You" content and follow-scope rules (2026-09 audit)
+
+- The You tabs (Notes · Replies · Bitz) come from a dedicated author-scoped
+  REQ (`authorRequest`: kind-0 head + split media/text filters on
+  `authors:[me]`), never from filtering the Home feed window — the Home
+  head window is global and the Following lane is follow-filtered, so a
+  Home-derived own-profile projection undercounts and empties. Android
+  uses a dedicated `ownAuthorRepository` so the shared author sheet/page
+  cannot clobber the You tab's REQ mid-composition; iOS uses a
+  ProfileView-local `AuthorStore`. Reposts (kind 6) remain a best-effort
+  projection of the feed window until an author-scoped kind-6 REQ exists.
+- Author pages and You surface an explicit Retry on an empty tab:
+  `retryFirstPage()` re-issues the first page because a timed-out page is
+  not proof of exhaustion (same rule as the feed's older-walk).
+- One-shot lookup REQs (profile batches, fallbacks, following-profiles)
+  are CLOSEd ~5 s after issue, and a batch whose primary + fallback both
+  failed is removed from `requestedProfiles` so a later enqueue retries
+  instead of rendering "Anonymous" for the session.
+- The Following backwards walk is author-scoped
+  (`BitzTimelinePolicy.batchFilters(until, authors)`, chunked ≤100 per
+  filter because relays cap author-array length); the global walk wasted
+  its 6-batch budget on unrelated events filtered client-side.
+- `ContactList.MAX_FOLLOWS` is 250 — just below the codec's 256-tag bound
+  so any accepted kind-3 parses in full and a follow/unfollow republish
+  never drops parsed follows.
+
 ## 7. Composition roots
 
 Construct dependencies once at the app/service boundary:

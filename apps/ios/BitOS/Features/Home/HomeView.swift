@@ -243,7 +243,7 @@ struct HomeView: View {
         case "copy-npub":
             UIPasteboard.general.string = (bridge.npubEncode(pubkeyHex: note.pubkey) as String?) ?? note.pubkey
         case "raw-event":
-            rawEventText = store.rawEventJson(forNoteId: note.id).map(RawEvent.init)
+            rawEventText = store.rawEventJson(forNoteId: note.id).map { RawEvent(value: $0) }
                 ?? RawEvent(
                     value: "This event is no longer available in this device's bounded feed cache.",
                     isEventJson: false

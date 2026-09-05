@@ -138,6 +138,15 @@ class AuthorRepository(
         requestPage(untilSeconds = until)
     }
 
+    /** Re-issues the first page after an empty result — a timed-out or
+     *  relay-less page is not proof the author has no notes. */
+    fun retryFirstPage() {
+        val target = pubkey ?: return
+        if (notes.isNotEmpty()) return
+        mutableState.value = mutableState.value.copy(isLoading = true, canLoadMore = true)
+        requestPage(untilSeconds = null)
+    }
+
     private fun requestPage(untilSeconds: Long?) {
         val target = pubkey ?: return
         val subId = if (untilSeconds == null) "bitos-author" else "bitos-author-$page"

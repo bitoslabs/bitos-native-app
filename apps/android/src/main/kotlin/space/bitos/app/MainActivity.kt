@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
         val muteStore = application.muteStore
         val searchRepository = application.searchRepository
         val authorRepository = application.authorRepository
+        val ownAuthorRepository = application.ownAuthorRepository
         val settingsStore = application.settingsStore
         val algorithmStore = application.algorithmStore
         val privacyPrefs = application.privacyPrefs
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
                 notifications = notificationRepository,
                 searchRepository = searchRepository,
                 authorRepository = authorRepository,
+                ownAuthorRepository = ownAuthorRepository,
                 settingsStore = settingsStore,
                 feedRepository = repository,
                 relayManager = relayManager,

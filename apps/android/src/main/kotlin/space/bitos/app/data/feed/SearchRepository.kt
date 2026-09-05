@@ -139,6 +139,22 @@ class SearchRepository(
         activeQuery = query
         activeScope = searchScope
 
+        // NIP-01 hashtag recall: `#` has no defined meaning in a NIP-50
+        // search string, so `#tag` queries broadcast the standard `#t`
+        // filter instead — single-letter tag filters are indexed by every
+        // conforming relay. Results still flow through the verified stream
+        // and `SearchResults.matches` (local search stays verify-first);
+        // free-text recall remains local-only (NIP-50 support varies).
+        SearchResults.queryTag(query)?.let { tag ->
+            subscriptionCounter += 1
+            SearchResults.tagRequest(
+                subscriptionId = "bitos-search-$subscriptionCounter",
+                tag = tag,
+                kinds = searchScope.kinds,
+                limit = 50,
+            )?.let(pool::broadcast)
+        }
+
         // Resolve the search-in-progress state after a settling window.
         settleJob = scope.launch {
             delay(SETTLE_MS)

@@ -1046,7 +1046,7 @@ struct BitzView: View {
         case "copy-npub":
             UIPasteboard.general.string = rules.npub(note.pubkey)
         case "raw-event":
-            rawEventText = environment.feedStore.rawEventJson(forNoteId: note.id).map(RawEvent.init)
+            rawEventText = environment.feedStore.rawEventJson(forNoteId: note.id).map { RawEvent(value: $0) }
                 ?? RawEvent(
                     value: "This event is no longer available in this device's bounded feed cache.",
                     isEventJson: false

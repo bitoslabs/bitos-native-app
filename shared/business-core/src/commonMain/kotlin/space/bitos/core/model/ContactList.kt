@@ -30,8 +30,12 @@ object ContactList {
     fun newest(events: List<NostrEvent>): NostrEvent? =
         events.filter { it.kind == NostrKinds.CONTACT_LIST }.maxByOrNull { it.createdAt }
 
-    /** Below the codec tag bound (256) so real contact lists always decode. */
-    const val MAX_FOLLOWS = 200
+    /**
+     * Just below the codec tag bound (256) so any accepted kind-3 parses in
+     * full. Republishing a follow change must never emit fewer `p` tags than
+     * the stored list, or unfollowed-but-parsed-only accounts get dropped.
+     */
+    const val MAX_FOLLOWS = 250
 
     private val hasher: EventHasher = Sha256EventHasher
 }

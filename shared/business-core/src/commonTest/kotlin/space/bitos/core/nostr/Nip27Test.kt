@@ -157,8 +157,8 @@ class FeedNoteContentWarningTest {
     @Test
     fun legacySensitiveHashtagsFallBackToTheContentWarningGate() {
         assertTrue(note(listOf(listOf("t", "NSFW"))).contentWarning)
-        assertTrue(note(emptyList(), "behind the scenes #Porn")).contentWarning)
-        assertTrue(note(emptyList(), "warning #nudity")).contentWarning)
+        assertTrue(note(emptyList(), "behind the scenes #Porn").contentWarning)
+        assertTrue(note(emptyList(), "warning #nudity").contentWarning)
         assertTrue(note(emptyList(), "safe discussion of explicit permissions").contentWarning.not())
     }
 }

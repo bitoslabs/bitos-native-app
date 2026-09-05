@@ -93,6 +93,7 @@ fun BitOSApp(
     notifications: space.bitos.app.data.feed.NotificationRepository,
     searchRepository: space.bitos.app.data.feed.SearchRepository,
     authorRepository: space.bitos.app.data.feed.AuthorRepository,
+    ownAuthorRepository: space.bitos.app.data.feed.AuthorRepository,
     settingsStore: space.bitos.app.data.settings.SettingsStore,
     feedRepository: space.bitos.app.data.feed.FeedRepository,
     relayManager: space.bitos.app.data.relay.RelayManager,
@@ -566,7 +567,7 @@ fun BitOSApp(
                                     )
                                 },
                             )
-                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note }, onOpenMentionProfile = { authorPageTarget = it })
+                            TopLevelDestination.YOU -> space.bitos.app.ui.profile.ProfileScreen(identityViewModel, settingsStore, feedRepository, relayManager, notePublisher, notifications, algorithmStore, homeViewModel, privacyPrefs, profileLookup = profileLookup, ownAuthorRepository = ownAuthorRepository, onOpenZaps = { showZaps = true }, onOpenBitzPlayer = { author, note -> authorBitzTarget = author to note }, onOpenMentionProfile = { authorPageTarget = it })
                         }
                     }
                 }

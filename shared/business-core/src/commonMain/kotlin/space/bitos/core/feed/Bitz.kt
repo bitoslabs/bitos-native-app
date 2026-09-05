@@ -172,10 +172,35 @@ object BitzTimelinePolicy {
         """{"kinds":[1],"limit":$TEXT_INITIAL_LIMIT}""",
     )
 
-    fun batchFilters(until: Long): List<String> = listOf(
-        """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
-        """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
-    )
+    fun batchFilters(until: Long): List<String> = batchFilters(until, authors = null)
+
+    /**
+     * Backwards-walk filters. [authors] scopes the walk to a follow set
+     * (Following timeline parity with the following REQ): the global walk
+     * downloads up to 6 × 210 unrelated events per load-more and filters
+     * client-side, which both wastes the walk budget and can falsely
+     * exhaust before any followed content is found. Author chunks stay
+     * small because several relays cap author-array length and would
+     * silently truncate a single large filter.
+     */
+    fun batchFilters(until: Long, authors: List<String>?): List<String> {
+        val scoped = authors?.takeIf { it.isNotEmpty() }
+            ?.chunked(FOLLOWING_WALK_AUTHOR_CHUNK)
+            ?: return listOf(
+                """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_PAGE_LIMIT,"until":$until}""",
+                """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until}""",
+            )
+        return scoped.flatMap { chunk ->
+            val joined = chunk.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
+            listOf(
+                """{"kinds":[${MEDIA_KINDS.joinToString(",")}],"limit":$MEDIA_PAGE_LIMIT,"until":$until,"authors":$joined}""",
+                """{"kinds":[1],"limit":$TEXT_PAGE_LIMIT,"until":$until,"authors":$joined}""",
+            )
+        }
+    }
+
+    /** Author-array chunk for follow-scoped walk filters (relay caps). */
+    const val FOLLOWING_WALK_AUTHOR_CHUNK = 100
 
     /** The walk continues while the budget is unfilled and batches remain. */
     fun shouldContinue(foundFreshMedia: Int, batchesIssued: Int): Boolean =

@@ -91,6 +91,8 @@ class BusinessCoreBridge {
         val fallbackUrls: List<String> = emptyList(),
         /** FED-004 rendition ladder as `url|height|bitrate` spec rows. */
         val renditionSpecs: List<String> = emptyList(),
+        /** Safe image-only previews for allowlisted external providers. */
+        val externalVideoPreviews: List<space.bitos.core.feed.ExternalVideoPreview> = emptyList(),
     )
 
     /**
@@ -270,6 +272,17 @@ class BusinessCoreBridge {
         NostrEventCodec.encodeRequest(
             subscriptionId,
             space.bitos.core.feed.BitzTimelinePolicy.batchFilters(until),
+        )
+
+    /** APP-004 pagination, follow-scoped: one older page for the Following
+     *  lane so the walk does not spend its budget on unrelated events. */
+    fun olderFeedRequestForAuthors(subscriptionId: String, until: Long, limit: Int, authors: List<String>): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            space.bitos.core.feed.BitzTimelinePolicy.batchFilters(
+                until,
+                authors.take(space.bitos.core.model.ContactList.MAX_FOLLOWS),
+            ),
         )
 
     /** FED-004 walk bound: page budget counts fresh media only. */
@@ -488,6 +501,7 @@ class BusinessCoreBridge {
             license = note.license,
             fallbackUrls = note.video?.fallbackUrls ?: emptyList(),
             renditionSpecs = note.video?.renditions?.map { renditionSpec(it) } ?: emptyList(),
+            externalVideoPreviews = note.externalVideoPreviews,
         )
     }
 
@@ -1029,6 +1043,13 @@ class BusinessCoreBridge {
     /** Shared local-search predicate for verified, normally delivered events. */
     fun matchesSearch(event: Event, query: String): Boolean =
         space.bitos.core.feed.SearchResults.matches(FeedNote.from(event.toCore()), query)
+
+    /** NIP-01 hashtag REQ for `#tag` queries (NIP-50 leaves `#` undefined in
+     *  search strings); null when the query is not a bounded single token. */
+    fun searchTagRequest(subscriptionId: String, query: String, kinds: List<Int>, limit: Int): String? {
+        val tag = space.bitos.core.feed.SearchResults.queryTag(query) ?: return null
+        return space.bitos.core.feed.SearchResults.tagRequest(subscriptionId, tag, kinds, limit)
+    }
 
     /**
      * Identity onboarding content (spec §4, docs/ui/app-01): shared copy for
@@ -2535,10 +2556,25 @@ class BusinessCoreBridge {
 
     /** REQ for followed authors' notes (the Following timeline). */
     fun followingRequest(subscriptionId: String, authors: List<String>): String {
-        val joined = authors.take(space.bitos.core.model.ContactList.MAX_FOLLOWS)
-            .joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-        val filter = """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"authors":$joined,"limit":40}"""
-        return NostrEventCodec.encodeRequest(subscriptionId, filter)
+        // Chunked filters (100 authors each): several relays cap author-array
+        // length and would silently truncate a single large filter.
+        val filters = authors.take(space.bitos.core.model.ContactList.MAX_FOLLOWS)
+            .chunked(FOLLOWING_FILTER_AUTHORS)
+            .map { chunk ->
+                val joined = chunk.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
+                """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"authors":$joined,"limit":40}"""
+            }
+        if (filters.isEmpty()) {
+            return NostrEventCodec.encodeRequest(
+                subscriptionId,
+                """{"kinds":[${NostrKinds.SHORT_TEXT_NOTE},${NostrKinds.NORMAL_VIDEO},${NostrKinds.SHORT_VIDEO}],"authors":[],"limit":0}""",
+            )
+        }
+        return NostrEventCodec.encodeRequest(subscriptionId, filters)
+    }
+
+    private companion object {
+        const val FOLLOWING_FILTER_AUTHORS = 100
     }
 
     /** Composes the unsigned kind-1 reply and returns its canonical id. */
@@ -3923,6 +3959,10 @@ class FeedWindow(maxItems: Int) {
         aggregator.snapshot().map { it.toBridge() }
 
     fun size(): Int = aggregator.size()
+
+    /** Drops notes failing [keepPubkey]'s authorship (contact-list replace). */
+    fun retainAuthors(keepPubkeys: Set<String>) =
+        aggregator.retainWhere { it.pubkey in keepPubkeys }
 
     private fun BusinessCoreBridge.Note.toCore() = FeedNote(
         id = id,
