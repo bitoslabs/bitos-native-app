@@ -481,6 +481,7 @@ struct HomeView: View {
                 StoryViewerView(
                     author: target,
                     interactionFor: { environment.storiesStore.interactions[$0] },
+                    profileFor: { pubkey in store.profiles[pubkey] },
                     isMine: identity.account.map { $0.pubkeyHex == target.pubkey } ?? false,
                     hasIdentity: identity.account != nil,
                     onLike: { slide in
@@ -889,10 +890,19 @@ struct HomeView: View {
                             seenIds: environment.storiesStore.seenIds,
                             onOpen: { environment.storiesStore.openViewer($0) },
                             onCreateStory: { showStoryComposer = true },
-                            onOpenPublicStories: onOpenDiscover
+                            onOpenPublicStories: onOpenDiscover,
+                            profileFor: { pubkey in store.profiles[pubkey] }
                         )
                         .padding(.vertical, BitOSTheme.Spacing.base)
                         .id(HomeView.storiesTopId)
+                        .task(id: environment.storiesStore.authors.map(\.pubkey).joined(separator: ",") + "|" + environment.storiesStore.publicAuthors.map(\.pubkey).joined(separator: ",")) {
+                            // Web `profiles.ensure` parity: fetch kind-0
+                            // metadata for story authors missing from the
+                            // profile cache (display names + pictures).
+                            let storyPubkeys = Set((environment.storiesStore.authors + environment.storiesStore.publicAuthors).map(\.pubkey))
+                            let missing = storyPubkeys.filter { store.profiles[$0] == nil }.prefix(30)
+                            if !missing.isEmpty { store.requestMentionProfiles(Array(missing)) }
+                        }
                     }
                     ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
                         noteCardRow(note: note, index: index)

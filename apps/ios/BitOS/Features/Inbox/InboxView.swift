@@ -914,7 +914,7 @@ private struct SentZapRowView: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(BitOSTheme.border).frame(height: 1)
+            Rectangle().fill(BitOSTheme.divider).frame(height: 0.5)
         }
     }
 }
@@ -1152,7 +1152,7 @@ private struct ActivityRowChrome: ViewModifier {
                 }
             }
             .overlay(alignment: .bottom) {
-                Rectangle().fill(BitOSTheme.border).frame(height: 1)
+                Rectangle().fill(BitOSTheme.divider).frame(height: 0.5)
             }
     }
 }

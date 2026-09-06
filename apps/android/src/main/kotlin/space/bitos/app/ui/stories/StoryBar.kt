@@ -29,20 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Send
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -121,6 +108,13 @@ private fun unseenRingBrush(): Brush = Brush.linearGradient(
     listOf(BitOSColors.primary, Color(0xFFFF6B9D), BitOSColors.primary),
 )
 
+/** Display name (web `nameFor` parity): profile name over the raw key. */
+private fun storyDisplayName(
+    pubkey: String,
+    profileFor: (String) -> space.bitos.core.model.ProfileMetadata?,
+): String =
+    profileFor(pubkey)?.bestDisplayName?.takeIf { it.isNotBlank() } ?: shortPubkey(pubkey)
+
 /** Layered hex story ring (web `story-ring-frame hex-clip` parity): a
  * 3 dp gradient (unseen) or muted (seen) hex ring, a 2 dp inner gap, then
  * the hex avatar — the ring shape always matches the avatar clip. */
@@ -130,6 +124,8 @@ private fun StoryRingHexAvatar(
     avatarSize: Int,
     ring: Brush,
     inner: Color = BitOSColors.surface,
+    pictureUrl: String? = null,
+    hasLightning: Boolean = false,
 ) {
     Box(
         Modifier
@@ -147,7 +143,7 @@ private fun StoryRingHexAvatar(
             contentAlignment = Alignment.Center,
         ) {
             Box(Modifier.padding(2.dp)) {
-                PubkeyAvatar(pubkey = pubkey, size = avatarSize)
+                PubkeyAvatar(pubkey = pubkey, size = avatarSize, pictureUrl = pictureUrl, hasLightning = hasLightning)
             }
         }
     }
@@ -161,6 +157,8 @@ fun StoriesBar(
     onOpenViewer: (StoryAuthor) -> Unit,
     onCreateStory: () -> Unit,
     onOpenPublicStories: () -> Unit,
+    /** Kind-0 metadata lookup for display names + avatar pictures. */
+    profileFor: (String) -> space.bitos.core.model.ProfileMetadata? = { null },
     modifier: Modifier = Modifier,
 ) {
     LazyRow(
@@ -170,11 +168,11 @@ fun StoriesBar(
     ) {
         item(key = "create-story") { CreateStoryCard(onClick = onCreateStory) }
         items(authors, key = { it.pubkey }) { author ->
-            StoryCard(author, seenIds) { onOpenViewer(author) }
+            StoryCard(author, seenIds, profileFor) { onOpenViewer(author) }
         }
         item(key = "public-stories") { PublicStoriesButton(onClick = onOpenPublicStories) }
         items(publicAuthors, key = { "public-${it.pubkey}" }) { author ->
-            StoryCard(author, seenIds) { onOpenViewer(author) }
+            StoryCard(author, seenIds, profileFor) { onOpenViewer(author) }
         }
     }
 }
@@ -203,7 +201,7 @@ private fun CreateStoryCard(onClick: () -> Unit) {
                     .background(BitOSColors.surface, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Add, contentDescription = null, tint = BitOSColors.primary)
+                Icon(space.bitos.app.ui.theme.AppIcons.Add, contentDescription = null, tint = BitOSColors.primary)
             }
         }
         Text(
@@ -218,7 +216,12 @@ private fun CreateStoryCard(onClick: () -> Unit) {
 }
 
 @Composable
-private fun StoryCard(author: StoryAuthor, seenIds: Set<String>, onClick: () -> Unit) {
+private fun StoryCard(
+    author: StoryAuthor,
+    seenIds: Set<String>,
+    profileFor: (String) -> space.bitos.core.model.ProfileMetadata?,
+    onClick: () -> Unit,
+) {
     val hasUnseen = author.slides.any { it.id !in seenIds }
     val latest = author.slides.first()
     val gradient = latest.gradient
@@ -276,7 +279,17 @@ private fun StoryCard(author: StoryAuthor, seenIds: Set<String>, onClick: () -> 
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
                 .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.sm),
         ) {
-            Text(shortPubkey(author.pubkey), style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(storyDisplayName(author.pubkey, profileFor), style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1)
+                if (!profileFor(author.pubkey)?.nip05.isNullOrBlank()) {
+                    Icon(
+                        space.bitos.app.ui.theme.AppIcons.CheckCircle,
+                        contentDescription = "NIP-05 identity claim",
+                        tint = Color.White,
+                        modifier = Modifier.padding(start = 3.dp).size(12.dp),
+                    )
+                }
+            }
         }
         // Hex ring (web `hex-clip` parity): gradient = unseen, muted = seen.
         Box(Modifier.padding(BitOSSpacing.sm)) {
@@ -288,6 +301,8 @@ private fun StoryCard(author: StoryAuthor, seenIds: Set<String>, onClick: () -> 
                 } else {
                     Brush.linearGradient(listOf(BitOSColors.border, BitOSColors.border))
                 },
+                pictureUrl = profileFor(author.pubkey)?.picture,
+                hasLightning = !profileFor(author.pubkey)?.lud16.isNullOrBlank(),
             )
         }
         if (author.isPublicDiscovery || latest.videoUrl != null) {
@@ -304,7 +319,7 @@ private fun StoryCard(author: StoryAuthor, seenIds: Set<String>, onClick: () -> 
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            Icons.Rounded.PlayArrow,
+                            space.bitos.app.ui.theme.AppIcons.Play,
                             contentDescription = "Video story",
                             tint = Color.White,
                             modifier = Modifier.size(12.dp),
@@ -341,7 +356,7 @@ private fun PublicStoriesButton(onClick: () -> Unit) {
             Modifier.size(30.dp).background(Color(0x1F24DFA0), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Rounded.Explore, contentDescription = null, tint = Color(0xFF24DFA0), modifier = Modifier.size(18.dp))
+            Icon(space.bitos.app.ui.theme.AppIcons.Compass, contentDescription = null, tint = Color(0xFF24DFA0), modifier = Modifier.size(18.dp))
         }
         Spacer(Modifier.height(BitOSSpacing.sm))
         Text(
@@ -370,6 +385,8 @@ fun StoryViewer(
     initialIndex: Int = 0,
     /** Engagement lookup for the CURRENT slide (viewer-side, per-slide ids). */
     interactionFor: (String) -> space.bitos.app.data.stories.StoryInteractionUi? = { null },
+    /** Kind-0 metadata lookup for display names + avatar pictures. */
+    profileFor: (String) -> space.bitos.core.model.ProfileMetadata? = { null },
     /** True for the signed-in account's own slides (delete + view count). */
     isMine: Boolean = false,
     /** Signed-in state gates the reply input (web "Sign in to reply"). */
@@ -584,7 +601,7 @@ fun StoryViewer(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Icon(
-                            Icons.Rounded.VisibilityOff,
+                            space.bitos.app.ui.theme.AppIcons.VisibilityOff,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier
@@ -669,17 +686,30 @@ fun StoryViewer(
                             avatarSize = 32,
                             ring = unseenRingBrush(),
                             inner = Color(0x73000000), // black/45 scrim
+                            pictureUrl = profileFor(author.pubkey)?.picture,
+                            hasLightning = !profileFor(author.pubkey)?.lud16.isNullOrBlank(),
                         )
                         Spacer(Modifier.width(BitOSSpacing.sm))
                         Column {
-                            Text(
-                                shortPubkey(author.pubkey),
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.W700,
-                                ),
-                                color = Color.White,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    storyDisplayName(author.pubkey, profileFor),
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.W700,
+                                    ),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                )
+                                if (!profileFor(author.pubkey)?.nip05.isNullOrBlank()) {
+                                    Icon(
+                                        space.bitos.app.ui.theme.AppIcons.CheckCircle,
+                                        contentDescription = "NIP-05 identity claim",
+                                        tint = BitOSColors.primary,
+                                        modifier = Modifier.padding(start = 3.dp).size(13.dp),
+                                    )
+                                }
+                            }
                             Text(
                                 formatTimeAgo(slide.createdAt, System.currentTimeMillis() / 1000),
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
@@ -690,7 +720,7 @@ fun StoryViewer(
                         if (isMine) {
                             IconButton(onClick = { confirmDeleteOpen = true }, modifier = Modifier.size(32.dp)) {
                                 Icon(
-                                    Icons.Rounded.Delete,
+                                    space.bitos.app.ui.theme.AppIcons.Delete,
                                     contentDescription = "Delete story",
                                     tint = Color.White.copy(alpha = 0.8f),
                                     modifier = Modifier.size(16.dp),
@@ -699,7 +729,7 @@ fun StoryViewer(
                         }
                         IconButton(onClick = { paused = !paused }, modifier = Modifier.size(32.dp)) {
                             Icon(
-                                if (paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                if (paused) space.bitos.app.ui.theme.AppIcons.Play else space.bitos.app.ui.theme.AppIcons.Pause,
                                 contentDescription = if (paused) "Play" else "Pause",
                                 tint = Color.White.copy(alpha = 0.8f),
                                 modifier = Modifier.size(16.dp),
@@ -707,7 +737,7 @@ fun StoryViewer(
                         }
                         IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
                             Icon(
-                                Icons.Rounded.Close,
+                                space.bitos.app.ui.theme.AppIcons.Close,
                                 contentDescription = "Close story",
                                 tint = Color.White.copy(alpha = 0.8f),
                                 modifier = Modifier.size(18.dp),
@@ -726,7 +756,7 @@ fun StoryViewer(
                         burstAt = null
                     }
                     Icon(
-                        Icons.Rounded.Favorite,
+                        space.bitos.app.ui.theme.AppIcons.Heart,
                         contentDescription = null,
                         tint = Color(0xFFFF4D67),
                         modifier = Modifier
@@ -823,8 +853,8 @@ fun StoryViewer(
                                         if (replyText.isEmpty()) {
                                             Text(
                                                 if (!hasIdentity) "Sign in to reply"
-                                                else if (replyMode == "reply") "Reply to ${shortPubkey(author.pubkey)}…"
-                                                else "Message ${shortPubkey(author.pubkey)} privately…",
+                                                else if (replyMode == "reply") "Reply to ${storyDisplayName(author.pubkey, profileFor)}…"
+                                                else "Message ${storyDisplayName(author.pubkey, profileFor)} privately…",
                                                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                                                 color = Color(0x99FFFFFF),
                                                 maxLines = 1,
@@ -849,7 +879,7 @@ fun StoryViewer(
                             modifier = Modifier.size(40.dp),
                         ) {
                             Icon(
-                                if (replyMode == "reply") Icons.Rounded.ChatBubbleOutline else Icons.Rounded.Send,
+                                if (replyMode == "reply") space.bitos.app.ui.theme.AppIcons.Comment else space.bitos.app.ui.theme.AppIcons.Send,
                                 contentDescription = if (replyMode == "reply") "Reply to story" else "Message privately",
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp),
@@ -857,7 +887,7 @@ fun StoryViewer(
                         }
                         IconButton(onClick = { likeCurrent() }, modifier = Modifier.size(40.dp)) {
                             Icon(
-                                if (interaction?.likedByMe == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                if (interaction?.likedByMe == true) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                                 contentDescription = if (interaction?.likedByMe == true) "Unlike story" else "Like story",
                                 tint = if (interaction?.likedByMe == true) Color(0xFFFF4D67) else Color.White,
                                 modifier = Modifier.size(18.dp),
@@ -865,7 +895,7 @@ fun StoryViewer(
                         }
                         IconButton(onClick = { onZap(slide) }, modifier = Modifier.size(40.dp)) {
                             Icon(
-                                Icons.Rounded.Bolt,
+                                space.bitos.app.ui.theme.AppIcons.Zap,
                                 contentDescription = "Zap sats to this story",
                                 tint = Color(0xFFFFC24B),
                                 modifier = Modifier.size(20.dp),
@@ -873,7 +903,7 @@ fun StoryViewer(
                         }
                         IconButton(onClick = { activityOpen = true }, modifier = Modifier.size(40.dp)) {
                             Icon(
-                                Icons.Rounded.KeyboardArrowUp,
+                                space.bitos.app.ui.theme.AppIcons.ArrowUp,
                                 contentDescription = "View activity",
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(20.dp),
@@ -888,14 +918,14 @@ fun StoryViewer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         StoryCountChip(
-                            icon = Icons.Rounded.Favorite,
+                            icon = space.bitos.app.ui.theme.AppIcons.Heart,
                             label = "${interaction?.likeCount ?: 0}",
                             onClick = { activityOpen = true },
                         )
                         Spacer(Modifier.width(BitOSSpacing.md))
                         if ((interaction?.zapSats ?: 0L) > 0L || (interaction?.zapCount ?: 0) > 0) {
                             StoryCountChip(
-                                icon = Icons.Rounded.Bolt,
+                                icon = space.bitos.app.ui.theme.AppIcons.Zap,
                                 label = if ((interaction?.zapSats ?: 0L) > 0L) {
                                     "${formatCount(interaction?.zapSats ?: 0L)} sats"
                                 } else {
@@ -908,14 +938,14 @@ fun StoryViewer(
                         }
                         if (isMine) {
                             StoryCountChip(
-                                icon = Icons.Rounded.Visibility,
+                                icon = space.bitos.app.ui.theme.AppIcons.Visibility,
                                 label = "${interaction?.viewCount ?: 0}",
                                 onClick = { activityOpen = true },
                             )
                             Spacer(Modifier.width(BitOSSpacing.md))
                         }
                         StoryCountChip(
-                            icon = Icons.Rounded.ChatBubbleOutline,
+                            icon = space.bitos.app.ui.theme.AppIcons.Comment,
                             label = "${interaction?.replyCount ?: 0}",
                             onClick = { activityOpen = true },
                         )
@@ -954,13 +984,27 @@ fun StoryViewer(
                             Modifier.padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            PubkeyAvatar(pubkey = like.pubkey, size = 28)
-                            Spacer(Modifier.width(BitOSSpacing.sm))
-                            Text(
-                                shortPubkey(like.pubkey),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = BitOSColors.textPrimary,
+                            PubkeyAvatar(
+                                pubkey = like.pubkey, size = 28,
+                                pictureUrl = profileFor(like.pubkey)?.picture,
+                                hasLightning = !profileFor(like.pubkey)?.lud16.isNullOrBlank(),
                             )
+                            Spacer(Modifier.width(BitOSSpacing.sm))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    storyDisplayName(like.pubkey, profileFor),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = BitOSColors.textPrimary,
+                                )
+                                if (!profileFor(like.pubkey)?.nip05.isNullOrBlank()) {
+                                    Icon(
+                                        space.bitos.app.ui.theme.AppIcons.CheckCircle,
+                                        contentDescription = "NIP-05 identity claim",
+                                        tint = BitOSColors.primary,
+                                        modifier = Modifier.padding(start = 4.dp).size(13.dp),
+                                    )
+                                }
+                            }
                             Spacer(Modifier.weight(1f))
                             Text(like.emoji, style = MaterialTheme.typography.bodyMedium)
                         }
@@ -973,13 +1017,27 @@ fun StoryViewer(
                     replies.forEach { reply ->
                         Column(Modifier.padding(vertical = 6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                PubkeyAvatar(pubkey = reply.pubkey, size = 28)
-                                Spacer(Modifier.width(BitOSSpacing.sm))
-                                Text(
-                                    shortPubkey(reply.pubkey),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = BitOSColors.textPrimary,
+                                PubkeyAvatar(
+                                    pubkey = reply.pubkey, size = 28,
+                                    pictureUrl = profileFor(reply.pubkey)?.picture,
+                                    hasLightning = !profileFor(reply.pubkey)?.lud16.isNullOrBlank(),
                                 )
+                                Spacer(Modifier.width(BitOSSpacing.sm))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        storyDisplayName(reply.pubkey, profileFor),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = BitOSColors.textPrimary,
+                                    )
+                                    if (!profileFor(reply.pubkey)?.nip05.isNullOrBlank()) {
+                                        Icon(
+                                            space.bitos.app.ui.theme.AppIcons.CheckCircle,
+                                            contentDescription = "NIP-05 identity claim",
+                                            tint = BitOSColors.primary,
+                                            modifier = Modifier.padding(start = 4.dp).size(13.dp),
+                                        )
+                                    }
+                                }
                                 Spacer(Modifier.weight(1f))
                                 Text(
                                     formatTimeAgo(reply.at, System.currentTimeMillis() / 1000),

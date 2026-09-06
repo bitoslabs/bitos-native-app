@@ -1,3 +1,4 @@
+import BusinessCore
 import SwiftUI
 
 /**
@@ -6,6 +7,19 @@ import SwiftUI
  * canvas, white progress bars, header with hex-ringed avatar, auto-advance
  * (5 s image / 7 s text), left-third / right-two-thirds tap zones.
  */
+
+/// Display name (web `nameFor` parity): profile name over the raw key.
+private func storyDisplayName(
+    _ pubkey: String,
+    _ profileFor: (String) -> ProfileMetadata?
+) -> String {
+    guard let profile = profileFor(pubkey) else { return FeedFormat.shortPubkey(pubkey) }
+    let candidate = [profile.displayName, profile.name]
+        .compactMap { $0 }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty }
+    return candidate ?? FeedFormat.shortPubkey(pubkey)
+}
 
 /// Signature story-ring gradient (web `from-primary-500 via-accent-500
 /// to-warm-500`, app palette): unseen stories / own story. Computed so the
@@ -25,6 +39,8 @@ private struct StoryHexRingAvatar: View {
     let avatarSize: CGFloat
     let ring: AnyShapeStyle
     var inner: Color = BitOSTheme.surface
+    var picture: String? = nil
+    var hasLightning: Bool = false
 
     var body: some View {
         HexShape()
@@ -34,7 +50,7 @@ private struct StoryHexRingAvatar: View {
                 HexShape()
                     .fill(inner)
                     .frame(width: avatarSize + 4, height: avatarSize + 4)
-                    .overlay(PubkeyAvatarView(pubkey: pubkey, size: avatarSize))
+                    .overlay(PubkeyAvatarView(pubkey: pubkey, size: avatarSize, picture: picture, hasLightning: hasLightning))
             )
             .accessibilityHidden(true)
     }
@@ -47,19 +63,21 @@ struct StoriesBarView: View {
     let onOpen: (StoriesStore.StoryAuthorMirror) -> Void
     let onCreateStory: () -> Void
     let onOpenPublicStories: () -> Void
+    /// Kind-0 metadata lookup for display names + avatar pictures.
+    var profileFor: (String) -> ProfileMetadata? = { _ in nil }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: BitOSTheme.Spacing.md) {
                 CreateStoryCard(onClick: onCreateStory)
                 ForEach(authors) { author in
-                    StoryCardView(author: author, seenIds: seenIds) {
+                    StoryCardView(author: author, seenIds: seenIds, profileFor: profileFor) {
                         onOpen(author)
                     }
                 }
                 PublicStoriesButton(onClick: onOpenPublicStories)
                 ForEach(publicAuthors) { author in
-                    StoryCardView(author: author, seenIds: seenIds) {
+                    StoryCardView(author: author, seenIds: seenIds, profileFor: profileFor) {
                         onOpen(author)
                     }
                 }
@@ -111,6 +129,7 @@ private struct CreateStoryCard: View {
 private struct StoryCardView: View {
     let author: StoriesStore.StoryAuthorMirror
     let seenIds: Set<String>
+    let profileFor: (String) -> ProfileMetadata?
     let onClick: () -> Void
 
     private var hasUnseen: Bool {
@@ -152,18 +171,28 @@ private struct StoryCardView: View {
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 VStack {
                     Spacer()
-                    Text(FeedFormat.shortPubkey(author.pubkey))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(BitOSTheme.Spacing.sm)
+                    HStack(spacing: 3) {
+                        Text(storyDisplayName(author.pubkey, profileFor))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        if !(profileFor(author.pubkey)?.nip05?.isEmpty ?? true) {
+                            Image(systemName: AppIcons.checkCircle)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .accessibilityLabel("NIP-05 identity claim")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(BitOSTheme.Spacing.sm)
                 }
                 // Hex ring (web `hex-clip` parity): gradient = unseen, muted = seen.
                 StoryHexRingAvatar(
                     pubkey: author.pubkey,
                     avatarSize: 34,
-                    ring: hasUnseen ? unseenRing : AnyShapeStyle(BitOSTheme.divider)
+                    ring: hasUnseen ? unseenRing : AnyShapeStyle(BitOSTheme.divider),
+                    picture: profileFor(author.pubkey)?.picture,
+                    hasLightning: !(profileFor(author.pubkey)?.lud16 ?? "").isEmpty
                 )
                 .padding(BitOSTheme.Spacing.sm)
                 if author.isPublicDiscovery || author.slides.first?.videoUrl != nil {
@@ -239,6 +268,8 @@ struct StoryViewerView: View {
     let author: StoriesStore.StoryAuthorMirror
     /// Engagement lookup for the CURRENT slide (viewer-side, per-slide ids).
     var interactionFor: (String) -> StoriesStore.StoryInteractionMirror? = { _ in nil }
+    /// Kind-0 metadata lookup for display names + avatar pictures.
+    var profileFor: (String) -> ProfileMetadata? = { _ in nil }
     /// True for the signed-in account's own slides (delete + view count).
     var isMine = false
     /// Signed-in state gates the reply input (web "Sign in to reply").
@@ -414,7 +445,7 @@ struct StoryViewerView: View {
 
             // Double-tap heart burst (web like-burst, simplified).
             if let burstAt {
-                Image(systemName: "heart.fill")
+                Image(systemName: AppIcons.heartFill)
                     .font(.system(size: 84))
                     .foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.42))
                     .position(burstAt)
@@ -433,7 +464,7 @@ struct StoryViewerView: View {
         }
         .clipped()
         .sheet(isPresented: $activityOpen) {
-            StoryActivitySheet(interaction: interaction)
+            StoryActivitySheet(interaction: interaction, profileFor: profileFor)
                 .presentationDetents([.medium, .large])
         }
         .alert("Delete story", isPresented: $confirmDeleteOpen) {
@@ -588,12 +619,23 @@ struct StoryViewerView: View {
                 pubkey: author.pubkey,
                 avatarSize: 32,
                 ring: unseenRing,
-                inner: Color.black.opacity(0.45)
+                inner: Color.black.opacity(0.45),
+                picture: profileFor(author.pubkey)?.picture,
+                hasLightning: !(profileFor(author.pubkey)?.lud16 ?? "").isEmpty
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text(FeedFormat.shortPubkey(author.pubkey))
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
+                HStack(spacing: 3) {
+                    Text(storyDisplayName(author.pubkey, profileFor))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if !(profileFor(author.pubkey)?.nip05?.isEmpty ?? true) {
+                        Image(systemName: AppIcons.checkCircle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.accent)
+                            .accessibilityLabel("NIP-05 identity claim")
+                    }
+                }
                 if let slide {
                     Text(FeedFormat.timeAgo(createdAt: slide.createdAt))
                         .font(.system(size: 11))
@@ -605,7 +647,7 @@ struct StoryViewerView: View {
                 Button {
                     confirmDeleteOpen = true
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: AppIcons.delete)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white.opacity(0.8))
                         .frame(width: 32, height: 32)
@@ -697,7 +739,7 @@ struct StoryViewerView: View {
                     "",
                     text: $replyText,
                     prompt: Text(hasIdentity
-                        ? (replyMode == "reply" ? "Reply to \(FeedFormat.shortPubkey(author.pubkey))…" : "Message \(FeedFormat.shortPubkey(author.pubkey)) privately…")
+                        ? (replyMode == "reply" ? "Reply to \(storyDisplayName(author.pubkey, profileFor))…" : "Message \(storyDisplayName(author.pubkey, profileFor)) privately…")
                         : "Sign in to reply")
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(0.6))
@@ -717,33 +759,33 @@ struct StoryViewerView: View {
                     paused = hasIdentity && !text.isEmpty ? true : paused
                 }
                 actionButton(
-                    icon: replyMode == "reply" ? "bubble.left" : "paperplane",
+                    icon: replyMode == "reply" ? AppIcons.comment : AppIcons.send,
                     label: replyMode == "reply" ? "Reply to story" : "Message privately",
                     action: sendReply
                 )
                 actionButton(
-                    icon: interaction?.likedByMe == true ? "heart.fill" : "heart",
+                    icon: interaction?.likedByMe == true ? AppIcons.heartFill : AppIcons.heart,
                     label: interaction?.likedByMe == true ? "Unlike story" : "Like story",
                     tint: interaction?.likedByMe == true ? Color(red: 1.0, green: 0.30, blue: 0.42) : .white,
                     action: likeCurrent
                 )
                 actionButton(
-                    icon: "bolt.fill",
+                    icon: AppIcons.zap,
                     label: "Zap sats to this story",
                     tint: Color(red: 1.0, green: 0.76, blue: 0.29),
                     action: { if let slide { onZap(slide) } }
                 )
                 actionButton(
-                    icon: "chevron.up",
+                    icon: AppIcons.arrowUp,
                     label: "View activity",
                     action: { activityOpen = true }
                 )
             }
             HStack(spacing: BitOSTheme.Spacing.md) {
-                countButton(icon: "heart.fill", label: "\(interaction?.likeCount ?? 0)") { activityOpen = true }
+                countButton(icon: AppIcons.heartFill, label: "\(interaction?.likeCount ?? 0)") { activityOpen = true }
                 if (interaction?.zapSats ?? 0) > 0 || (interaction?.zapCount ?? 0) > 0 {
                     countButton(
-                        icon: "bolt.fill",
+                        icon: AppIcons.zap,
                         label: (interaction?.zapSats ?? 0) > 0
                             ? "\(FeedFormat.count(Int(interaction?.zapSats ?? 0))) sats"
                             : "\(interaction?.zapCount ?? 0)",
@@ -753,9 +795,9 @@ struct StoryViewerView: View {
                     }
                 }
                 if isMine {
-                    countButton(icon: "eye", label: "\(interaction?.viewCount ?? 0)") { activityOpen = true }
+                    countButton(icon: AppIcons.eye, label: "\(interaction?.viewCount ?? 0)") { activityOpen = true }
                 }
-                countButton(icon: "bubble.left", label: "\(interaction?.replyCount ?? 0)") { activityOpen = true }
+                countButton(icon: AppIcons.comment, label: "\(interaction?.replyCount ?? 0)") { activityOpen = true }
             }
         }
         .padding(.horizontal, BitOSTheme.Spacing.md)
@@ -837,6 +879,7 @@ struct StoryViewerView: View {
 /// Story activity sheet (web `StoryActivity` parity): likes + replies.
 private struct StoryActivitySheet: View {
     let interaction: StoriesStore.StoryInteractionMirror?
+    var profileFor: (String) -> ProfileMetadata? = { _ in nil }
 
     var body: some View {
         NavigationStack {
@@ -851,10 +894,18 @@ private struct StoryActivitySheet: View {
                 Section("Reactions") {
                     ForEach(likes, id: \.eventId) { like in
                         HStack(spacing: BitOSTheme.Spacing.sm) {
-                            PubkeyAvatarView(pubkey: like.pubkey, size: 28)
-                            Text(FeedFormat.shortPubkey(like.pubkey))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(BitOSTheme.textPrimary)
+                            PubkeyAvatarView(pubkey: like.pubkey, size: 28, picture: profileFor(like.pubkey)?.picture, hasLightning: !(profileFor(like.pubkey)?.lud16 ?? "").isEmpty)
+                            HStack(spacing: 4) {
+                                Text(storyDisplayName(like.pubkey, profileFor))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.textPrimary)
+                                if !(profileFor(like.pubkey)?.nip05?.isEmpty ?? true) {
+                                    Image(systemName: AppIcons.checkCircle)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(BitOSTheme.accent)
+                                        .accessibilityLabel("NIP-05 identity claim")
+                                }
+                            }
                             Spacer()
                             Text(like.emoji)
                         }
@@ -864,10 +915,18 @@ private struct StoryActivitySheet: View {
                     ForEach(replies, id: \.eventId) { reply in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: BitOSTheme.Spacing.sm) {
-                                PubkeyAvatarView(pubkey: reply.pubkey, size: 28)
-                                Text(FeedFormat.shortPubkey(reply.pubkey))
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(BitOSTheme.textPrimary)
+                                PubkeyAvatarView(pubkey: reply.pubkey, size: 28, picture: profileFor(reply.pubkey)?.picture, hasLightning: !(profileFor(reply.pubkey)?.lud16 ?? "").isEmpty)
+                                HStack(spacing: 4) {
+                                    Text(storyDisplayName(reply.pubkey, profileFor))
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(BitOSTheme.textPrimary)
+                                    if !(profileFor(reply.pubkey)?.nip05?.isEmpty ?? true) {
+                                        Image(systemName: AppIcons.checkCircle)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(BitOSTheme.accent)
+                                            .accessibilityLabel("NIP-05 identity claim")
+                                    }
+                                }
                                 Spacer()
                                 Text(FeedFormat.timeAgo(createdAt: reply.at))
                                     .font(.system(size: 11))

@@ -25,6 +25,14 @@ Inbox      Activity / zaps / messages
 Profile    Identity / posts / saved / Creator Studio / settings
 ```
 
+The tab-dock center ＋ opens the Create sheet picker (prototype
+`openCreateSheet` parity) with the native creation entries — New note (full
+page composer) · New Bitz (capture hub) · New story (kind-30315 composer).
+The note composer page keeps its action toolbar pinned to the bottom of the
+form, riding just above the open keyboard on both platforms (Android
+`imePadding`, SwiftUI keyboard avoidance) — the keyboard never covers the
+toolbar or the post action.
+
 The central Create action may receive stronger visual treatment, but it remains a real tab with a stable accessibility label and predictable back behavior.
 
 ## 3. Global UI states
@@ -277,7 +285,10 @@ Home -> poster/first frame -> autoplay visible Bitz
         #e, kind 1 by #e/#a; latest reaction per pubkey, zap receipts
         deduped by event id); view receipts stay private by default
      -> Create story opens the dedicated story composer (web `StoryComposer`
-        parity): 9:16 preview, ≤280-char caption, six gradient backgrounds
+        parity; reachable BOTH from the rail's Create story card and the
+        shell Create sheet's New story row, prototype `#/story-compose`):
+        9:16 preview carrying the "24 h · kind-30315" expiry chip, ≤280-char
+        caption, six gradient backgrounds
         for text-only slides (published as the `background` CSS token),
         ≤6 gallery images each hash-verified-uploaded via Blossom BEFORE
         anything references it, alt text (NIP-92 on the first imeta) and a

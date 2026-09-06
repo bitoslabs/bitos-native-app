@@ -67,8 +67,8 @@ import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSTheme
 
 /** Five-slot product shell (prototype parity: Home · Bitz · ＋ · Activity · You).
- * The center ＋ opens the Create sheet (New note / New Bitz) — it replaces
- * the removed Home FAB, which conflicted with the tab bar. Chats lives
+ * The center ＋ opens the Create sheet (New note / New Bitz / New story) — it
+ * replaces the removed Home FAB, which conflicted with the tab bar. Chats lives
  * INSIDE Activity as a chip (Activity | Chats · unread). Discover stays
  * reachable from the Home header search and the More hub; Settings pushes
  * from You. */
@@ -173,6 +173,8 @@ fun BitOSApp(
             settingsSnapshot.sensitiveMedia == space.bitos.core.settings.SensitiveMediaSetting.SHOW
         // APP-008: the composer is a full page (legacy CreateView parity).
         var showCreateNote by remember { mutableStateOf(false) }
+        // APP-006: the Create sheet's New story row (prototype `story-compose`).
+        var showStoryComposer by remember { mutableStateOf(false) }
         // Prototype `openCreateSheet`: the center ＋ picker (New note /
         // New Bitz) — replaces the removed Home FAB.
         var showCreateSheet by remember { mutableStateOf(false) }
@@ -601,7 +603,32 @@ fun BitOSApp(
                         subtitle = "camera → editor → publish",
                         onClick = { showCreateSheet = false; showCreateHub = true },
                     )
+                    Spacer(Modifier.height(8.dp))
+                    CreateSheetRow(
+                        icon = AppIcons.Film,
+                        title = "New story",
+                        subtitle = "24 h · kind-30315 set",
+                        onClick = { showCreateSheet = false; showStoryComposer = true },
+                    )
                 }
+            }
+        }
+
+        // Create sheet → New story: the APP-006 story composer (same surface
+        // the stories rail's Create story card opens, FeedScreen parity).
+        if (showStoryComposer) {
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showStoryComposer = false }) {
+                space.bitos.app.ui.stories.StoryComposerSheet(
+                    identityViewModel = identityViewModel,
+                    onPublish = { text, imageUrls, background, altText, sensitive ->
+                        notePublisher.publishStory(
+                            text, imageUrls, background, altText, sensitive,
+                            { identityViewModel.createSigner() },
+                            space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                        )
+                    },
+                    onClose = { showStoryComposer = false },
+                )
             }
         }
 

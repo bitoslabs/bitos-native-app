@@ -3,8 +3,11 @@ package space.bitos.app.ui.theme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -188,6 +191,9 @@ object AppIcons {
     val Gif = Icons.Rounded.Gif                       // GIF picker (legacy parity)
     val BrokenImage = Icons.Rounded.BrokenImage       // failed media tile
     val Link = Icons.Rounded.Link                     // Solar: linkCircle (profile link)
+    val Compass = Icons.Rounded.Explore          // Solar: compass (public stories lane)
+    val Visibility = Icons.Rounded.Visibility        // own-story view count
+    val VisibilityOff = Icons.Rounded.VisibilityOff  // Solar: eyeClosed (sensitive gate)
 
     /** Convenience for components taking optional leading icons. */
     val none: ImageVector? = null

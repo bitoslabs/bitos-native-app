@@ -185,6 +185,16 @@ class HomeViewModel(
     /** In-app note-ref open (delegates the bounded fetch to the repository). */
     fun openNoteReference(raw: String) = repository.openNoteReference(raw)
 
+    /**
+     * APP-006: kind-0 metadata for story authors (web `profiles.ensure`
+     * parity) — display names + pictures in the bar, viewer and activity
+     * sheet. Bounded by the repository's batch cap.
+     */
+    fun requestStoryAuthorProfiles(pubkeys: List<String>) {
+        if (pubkeys.isEmpty()) return
+        repository.requestMentionProfiles(pubkeys)
+    }
+
     /** Fetched note for an in-app ref open (null while in flight). */
     fun refNote(raw: String): space.bitos.core.feed.FeedNote? = repository.refNote(raw)
 

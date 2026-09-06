@@ -114,7 +114,7 @@ struct StoryComposerSheet: View {
                             sensitive.toggle()
                         } label: {
                             HStack(spacing: BitOSTheme.Spacing.sm) {
-                                Image(systemName: sensitive ? "checkmark.circle.fill" : "circle")
+                                Image(systemName: sensitive ? AppIcons.checkCircle : "circle")
                                     .foregroundStyle(sensitive ? Color(red: 1.0, green: 0.46, blue: 0.37) : BitOSTheme.textSecondary)
                                 Text("Mark as sensitive — blur until tapped")
                                     .font(.system(size: 12, weight: .semibold))
@@ -221,6 +221,16 @@ struct StoryComposerSheet: View {
             }
         }
         .frame(width: 190, height: 338)
+        .overlay(alignment: .topLeading) {
+            // Prototype `#/story-compose` parity: expiry chip on the preview.
+            Text("24 h · kind-30315")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.5), in: Capsule())
+                .padding(6)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .onTapGesture {
             if !images.isEmpty { previewIndex = (previewIndex + 1) % images.count }
@@ -252,7 +262,7 @@ struct StoryComposerSheet: View {
                             images.remove(at: index)
                             previewIndex = min(previewIndex, max(0, images.count - 1))
                         } label: {
-                            Image(systemName: "xmark")
+                            Image(systemName: AppIcons.close)
                                 .font(.system(size: 8, weight: .bold))
                                 .frame(width: 18, height: 18)
                                 .background(Circle().fill(BitOSTheme.surface))
@@ -322,7 +332,7 @@ struct StoryComposerSheet: View {
 /// never reads MainActor state).
 private struct StoryAddImageTile: View {
     var body: some View {
-        Image(systemName: "photo.badge.plus")
+        Image(systemName: AppIcons.photo)
             .font(.system(size: 20))
             .foregroundStyle(BitOSTheme.textSecondary)
             .frame(width: 64, height: 64)

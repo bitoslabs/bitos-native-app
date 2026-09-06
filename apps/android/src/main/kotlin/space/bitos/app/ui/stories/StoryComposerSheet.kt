@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,8 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AddPhotoAlternate
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -147,6 +146,7 @@ fun StoryComposerSheet(
             Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(horizontal = BitOSSpacing.lg)
                 .padding(bottom = BitOSSpacing.xl),
         ) {
@@ -174,6 +174,17 @@ fun StoryComposerSheet(
                         else Modifier.background(Brush.linearGradient(backgrounds[bgIndex]))
                     ),
             ) {
+                // Prototype `#/story-compose` parity: expiry chip on the preview.
+                Text(
+                    "24 h · kind-30315",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.W700),
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(Color(0x80000000), RoundedCornerShape(BitOSRadius.pill))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
                 if (images.isNotEmpty()) {
                     AsyncImage(
                         model = images[previewIndex.coerceIn(0, images.lastIndex)],
@@ -289,7 +300,7 @@ fun StoryComposerSheet(
                                     .size(20.dp)
                                     .background(BitOSColors.surface, CircleShape),
                             ) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Remove image", modifier = Modifier.size(12.dp))
+                                Icon(space.bitos.app.ui.theme.AppIcons.Close, contentDescription = "Remove image", modifier = Modifier.size(12.dp))
                             }
                         }
                     }
@@ -309,7 +320,7 @@ fun StoryComposerSheet(
                                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                                 } else {
                                     Icon(
-                                        Icons.Rounded.AddPhotoAlternate,
+                                        space.bitos.app.ui.theme.AppIcons.Photo,
                                         contentDescription = null,
                                         tint = BitOSColors.textSecondary,
                                     )

@@ -139,6 +139,7 @@ enum AppIcons {
     // eye-off sensitive, bar-chart poll, film GIF, hash, smile) ──────
     static let shieldCheck = "shieldCheck"
     static let eyeClosed = "eyeClosed"
+    static let eye = "eye"                             // own-story view count
     static let chart = "chart"
     static let hashtag = "hashtag"
     static let emoji = "emoji"

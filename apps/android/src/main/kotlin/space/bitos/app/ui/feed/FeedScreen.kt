@@ -192,6 +192,16 @@ fun FeedScreen(
     androidx.compose.runtime.LaunchedEffect(state.accountPubkey, state.following) {
         storiesRepository?.setAccount(state.accountPubkey, state.following, context)
     }
+    // APP-006: fetch kind-0 metadata for story authors missing from the
+    // profile cache (web `profiles.ensure` parity — display names/pictures).
+    androidx.compose.runtime.LaunchedEffect(storiesState.authors, storiesState.publicAuthors) {
+        val missing = (storiesState.authors + storiesState.publicAuthors)
+            .map { it.pubkey }
+            .filterNot { state.profiles.containsKey(it) }
+            .distinct()
+            .take(30)
+        if (missing.isNotEmpty()) viewModel.requestStoryAuthorProfiles(missing)
+    }
     // APP-018 functional settings: autoplay policy + playback rate drive the
     // pool live (closure reads the current snapshot on every reconciliation).
     val settingsSnapshot by settingsStore.snapshot.collectAsStateWithLifecycle()
@@ -350,6 +360,7 @@ fun FeedScreen(
                                     onOpenViewer = { storyViewerTarget = it },
                                     onCreateStory = { showStoryComposer = true },
                                     onOpenPublicStories = onOpenDiscover,
+                                    profileFor = { pubkey -> state.profiles[pubkey] },
                                     modifier = Modifier.padding(top = BitOSSpacing.base, bottom = BitOSSpacing.sm),
                                 )
                             },
@@ -391,6 +402,7 @@ fun FeedScreen(
             space.bitos.app.ui.stories.StoryViewer(
                 author = storyAuthor,
                 interactionFor = { slideId -> storiesState.interactions[slideId] },
+                profileFor = { pubkey -> state.profiles[pubkey] },
                 isMine = storyAuthor.pubkey == state.accountPubkey,
                 hasIdentity = state.accountPubkey != null,
                 onLike = viewModel::likeStorySlide,

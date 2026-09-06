@@ -12,8 +12,8 @@ enum AppDestination: Hashable {
 }
 
 /// Five-slot product shell (prototype parity): Home · Bitz · ＋ · Activity ·
-/// You. The center ＋ opens the Create sheet (New note / New Bitz) and
-/// replaces the removed Home composer FAB, which conflicted with the tab
+/// You. The center ＋ opens the Create sheet (New note / New Bitz / New story)
+/// and replaces the removed Home composer FAB, which conflicted with the tab
 /// bar. Chats lives INSIDE Activity as a chip. Discover stays on the Home
 /// header search and the More hub (APP-017); Settings pushes from You.
 struct RootView: View {
@@ -39,6 +39,8 @@ struct RootView: View {
     @State private var showCreateNote = false
     /** The Create sheet's New Bitz row opens the capture hub. */
     @State private var showCreateBitz = false
+    /** The Create sheet's New story row (prototype `story-compose`). */
+    @State private var showStoryComposer = false
     /** T16 deep-link surfaces. */
     @State private var deepLinkAuthor: String?
     @State private var deepLinkInvoice: String?
@@ -230,9 +232,9 @@ struct RootView: View {
             .environment(environment)
             .environment(environment.identityStore)
         }
-        // Prototype `openCreateSheet`: the center ＋ picker — the two
-        // native creation entries (story compose / quick MEM arrive with
-        // their surfaces; the sheet grows then).
+        // Prototype `openCreateSheet`: the center ＋ picker — the three
+        // native creation entries (quick MEM arrives with the Bitz hub;
+        // the sheet grows then).
         .sheet(isPresented: $showCreateSheet) {
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.base) {
                 Text("Create")
@@ -248,11 +250,37 @@ struct RootView: View {
                     showCreateSheet = false
                     showCreateBitz = true
                 }
+                createRow(icon: "film.fill", title: "New story",
+                          subtitle: "24 h · kind-30315 set") {
+                    showCreateSheet = false
+                    showStoryComposer = true
+                }
                 Spacer(minLength: 8)
             }
             .padding(.horizontal, BitOSTheme.Spacing.base)
             .padding(.top, 12)
-            .presentationDetents([.height(220)])
+            .presentationDetents([.height(300), .large])
+            .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+        // Create sheet → New story: the APP-006 story composer (same
+        // surface the stories rail's Create story card opens, HomeView
+        // parity). A sheet keeps swipe-to-dismiss over the keyboard.
+        .sheet(isPresented: $showStoryComposer) {
+            StoryComposerSheet(
+                onPublish: { text, imageUrls, background, altText, sensitive in
+                    Task { await environment.notePublisher.publishStory(
+                        text: text,
+                        imageUrls: imageUrls,
+                        background: background,
+                        altText: altText,
+                        sensitive: sensitive
+                    ) }
+                },
+                onClose: { showStoryComposer = false }
+            )
+            .environment(environment.identityStore)
+            .environment(environment)
+            .presentationDetents([.large])
             .preferredColorScheme(BitOSTheme.preferredScheme)
         }
         // Create sheet → New note: the full-page composer (legacy parity).

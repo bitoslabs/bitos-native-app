@@ -840,8 +840,9 @@ private fun BoxScope.UnreadStripe(tint: Color) {
 private fun BoxScope.RowDivider() {
     HorizontalDivider(
         modifier = Modifier.align(Alignment.BottomCenter),
-        thickness = 1.dp,
-        color = BitOSColors.border,
+        // Home-feed parity: soft divider token as a hairline.
+        thickness = 0.5.dp,
+        color = BitOSColors.divider,
     )
 }
 
