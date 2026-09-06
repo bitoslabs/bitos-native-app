@@ -4294,6 +4294,17 @@ private fun MemePostFlowScreen(
                         )
                     }
                 }
+                if (caption.isNotEmpty()) {
+                    // Real caption preview — the same shared NIP-27 tokenizer
+                    // the feed cards render with, so hashtags/mentions
+                    // highlight exactly as they will post.
+                    space.bitos.app.ui.components.RichText(
+                        tokens = remember(caption) {
+                            space.bitos.core.nostr.Nip27.tokenize(caption)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Column(
                     Modifier
                         .clip(RoundedCornerShape(12.dp))

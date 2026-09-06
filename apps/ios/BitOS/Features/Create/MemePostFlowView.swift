@@ -30,6 +30,11 @@ struct MemePostFlowView: View {
                         store: store,
                         identity: identity,
                         draft: draft,
+                        richTokens: { content in
+                            ((environment.businessCore as? FrameworkBusinessCoreClient)?
+                                .bridgeForFollowing() ?? BusinessCoreBridge())
+                                .richTokens(content: content)
+                        },
                         onSignAndPublish: {
                             beginPublish()
                             path.append(.publishing)
@@ -474,7 +479,11 @@ private struct MemePreflightView: View {
     let store: MemeEditorStore
     let identity: IdentityStore
     let draft: MemePostDraft
+    /// NIP-27 rich tokens for the caption preview (bridge seam — the same
+    /// tokenizer the feed cards render with).
+    let richTokens: (String) -> String
     let onSignAndPublish: () -> Void
+    @State private var captionRichJson = "[]"
 
     private var busy: Bool {
         store.publishState == .uploading || store.publishState == .publishing
@@ -498,22 +507,32 @@ private struct MemePreflightView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-                // Summary card: thumb + kind + imeta facts.
-                HStack(spacing: BitOSTheme.Spacing.md) {
-                    MemePostPreviewThumb(store: store)
-                        .frame(width: 64, height: 96)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(mediaSummary)
-                            .font(.subheadline.weight(.bold))
-                        Text("kind \(kindLabel) · imeta dims + sha256 pinned at upload\(draft.contentWarningOn ? " · CW on" : "")")
-                            .font(.caption)
-                            .foregroundStyle(BitOSTheme.textSecondary)
+                // Summary card: thumb + kind + imeta facts + the caption
+                // rendered exactly as the feed card will show it.
+                VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+                    HStack(spacing: BitOSTheme.Spacing.md) {
+                        MemePostPreviewThumb(store: store)
+                            .frame(width: 64, height: 96)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(mediaSummary)
+                                .font(.subheadline.weight(.bold))
+                            Text("kind \(kindLabel) · imeta dims + sha256 pinned at upload\(draft.contentWarningOn ? " · CW on" : "")")
+                                .font(.caption)
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
+                    if !draft.caption.isEmpty {
+                        Divider()
+                        ExpandableRichText(json: captionRichJson)
+                    }
                 }
                 .padding(BitOSTheme.Spacing.md)
                 .background(BitOSTheme.surface)
                 .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+                .task(id: draft.caption) {
+                    captionRichJson = richTokens(draft.caption)
+                }
 
                 VStack(spacing: 0) {
                     PreflightLine(done: true, label: "Media ready", meta: mediaSummary)

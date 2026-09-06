@@ -420,7 +420,9 @@ plus the keep-it-remixable license note — and publish stamps the machine
 and tag entry use the compact, flat
 prototype treatment; caption input enforces the displayed 300-character limit.
 Preflight shows the real checklist (media, tags, license,
-audience, relays, signer) and runs the existing render → hash-verified upload →
+audience, relays, signer) and previews the caption with the SAME shared
+NIP-27 rich renderer the feed cards use (hashtags/mentions highlighted
+exactly as they will post) and runs the existing render → hash-verified upload →
 sign machine with phase feedback. Zap-scope tags, splits, PoW and schedule
 remain wave-4 work (see `docs/native/meme-studio-plan.md`): the details form
 carries an explicit wave-4 note where the prototype mocks those controls
