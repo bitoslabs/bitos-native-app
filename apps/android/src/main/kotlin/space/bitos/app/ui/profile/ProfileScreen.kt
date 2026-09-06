@@ -168,6 +168,10 @@ fun ProfileScreen(
         // Author-scoped own content (dedicated REQ, paginated); reposts stay
         // on the feed window's best-effort kind-6 projection.
         androidx.compose.runtime.LaunchedEffect(account.pubkeyHex) {
+            // Recover account heads that may have been sent before a relay
+            // socket opened. The contact-list head is the canonical source
+            // for the Following stat and connections sheet.
+            feedRepository.refreshProfileAndFollowing(account.pubkeyHex)
             ownAuthorRepository.open(account.pubkeyHex)
         }
         val ownAuthorState by ownAuthorRepository.state.collectAsStateWithLifecycle()
@@ -441,7 +445,13 @@ fun ProfileScreen(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
                     StatPill("Posts", formatCount(tabNotes.size))
-                    StatPill("Following", formatCount(feedState.following.size), onClick = { showFollowing = true })
+                    StatPill("Following", formatCount(feedState.following.size), onClick = {
+                        // You stays composed after its first visit, so tapping
+                        // Following is also the explicit recovery action for a
+                        // missed/timed-out one-shot contact-list request.
+                        feedRepository.refreshProfileAndFollowing(account.pubkeyHex)
+                        showFollowing = true
+                    })
                     StatPill("Followers", "—", onClick = { showFollowersInfo = true })
                     // Web stats-row parity: truthful sats figure from the
                     // merged ledger (tapping opens the zap wallet).

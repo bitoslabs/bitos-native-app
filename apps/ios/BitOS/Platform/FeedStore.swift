@@ -189,8 +189,11 @@ final class FeedStore {
         window = window ?? client.makeFeedWindow(maxItems: 200)
         followingWindow = followingWindow ?? client.makeFeedWindow(maxItems: 200)
         hydrateFromCache()
-        await pool.start()
-        subscribe()
+        // Register the verified stream before opening sockets or sending any
+        // REQ. A fast relay can answer a queued subscription immediately;
+        // RelayPool intentionally does no decode/buffering until at least one
+        // verified-stream continuation exists, so registering afterward can
+        // lose the account's kind-3 head and leave You showing zero follows.
         let stream = await pool.verifiedFrames(client: client)
         // Ingest stage (audit R1/R2 + Phase 2): the pool's shared decode-once
         // gate already ran the trust gate off-main; this task only prebuilds
@@ -202,6 +205,8 @@ final class FeedStore {
                 await self.absorb(Self.ingest(gated, client: client))
             }
         }
+        await pool.start()
+        subscribe()
         healthTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -1236,8 +1241,15 @@ final class FeedStore {
     /// Profile "You" pull-to-fresh equivalent: request only the two account
     /// heads rendered by that surface. Cached projections remain visible
     /// until verified relay responses replace them.
-    func refreshProfileAndFollowing() {
-        guard let pubkey = accountPubkey else { return }
+    func refreshProfileAndFollowing(for pubkey: String) {
+        // Shell account wiring and destination presentation are independent
+        // SwiftUI tasks. If You appears first, activate its known account
+        // here instead of silently skipping the refresh while accountPubkey
+        // is still nil.
+        if accountPubkey != pubkey {
+            setAccount(pubkey)
+            return
+        }
         isRefreshingAccountHeads = true
         accountHeadRefreshTask?.cancel()
         accountHeadRefreshTask = Task { [weak self] in
@@ -1355,6 +1367,10 @@ final class FeedStore {
               let authors = (bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) else { return }
         guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
         followingAuthors = Set(authors)
+        // Keep the public UI projection in the same MainActor transaction as
+        // the accepted contact head; a later full feed projection still
+        // derives the identical value.
+        following = followingAuthors
         // Unfollowed authors' notes leave the window with the follow set —
         // they used to linger until bound-eviction churn.
         followingWindow?.retainAuthors(followingAuthors)

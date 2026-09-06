@@ -162,8 +162,8 @@ struct ProfileView: View {
         // store keeps its cached profile/contact projection on screen while
         // the verified responses arrive and persist.
         .onAppear {
-            environment.feedStore.refreshProfileAndFollowing()
             if let pubkey = store.account?.pubkeyHex {
+                environment.feedStore.refreshProfileAndFollowing(for: pubkey)
                 let own = ownStore ?? AuthorStore(
                     pool: environment.relayPool,
                     client: environment.businessCore
@@ -308,7 +308,13 @@ struct ProfileView: View {
                 Spacer()
                 stat("Posts", FeedFormat.count(tabs[0].1.count))
                 Spacer()
-                Button { showFollowing = true } label: {
+                Button {
+                    // You remains mounted after its first tab visit. Retrying
+                    // here gives a deterministic recovery action if the first
+                    // one-shot contact request timed out.
+                    environment.feedStore.refreshProfileAndFollowing(for: account.pubkeyHex)
+                    showFollowing = true
+                } label: {
                     stat("Following", FeedFormat.count(feed.following.count))
                 }
                 .buttonStyle(.plain)

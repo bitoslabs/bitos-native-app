@@ -1331,7 +1331,13 @@ class FeedRepository(
         followingAuthors.forEach(::enqueueProfile)
         followingSubscribed = false
         subscribeFollowing()
-        mutableState.value = mutableState.value.copy(followingResolved = true)
+        // Publish resolution and the canonical set atomically. Emitting
+        // `resolved=true` with the previous empty set creates a false-zero
+        // UI frame and lets consumers awaiting resolution observe stale data.
+        mutableState.value = mutableState.value.copy(
+            followingResolved = true,
+            following = followingAuthors.toSet(),
+        )
         // The kind-3 head is the source for every Following surface. Keep
         // the verified event in the bounded cache so Home, Bitz and Profile
         // can render it during cold start before relays answer.
@@ -1576,6 +1582,26 @@ class FeedRepository(
             return
         }
         enqueueProfile(pubkey)
+    }
+
+    /**
+     * Refreshes the two account heads rendered by the You surface. Account
+     * activation already bootstraps these requests, but a one-shot REQ sent
+     * before a relay opens is dropped by the transport. Re-entering You must
+     * provide a direct recovery path without waiting for another connection
+     * transition.
+     */
+    fun refreshProfileAndFollowing(pubkey: String) {
+        if (space.bitos.core.model.Pubkey.parse(pubkey) == null) return
+        // Identity and destination collectors start independently. If You
+        // composes first, activate its known account here instead of turning
+        // the refresh into a silent no-op against a still-null account.
+        if (accountPubkey != pubkey) {
+            setAccount(pubkey)
+            return
+        }
+        requestProfile(pubkey, force = true)
+        requestContactHead(pubkey)
     }
 
     /** One-shot REQ discipline: a pure head/lookup fetch has no live

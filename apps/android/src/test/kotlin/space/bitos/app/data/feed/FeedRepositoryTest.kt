@@ -581,7 +581,8 @@ class FeedRepositoryTest {
         repository.start()
         repository.setAccount(account)
         transport.emit(VALID_CONTACT_LIST_MESSAGE)
-        withTimeout(20_000) { repository.state.first { it.followingResolved } }
+        val resolved = withTimeout(20_000) { repository.state.first { it.followingResolved } }
+        assertEquals(2, resolved.following.size, "resolved state must carry the contact set atomically")
 
         // A following REQ targeted the followed author.
         withTimeout(20_000) {
@@ -596,6 +597,43 @@ class FeedRepositoryTest {
         transport.emit(VALID_TEXT_NOTE_MESSAGE)
         val state = withTimeout(20_000) { repository.state.first { it.notes.isNotEmpty() } }
         assertEquals(listOf("second author note"), state.notes.map { it.content })
+    }
+
+    @Test
+    fun refreshProfileAndFollowingReissuesBothYouAccountHeads() = runBlocking {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        repository.start()
+        repository.setAccount(account)
+        transport.sent.clear()
+
+        repository.refreshProfileAndFollowing(account)
+
+        withTimeout(20_000) {
+            while (transport.sent.none { it.startsWith("[\"REQ\",\"bitos-profile-head-") } ||
+                transport.sent.none { it.contains("\"bitos-contacts\"") }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
+        assertTrue(transport.sent.any { it.contains(account) && it.contains("\"kinds\":[0]") })
+        assertTrue(transport.sent.any { it.contains(account) && it.contains("\"kinds\":[3]") })
+    }
+
+    @Test
+    fun youRefreshActivatesAccountWhenIdentityCollectorHasNotRunYet() = runBlocking {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        repository.start()
+
+        repository.refreshProfileAndFollowing(account)
+
+        val state = withTimeout(20_000) {
+            repository.state.first { it.accountPubkey == account }
+        }
+        assertEquals(account, state.accountPubkey)
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains(account) && it.contains("\"kinds\":[3]") }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
     }
 
     @Test

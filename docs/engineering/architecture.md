@@ -184,6 +184,18 @@ window, now explicitly bounded by the registry pointer.
   cannot clobber the You tab's REQ mid-composition; iOS uses a
   ProfileView-local `AuthorStore`. Reposts (kind 6) remain a best-effort
   projection of the feed window until an author-scoped kind-6 REQ exists.
+- Entering You re-issues the active account's kind-0 and kind-3 heads on
+  both platforms. This is a manual recovery path for a one-shot bootstrap
+  REQ that was sent before any relay socket opened; kind-3 remains the sole
+  canonical source for the Following count and connections list.
+- Because top-level tabs stay mounted after their first visit, tapping the
+  Following stat also re-issues the account heads. Accepting a kind-3 publishes
+  `followingResolved` and its follow set together so UI never observes a
+  resolved-but-stale zero projection.
+- Native relay consumers register their verified-frame stream before sockets
+  start or REQs are sent. Fast head responses must have a consumer/buffer at
+  the instant they arrive; otherwise a valid kind-3 can disappear between
+  transport startup and feature-store collection.
 - Author pages and You surface an explicit Retry on an empty tab:
   `retryFirstPage()` re-issues the first page because a timed-out page is
   not proof of exhaustion (same rule as the feed's older-walk).
