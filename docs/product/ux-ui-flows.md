@@ -623,7 +623,9 @@ on both platforms:
   glyph, follow rows with a working **Follow back** pill (optimistic kind-3
   publish; "Following ✓" when already followed), mention/reply quote cards
   with @handles highlighted in brand orange, and dimmed zap-out rows from
-  the local APP-014 sent-zap ledger with a PAID chip.
+  the local APP-014 sent-zap ledger with a PAID chip. In mention/reply rows
+  the quote card indents to the name line (avatar 32 + gap 10 = 42 pt/dp)
+  so the content lines up under the username.
 - Day sections Today / Yesterday / Earlier (one collapsed "Earlier"), a 3 dp
   left accent stripe marks unread rows, and the footer restates the
   verified-events promise ("no invented counts, no engagement theater").

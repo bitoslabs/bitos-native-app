@@ -1102,10 +1102,12 @@ private fun MentionCardRow(
                 )
             }
             Spacer(Modifier.height(8.dp))
+            // Quote card aligns with the name line: avatar (32) + gap (10).
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = BitOSColors.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border),
+                modifier = Modifier.padding(start = 42.dp),
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Text(

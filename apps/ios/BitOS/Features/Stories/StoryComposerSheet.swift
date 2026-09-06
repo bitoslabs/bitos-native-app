@@ -262,7 +262,7 @@ struct StoryComposerSheet: View {
                             images.remove(at: index)
                             previewIndex = min(previewIndex, max(0, images.count - 1))
                         } label: {
-                            Image(systemName: AppIcons.close)
+                            AppIcons.image(for: AppIcons.close)
                                 .font(.system(size: 8, weight: .bold))
                                 .frame(width: 18, height: 18)
                                 .background(Circle().fill(BitOSTheme.surface))
@@ -332,7 +332,7 @@ struct StoryComposerSheet: View {
 /// never reads MainActor state).
 private struct StoryAddImageTile: View {
     var body: some View {
-        Image(systemName: AppIcons.photo)
+        AppIcons.image(for: AppIcons.photo)
             .font(.system(size: 20))
             .foregroundStyle(BitOSTheme.textSecondary)
             .frame(width: 64, height: 64)

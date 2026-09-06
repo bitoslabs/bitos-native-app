@@ -600,8 +600,8 @@ fun StoryViewer(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Icon(
-                            space.bitos.app.ui.theme.AppIcons.VisibilityOff,
+                        space.bitos.app.ui.theme.SolarFeedIconImage(
+                            icon = space.bitos.app.ui.theme.SolarFeedIcon.EyeClosed,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier
@@ -719,8 +719,8 @@ fun StoryViewer(
                         Spacer(Modifier.weight(1f))
                         if (isMine) {
                             IconButton(onClick = { confirmDeleteOpen = true }, modifier = Modifier.size(32.dp)) {
-                                Icon(
-                                    space.bitos.app.ui.theme.AppIcons.Delete,
+                                space.bitos.app.ui.theme.SolarFeedIconImage(
+                                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Trash,
                                     contentDescription = "Delete story",
                                     tint = Color.White.copy(alpha = 0.8f),
                                     modifier = Modifier.size(16.dp),
@@ -755,8 +755,8 @@ fun StoryViewer(
                         delay(430)
                         burstAt = null
                     }
-                    Icon(
-                        space.bitos.app.ui.theme.AppIcons.Heart,
+                    space.bitos.app.ui.theme.SolarFeedIconImage(
+                        icon = space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled,
                         contentDescription = null,
                         tint = Color(0xFFFF4D67),
                         modifier = Modifier
@@ -878,24 +878,24 @@ fun StoryViewer(
                             },
                             modifier = Modifier.size(40.dp),
                         ) {
-                            Icon(
-                                if (replyMode == "reply") space.bitos.app.ui.theme.AppIcons.Comment else space.bitos.app.ui.theme.AppIcons.Send,
+                            space.bitos.app.ui.theme.SolarFeedIconImage(
+                                icon = if (replyMode == "reply") space.bitos.app.ui.theme.SolarFeedIcon.Comment else space.bitos.app.ui.theme.SolarFeedIcon.Send,
                                 contentDescription = if (replyMode == "reply") "Reply to story" else "Message privately",
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                         IconButton(onClick = { likeCurrent() }, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                if (interaction?.likedByMe == true) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
+                            space.bitos.app.ui.theme.SolarFeedIconImage(
+                                icon = if (interaction?.likedByMe == true) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
                                 contentDescription = if (interaction?.likedByMe == true) "Unlike story" else "Like story",
                                 tint = if (interaction?.likedByMe == true) Color(0xFFFF4D67) else Color.White,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                         IconButton(onClick = { onZap(slide) }, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                space.bitos.app.ui.theme.AppIcons.Zap,
+                            space.bitos.app.ui.theme.SolarFeedIconImage(
+                                icon = space.bitos.app.ui.theme.SolarFeedIcon.Zap,
                                 contentDescription = "Zap sats to this story",
                                 tint = Color(0xFFFFC24B),
                                 modifier = Modifier.size(20.dp),
@@ -918,14 +918,22 @@ fun StoryViewer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         StoryCountChip(
-                            icon = space.bitos.app.ui.theme.AppIcons.Heart,
+                            icon = { tint ->
+                                space.bitos.app.ui.theme.SolarFeedIconImage(
+                                    space.bitos.app.ui.theme.SolarFeedIcon.Heart, null, tint, Modifier.size(14.dp),
+                                )
+                            },
                             label = "${interaction?.likeCount ?: 0}",
                             onClick = { activityOpen = true },
                         )
                         Spacer(Modifier.width(BitOSSpacing.md))
                         if ((interaction?.zapSats ?: 0L) > 0L || (interaction?.zapCount ?: 0) > 0) {
                             StoryCountChip(
-                                icon = space.bitos.app.ui.theme.AppIcons.Zap,
+                                icon = { tint ->
+                                    space.bitos.app.ui.theme.SolarFeedIconImage(
+                                        space.bitos.app.ui.theme.SolarFeedIcon.Zap, null, tint, Modifier.size(14.dp),
+                                    )
+                                },
                                 label = if ((interaction?.zapSats ?: 0L) > 0L) {
                                     "${formatCount(interaction?.zapSats ?: 0L)} sats"
                                 } else {
@@ -938,14 +946,25 @@ fun StoryViewer(
                         }
                         if (isMine) {
                             StoryCountChip(
-                                icon = space.bitos.app.ui.theme.AppIcons.Visibility,
+                                icon = { tint ->
+                                    Icon(
+                                        space.bitos.app.ui.theme.AppIcons.Visibility,
+                                        contentDescription = null,
+                                        tint = tint,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                },
                                 label = "${interaction?.viewCount ?: 0}",
                                 onClick = { activityOpen = true },
                             )
                             Spacer(Modifier.width(BitOSSpacing.md))
                         }
                         StoryCountChip(
-                            icon = space.bitos.app.ui.theme.AppIcons.Comment,
+                            icon = { tint ->
+                                space.bitos.app.ui.theme.SolarFeedIconImage(
+                                    space.bitos.app.ui.theme.SolarFeedIcon.Comment, null, tint, Modifier.size(14.dp),
+                                )
+                            },
                             label = "${interaction?.replyCount ?: 0}",
                             onClick = { activityOpen = true },
                         )
@@ -1100,10 +1119,11 @@ private fun StoryModeChip(label: String, selected: Boolean, onClick: () -> Unit)
     )
 }
 
-/** One count chip in the viewer's counts row (web parity). */
+/** One count chip in the viewer's counts row (web parity). The icon slot
+ *  takes the chip tint so Solar painters and Material vectors match. */
 @Composable
 private fun StoryCountChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: @Composable (Color) -> Unit,
     label: String,
     tint: Color = Color.White.copy(alpha = 0.85f),
     onClick: () -> Unit,
@@ -1115,7 +1135,7 @@ private fun StoryCountChip(
             .clickable(onClickLabel = label, onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+        Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) { icon(tint) }
         Spacer(Modifier.width(4.dp))
         Text(
             label,

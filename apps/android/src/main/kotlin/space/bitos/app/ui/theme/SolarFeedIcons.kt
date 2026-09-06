@@ -19,6 +19,7 @@ enum class SolarFeedIcon(@DrawableRes val drawableRes: Int) {
     Zap(R.drawable.solar_bolt_linear),
     More(R.drawable.solar_menu_dots_linear),
     Send(R.drawable.solar_plain_linear),
+    Trash(R.drawable.solar_trash_linear),
 
     // Composer toolbar (web Composer Solar Linear order — one token per
     // action so the composer and the reply bar always paint the same icon).

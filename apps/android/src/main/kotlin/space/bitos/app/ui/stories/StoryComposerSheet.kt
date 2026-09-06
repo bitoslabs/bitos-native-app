@@ -319,8 +319,8 @@ fun StoryComposerSheet(
                                 if (uploading) {
                                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                                 } else {
-                                    Icon(
-                                        space.bitos.app.ui.theme.AppIcons.Photo,
+                                    space.bitos.app.ui.theme.SolarFeedIconImage(
+                                        icon = space.bitos.app.ui.theme.SolarFeedIcon.Gallery,
                                         contentDescription = null,
                                         tint = BitOSColors.textSecondary,
                                     )

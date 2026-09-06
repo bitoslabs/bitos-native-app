@@ -960,11 +960,13 @@ private struct MentionCardRowView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(BitOSTheme.textTertiary)
             }
+            // Quote card aligns with the name line: avatar (32) + gap (10).
             MentionQuoteCard(
                 content: (preview?.excerpt.isEmpty == false ? preview?.excerpt : nil) ?? group.summary,
                 media: preview,
                 sensitiveShowByDefault: settings.state.sensitiveMedia == .show
             )
+            .padding(.leading, 42)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)

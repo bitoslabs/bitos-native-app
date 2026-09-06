@@ -177,7 +177,7 @@ private struct StoryCardView: View {
                             .foregroundStyle(.white)
                             .lineLimit(1)
                         if !(profileFor(author.pubkey)?.nip05?.isEmpty ?? true) {
-                            Image(systemName: AppIcons.checkCircle)
+                            AppIcons.image(for: AppIcons.checkCircle)
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .accessibilityLabel("NIP-05 identity claim")
@@ -198,7 +198,7 @@ private struct StoryCardView: View {
                 if author.isPublicDiscovery || author.slides.first?.videoUrl != nil {
                     VStack(alignment: .trailing, spacing: 6) {
                         if author.slides.first?.videoUrl != nil {
-                            Image(systemName: AppIcons.play)
+                            AppIcons.image(for: AppIcons.play)
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 24, height: 24)
@@ -233,7 +233,7 @@ private struct PublicStoriesButton: View {
     var body: some View {
         Button(action: onClick) {
             VStack(spacing: BitOSTheme.Spacing.sm) {
-                Image(systemName: "safari")
+                AppIcons.image(for: AppIcons.globe)
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Color(hex: 0x24DFA0))
                     .frame(width: 30, height: 30)
@@ -445,7 +445,7 @@ struct StoryViewerView: View {
 
             // Double-tap heart burst (web like-burst, simplified).
             if let burstAt {
-                Image(systemName: AppIcons.heartFill)
+                AppIcons.image(for: AppIcons.heartFill)
                     .font(.system(size: 84))
                     .foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.42))
                     .position(burstAt)
@@ -630,7 +630,7 @@ struct StoryViewerView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     if !(profileFor(author.pubkey)?.nip05?.isEmpty ?? true) {
-                        Image(systemName: AppIcons.checkCircle)
+                        AppIcons.image(for: AppIcons.checkCircle)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(BitOSTheme.accent)
                             .accessibilityLabel("NIP-05 identity claim")
@@ -647,7 +647,7 @@ struct StoryViewerView: View {
                 Button {
                     confirmDeleteOpen = true
                 } label: {
-                    Image(systemName: AppIcons.delete)
+                    AppIcons.image(for: AppIcons.delete)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white.opacity(0.8))
                         .frame(width: 32, height: 32)
@@ -666,7 +666,7 @@ struct StoryViewerView: View {
             }
             .accessibilityLabel(paused ? "Play" : "Pause")
             Button(action: onClose) {
-                Image(systemName: AppIcons.close)
+                AppIcons.image(for: AppIcons.close)
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.white.opacity(0.8))
                     .frame(width: 32, height: 32)
@@ -900,7 +900,7 @@ private struct StoryActivitySheet: View {
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(BitOSTheme.textPrimary)
                                 if !(profileFor(like.pubkey)?.nip05?.isEmpty ?? true) {
-                                    Image(systemName: AppIcons.checkCircle)
+                                    AppIcons.image(for: AppIcons.checkCircle)
                                         .font(.system(size: 12, weight: .semibold))
                                         .foregroundStyle(BitOSTheme.accent)
                                         .accessibilityLabel("NIP-05 identity claim")
@@ -921,7 +921,7 @@ private struct StoryActivitySheet: View {
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(BitOSTheme.textPrimary)
                                     if !(profileFor(reply.pubkey)?.nip05?.isEmpty ?? true) {
-                                        Image(systemName: AppIcons.checkCircle)
+                                        AppIcons.image(for: AppIcons.checkCircle)
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundStyle(BitOSTheme.accent)
                                             .accessibilityLabel("NIP-05 identity claim")
