@@ -267,14 +267,30 @@ struct RootView: View {
         // parity). A sheet keeps swipe-to-dismiss over the keyboard.
         .sheet(isPresented: $showStoryComposer) {
             StoryComposerSheet(
-                onPublish: { text, imageUrls, background, altText, sensitive in
-                    Task { await environment.notePublisher.publishStory(
-                        text: text,
-                        imageUrls: imageUrls,
-                        background: background,
-                        altText: altText,
-                        sensitive: sensitive
-                    ) }
+                onPublish: { text, imageUrls, background, altText, sensitive, pow in
+                    Task {
+                        if let pow {
+                            await environment.notePublisher.publishStoryWithPow(
+                                text: text,
+                                imageUrls: imageUrls,
+                                background: background,
+                                altText: altText,
+                                sensitive: sensitive,
+                                dTag: pow.dTag,
+                                nonce: pow.nonce,
+                                targetDifficulty: Int32(pow.targetDifficulty),
+                                createdAt: pow.createdAt
+                            )
+                        } else {
+                            await environment.notePublisher.publishStory(
+                                text: text,
+                                imageUrls: imageUrls,
+                                background: background,
+                                altText: altText,
+                                sensitive: sensitive
+                            )
+                        }
+                    }
                 },
                 onClose: { showStoryComposer = false }
             )

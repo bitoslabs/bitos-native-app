@@ -99,4 +99,58 @@ class StoryComposerTest {
         assertEquals(dTag, slide.d)
         assertEquals(now + Stories.STORY_TTL_SECONDS, slide.expiresAt)
     }
+
+    @Test
+    fun powStoryDerivesExpirationFromTheMiningTimestampAndAppendsNonceLast() {
+        val minedAt = now + 45 // mine, then publish later — the template is fixed
+        val note = NoteComposer(clock = { now }).composeStoryWithPow(
+            author, "gm #nostr", listOf("https://cdn.example/a.png"),
+            null, "pic", false, dTag, 4242L, 16, minedAt,
+        )!!
+        assertEquals(minedAt, note.createdAtSeconds)
+        // Expiration rides the mining timestamp, never the publish clock.
+        assertEquals(minedAt + Stories.STORY_TTL_SECONDS, tag(note, "expiration").first()[1].toLong())
+        // The nonce tag is APPENDED (mineChunk commits it last) with its target.
+        assertEquals(
+            listOf("nonce", "4242", "16"),
+            note.tags.last(),
+        )
+        // The committed id covers the appended nonce tag.
+        assertEquals(
+            space.bitos.core.nostr.NostrEventCodec.computeId(
+                space.bitos.core.nostr.Sha256EventHasher, author, minedAt,
+                Stories.STORY_KIND, note.tags, note.content,
+            ),
+            note.idHex,
+        )
+        // Non-pow composition stays clock-driven and nonce-free.
+        val plain = clock.composeStory(author, "gm #nostr", listOf("https://cdn.example/a.png"), null, "pic", false, dTag)!!
+        assertTrue(plain.tags.none { it.firstOrNull() == "nonce" })
+        assertEquals(now + Stories.STORY_TTL_SECONDS, tag(plain, "expiration").first()[1].toLong())
+    }
+
+    @Test
+    fun powStoryMinedIdIsReproducedOnPublish() {
+        // The story pow publish contract: mining hashes the kind-30315
+        // template (mineChunk appends the nonce tag); composing with the
+        // mined nonce must reproduce that exact id at the target difficulty.
+        val minedAt = now
+        val base = NoteComposer(clock = { minedAt }).composeStory(
+            author, "mined story", emptyList(),
+            "linear-gradient(135deg, #2f95f6, #55d69a)", null, false, dTag,
+        )!!
+        val target = 10
+        val mined = space.bitos.core.nostr.Pow.mineChunk(
+            space.bitos.core.nostr.Sha256EventHasher,
+            base.pubkeyHex, base.createdAtSeconds, base.kind, base.tags, base.content,
+            target, 0, 500_000,
+        )!!
+        val published = NoteComposer(clock = { now }).composeStoryWithPow(
+            author, "mined story", emptyList(),
+            "linear-gradient(135deg, #2f95f6, #55d69a)", null, false, dTag,
+            mined.nonce, target, minedAt,
+        )!!
+        assertEquals(mined.idHex, published.idHex)
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(published.idHex) >= target)
+    }
 }

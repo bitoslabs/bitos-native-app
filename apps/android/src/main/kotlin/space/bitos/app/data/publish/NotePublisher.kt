@@ -170,6 +170,41 @@ class NotePublisher(
     }
 
     /**
+     * APP-006 story PoW publish: the nonce was mined over the exact
+     * kind-30315 template (same `dTag` + `createdAtSeconds` the PowCard
+     * session committed), so the published event reproduces the mined id.
+     */
+    fun publishStoryWithPow(
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val story = composer.composeStoryWithPow(
+                signer.publicKeyHex(), text, imageUrls, background, altText, sensitive, dTag,
+                nonce, targetDifficulty, createdAtSeconds,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(story, signer, writeRelays)
+        }
+    }
+
+    /**
      * NIP-22 kind-1111 comment on a non-kind-1 event (web `feed.comment`
      * parity): tags come from `NoteComposer.commentTags`.
      */

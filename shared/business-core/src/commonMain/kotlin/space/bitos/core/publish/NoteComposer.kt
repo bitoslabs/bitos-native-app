@@ -109,7 +109,48 @@ class NoteComposer(
         altText: String?,
         sensitive: Boolean,
         dTag: String,
+    ): UnsignedNote? = storyEvent(
+        pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+        clock.nowSeconds(), emptyList(),
+    )
+
+    /**
+     * Kind-30315 story with a pre-mined NIP-13 nonce tag (APP-006 story
+     * PowCard path): the template [space.bitos.core.nostr.Pow.mineChunk]
+     * hashed is exactly this event's fields at [createdAtSeconds] — the
+     * expiration derives from that timestamp (not the wall clock) so a
+     * mined nonce stays valid between mining and publish, and the nonce
+     * tag is appended last to byte-match the miner's serialization.
+     */
+    fun composeStoryWithPow(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+    ): UnsignedNote? = storyEvent(
+        pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+        createdAtSeconds, listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)),
+    )
+
+    /** The kind-30315 template both story paths share (tags, content, id). */
+    private fun storyEvent(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        createdAtSeconds: Long,
+        extraTags: List<List<String>>,
     ): UnsignedNote? {
+        if (createdAtSeconds <= 0) return null
         if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
         val boundedText = text.trim().take(280)
         val boundedImages = imageUrls
@@ -120,7 +161,7 @@ class NoteComposer(
         if (dTag.isBlank() || dTag.length > 128) return null
         val tags = mutableListOf(
             listOf("d", dTag),
-            listOf("expiration", (clock.nowSeconds() + space.bitos.core.model.Stories.STORY_TTL_SECONDS).toString()),
+            listOf("expiration", (createdAtSeconds + space.bitos.core.model.Stories.STORY_TTL_SECONDS).toString()),
         )
         // Hashtags from the caption (web extractHashtagTags).
         space.bitos.core.publish.ComposerRules.deriveTags(boundedText)
@@ -138,8 +179,10 @@ class NoteComposer(
             if (index == 0 && !boundedAlt.isNullOrBlank()) imeta.add("alt $boundedAlt")
             tags.add(listOf("imeta") + imeta)
         }
+        tags.addAll(extraTags)
         val content = (listOf(boundedText) + boundedImages).filter { it.isNotBlank() }.joinToString("\n")
-        return compose(pubkeyHex, space.bitos.core.model.Stories.STORY_KIND, tags, content)
+        val id = NostrEventCodec.computeId(hasher, pubkeyHex, createdAtSeconds, space.bitos.core.model.Stories.STORY_KIND, tags, content)
+        return UnsignedNote(id, pubkeyHex, createdAtSeconds, space.bitos.core.model.Stories.STORY_KIND, tags, content)
     }
 
     /**
@@ -599,9 +642,10 @@ class NoteComposer(
         val trimmed = content.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_NOTE_LENGTH) return null
         if (baseTags.size + 1 > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
-        // The nonce tag leads; the mining template must byte-match (PowCard
-        // mines over the same baseTags).
-        val tags = listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)) + baseTags
+        // The nonce tag is APPENDED — [Pow.mineChunk] commits it as the last
+        // tag while hashing, so the published event must byte-match that
+        // serialization or the recomputed ID loses the mined difficulty.
+        val tags = baseTags + listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty))
         val id = NostrEventCodec.computeId(hasher, pubkeyHex, createdAtSeconds, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
         return UnsignedNote(id, pubkeyHex, createdAtSeconds, NostrKinds.SHORT_TEXT_NOTE, tags, trimmed)
     }

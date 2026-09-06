@@ -620,12 +620,21 @@ fun BitOSApp(
             androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showStoryComposer = false }) {
                 space.bitos.app.ui.stories.StoryComposerSheet(
                     identityViewModel = identityViewModel,
-                    onPublish = { text, imageUrls, background, altText, sensitive ->
-                        notePublisher.publishStory(
-                            text, imageUrls, background, altText, sensitive,
-                            { identityViewModel.createSigner() },
-                            space.bitos.app.data.feed.DefaultRelays.writeUrls,
-                        )
+                    onPublish = { text, imageUrls, background, altText, sensitive, pow ->
+                        if (pow != null) {
+                            notePublisher.publishStoryWithPow(
+                                text, imageUrls, background, altText, sensitive,
+                                pow.dTag, pow.nonce, pow.targetDifficulty, pow.createdAtSeconds,
+                                { identityViewModel.createSigner() },
+                                space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                            )
+                        } else {
+                            notePublisher.publishStory(
+                                text, imageUrls, background, altText, sensitive,
+                                { identityViewModel.createSigner() },
+                                space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                            )
+                        }
                     },
                     onClose = { showStoryComposer = false },
                 )

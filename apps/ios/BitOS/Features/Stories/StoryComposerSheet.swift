@@ -2,21 +2,33 @@ import BusinessCore
 import PhotosUI
 import SwiftUI
 
+/// A completed story mining session — the `dTag` is part of the template,
+/// so publish must commit exactly this (dTag, nonce, target, createdAt).
+struct StoryPowCommit: Equatable {
+    let dTag: String
+    let nonce: Int64
+    let targetDifficulty: Int
+    let createdAt: Int64
+}
+
 /**
  * APP-006 story composer (web `StoryComposer` parity): 9:16 preview
  * (gradient text slide or image carousel with caption scrim), ≤280-char
  * caption, six IG-style gradient backgrounds, ≤6 photo-picker images
- * uploaded via Blossom BEFORE anything references them, alt text +
- * sensitive flag, and a kind-30315 publish through the receipt machine.
- * Stories double as a 24h status note when no image is attached.
+ * uploaded via Blossom BEFORE anything references them, GIF picks
+ * (already-public URLs ride the same imeta carousel), emoji inserts,
+ * optional NIP-13 PoW mined over the exact kind-30315 template, alt
+ * text + sensitive flag, and a kind-30315 publish through the receipt
+ * machine. Stories double as a 24h status note when no image is attached.
  */
 @MainActor
 struct StoryComposerSheet: View {
     /// Publishes the composed story (kind-30315 through the receipt machine).
-    let onPublish: (_ text: String, _ imageUrls: [String], _ background: String?, _ altText: String, _ sensitive: Bool) -> Void
+    let onPublish: (_ text: String, _ imageUrls: [String], _ background: String?, _ altText: String, _ sensitive: Bool, _ pow: StoryPowCommit?) -> Void
     let onClose: () -> Void
 
     @Environment(IdentityStore.self) private var identity
+    @Environment(AppEnvironment.self) private var environment
     @State private var text = ""
     @State private var altText = ""
     @State private var sensitive = false
@@ -27,6 +39,19 @@ struct StoryComposerSheet: View {
     @State private var uploading = false
     @State private var failure: String?
     @State private var uploader = BlossomUploader()
+    @State private var gifSheet = false
+    @State private var emojiSheet = false
+    @State private var showPowPanel = false
+    @State private var powTarget = 0
+    @State private var powOutcome: PowOutcome?
+    /// Fixed for the whole session: the dTag is part of the PoW mining
+    /// template, so it cannot be regenerated at publish time. Same wire
+    /// format as `NotePublisher.publishStory` (`Stories.storyDTag`).
+    @State private var storyDTag: String = {
+        let now = Int64(Date.now.timeIntervalSince1970)
+        return "bitos-story-\(now)-\(String(UInt32.random(in: 0...UInt32.max), radix: 36))"
+    }()
+    private let bridge = BusinessCoreBridge()
 
     private let blossomServer = "https://blossom.primal.net"
 
@@ -126,6 +151,37 @@ struct StoryComposerSheet: View {
                         .accessibilityLabel("Mark as sensitive")
                     }
 
+                    // Quick actions (note-composer toolbar parity): photo ·
+                    // GIF · emoji · PoW. GIFs arrive as already-public URLs.
+                    HStack(spacing: 2) {
+                        actionButton(AppIcons.photo, "Add image", enabled: images.count < Self.maxImages && !uploading,
+                                     active: !images.isEmpty, badge: images.isEmpty ? nil : "\(images.count)") {
+                            pickerPrompt = true
+                        }
+                        actionButton(AppIcons.gifFilm, "Add GIF", enabled: images.count < Self.maxImages) {
+                            gifSheet = true
+                        }
+                        actionButton(AppIcons.emoji, "Insert emoji") {
+                            emojiSheet = true
+                        }
+                        actionButton(AppIcons.shieldCheck, "Proof of Work",
+                                     active: showPowPanel || powOutcome != nil,
+                                     badge: powOutcome.map { "\($0.targetDifficulty)" }) {
+                            showPowPanel.toggle()
+                        }
+                        Spacer(minLength: BitOSTheme.Spacing.sm)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, BitOSTheme.Spacing.xs)
+                    .background(BitOSTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+
+                    // NIP-13 PoW over the exact kind-30315 template (the
+                    // nonce tag is appended by the miner; any edit voids
+                    // the session — `.id` keys the card to the template).
+                    if showPowPanel {
+                        powPanel
+                    }
+
                     if let failure {
                         Text(failure)
                             .font(.system(size: 12))
@@ -168,9 +224,116 @@ struct StoryComposerSheet: View {
             }
             uploadPicked(Array(items.prefix(room)))
         }
+        .sheet(isPresented: $gifSheet) {
+            GifPickerSheet(
+                onPick: { gif in
+                    if images.count < Self.maxImages {
+                        images.append(gif.url)
+                        previewIndex = images.count - 1
+                    }
+                    gifSheet = false
+                },
+                onDismiss: { gifSheet = false }
+            )
+            .presentationDetents([.large, .medium])
+        }
+        .sheet(isPresented: $emojiSheet) {
+            emojiSheetContent
+                .presentationDetents([.medium])
+        }
+        .photosPicker(
+            isPresented: $pickerPrompt,
+            selection: $pickerItems,
+            maxSelectionCount: max(0, Self.maxImages - images.count),
+            matching: .images
+        )
     }
 
     private static let maxImages = 6
+
+    @State private var pickerPrompt = false
+
+    /// Quick-action icon (note-composer `toolbarButton` parity).
+    private func actionButton(_ symbol: String, _ label: String, enabled: Bool = true, active: Bool = false, badge: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            AppIcons.image(for: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(
+                    !enabled ? BitOSTheme.textTertiary.opacity(0.4) :
+                    active ? BitOSTheme.accent : BitOSTheme.textSecondary
+                )
+                .frame(width: 40, height: 40)
+                .background {
+                    if active { Circle().fill(BitOSTheme.accent.opacity(0.15)) }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(BitOSTheme.background)
+                            .padding(.horizontal, 3)
+                            .background(Capsule().fill(BitOSTheme.accent))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
+
+    /// Emoji grid (note-composer parity): appends to the caption.
+    private var emojiSheetContent: some View {
+        let emojis = bridge.composerEmojis() as? [String] ?? []
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Insert emoji")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(BitOSTheme.textPrimary)
+                .padding(.horizontal, BitOSTheme.Spacing.screen)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: BitOSTheme.Spacing.sm) {
+                ForEach(emojis, id: \.self) { emoji in
+                    Button {
+                        if (text as NSString).length + (emoji as NSString).length <= 280 {
+                            text += emoji
+                        }
+                        emojiSheet = false
+                    } label: {
+                        Text(emoji)
+                            .font(.system(size: 22))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Insert \(emoji)")
+                }
+            }
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.bottom, BitOSTheme.Spacing.xl)
+        }
+    }
+
+    /// Web Composer parity: the PoW panel rides inline under the actions.
+    /// `.id` keys the card to the mining template — a mined nonce is valid
+    /// for exactly one (content, target, tags) story, so any edit resets
+    /// the card.
+    private var powPanel: some View {
+        PowCard(
+            target: $powTarget,
+            mineChunk: { createdAt, startNonce, attempts in
+                await environment.notePublisher.mineStoryPowChunk(
+                    text: text,
+                    imageUrls: images,
+                    background: backgroundCss,
+                    altText: altText,
+                    sensitive: sensitive,
+                    dTag: storyDTag,
+                    targetDifficulty: Int32(powTarget),
+                    createdAt: createdAt,
+                    startNonce: startNonce,
+                    attempts: attempts
+                )
+            },
+            onMined: { outcome in powOutcome = outcome }
+        )
+        .id("\(powTarget)|\(text)|\(images)|\(bgIndex)|\(altText)|\(sensitive)|\(storyDTag)")
+    }
 
     /// The 9:16 preview: gradient text slide or image + caption scrim.
     private var preview: some View {
@@ -317,12 +480,16 @@ struct StoryComposerSheet: View {
 
     private func post() {
         guard canPost else { return }
+        let commit = powOutcome.map {
+            StoryPowCommit(dTag: storyDTag, nonce: $0.nonce, targetDifficulty: $0.targetDifficulty, createdAt: $0.createdAt)
+        }
         onPublish(
             text.trimmingCharacters(in: .whitespacesAndNewlines),
             images,
             backgroundCss,
             altText.trimmingCharacters(in: .whitespacesAndNewlines),
-            sensitive
+            sensitive,
+            commit
         )
         onClose()
     }

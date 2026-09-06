@@ -1266,6 +1266,80 @@ class BusinessCoreBridge {
         return composer.publishMessage(unsigned, signatureHex)
     }
 
+    /** APP-006 story PoW: one bounded mining window over the kind-30315
+     *  template at the FIXED [createdAtSeconds] (expiration derives from it),
+     *  same `nonce:idHex` contract as [mineTextNotePowWithTags]. */
+    fun mineStoryPow(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        createdAtSeconds: Long,
+        targetDifficulty: Int,
+        startNonce: Long,
+        maxAttempts: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val base = composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)
+            ?: return null
+        return space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex,
+            base.createdAtSeconds,
+            base.kind,
+            base.tags,
+            base.content,
+            targetDifficulty,
+            startNonce,
+            maxAttempts,
+        )?.let { "${it.nonce}:${it.idHex}" }
+    }
+
+    /** APP-006 story PoW: the committed event id for the pre-mined nonce. */
+    fun powStoryEventId(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        return composer.composeStoryWithPow(
+            pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+            nonce, targetDifficulty, createdAtSeconds,
+        )?.idHex
+    }
+
+    /** APP-006 story PoW: the ["EVENT", {...}] frame for the signed mined story. */
+    fun powStoryPublishMessage(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeStoryWithPow(
+            pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+            nonce, targetDifficulty, createdAtSeconds,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
     /**
      * APP-006: engagement REQ for a set of tracked slides — kind 7 + 9735 by
      * `#e`, kind 1 by `#e` and (when parameterized) `#a` (web

@@ -104,14 +104,21 @@ fun PowCard(
     pubkeyHex: String,
     onMined: (PowOutcome?) -> Unit,
     modifier: Modifier = Modifier,
-    /** APP-008: mining template tags (nonce tag is prepended by the
-     * publisher; the template must byte-match the published event). */
+    /** APP-008: mining template tags (the nonce tag is appended by the
+     * miner; the template must byte-match the published event). */
     baseTags: List<List<String>> = emptyList(),
+    /** Non-kind-1 mining template (e.g. the APP-006 kind-30315 story):
+     *  built once per session with the fixed mining timestamp. When set,
+     *  [templateKey] replaces `content + baseTags` as the session key that
+     *  invalidates a previous nonce on any edit. */
+    template: ((createdAtSeconds: Long) -> UnsignedNote?)? = null,
+    templateKey: String? = null,
 ) {
     var mining by remember { mutableStateOf(false) }
     var attempts by remember { mutableLongStateOf(0L) }
-    var outcome by remember(content, pubkeyHex, target, baseTags) { mutableStateOf<PowOutcome?>(null) }
-    var exhausted by remember(content, pubkeyHex, target, baseTags) { mutableStateOf(false) }
+    val sessionKey = template?.let { templateKey ?: content } ?: content
+    var outcome by remember(sessionKey, pubkeyHex, target, baseTags, templateKey) { mutableStateOf<PowOutcome?>(null) }
+    var exhausted by remember(sessionKey, pubkeyHex, target, baseTags, templateKey) { mutableStateOf(false) }
     var mineJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -123,7 +130,7 @@ fun PowCard(
     }
 
     // Any template change invalidates a previous nonce.
-    LaunchedEffect(content, pubkeyHex, target) {
+    LaunchedEffect(sessionKey, pubkeyHex, target, templateKey) {
         outcome = null
         exhausted = false
         attempts = 0
@@ -140,22 +147,25 @@ fun PowCard(
         mineJob = scope.launch {
             val createdAt = System.currentTimeMillis() / 1000
             // Template fixed for the whole session (createdAt included).
-            val template: UnsignedNote = withContext(Dispatchers.Default) {
-                NoteComposer(clock = { createdAt }).composeTextNote(pubkeyHex, content, baseTags)
-            } ?: run {
-                mining = false
-                return@launch
+            val buildTemplate: () -> UnsignedNote? = {
+                template?.invoke(createdAt)
+                    ?: NoteComposer(clock = { createdAt }).composeTextNote(pubkeyHex, content, baseTags)
             }
+            val templateNote: UnsignedNote = withContext(Dispatchers.Default) { buildTemplate() }
+                ?: run {
+                    mining = false
+                    return@launch
+                }
             var start = 0L
             while (true) {
                 val hit = withContext(Dispatchers.Default) {
                     Pow.mineChunk(
                         Sha256EventHasher,
-                        template.pubkeyHex,
-                        template.createdAtSeconds,
-                        template.kind,
-                        template.tags,
-                        template.content,
+                        templateNote.pubkeyHex,
+                        templateNote.createdAtSeconds,
+                        templateNote.kind,
+                        templateNote.tags,
+                        templateNote.content,
                         minedTarget,
                         start,
                         CHUNK_ATTEMPTS,
@@ -166,7 +176,7 @@ fun PowCard(
                         nonce = hit.nonce,
                         idHex = hit.idHex,
                         targetDifficulty = minedTarget,
-                        createdAtSeconds = template.createdAtSeconds,
+                        createdAtSeconds = templateNote.createdAtSeconds,
                     )
                     outcome = result
                     mining = false

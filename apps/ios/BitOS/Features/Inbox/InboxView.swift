@@ -945,7 +945,7 @@ private struct MentionCardRowView: View {
             HStack(spacing: 10) {
                 RingHexAvatarView(
                     pubkey: group.actors.first ?? String(repeating: "0", count: 64),
-                    size: 32,
+                    size: 40,
                     label: profile?.bestDisplayName,
                     imageURL: safeProfilePictureURL(profile?.picture)
                 )
@@ -960,13 +960,14 @@ private struct MentionCardRowView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(BitOSTheme.textTertiary)
             }
-            // Quote card aligns with the name line: avatar (32) + gap (10).
+            // Quote card aligns with the name line: avatar (40) + gap (10) —
+            // same avatar size as the aggregated rows.
             MentionQuoteCard(
                 content: (preview?.excerpt.isEmpty == false ? preview?.excerpt : nil) ?? group.summary,
                 media: preview,
                 sensitiveShowByDefault: settings.state.sensitiveMedia == .show
             )
-            .padding(.leading, 42)
+            .padding(.leading, 50)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)

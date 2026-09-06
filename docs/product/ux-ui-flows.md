@@ -291,7 +291,15 @@ Home -> poster/first frame -> autoplay visible Bitz
         caption, six gradient backgrounds
         for text-only slides (published as the `background` CSS token),
         ≤6 gallery images each hash-verified-uploaded via Blossom BEFORE
-        anything references it, alt text (NIP-92 on the first imeta) and a
+        anything references it, GIF picks (already-public URLs join the
+        same imeta carousel, no upload) and emoji inserts into the
+        caption via the note-composer action row (photo · GIF · emoji ·
+        PoW), optional NIP-13 PoW mined over the EXACT kind-30315
+        template (the session fixes the `d` tag and its `created_at`;
+        expiration derives from that timestamp; the nonce tag is appended
+        last, byte-matching the miner; any edit voids the nonce and
+        publish falls back to the unmined path), alt text (NIP-92 on the
+        first imeta) and a
         sensitive flag; publishing is a kind-30315 with a unique `d`
         (bitos-story-<ts>-<rand>), 24h expiration and image URLs mirrored
         into the content — no image, and the story doubles as a 24h status
@@ -623,9 +631,10 @@ on both platforms:
   glyph, follow rows with a working **Follow back** pill (optimistic kind-3
   publish; "Following ✓" when already followed), mention/reply quote cards
   with @handles highlighted in brand orange, and dimmed zap-out rows from
-  the local APP-014 sent-zap ledger with a PAID chip. In mention/reply rows
-  the quote card indents to the name line (avatar 32 + gap 10 = 42 pt/dp)
-  so the content lines up under the username.
+  the local APP-014 sent-zap ledger with a PAID chip. Every actor avatar is
+  40 pt/dp across all row types (mention/reply rows match the aggregated
+  rows). In mention/reply rows the quote card indents to the name line
+  (avatar 40 + gap 10 = 50 pt/dp) so the content lines up under the username.
 - Day sections Today / Yesterday / Earlier (one collapsed "Earlier"), a 3 dp
   left accent stripe marks unread rows, and the footer restates the
   verified-events promise ("no invented counts, no engagement theater").

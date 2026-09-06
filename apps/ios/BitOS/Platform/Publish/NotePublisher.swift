@@ -318,6 +318,79 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// APP-006 story PoW: one bounded mining window over the kind-30315
+    /// template at the FIXED `createdAt` (expiration derives from it; the
+    /// dTag is part of the template). Off the main actor; same
+    /// `nonce:idHex` contract as `minePowChunkWithTags`.
+    func mineStoryPowChunk(
+        text: String,
+        imageUrls: [String],
+        background: String?,
+        altText: String,
+        sensitive: Bool,
+        dTag: String,
+        targetDifficulty: Int32,
+        createdAt: Int64,
+        startNonce: Int64,
+        attempts: Int64
+    ) async -> (nonce: Int64, idHex: String)? {
+        guard let account = identity.account else { return nil }
+        let bridge = self.bridge
+        let raw = await Task.detached(priority: .userInitiated) {
+            bridge.mineStoryPow(
+                pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                background: background, altText: altText, sensitive: sensitive,
+                dTag: dTag, createdAtSeconds: createdAt,
+                targetDifficulty: targetDifficulty,
+                startNonce: startNonce, maxAttempts: attempts
+            )
+        }.value
+        guard let raw, let separator = raw.firstIndex(of: ":") else { return nil }
+        let nonce = Int64(raw[raw.startIndex..<separator])
+        guard let nonce else { return nil }
+        return (nonce, String(raw[raw.index(after: separator)...]))
+    }
+
+    /// APP-006 story PoW publish: the nonce was mined over the exact
+    /// kind-30315 template (same `dTag` + `createdAt` the PowCard session
+    /// committed), so the published event reproduces the mined id.
+    func publishStoryWithPow(
+        text: String,
+        imageUrls: [String],
+        background: String?,
+        altText: String,
+        sensitive: Bool,
+        dTag: String,
+        nonce: Int64,
+        targetDifficulty: Int32,
+        createdAt: Int64
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        guard let eventId = bridge.powStoryEventId(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, nonce: nonce, targetDifficulty: targetDifficulty,
+                  createdAtSeconds: createdAt
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.powStoryPublishMessage(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, nonce: nonce, targetDifficulty: targetDifficulty,
+                  createdAtSeconds: createdAt, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
     /// Kind-1 reply (NIP-10) through the same machine (SOC-002).
     func publishReply(content: String, targetEventId: String, targetPubkey: String) async {
         guard result == nil, inFlightId == nil, !busy else { return }

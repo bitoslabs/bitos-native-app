@@ -1080,7 +1080,7 @@ private fun MentionCardRow(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 RingHexAvatar(
                     pubkey = actor ?: "00".repeat(32),
-                    size = 32,
+                    size = 40,
                     label = profiles[actor]?.bestDisplayName,
                     imageUrl = actor?.let { profiles[it]?.picture },
                 )
@@ -1102,12 +1102,13 @@ private fun MentionCardRow(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            // Quote card aligns with the name line: avatar (32) + gap (10).
+            // Quote card aligns with the name line: avatar (40) + gap (10) —
+            // same avatar size as the aggregated rows.
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = BitOSColors.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, BitOSColors.border),
-                modifier = Modifier.padding(start = 42.dp),
+                modifier = Modifier.padding(start = 50.dp),
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Text(

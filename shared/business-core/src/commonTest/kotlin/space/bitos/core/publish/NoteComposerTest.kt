@@ -127,4 +127,22 @@ class NoteComposerTest {
         assertNull(NoteComposer.replyTags(rootId, "nope", author, emptyList(), "x"))
         assertNull(NoteComposer.replyTags(rootId, parentId, "NOPE", emptyList(), "x"))
     }
+
+    @Test
+    fun powNoteReproducesTheMinedIdByteForByte() {
+        // The pow publish contract: mineChunk commits the nonce tag LAST, so
+        // composeTextNoteWithPow must serialize the same tag order — the
+        // published id is the mined id and keeps the difficulty claim.
+        val baseTags = listOf(listOf("t", "pow"), listOf("p", pubkey))
+        val target = 12
+        val createdAt = 1_710_000_000L
+        val mined = space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher, pubkey, createdAt, 1, baseTags, "pow note", target, 0, 500_000,
+        )!!
+        val note = composer.composeTextNoteWithPow(pubkey, "pow note", mined.nonce, target, createdAt, baseTags)!!
+        assertEquals(mined.idHex, note.idHex)
+        // NIP-01 shape: each tag is a list; the nonce tag rides last.
+        assertEquals(baseTags + listOf(space.bitos.core.nostr.Pow.nonceTag(mined.nonce, target)), note.tags)
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(note.idHex) >= target)
+    }
 }
