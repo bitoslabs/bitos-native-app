@@ -179,13 +179,21 @@ User stories:
    images or one 16:9 video tile), carries a like · repost · zap action row
    (real shared-core publishes: kind-7 reaction, kind-6 repost, NIP-57 note
    zap), and opens the note's thread sheet on tap; Bitz grid tiles open the
-   same thread. Opening an image uses a dark, full-screen lightbox that fits
+   shared reels player scoped to the author (web `/bitz?author=` parity)
+   with the NIP-92 imeta `thumb` as the cover — rendered instantly by the
+   image loader, never the video URL — plus a locale-free imeta-duration
+   badge in the tile corner (web ProfileBitzGrid parity). Opening an image uses a dark, full-screen lightbox that fits
    the complete image inside the viewport (never crops it); multi-image posts
    show a position label and previous/next controls, disabled at either end.
    The shared attachment extractor supports both bare links and Markdown
    links; an allowlisted image/video extension in either the path or a
    `format`/`fm`/`ext` query value is an inline attachment (for example,
    X's `?format=jpg`). The Markdown wrapper never appears as body text.
+   Animated `.gif` attachments play inline in note/comment media tiles and
+   the lightbox — Android renders tiles through the shared Coil loader
+   (platform GIF decoder registered app-wide), iOS through the DesignSystem
+   `GifDecoder` frame player behind `RemoteImageView` (the same decoder
+   story slides use); a static first frame is never shown for a GIF.
 7. **Own notes are deletable (NIP-09)** — the shared core composes bounded
    kind-5 deletions (`composeDeletion`, ≤50 targets, hex-validated); the
    thread sheet offers Delete on the root card and reply rows for the
@@ -260,8 +268,28 @@ Home -> poster/first frame -> autoplay visible Bitz
         duration capped 60 s, advance on end), sensitive media blurred
         until tapped (content-warning tag), and text-only slides centered
         on their gradient (7 s; background tag or `#hex>to>#hex` token)
-     -> poster prefers explicit publisher hints (top-level preview/image tag,
-        then imeta preview/image value) before derived image attachments
+     -> the viewer's engagement lane (web `stories` parity): double-tap or
+        heart = kind-7 ❤️ like with e/p/a target tags (kind-5 delete on
+        unlike), Reply = kind-1 NIP-10 reply (marker tags), DM = prefilled
+        private message through the DM pipeline, Zap = NIP-57 LNURL flow
+        targeting the slide id, own-story delete (kind-5 e-tag), live
+        likes/zaps/views/replies counts + activity sheet (kinds 7/9735 by
+        #e, kind 1 by #e/#a; latest reaction per pubkey, zap receipts
+        deduped by event id); view receipts stay private by default
+     -> Create story opens the dedicated story composer (web `StoryComposer`
+        parity): 9:16 preview, ≤280-char caption, six gradient backgrounds
+        for text-only slides (published as the `background` CSS token),
+        ≤6 gallery images each hash-verified-uploaded via Blossom BEFORE
+        anything references it, alt text (NIP-92 on the first imeta) and a
+        sensitive flag; publishing is a kind-30315 with a unique `d`
+        (bitos-story-<ts>-<rand>), 24h expiration and image URLs mirrored
+        into the content — no image, and the story doubles as a 24h status
+        note
+     -> poster prefers explicit publisher hints (NIP-92 imeta `thumb` — the
+        standard cover our composer and the web BitzComposer publish, rendered
+        by the web notification media as the video poster — then top-level
+        preview/image tag, then imeta preview/image value) before derived
+        image attachments
      -> cached notes render immediately; relay head fills one bounded snapshot
      -> after EOSE (or a short deadline), live notes merge at top or buffer while reading older posts
      -> return to top or pull to refresh to merge the bounded buffer; no pending-count control is shown
@@ -607,6 +635,13 @@ on both platforms:
   when the verified origin has media but no text, and row taps pass the
   origin's media URLs into the thread sheet so the media grid renders there
   instead of raw link text.
+- NIP-22 kind-1111 comments (feed cards, bitz videos) notify the commented
+  post's author like replies do: the inbox REQ adds kind 1111 to the `#p`
+  participant filter and a dedicated uppercase `#P` root-author filter
+  (strict NIP-22 clients may carry no lowercase `p` naming the author), and
+  the shared extractor classifies them as reply rows whose deep link is the
+  `E` root tag (the commented post), with the lowercase `e` parent as
+  fallback. Own comments never notify.
 
 ## 12. Visual system
 

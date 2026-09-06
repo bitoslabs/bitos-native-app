@@ -21,8 +21,10 @@ struct ZapUiState: Sendable, Equatable {
  * (NWC is a separate safety-gated slice).
  */
 struct ZapSheet: View {
-    /** Target note for a note zap; nil for a profile zap (NIP-57 p-tag only). */
+    /** Target note for a note zap; nil for a profile/story zap. */
     let note: FeedNote?
+    /** APP-006 story zap: the slide id the 9735 receipt tags (no FeedNote). */
+    var storyEventId: String? = nil
     /** Recipient in both modes: the note author or the zapped profile. */
     let recipientPubkey: String
     let profiles: [String: ProfileMetadata]
@@ -76,6 +78,24 @@ struct ZapSheet: View {
         self.note = nil
         self.recipientPubkey = authorPubkey
         self.profiles = [authorPubkey: profile].compactMapValues { $0 }
+        self.initialAmountSats = initialAmountSats
+        self.zapCount = 0
+        self.paidRequestIds = []
+        self.onPaid = onPaid
+        self.onClose = onClose
+        _state = State(initialValue: ZapUiState(amountSats: initialAmountSats))
+    }
+
+    /// APP-006 story zap: targets a story slide id (NIP-57 `e` tag) with
+    /// the author as recipient; paid detection rides LUD-21 alone.
+    init(storyEventId: String, authorPubkey: String, profiles: [String: ProfileMetadata],
+         initialAmountSats: Int = 21,
+         onPaid: @escaping (Int, String) -> Void = { _, _ in },
+         onClose: @escaping () -> Void) {
+        self.note = nil
+        self.storyEventId = storyEventId
+        self.recipientPubkey = authorPubkey
+        self.profiles = profiles
         self.initialAmountSats = initialAmountSats
         self.zapCount = 0
         self.paidRequestIds = []
@@ -235,7 +255,7 @@ struct ZapSheet: View {
                 if let eventId = bridge.composeZapRequestEventId(
                     recipientPubkey: recipientPubkey, amountMillisats: Int64(amount) * 1000,
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
-                    authorPubkey: account.pubkeyHex, targetEventId: note?.id, nowSeconds: now
+                    authorPubkey: account.pubkeyHex, targetEventId: note?.id ?? storyEventId, nowSeconds: now
                 ), let signature = await identity.signLocally(eventId),
                    // LUD-06: the `nostr` param is the BARE signed event
                    // object `{...}` — never a relay `["EVENT",…]` frame
@@ -243,7 +263,7 @@ struct ZapSheet: View {
                    let frame = bridge.zapRequestEventJson(
                     recipientPubkey: recipientPubkey, amountMillisats: Int64(amount) * 1000,
                     relays: DefaultRelays.urls.map(\.rawValue), lnurlHint: lud16, comment: comment,
-                    authorPubkey: account.pubkeyHex, targetEventId: note?.id,
+                    authorPubkey: account.pubkeyHex, targetEventId: note?.id ?? storyEventId,
                     createdAtSeconds: now, signatureHex: signature
                    ) {
                     nostrJson = frame

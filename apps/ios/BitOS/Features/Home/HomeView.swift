@@ -50,6 +50,10 @@ struct HomeView: View {
     @State private var showComposer = false
     @State private var commentTarget: FeedNote?
     @State private var zapTarget: FeedNote?
+    /** APP-006: dedicated story composer (kind-30315, web parity). */
+    @State private var showStoryComposer = false
+    /** APP-006: story zap target (author + the slide the 9735 tags). */
+    @State private var storyZapTarget: StoryZapTarget?
     @State private var showMediaImport = false
     /** Create hub (record/import/studio) from the app-bar camera. */
     @State private var showCreateHub = false
@@ -476,10 +480,71 @@ struct HomeView: View {
             if let target = environment.storiesStore.viewerTarget {
                 StoryViewerView(
                     author: target,
+                    interactionFor: { environment.storiesStore.interactions[$0] },
+                    isMine: identity.account.map { $0.pubkeyHex == target.pubkey } ?? false,
+                    hasIdentity: identity.account != nil,
+                    onLike: { slide in
+                        let bridge = BusinessCoreBridge()
+                        let tags = bridge.storyTargetTagsJson(slideId: slide.id, authorPubkey: slide.pubkey, d: slide.d ?? "")
+                        Task { await environment.notePublisher.publishStoryReaction(emoji: "❤️", tagsJson: tags) }
+                    },
+                    onUnlike: { eventId in
+                        Task { await environment.notePublisher.publishDeletion(targetEventIds: [eventId]) }
+                    },
+                    onReply: { slide, text in
+                        let bridge = BusinessCoreBridge()
+                        let tags = bridge.storyReplyTagsJson(slideId: slide.id, authorPubkey: slide.pubkey, d: slide.d ?? "")
+                        Task { await environment.notePublisher.publishNote(content: text, tagsJson: tags) }
+                    },
+                    onDm: { text in
+                        // Web `privateMessageDraft` parity: reference the
+                        // story, then the typed message.
+                        var parts = ["Replying to your story:"]
+                        if let slide = target.slides.first {
+                            if !slide.content.isEmpty { parts.append(slide.content) }
+                            parts.append(contentsOf: slide.imageUrls)
+                            if let video = slide.videoUrl { parts.append(video) }
+                        }
+                        parts.append("")
+                        parts.append(text)
+                        Task { _ = await environment.dmStore.sendMessage(recipientPubkey: target.pubkey, content: parts.joined(separator: "\n")) }
+                    },
+                    onZap: { slide in
+                        storyZapTarget = StoryZapTarget(author: target, slideId: slide.id)
+                    },
+                    onDelete: { slide in
+                        environment.storiesStore.removeSlide(slide.id)
+                        Task { await environment.notePublisher.publishDeletion(targetEventIds: [slide.id]) }
+                    },
                     onSeen: { environment.storiesStore.markSeen($0) },
                     onClose: { environment.storiesStore.openViewer(nil) }
                 )
+                .task(id: target.pubkey) {
+                    // Web parity: engagement loads with the viewer.
+                    environment.storiesStore.loadActivity(target.slides)
+                }
                 .preferredColorScheme(BitOSTheme.preferredScheme)
+                .sheet(item: $storyZapTarget) { zap in
+                    ZapSheet(
+                        storyEventId: zap.slideId,
+                        authorPubkey: zap.author.pubkey,
+                        profiles: store.profiles,
+                        initialAmountSats: settings.state.defaultZapAmount,
+                        onPaid: { sats, memo in
+                            environment.sentZaps.record(.init(
+                                id: "zap-\(zap.slideId)-\(sats)-\(Int(Date.now.timeIntervalSince1970))",
+                                amountSats: Int64(sats),
+                                recipientPubkey: zap.author.pubkey,
+                                createdAt: Int64(Date.now.timeIntervalSince1970),
+                                targetNoteId: zap.slideId,
+                                memo: memo.isEmpty ? nil : memo
+                            ))
+                        },
+                        onClose: { storyZapTarget = nil }
+                    )
+                    .environment(identity)
+                    .presentationDetents([.medium])
+                }
             }
         }
     }
@@ -596,6 +661,23 @@ struct HomeView: View {
                     .preferredColorScheme(BitOSTheme.preferredScheme)
             }
             .appMenuHost($menu)
+            .sheet(isPresented: $showStoryComposer) {
+                StoryComposerSheet(
+                    onPublish: { text, imageUrls, background, altText, sensitive in
+                        Task { await environment.notePublisher.publishStory(
+                            text: text,
+                            imageUrls: imageUrls,
+                            background: background,
+                            altText: altText,
+                            sensitive: sensitive
+                        ) }
+                    },
+                    onClose: { showStoryComposer = false }
+                )
+                .environment(identity)
+                .environment(environment)
+                .presentationDetents([.large])
+            }
             .sheet(item: $zapTarget) { target in
                 ZapSheet(
                     note: target,
@@ -806,7 +888,7 @@ struct HomeView: View {
                             publicAuthors: environment.storiesStore.publicAuthors,
                             seenIds: environment.storiesStore.seenIds,
                             onOpen: { environment.storiesStore.openViewer($0) },
-                            onCreateStory: { showCreateHub = true },
+                            onCreateStory: { showStoryComposer = true },
                             onOpenPublicStories: onOpenDiscover
                         )
                         .padding(.vertical, BitOSTheme.Spacing.base)
@@ -951,6 +1033,13 @@ struct HomeView: View {
             onOpenMentionProfile: { authorTarget = $0 }
             )
     }
+}
+
+/// APP-006: story zap target (author + the slide the 9735 receipt tags).
+private struct StoryZapTarget: Identifiable {
+    let author: StoriesStore.StoryAuthorMirror
+    let slideId: String
+    var id: String { slideId }
 }
 
 /// Guest banner — browsing without an identity (spec §3.4).

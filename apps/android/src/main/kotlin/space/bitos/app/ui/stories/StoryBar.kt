@@ -2,7 +2,9 @@ package space.bitos.app.ui.stories
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -14,6 +16,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -22,12 +27,21 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,14 +58,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -63,6 +82,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
+import space.bitos.app.ui.components.formatCount
 import space.bitos.app.ui.components.HexShape
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.formatTimeAgo
@@ -339,12 +360,28 @@ private fun PublicStoriesButton(onClick: () -> Unit) {
  * play inline), carousels with dots + per-image timers, video slides via a
  * controls-free ExoPlayer, sensitive media blurred until revealed, text
  * slides centered on their gradient, left-third / right-two-thirds tap
- * zones, slide counter pill.
+ * zones (double-tap = like burst), reply/DM input row with like/zap/
+ * activity actions and a counts row, slide counter pill.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun StoryViewer(
     author: StoryAuthor,
     initialIndex: Int = 0,
+    /** Engagement lookup for the CURRENT slide (viewer-side, per-slide ids). */
+    interactionFor: (String) -> space.bitos.app.data.stories.StoryInteractionUi? = { null },
+    /** True for the signed-in account's own slides (delete + view count). */
+    isMine: Boolean = false,
+    /** Signed-in state gates the reply input (web "Sign in to reply"). */
+    hasIdentity: Boolean = false,
+    onLike: (space.bitos.core.model.StorySlide) -> Unit = {},
+    /** Unlike publishes a kind-5 delete of MY like event id. */
+    onUnlike: (String) -> Unit = {},
+    onReply: (space.bitos.core.model.StorySlide, String) -> Unit = { _, _ -> },
+    onDm: (String) -> Unit = {},
+    /** Zap request carrying the CURRENT slide (its id is the zap target). */
+    onZap: (space.bitos.core.model.StorySlide) -> Unit = {},
+    onDelete: (space.bitos.core.model.StorySlide) -> Unit = {},
     onSeen: (String) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -353,12 +390,22 @@ fun StoryViewer(
     var paused by remember { mutableStateOf(false) }
     var revealed by remember { mutableStateOf(false) }
     var measuredVideoMs by remember { mutableStateOf(0L) }
+    // Engagement UI state (web parity): reply/DM modes, activity sheet,
+    // delete confirm, double-tap heart burst.
+    var replyMode by remember { mutableStateOf("reply") }
+    var replyText by remember { mutableStateOf("") }
+    var activityOpen by remember { mutableStateOf(false) }
+    var confirmDeleteOpen by remember { mutableStateOf(false) }
+    var burstAt by remember { mutableStateOf<Offset?>(null) }
+    val burstScale = remember { androidx.compose.animation.core.Animatable(0.6f) }
     val slide = author.slides.getOrNull(index)
 
     if (slide == null) {
         onClose()
         return
     }
+
+    val interaction = interactionFor(slide.id)
 
     var imageFailed by remember(slide.id) { mutableStateOf(false) }
     val images = slide.imageUrls
@@ -388,6 +435,17 @@ fun StoryViewer(
             imageIndex--
         } else if (index > 0) {
             index--
+        }
+    }
+
+    /** Like the current slide (double-tap + heart button path). */
+    fun likeCurrent() {
+        if (!hasIdentity) return
+        val eventId = interaction?.myLikeEventId
+        if (interaction?.likedByMe == true && eventId != null) {
+            onUnlike(eventId)
+        } else {
+            onLike(slide)
         }
     }
 
@@ -497,21 +555,23 @@ fun StoryViewer(
                 }
 
                 // Tap zones (web: left third = previous, right two thirds =
-                // next), under the reveal gate + header chrome so their taps win.
-                Row(Modifier.fillMaxSize()) {
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clickable(onClickLabel = "Previous slide") { back() },
-                    )
-                    Box(
-                        Modifier
-                            .weight(2f)
-                            .fillMaxHeight()
-                            .clickable(onClickLabel = "Next slide") { advance() },
-                    )
-                }
+                // next; double-tap = like burst), under the reveal gate +
+                // header chrome so their taps win.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    if (offset.x < size.width / 3) back() else advance()
+                                },
+                                onDoubleTap = { offset ->
+                                    burstAt = offset
+                                    likeCurrent()
+                                },
+                            )
+                        },
+                )
 
                 // Sensitive media gate (web parity): blur + tap-to-reveal.
                 if (hidden) {
@@ -627,6 +687,16 @@ fun StoryViewer(
                             )
                         }
                         Spacer(Modifier.weight(1f))
+                        if (isMine) {
+                            IconButton(onClick = { confirmDeleteOpen = true }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    Icons.Rounded.Delete,
+                                    contentDescription = "Delete story",
+                                    tint = Color.White.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                         IconButton(onClick = { paused = !paused }, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 if (paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
@@ -646,25 +716,354 @@ fun StoryViewer(
                     }
                 }
 
-                // "1 / 3 · 1/2" pill, multi-slide authors only (web parity).
-                if (author.slides.size > 1) {
-                    val carousel = if (images.size > 1) " · ${imageIndex + 1}/${images.size}" else ""
-                    Text(
-                        "${index + 1} / ${author.slides.size}$carousel",
+                // Double-tap heart burst (web like-burst, simplified).
+                burstAt?.let { position ->
+                    LaunchedEffect(position) {
+                        burstScale.snapTo(0.55f)
+                        burstScale.animateTo(1.15f, androidx.compose.animation.core.tween(160))
+                        burstScale.animateTo(1f, androidx.compose.animation.core.tween(90))
+                        delay(430)
+                        burstAt = null
+                    }
+                    Icon(
+                        Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = Color(0xFFFF4D67),
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 8.dp)
-                            .background(Color(0x66000000), RoundedCornerShape(BitOSRadius.pill))
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            .offset {
+                                IntOffset(
+                                    (position.x - 44.dp.toPx()).roundToInt(),
+                                    (position.y - 44.dp.toPx()).roundToInt(),
+                                )
+                            }
+                            .size(88.dp)
+                            .scale(burstScale.value),
+                    )
+                }
+
+                // Interactions (web parity): slide counter, reply/DM modes,
+                // input + like/zap/activity row, counts.
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .imePadding()
+                        .navigationBarsPadding()
+                        .background(
+                            Brush.verticalGradient(listOf(Color(0xC0000000), Color(0x40000000), Color.Transparent))
+                        )
+                        .padding(horizontal = BitOSSpacing.md)
+                        .padding(top = BitOSSpacing.lg, bottom = BitOSSpacing.sm),
+                ) {
+                    if (author.slides.size > 1) {
+                        val carousel = if (images.size > 1) " · ${imageIndex + 1}/${images.size}" else ""
+                        Text(
+                            "${index + 1} / ${author.slides.size}$carousel",
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 6.dp)
+                                .background(Color(0x66000000), RoundedCornerShape(BitOSRadius.pill))
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.W600,
                         ),
                         color = Color.White.copy(alpha = 0.8f),
                     )
+                    }
+
+                    // Mode segmented control + privacy hint (web parity).
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier
+                                .background(Color(0x1AFFFFFF), RoundedCornerShape(BitOSRadius.pill))
+                                .padding(1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            StoryModeChip("Reply", replyMode == "reply") { replyMode = "reply"; paused = true }
+                            StoryModeChip("DM", replyMode == "dm") { replyMode = "dm"; paused = true }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (replyMode == "reply") "Visible in story activity" else "Only sent privately",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.W600,
+                            ),
+                            color = Color.White.copy(alpha = 0.75f),
+                        )
+                    }
+                    Spacer(Modifier.height(BitOSSpacing.sm))
+                    // Input + like/zap/activity actions.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(BitOSRadius.pill))
+                                .background(Color(0x1AFFFFFF))
+                                .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(BitOSRadius.pill)),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            BasicTextField(
+                                value = replyText,
+                                onValueChange = { replyText = it },
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 13.sp,
+                                    color = Color.White,
+                                ),
+                                singleLine = true,
+                                cursorBrush = SolidColor(Color.White),
+                                decorationBox = { inner ->
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = BitOSSpacing.base)
+                                    ) {
+                                        if (replyText.isEmpty()) {
+                                            Text(
+                                                if (!hasIdentity) "Sign in to reply"
+                                                else if (replyMode == "reply") "Reply to ${shortPubkey(author.pubkey)}…"
+                                                else "Message ${shortPubkey(author.pubkey)} privately…",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                                                color = Color(0x99FFFFFF),
+                                                maxLines = 1,
+                                            )
+                                        }
+                                        inner()
+                                    }
+                                },
+                                enabled = hasIdentity,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { paused = it.isFocused },
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                val text = replyText.trim()
+                                if (text.isEmpty()) return@IconButton
+                                if (replyMode == "dm") onDm(text) else onReply(slide, text)
+                                replyText = ""
+                            },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                if (replyMode == "reply") Icons.Rounded.ChatBubbleOutline else Icons.Rounded.Send,
+                                contentDescription = if (replyMode == "reply") "Reply to story" else "Message privately",
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        IconButton(onClick = { likeCurrent() }, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                if (interaction?.likedByMe == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (interaction?.likedByMe == true) "Unlike story" else "Like story",
+                                tint = if (interaction?.likedByMe == true) Color(0xFFFF4D67) else Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        IconButton(onClick = { onZap(slide) }, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.Rounded.Bolt,
+                                contentDescription = "Zap sats to this story",
+                                tint = Color(0xFFFFC24B),
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        IconButton(onClick = { activityOpen = true }, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.Rounded.KeyboardArrowUp,
+                                contentDescription = "View activity",
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    // Counts row (own slides add the view count, web parity).
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        StoryCountChip(
+                            icon = Icons.Rounded.Favorite,
+                            label = "${interaction?.likeCount ?: 0}",
+                            onClick = { activityOpen = true },
+                        )
+                        Spacer(Modifier.width(BitOSSpacing.md))
+                        if ((interaction?.zapSats ?: 0L) > 0L || (interaction?.zapCount ?: 0) > 0) {
+                            StoryCountChip(
+                                icon = Icons.Rounded.Bolt,
+                                label = if ((interaction?.zapSats ?: 0L) > 0L) {
+                                    "${formatCount(interaction?.zapSats ?: 0L)} sats"
+                                } else {
+                                    "${interaction?.zapCount ?: 0}"
+                                },
+                                tint = Color(0xFFFFC24B),
+                                onClick = { onZap(slide) },
+                            )
+                            Spacer(Modifier.width(BitOSSpacing.md))
+                        }
+                        if (isMine) {
+                            StoryCountChip(
+                                icon = Icons.Rounded.Visibility,
+                                label = "${interaction?.viewCount ?: 0}",
+                                onClick = { activityOpen = true },
+                            )
+                            Spacer(Modifier.width(BitOSSpacing.md))
+                        }
+                        StoryCountChip(
+                            icon = Icons.Rounded.ChatBubbleOutline,
+                            label = "${interaction?.replyCount ?: 0}",
+                            onClick = { activityOpen = true },
+                        )
+                    }
                 }
             }
         }
+
+        // Activity sheet (web StoryActivity parity): likes + replies.
+        if (activityOpen) {
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { activityOpen = false }) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = BitOSSpacing.lg)
+                        .padding(bottom = 32.dp)
+                ) {
+                    Text(
+                        "Story activity",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.W700,
+                        color = BitOSColors.textPrimary,
+                    )
+                    Spacer(Modifier.height(BitOSSpacing.md))
+                    val likes = interaction?.likes.orEmpty()
+                    val replies = interaction?.replies.orEmpty()
+                    if (likes.isEmpty() && replies.isEmpty()) {
+                        Text(
+                            "No activity yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BitOSColors.textSecondary,
+                        )
+                    }
+                    likes.forEach { like ->
+                        Row(
+                            Modifier.padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PubkeyAvatar(pubkey = like.pubkey, size = 28)
+                            Spacer(Modifier.width(BitOSSpacing.sm))
+                            Text(
+                                shortPubkey(like.pubkey),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = BitOSColors.textPrimary,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(like.emoji, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    if (likes.isNotEmpty() && replies.isNotEmpty()) {
+                        Spacer(Modifier.height(BitOSSpacing.sm))
+                        androidx.compose.material3.HorizontalDivider()
+                        Spacer(Modifier.height(BitOSSpacing.sm))
+                    }
+                    replies.forEach { reply ->
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                PubkeyAvatar(pubkey = reply.pubkey, size = 28)
+                                Spacer(Modifier.width(BitOSSpacing.sm))
+                                Text(
+                                    shortPubkey(reply.pubkey),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = BitOSColors.textPrimary,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    formatTimeAgo(reply.at, System.currentTimeMillis() / 1000),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                )
+                            }
+                            Text(
+                                reply.text,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = BitOSColors.textPrimary,
+                                modifier = Modifier.padding(start = 36.dp, top = 2.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Own-story delete confirm (web `deleteSlide` dialog parity).
+        if (confirmDeleteOpen) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmDeleteOpen = false },
+                title = { Text("Delete story", fontWeight = FontWeight.W700) },
+                text = {
+                    Text(
+                        "Delete this story from your profile? BitOS will publish a delete event to your relays and remove this story from your device."
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            confirmDeleteOpen = false
+                            onDelete(slide)
+                        },
+                    ) { Text("Delete", color = Color(0xFFE5484D), fontWeight = FontWeight.W700) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmDeleteOpen = false }) {
+                        Text("Cancel")
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** Reply/DM segmented chip (web pill parity). */
+@Composable
+private fun StoryModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W600),
+        color = if (selected) Color.Black else Color.White.copy(alpha = 0.85f),
+        modifier = Modifier
+            .clip(RoundedCornerShape(BitOSRadius.pill))
+            .background(if (selected) Color.White else Color.Transparent)
+            .clickable(onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    )
+}
+
+/** One count chip in the viewer's counts row (web parity). */
+@Composable
+private fun StoryCountChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color = Color.White.copy(alpha = 0.85f),
+    onClick: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(BitOSRadius.pill))
+            .clickable(onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W600),
+            color = tint,
+        )
     }
 }
 

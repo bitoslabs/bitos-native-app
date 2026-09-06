@@ -990,12 +990,17 @@ private fun TabEmptyState(tab: Int) {
 }
 
 /// One Bitz grid tile — poster/image cover-cropped square; video tiles get
-/// the black/30 scrim + white play affordance (legacy _MediaTile).
-/// Shared with the author profile page.
+/// the black/30 scrim + white play affordance and an imeta-duration badge
+/// (web ProfileBitzGrid parity: the NIP-92 `thumb` cover renders instantly,
+/// no video metadata fetch). Shared with the author profile page.
 @Composable
 internal fun BitzGridTile(note: space.bitos.core.feed.FeedNote, modifier: Modifier = Modifier) {
     val images = note.mediaUrls.filterNot { it.hasVideoExtension() }
-    val model = images.firstOrNull() ?: note.video?.posterUrl ?: note.video?.url
+    // Video notes lead with their own poster (imeta thumb); image notes and
+    // poster-less videos fall through to content images, then the video URL.
+    val model = note.video?.posterUrl ?: images.firstOrNull() ?: note.video?.url
+    val durationLabel = note.video?.durationSeconds
+        ?.let { space.bitos.core.model.MediaMetadata.formatDuration(it) }
     Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(0.dp))) {
         if (model != null) {
             coil.compose.AsyncImage(
@@ -1018,6 +1023,20 @@ internal fun BitzGridTile(note: space.bitos.core.feed.FeedNote, modifier: Modifi
             ) {
                 Icon(AppIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
+        }
+        if (durationLabel != null) {
+            Text(
+                durationLabel,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(5.dp)
+                    .background(Color.Black.copy(alpha = 0.60f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+            )
         }
     }
 }

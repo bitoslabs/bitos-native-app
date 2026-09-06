@@ -113,6 +113,63 @@ class NotePublisher(
     }
 
     /**
+     * APP-006 story like (kind 7 with e/p/a target tags, web `stories.like`
+     * parity): tags come from `StoriesInteractions.targetTags`.
+     */
+    fun publishReactionWithTags(
+        emoji: String,
+        tags: List<List<String>>,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val reaction = composer.composeReactionWithTags(signer.publicKeyHex(), emoji, tags)
+                ?: run {
+                    mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                    return@launch
+                }
+            publishUnsigned(reaction, signer, writeRelays)
+        }
+    }
+
+    /**
+     * APP-006 story publish (web `stories.publish` parity): kind-30315 with
+     * per-image NIP-92 imeta, background gradient for text-only slides and
+     * a content-warning tag for sensitive media.
+     */
+    fun publishStory(
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val dTag = space.bitos.core.model.Stories.storyDTag(nowSeconds, (1..Int.MAX_VALUE).random())
+            val story = composer.composeStory(
+                signer.publicKeyHex(), text, imageUrls, background, altText, sensitive, dTag,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(story, signer, writeRelays)
+        }
+    }
+
+    /**
      * NIP-22 kind-1111 comment on a non-kind-1 event (web `feed.comment`
      * parity): tags come from `NoteComposer.commentTags`.
      */

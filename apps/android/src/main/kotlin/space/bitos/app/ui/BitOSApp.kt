@@ -512,7 +512,7 @@ fun BitOSApp(
                     // More/Settings stacked-layout bug.
                     tabStateHolder.SaveableStateProvider(destination.name) {
                         when (destination) {
-                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, relayManager = relayManager, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, onOpenAuthorProfile = { authorPageTarget = it }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository)
+                            TopLevelDestination.HOME -> FeedScreen(homeViewModel, identityViewModel, notePublisher, mediaPublishViewModel, authorRepository, settingsStore, videoOnly = false, relayManager = relayManager, onOpenProfile = { destination = TopLevelDestination.YOU }, onOpenDiscover = { destination = TopLevelDestination.DISCOVER }, onOpenHub = { showMore = true }, onOpenCreate = { showCreateHub = true }, onOpenComposer = { showCreateNote = true }, onOpenAuthorProfile = { authorPageTarget = it }, retapTick = feedRetapTick, sensitiveShowByDefault = sensitiveShowByDefault, storiesRepository = storiesRepository, dmRepository = dmRepository)
                             TopLevelDestination.BITZ -> space.bitos.app.ui.bitz.BitzScreen(
                                 viewModel = homeViewModel,
                                 identityViewModel = identityViewModel,

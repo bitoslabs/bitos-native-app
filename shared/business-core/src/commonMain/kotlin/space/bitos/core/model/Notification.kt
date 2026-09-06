@@ -35,10 +35,18 @@ object NotificationExtractor {
      * note (first `e` tag), negative reactions (`-`) never notify, kind-16
      * generic reposts repost, and zap receipts prefer the *second* `e` tag
      * (the first is the zapped note's own reference in most receipts).
+     * NIP-22 kind-1111 comments (feed cards, bitz videos) are replies whose
+     * deep link is the uppercase `E` root — the commented post — with the
+     * lowercase `e` parent (the answered comment) as fallback.
      */
     fun extract(event: NostrEvent, accountPubkey: String): NotificationItem? {
         if (event.pubkey.value == accountPubkey) return null // own events are not notifications
-        val tagsTargetAccount = event.tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == accountPubkey }
+        // NIP-22 comments target the root author via the uppercase `P` tag
+        // even when the lowercase `p` participants only name the parent.
+        val tagsTargetAccount = event.tags.any { tag ->
+            (tag.firstOrNull() == "p" && tag.getOrNull(1) == accountPubkey) ||
+                (event.kind == NostrKinds.VIDEO_COMMENT && tag.firstOrNull() == "P" && tag.getOrNull(1) == accountPubkey)
+        }
         if (!tagsTargetAccount && event.kind != ZapReceipt.RECEIPT_KIND) return null
 
         val eventTags = event.tags.filter { it.firstOrNull() == "e" && !it.getOrNull(1).isNullOrEmpty() }
@@ -69,6 +77,15 @@ object NotificationExtractor {
                     )
                 }
             }
+            NostrKinds.VIDEO_COMMENT -> NotificationItem(
+                id = event.id.value,
+                authorPubkey = event.pubkey.value,
+                kind = NotificationKind.REPLY,
+                targetEventId = event.tag("E").getOrNull(1)
+                    ?: eventTags.firstOrNull()?.get(1),
+                summary = summary,
+                createdAt = event.createdAt,
+            )
             NostrKinds.GENERIC_REACTION -> {
                 if (event.content.trim() == "-") return null // negative reaction: never a like
                 NotificationItem(

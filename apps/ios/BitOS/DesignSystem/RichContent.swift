@@ -1,4 +1,5 @@
 import AVKit
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -122,14 +123,66 @@ struct RichTextView: View {
 
 // MARK: - Remote image
 
+/// Multi-frame GIF decoding (ImageIO): SwiftUI `Image` renders only the
+/// first frame of a GIF payload. Single-frame and non-GIF data return
+/// empty — callers keep the static image path. Shared by remote media
+/// tiles (`RemoteImageView`) and story slides (`StoryGifView`).
+enum GifDecoder {
+    static func decode(_ data: Data) -> (frames: [UIImage], duration: Double) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return ([], 0) }
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return ([], 0) }
+        var frames: [UIImage] = []
+        var total: Double = 0
+        for index in 0..<count {
+            guard let cgImage = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            var delay: Double = 0.1
+            if let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any],
+               let raw = properties[kCGImagePropertyGIFDictionary as String] as? [String: Any],
+               let unclamped = raw[kCGImagePropertyGIFUnclampedDelayTime as String] as? Double {
+                delay = max(unclamped, 0.02)
+            }
+            frames.append(UIImage(cgImage: cgImage))
+            total += delay
+        }
+        return (frames, total)
+    }
+}
+
+/// Plays decoded GIF frames in a UIImageView (`animationImages`).
+struct GifFramePlayer: UIViewRepresentable {
+    let frames: [UIImage]
+    let duration: Double
+    var contentMode: UIView.ContentMode = .scaleAspectFill
+
+    func makeUIView(context: Context) -> UIImageView {
+        let view = UIImageView()
+        view.contentMode = contentMode
+        view.clipsToBounds = true
+        view.animationImages = frames
+        view.animationDuration = duration
+        view.animationRepeatCount = 0
+        view.startAnimating()
+        return view
+    }
+
+    func updateUIView(_ uiView: UIImageView, context: Context) {}
+}
+
 struct RemoteImageView: View {
     let url: String
     @State private var image: UIImage?
+    /// Animated GIF payloads: decoded frames + summed delay. Empty while
+    /// static, so the `image` path keeps rendering everything else.
+    @State private var gifFrames: [UIImage] = []
+    @State private var gifDuration: Double = 0
 
     var body: some View {
         GeometryReader { geo in
             Group {
-                if let image {
+                if gifFrames.count > 1 {
+                    GifFramePlayer(frames: gifFrames, duration: gifDuration, contentMode: .scaleAspectFit)
+                } else if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
@@ -144,11 +197,17 @@ struct RemoteImageView: View {
             .clipped()
         }
         .task(id: url) {
-            guard image == nil, let target = URL(string: url) else { return }
-            image = await Task.detached(priority: .utility) { () -> UIImage? in
-                guard let (data, _) = try? await URLSession.shared.data(from: target) else { return nil }
-                return UIImage(data: data)?.normalized()
-            }.value
+            guard image == nil, gifFrames.isEmpty, let target = URL(string: url) else { return }
+            let decoded: (frames: [UIImage], duration: Double, staticImage: UIImage?) =
+                await Task.detached(priority: .utility) {
+                    guard let (data, _) = try? await URLSession.shared.data(from: target) else { return ([], 0, nil) }
+                    let gif = GifDecoder.decode(data)
+                    if gif.frames.count > 1 { return (gif.frames, gif.duration, nil) }
+                    return ([], 0, UIImage(data: data)?.normalized())
+                }.value
+            gifFrames = decoded.frames
+            gifDuration = decoded.duration
+            image = decoded.staticImage
         }
     }
 }

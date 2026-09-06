@@ -1170,10 +1170,23 @@ struct BitzGridTile: View {
     let note: FeedNote
 
     private var imageURL: URL? {
+        // Video notes lead with their own poster (NIP-92 imeta `thumb`);
+        // image notes and poster-less videos fall through to content
+        // images, then the video URL.
+        if let poster = note.video?.posterUrl ?? note.video?.url { return URL(string: poster) }
         let images = note.mediaUrls.filter { !$0.hasVideoExtension }
         if let first = images.first { return URL(string: first) }
-        if let poster = note.video?.posterUrl ?? note.video?.url { return URL(string: poster) }
         return nil
+    }
+
+    /// Locale-free `m:ss` / `h:mm:ss` (shared `MediaMetadata.formatDuration`
+    /// parity) from the parsed imeta duration — no video metadata fetch.
+    private var durationLabel: String? {
+        guard let seconds = note.video?.durationSeconds, seconds >= 0 else { return nil }
+        let hours = seconds / 3_600, minutes = (seconds % 3_600) / 60, secs = seconds % 60
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, secs)
+            : String(format: "%d:%02d", minutes, secs)
     }
 
     var body: some View {
@@ -1195,6 +1208,17 @@ struct BitzGridTile: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
+        .overlay(alignment: .topTrailing) {
+            if let durationLabel {
+                Text(durationLabel)
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.60), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(5)
+            }
+        }
         .clipped()
     }
 }

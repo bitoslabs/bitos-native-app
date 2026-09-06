@@ -1198,6 +1198,115 @@ class BusinessCoreBridge {
         """{"kinds":[${space.bitos.core.model.Stories.STORY_KIND}],"limit":20}""",
     )
 
+    // ── APP-006 story interactions (web `stories` engagement parity) ────
+
+    /** Story like/reply target tags (e/p/a) as TagsCodec wire JSON (iOS seam). */
+    fun storyTargetTagsJson(slideId: String, authorPubkey: String, d: String): String =
+        space.bitos.core.store.TagsCodec.encode(
+            space.bitos.core.model.StoriesInteractions.targetTagsFor(slideId, authorPubkey, d.ifBlank { null })
+        )
+
+    /** Story reply tags (e/p/a with `reply` markers) as TagsCodec wire JSON. */
+    fun storyReplyTagsJson(slideId: String, authorPubkey: String, d: String): String =
+        space.bitos.core.store.TagsCodec.encode(
+            space.bitos.core.model.StoriesInteractions.replyTagsFor(slideId, authorPubkey, d.ifBlank { null })
+        )
+
+    /** Composes the unsigned kind-7 story reaction (tagsJson wire form) and returns its id. */
+    fun composeReactionWithTagsEventId(emoji: String, tagsJson: String, authorPubkey: String, nowSeconds: Long): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        return composer.composeReactionWithTags(authorPubkey, emoji, tags)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-7 story reaction, or null. */
+    fun reactionWithTagsPublishMessage(
+        emoji: String,
+        tagsJson: String,
+        authorPubkey: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val unsigned = composer.composeReactionWithTags(authorPubkey, emoji, tags) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** APP-006: composes the unsigned kind-30315 story and returns its id. */
+    fun composeStoryEventId(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        nowSeconds: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)?.idHex
+    }
+
+    /** The ["EVENT", {...}] frame for the signed kind-30315 story, or null. */
+    fun storyPublishMessage(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)
+            ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
+     * APP-006: engagement REQ for a set of tracked slides — kind 7 + 9735 by
+     * `#e`, kind 1 by `#e` and (when parameterized) `#a` (web
+     * `activityFilters` parity).
+     */
+    fun storyActivityRequest(subscriptionId: String, slideIds: List<String>, addresses: List<String>): String? {
+        val filters = space.bitos.core.model.StoriesInteractions.activityFilters(slideIds, addresses)
+            ?: return null
+        return NostrEventCodec.encodeRequest(subscriptionId, filters)
+    }
+
+    /**
+     * APP-006: classify one verified engagement event against the tracked
+     * slide ids/addresses (null = targets nothing tracked). `addresses`
+     * entries are `"kind:pubkey:d=slideId"` pairs — the address a
+     * parameterized slide is reachable by. Map keys:
+     * slideId/type(like|view|reply|zap)/pubkey/emoji/text/sats/at/eventId.
+     */
+    fun storyInteractionFromEvent(event: Event, slideIds: List<String>, addresses: List<String>): Map<String, Any>? {
+        val core = coreEvent(event) ?: return null
+        val addressToId = addresses.mapNotNull { raw ->
+            val idx = raw.indexOf('=')
+            if (idx > 0) raw.substring(0, idx) to raw.substring(idx + 1) else null
+        }.toMap()
+        val projected = space.bitos.core.model.StoriesInteractions.project(
+            core,
+            slideIds.filter { it.isNotEmpty() }.toSet(),
+            addressToId,
+        ) ?: return null
+        return mapOf(
+            "slideId" to projected.slideId,
+            "type" to projected.type.name.lowercase(),
+            "pubkey" to projected.pubkey,
+            "emoji" to projected.emoji,
+            "text" to projected.text,
+            "sats" to projected.sats,
+            "at" to projected.at,
+            "eventId" to projected.eventId,
+        )
+    }
+
     /** APP-006: parse a verified kind-30315 frame → slide map (null = not a valid story). */
     fun storyFromFrame(message: String, relayUrl: String, nowSeconds: Long): Map<String, Any>? {
         val relay = RelayUrl.parse(relayUrl) ?: return null
@@ -3712,8 +3821,10 @@ class BusinessCoreBridge {
     /**
      * REQ for events targeting the account (notification inbox). Zap
      * receipts keep their own filter so relay per-filter limits cannot crowd
-     * them out of a busy account's history (web parity); [untilSeconds]
-     * pages older history (0 = live head subscription).
+     * them out of a busy account's history (web parity); NIP-22 kind-1111
+     * comments (feed cards, bitz videos) arrive via both `#p` participants
+     * and the uppercase `#P` root author; [untilSeconds] pages older
+     * history (0 = live head subscription).
      */
     fun notificationsRequest(
         subscriptionId: String,
@@ -3725,7 +3836,8 @@ class BusinessCoreBridge {
         return NostrEventCodec.encodeRequest(
             subscriptionId,
             listOf(
-                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},3],"#p":["$accountPubkey"],"limit":$limit$timeBound}""",
+                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},${space.bitos.core.model.NostrKinds.VIDEO_COMMENT},3],"#p":["$accountPubkey"],"limit":$limit$timeBound}""",
+                """{"kinds":[${space.bitos.core.model.NostrKinds.VIDEO_COMMENT}],"#P":["$accountPubkey"],"limit":$limit$timeBound}""",
                 """{"kinds":[${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#p":["$accountPubkey"],"limit":$limit$timeBound}""",
             ),
         )

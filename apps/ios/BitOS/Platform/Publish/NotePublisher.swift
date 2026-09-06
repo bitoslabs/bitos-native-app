@@ -257,6 +257,67 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// APP-006 story like (kind 7 ❤️ with e/p/a target tags, web
+    /// `stories.like` parity; tagsJson is the TagsCodec wire form).
+    func publishStoryReaction(emoji: String, tagsJson: String) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.composeReactionWithTagsEventId(
+                  emoji: emoji, tagsJson: tagsJson, authorPubkey: account.pubkeyHex, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.reactionWithTagsPublishMessage(
+                  emoji: emoji, tagsJson: tagsJson, authorPubkey: account.pubkeyHex,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
+    /// APP-006 story publish (web `stories.publish` parity): kind-30315 with
+    /// per-image NIP-92 imeta, background gradient for text-only slides and
+    /// a content-warning tag for sensitive media.
+    func publishStory(
+        text: String,
+        imageUrls: [String],
+        background: String?,
+        altText: String,
+        sensitive: Bool
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        let dTag = "bitos-story-\(now)-\(String(UInt32.random(in: 0...UInt32.max), radix: 36))"
+        guard let eventId = bridge.composeStoryEventId(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.storyPublishMessage(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
     /// Kind-1 reply (NIP-10) through the same machine (SOC-002).
     func publishReply(content: String, targetEventId: String, targetPubkey: String) async {
         guard result == nil, inFlightId == nil, !busy else { return }

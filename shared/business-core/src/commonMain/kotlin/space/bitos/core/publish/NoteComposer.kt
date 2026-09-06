@@ -82,6 +82,67 @@ class NoteComposer(
     }
 
     /**
+     * Builds the unsigned kind-7 reaction with caller-provided tags (APP-006
+     * story likes: e/p/a target tags from `StoriesInteractions.targetTags`,
+     * content "❤️" — web `stories.like` parity).
+     */
+    fun composeReactionWithTags(pubkeyHex: String, emoji: String, tags: List<List<String>>): UnsignedNote? {
+        if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (tags.isEmpty() || tags.size > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
+        val boundedEmoji = emoji.trim().take(16)
+        if (boundedEmoji.isEmpty()) return null
+        return compose(pubkeyHex, NostrKinds.GENERIC_REACTION, tags, boundedEmoji)
+    }
+
+    /**
+     * APP-006 story publish (web `stories.publish` parity): kind-30315 with a
+     * unique `d`, 24 h expiration, one NIP-92 imeta per image (alt on the
+     * first only), the `background` gradient for text-only slides and a
+     * content-warning tag for sensitive media. Image URLs mirror into the
+     * content for link-only clients.
+     */
+    fun composeStory(
+        pubkeyHex: String,
+        text: String,
+        imageUrls: List<String>,
+        background: String?,
+        altText: String?,
+        sensitive: Boolean,
+        dTag: String,
+    ): UnsignedNote? {
+        if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
+        val boundedText = text.trim().take(280)
+        val boundedImages = imageUrls
+            .filter { it.startsWith("https://") }
+            .distinct()
+            .take(space.bitos.core.model.Stories.MAX_STORY_IMAGES)
+        if (boundedText.isEmpty() && boundedImages.isEmpty()) return null
+        if (dTag.isBlank() || dTag.length > 128) return null
+        val tags = mutableListOf(
+            listOf("d", dTag),
+            listOf("expiration", (clock.nowSeconds() + space.bitos.core.model.Stories.STORY_TTL_SECONDS).toString()),
+        )
+        // Hashtags from the caption (web extractHashtagTags).
+        space.bitos.core.publish.ComposerRules.deriveTags(boundedText)
+            .filter { it.firstOrNull() == "t" }
+            .forEach { tags.add(it) }
+        if (boundedImages.isEmpty() && !background.isNullOrBlank() && background.length <= 256) {
+            tags.add(listOf("background", background.trim()))
+        }
+        if (sensitive && boundedImages.isNotEmpty()) {
+            tags.add(listOf("content-warning", "Sensitive media"))
+        }
+        val boundedAlt = altText?.trim()?.take(280)
+        boundedImages.forEachIndexed { index, url ->
+            val imeta = mutableListOf("url $url")
+            if (index == 0 && !boundedAlt.isNullOrBlank()) imeta.add("alt $boundedAlt")
+            tags.add(listOf("imeta") + imeta)
+        }
+        val content = (listOf(boundedText) + boundedImages).filter { it.isNotBlank() }.joinToString("\n")
+        return compose(pubkeyHex, space.bitos.core.model.Stories.STORY_KIND, tags, content)
+    }
+
+    /**
      * Builds the unsigned kind-5 deletion (NIP-09): one `e` tag per target
      * event, bounded, authored by the original event's key only. Web
      * `feed.deleteNote` parity (content "Deleted from BitOS").

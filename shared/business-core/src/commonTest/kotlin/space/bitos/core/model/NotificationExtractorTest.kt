@@ -73,6 +73,80 @@ class NotificationExtractorTest {
     }
 
     @Test
+    fun extractsVideoCommentsAsReplies() {
+        // BitOS kind-1111 comment on the account's post: uppercase E/K/P
+        // root tags + lowercase participants (`NoteComposer.commentTags`).
+        val comment = NotificationExtractor.extract(
+            event(
+                1_111,
+                listOf(
+                    listOf("E", targetId),
+                    listOf("K", "22"),
+                    listOf("P", me),
+                    listOf("e", targetId),
+                    listOf("k", "22"),
+                    listOf("p", me),
+                ),
+                "great clip",
+            ),
+            me,
+        )!!
+        assertEquals(NotificationKind.REPLY, comment.kind)
+        assertEquals(targetId, comment.targetEventId)
+        assertEquals("great clip", comment.summary)
+
+        // Nested comment answering someone else's comment: the account is
+        // only the uppercase root author; the deep link stays on the root.
+        val parentCommentId = "40cf5a33e757be81a5b4c933c93ecb895667c6f202814d4291ab6b15d99a1d8a"
+        val nested = NotificationExtractor.extract(
+            event(
+                1_111,
+                listOf(
+                    listOf("E", targetId),
+                    listOf("K", "22"),
+                    listOf("P", me),
+                    listOf("e", parentCommentId),
+                    listOf("k", "1111"),
+                    listOf("p", other),
+                ),
+                "same thought",
+            ),
+            me,
+        )!!
+        assertEquals(NotificationKind.REPLY, nested.kind)
+        assertEquals(targetId, nested.targetEventId)
+
+        // Comment tagging the account only as a lowercase participant
+        // (reply to the account's comment under a third party's post).
+        val replyToMyComment = NotificationExtractor.extract(
+            event(
+                1_111,
+                listOf(
+                    listOf("E", targetId),
+                    listOf("K", "22"),
+                    listOf("P", other),
+                    listOf("e", parentCommentId),
+                    listOf("k", "1111"),
+                    listOf("p", me),
+                ),
+                "thanks",
+            ),
+            me,
+        )!!
+        assertEquals(NotificationKind.REPLY, replyToMyComment.kind)
+        assertEquals(targetId, replyToMyComment.targetEventId)
+
+        // Comments that never involve the account do not notify; neither
+        // do the account's own comments.
+        assertNull(NotificationExtractor.extract(
+            event(1_111, listOf(listOf("E", targetId), listOf("P", other), listOf("p", other)), "x"), me,
+        ))
+        assertNull(NotificationExtractor.extract(
+            event(1_111, listOf(listOf("E", targetId), listOf("P", me), listOf("p", me)), "self", pubkey = me), me,
+        ))
+    }
+
+    @Test
     fun extractsGenericReposts() {
         // NIP-18 kind 16 with an e tag → repost on that id.
         val tagged = NotificationExtractor.extract(

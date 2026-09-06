@@ -67,6 +67,10 @@ object Stories {
     /** Hard cap on images per slide — keeps events + viewer carousels sane. */
     const val MAX_STORY_IMAGES = 6
 
+    /** Unique `d` for a new slide (web `bitos-story-<ts>-<rand>` parity). */
+    fun storyDTag(nowSeconds: Long, nonce: Int): String =
+        "bitos-story-$nowSeconds-" + (nonce.toLong() and 0xFFFF_FFFFL).toString(36)
+
     /** Future-dated guard (±10 min clock skew). */
     const val CLOCK_SKEW_SECONDS = 600
 

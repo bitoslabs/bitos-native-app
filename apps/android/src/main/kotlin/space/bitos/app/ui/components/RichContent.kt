@@ -250,15 +250,19 @@ private fun FullscreenVideoPlayer(url: String, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * Remote image tile rendered through the shared Coil loader — the app-wide
+ * `ImageLoader` registers the platform GIF decoder, so animated `.gif`
+ * attachments play inline (comment sheets, feed tiles, lightbox) instead
+ * of decoding a static first frame. The gradient shows until the load
+ * lands.
+ */
 @Composable
 fun RemoteBitmapImage(
     url: String,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
 ) {
-    val bitmap by produceState<Bitmap?>(initialValue = null, url) {
-        value = loadBitmap(url)
-    }
     Box(
         modifier
             .background(
@@ -267,14 +271,12 @@ fun RemoteBitmapImage(
                 ),
             ),
     ) {
-        bitmap?.let { image ->
-            Image(
-                bitmap = image.asImageBitmap(),
-                contentDescription = null,
-                contentScale = contentScale,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        coil.compose.AsyncImage(
+            model = url,
+            contentDescription = null,
+            contentScale = contentScale,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 

@@ -142,6 +142,8 @@ fun FeedScreen(
     retapTick: Int = 0,
     /** APP-006: stories bar + viewer. */
     storiesRepository: space.bitos.app.data.stories.StoriesRepository? = null,
+    /** APP-006: story viewer "DM" mode sends through the DM repository. */
+    dmRepository: space.bitos.app.data.dm.DmRepository? = null,
     /** APP-009 not-found "Add relay" applies nevent TLV hints here. */
     relayManager: space.bitos.app.data.relay.RelayManager? = null,
     /** UX-010: opens the in-app full profile page for a pubkey. */
@@ -181,6 +183,12 @@ fun FeedScreen(
     var storyViewerTarget by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<space.bitos.core.model.StoryAuthor?>(null)
     }
+    // Story zap target: author + the slide the zap receipt tags.
+    var storyZapTarget by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<Pair<space.bitos.core.model.StoryAuthor, String>?>(null)
+    }
+    // APP-006: dedicated story composer (kind-30315, web `StoryComposer` parity).
+    var showStoryComposer by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(state.accountPubkey, state.following) {
         storiesRepository?.setAccount(state.accountPubkey, state.following, context)
     }
@@ -340,7 +348,7 @@ fun FeedScreen(
                                     publicAuthors = storiesState.publicAuthors,
                                     seenIds = storiesState.seenIds,
                                     onOpenViewer = { storyViewerTarget = it },
-                                    onCreateStory = onOpenCreate,
+                                    onCreateStory = { showStoryComposer = true },
                                     onOpenPublicStories = onOpenDiscover,
                                     modifier = Modifier.padding(top = BitOSSpacing.base, bottom = BitOSSpacing.sm),
                                 )
@@ -376,11 +384,94 @@ fun FeedScreen(
                 }
                 // APP-006: story viewer full-screen overlay.
         storyViewerTarget?.let { storyAuthor ->
+            androidx.compose.runtime.LaunchedEffect(storyAuthor.pubkey) {
+                // Web parity: engagement loads with the viewer.
+                storiesRepository?.loadActivity(storyAuthor.slides)
+            }
             space.bitos.app.ui.stories.StoryViewer(
                 author = storyAuthor,
+                interactionFor = { slideId -> storiesState.interactions[slideId] },
+                isMine = storyAuthor.pubkey == state.accountPubkey,
+                hasIdentity = state.accountPubkey != null,
+                onLike = viewModel::likeStorySlide,
+                onUnlike = viewModel::unlikeStorySlide,
+                onReply = viewModel::replyToStorySlide,
+                onDm = { text ->
+                    val repo = dmRepository
+                    if (repo != null) {
+                        scope.launch {
+                            // Web `privateMessageDraft` parity: reference the
+                            // story, then the typed message.
+                            val draft = buildString {
+                                append("Replying to your story:")
+                                storyAuthor.slides.firstOrNull()?.let { slide ->
+                                    if (slide.content.isNotBlank()) {
+                                        append("\n")
+                                        append(slide.content)
+                                    }
+                                    slide.imageUrls.forEach { url -> append("\n").append(url) }
+                                    slide.videoUrl?.let { url -> append("\n").append(url) }
+                                }
+                                append("\n\n")
+                                append(text)
+                            }
+                            repo.sendMessage(storyAuthor.pubkey, draft)
+                        }
+                    }
+                },
+                onZap = { slide ->
+                    viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong())
+                    storyZapTarget = storyAuthor to slide.id
+                },
+                onDelete = { slide ->
+                    viewModel.deleteStorySlide(slide.id)
+                    storiesRepository?.removeSlide(slide.id)
+                    storyViewerTarget = null
+                },
                 onSeen = { slideId -> storiesRepository?.markSeen(slideId, context) },
                 onClose = { storyViewerTarget = null },
             )
+        }
+
+        // APP-006: story composer (kind-30315, web `StoryComposer` parity).
+        if (showStoryComposer) {
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showStoryComposer = false }) {
+                space.bitos.app.ui.stories.StoryComposerSheet(
+                    identityViewModel = identityViewModel,
+                    onPublish = { text, imageUrls, background, altText, sensitive ->
+                        notePublisher.publishStory(
+                            text, imageUrls, background, altText, sensitive,
+                            { identityViewModel.createSigner() },
+                            space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                        )
+                    },
+                    onClose = { showStoryComposer = false },
+                )
+            }
+        }
+
+        // APP-006: story zap sheet (web NoteZapDialog parity over the slide id).
+        storyZapTarget?.let { (zapAuthor, slideId) ->
+            val zapLud16 = state.profiles[zapAuthor.pubkey]?.lud16
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { viewModel.dismissZap(); storyZapTarget = null },
+            ) {
+                space.bitos.app.ui.feed.ZapContent(
+                    note = null,
+                    recipientPubkey = zapAuthor.pubkey,
+                    lud16 = zapLud16,
+                    state = zapState,
+                    profileName = state.profiles[zapAuthor.pubkey]?.bestDisplayName,
+                    hasIdentity = state.accountPubkey != null,
+                    onAmountSelected = viewModel::selectZapAmount,
+                    onZap = { sats, comment, anonymous ->
+                        viewModel.selectZapAmount(sats)
+                        viewModel.zapStory(zapAuthor.pubkey, zapLud16, slideId, comment, anonymous)
+                    },
+                    onClose = { viewModel.dismissZap(); storyZapTarget = null },
+                    profilePictureUrl = state.profiles[zapAuthor.pubkey]?.picture,
+                )
+            }
         }
 
             }

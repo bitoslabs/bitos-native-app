@@ -1,5 +1,4 @@
 import AVFoundation
-import ImageIO
 import SwiftUI
 import UIKit
 
@@ -11,8 +10,8 @@ import UIKit
  * Media URLs arrive from the shared stories parser (bounded HTTPS only).
  */
 
-/// Animated GIF renderer: decodes frames + delays off-main via ImageIO,
-/// then plays them in a UIImageView (`animationImages`).
+/// Animated GIF renderer: decodes frames + delays off-main via the shared
+/// `GifDecoder` (DesignSystem), then plays them in `GifFramePlayer`.
 struct StoryGifView: View {
     let url: URL
 
@@ -37,51 +36,12 @@ struct StoryGifView: View {
                 loadFailed = true
                 return
             }
-            let decoded = Self.decode(data)
+            let decoded = GifDecoder.decode(data)
             frames = decoded.frames
             totalDuration = decoded.duration
             loadFailed = decoded.frames.isEmpty
         }
     }
-
-    private static func decode(_ data: Data) -> (frames: [UIImage], duration: Double) {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return ([], 0) }
-        let count = CGImageSourceGetCount(source)
-        guard count > 1 else { return ([], 0) }
-        var frames: [UIImage] = []
-        var total: Double = 0
-        for index in 0..<count {
-            guard let cgImage = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
-            var delay: Double = 0.1
-            if let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any],
-               let raw = properties[kCGImagePropertyGIFDictionary as String] as? [String: Any],
-               let unclamped = raw[kCGImagePropertyGIFUnclampedDelayTime as String] as? Double {
-                delay = max(unclamped, 0.02)
-            }
-            frames.append(UIImage(cgImage: cgImage))
-            total += delay
-        }
-        return (frames, total)
-    }
-}
-
-/// The UIKit frame player backing `StoryGifView`.
-private struct GifFramePlayer: UIViewRepresentable {
-    let frames: [UIImage]
-    let duration: Double
-
-    func makeUIView(context: Context) -> UIImageView {
-        let view = UIImageView()
-        view.contentMode = .scaleAspectFill
-        view.clipsToBounds = true
-        view.animationImages = frames
-        view.animationDuration = duration
-        view.animationRepeatCount = 0
-        view.startAnimating()
-        return view
-    }
-
-    func updateUIView(_ uiView: UIImageView, context: Context) {}
 }
 
 /// Controls-free, muted, aspect-fill video surface for story slides.

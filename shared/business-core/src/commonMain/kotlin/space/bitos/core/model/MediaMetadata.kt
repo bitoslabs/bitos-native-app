@@ -3,11 +3,11 @@ package space.bitos.core.model
 /**
  * Display-oriented media attachment for feed notes (FED foundation).
  *
- * Parses kind-22 attachments (NIP-92 `imeta` tags with url/m/dim fields and
- * a poster image attachment) and legacy kind-1 video URLs in content. All
- * inputs are untrusted relay data: URLs are scheme/length bounded and
- * dimensions capped, so a hostile event cannot inflate memory or smuggle a
- * non-media locator.
+ * Parses kind-22 attachments (NIP-92 `imeta` tags with url/m/dim/thumb
+ * fields and a poster image attachment) and legacy kind-1 video URLs in
+ * content. All inputs are untrusted relay data: URLs are scheme/length
+ * bounded and dimensions capped, so a hostile event cannot inflate memory
+ * or smuggle a non-media locator.
  */
 data class MediaMetadata(
     val url: String,
@@ -141,11 +141,14 @@ data class MediaMetadata(
                         }
                         // Mirrors ride along any imeta block, order preserved.
                         fields["fallback"]?.takeIf(::isHttpUrl)?.let { fallbacks.add(it) }
-                        // Flutter parity (media_utils.dart posterUrlFor): an
-                        // imeta `preview <url>` / `image <url>` value is a
+                        // NIP-92 `thumb` is the standard publisher cover
+                        // (our composer and the web BitzComposer write it;
+                        // web renders it as the video poster). Flutter
+                        // parity (media_utils.dart posterUrlFor): an imeta
+                        // `preview <url>` / `image <url>` value is a
                         // non-standard but harmless explicit cover hint.
                         if (posterHint == null) {
-                            val hinted = fields["preview"] ?: fields["image"]
+                            val hinted = fields["thumb"] ?: fields["preview"] ?: fields["image"]
                             posterHint = hinted?.takeIf(::isHttpUrl)
                         }
                         val url = fields["url"]?.takeIf(::isHttpUrl) ?: continue

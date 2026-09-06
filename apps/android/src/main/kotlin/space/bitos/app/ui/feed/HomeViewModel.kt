@@ -375,6 +375,55 @@ class HomeViewModel(
         zapRecipient(recipientPubkey, lud16, null, comment, anonymous)
     }
 
+    // ── APP-006 story engagement (web `stories.like/unlike/reply` parity) ──
+
+    /** Story like: kind 7 ❤️ with e/p/a target tags. */
+    fun likeStorySlide(slide: space.bitos.core.model.StorySlide) {
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishReactionWithTags(
+            emoji = "❤️",
+            tags = space.bitos.core.model.StoriesInteractions.targetTags(slide),
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** Story unlike: kind-5 delete of my reaction event. */
+    fun unlikeStorySlide(myLikeEventId: String) {
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishDeletion(
+            targetEventIds = listOf(myLikeEventId),
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** Story reply: kind 1 with e/p/a `reply`-marker tags. */
+    fun replyToStorySlide(slide: space.bitos.core.model.StorySlide, text: String) {
+        if (notePublisher == null || identityViewModel == null) return
+        val content = text.trim()
+        if (content.isEmpty()) return
+        notePublisher.publishNoteWith(
+            content, space.bitos.core.model.StoriesInteractions.replyTags(slide),
+            { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** Delete my own story slide (kind 5; the repo also drops it locally). */
+    fun deleteStorySlide(slideId: String) {
+        if (notePublisher == null || identityViewModel == null) return
+        notePublisher.publishDeletion(
+            targetEventIds = listOf(slideId),
+            signerProvider = { identityViewModel.createSigner() },
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+        )
+    }
+
+    /** Story zap: the LNURL flow with the slide id as the target event. */
+    fun zapStory(recipientPubkey: String, lud16: String?, targetEventId: String, comment: String = "", anonymous: Boolean = false) {
+        zapRecipient(recipientPubkey, lud16, targetEventId, comment, anonymous)
+    }
+
     private fun zapRecipient(
         recipientPubkey: String,
         lud16: String?,

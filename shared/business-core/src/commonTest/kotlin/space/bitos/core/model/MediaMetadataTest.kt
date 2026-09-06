@@ -165,6 +165,69 @@ class MediaMetadataTest {
     }
 
     @Test
+    fun imetaThumbFieldIsTheStandardCoverHint() {
+        // Real bitz publish shape (web BitzComposer parity): a single video
+        // imeta block whose `thumb` is the only cover — no separate image
+        // attachment exists, so without parsing it the grid has no poster.
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf(
+                        "imeta",
+                        "url https://blossom.example/20b0.mp4",
+                        "m video/mp4",
+                        "x 20b0c984eabaed394aada0bc6b2b0514d8b2f19476a87412e28b427ba943b4c7",
+                        "size 1734198",
+                        "dim 720x1280",
+                        "duration 3",
+                        "thumb https://blossom.example/7fba.jpg",
+                    ),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://blossom.example/20b0.mp4", media.url)
+        assertEquals("https://blossom.example/7fba.jpg", media.posterUrl)
+        assertEquals(720, media.width)
+        assertEquals(1280, media.height)
+        assertEquals(3L, media.durationSeconds)
+    }
+
+    @Test
+    fun imetaThumbBeatsPreviewHintAndDerivedPoster() {
+        // The standard `thumb` field outranks the non-standard preview hint
+        // and any poster derived from a separate image attachment.
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4", "preview https://x/hint.png", "thumb https://x/cover.jpg"),
+                    listOf("imeta", "url https://x/derived.jpg", "m image/jpeg"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://x/cover.jpg", media.posterUrl)
+    }
+
+    @Test
+    fun hostileThumbHintFallsBackToDerivedPoster() {
+        // Non-http thumb is dropped; the derived poster still resolves.
+        val media = MediaMetadata.fromEvent(
+            event(
+                kind = NostrKinds.VIDEO,
+                tags = listOf(
+                    listOf("imeta", "url https://x/v.mp4", "m video/mp4", "thumb javascript:alert(1)"),
+                    listOf("imeta", "url https://x/derived.jpg", "m image/jpeg"),
+                ),
+            ),
+        )
+        assertNotNull(media)
+        assertEquals("https://x/derived.jpg", media.posterUrl)
+    }
+
+    @Test
     fun hintOverSizeOrNonHttpIsIgnored() {
         // Non-http hint falls back to the derived poster.
         val nonHttp = MediaMetadata.fromEvent(

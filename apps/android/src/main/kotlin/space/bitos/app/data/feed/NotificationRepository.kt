@@ -371,7 +371,10 @@ class NotificationRepository(
         return NostrEventCodec.encodeRequest(
             subscriptionId,
             listOf(
-                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},3],"#p":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
+                """{"kinds":[1,7,6,${space.bitos.core.model.NostrKinds.GENERIC_REPOST},${space.bitos.core.model.NostrKinds.VIDEO_COMMENT},3],"#p":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
+                // NIP-22 comments name the root author with the uppercase `P`
+                // tag; strict clients may carry no lowercase `p` for them.
+                """{"kinds":[${space.bitos.core.model.NostrKinds.VIDEO_COMMENT}],"#P":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
                 """{"kinds":[${space.bitos.core.model.ZapReceipt.RECEIPT_KIND}],"#p":["$account"],"limit":$PAGE_LIMIT$timeBound}""",
             ),
         )

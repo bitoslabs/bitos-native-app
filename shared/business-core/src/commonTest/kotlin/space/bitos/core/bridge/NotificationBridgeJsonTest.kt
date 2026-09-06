@@ -61,6 +61,18 @@ class NotificationBridgeJsonTest {
     }
 
     @Test
+    fun notificationsRequestCoversVideoComments() {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val request = bridge.notificationsRequest("inbox", account)
+        // Kind-1111 comments ride the #p participant filter…
+        assertTrue(request.contains(""""kinds":[1,7,6,16,1111,3],"#p":["$account"]"""), request)
+        // …and the uppercase #P root-author filter for strict NIP-22 clients.
+        assertTrue(request.contains(""""kinds":[1111],"#P":["$account"]"""), request)
+        // Zap receipts keep their dedicated filter (web parity).
+        assertTrue(request.contains(""""kinds":[9735],"#p":["$account"]"""), request)
+    }
+
+    @Test
     fun eventsByIdsRequestIsBoundedAndValidated() {
         val request = bridge.eventsByIdsRequest("sub", listOf("a".repeat(64), "zz-not-hex"))!!
         assertTrue(request.contains(""""ids":["${"a".repeat(64)}"]}"""))

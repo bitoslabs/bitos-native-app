@@ -237,6 +237,20 @@ private func storyCardGradient(_ token: String?) -> [Color] {
 
 struct StoryViewerView: View {
     let author: StoriesStore.StoryAuthorMirror
+    /// Engagement lookup for the CURRENT slide (viewer-side, per-slide ids).
+    var interactionFor: (String) -> StoriesStore.StoryInteractionMirror? = { _ in nil }
+    /// True for the signed-in account's own slides (delete + view count).
+    var isMine = false
+    /// Signed-in state gates the reply input (web "Sign in to reply").
+    var hasIdentity = false
+    var onLike: (StoriesStore.StorySlideMirror) -> Void = { _ in }
+    /// Unlike publishes a kind-5 delete of MY like event id.
+    var onUnlike: (String) -> Void = { _ in }
+    var onReply: (StoriesStore.StorySlideMirror, String) -> Void = { _, _ in }
+    var onDm: (String) -> Void = { _ in }
+    /// Zap request carrying the CURRENT slide (its id is the zap target).
+    var onZap: (StoriesStore.StorySlideMirror) -> Void = { _ in }
+    var onDelete: (StoriesStore.StorySlideMirror) -> Void = { _ in }
     let onSeen: (String) -> Void
     let onClose: () -> Void
 
@@ -247,9 +261,21 @@ struct StoryViewerView: View {
     @State private var imageFailed = false
     @State private var revealed = false
     @State private var measuredVideoSeconds: Double?
+    // Engagement UI state (web parity): reply/DM modes, activity sheet,
+    // delete confirm, double-tap heart burst.
+    @State private var replyMode = "reply"
+    @State private var replyText = ""
+    @State private var activityOpen = false
+    @State private var confirmDeleteOpen = false
+    @State private var burstAt: CGPoint?
+    @State private var burstScale: Double = 0.55
 
     private var slide: StoriesStore.StorySlideMirror? {
         author.slides.indices.contains(index) ? author.slides[index] : nil
+    }
+
+    private var interaction: StoriesStore.StoryInteractionMirror? {
+        slide.flatMap { interactionFor($0.id) }
     }
 
     /// All images on the current slide — carousels get one timer per image.
@@ -331,22 +357,41 @@ struct StoryViewerView: View {
         }
     }
 
+    /// Like the current slide (double-tap + heart button path).
+    private func likeCurrent() {
+        guard hasIdentity, let slide else { return }
+        if let interaction, interaction.likedByMe, let eventId = interaction.myLikeEventId {
+            onUnlike(eventId)
+        } else {
+            onLike(slide)
+        }
+    }
+
     private var canvas: some View {
         ZStack {
             slideBackground
 
-            // Tap zones (web: left third = previous, right two thirds = next)
-            // sit above the media but below the header chrome.
+            // Tap zones (web: left third = previous, right two thirds = next;
+            // double-tap = like burst) sit above the media but below the
+            // header chrome and the interactions bar.
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     Color.clear
                         .frame(width: geo.size.width / 3)
                         .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { location in
+                            burstAt = location
+                            likeCurrent()
+                        }
                         .onTapGesture { back() }
                         .accessibilityLabel("Previous slide")
                     Color.clear
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { location in
+                            burstAt = location
+                            likeCurrent()
+                        }
                         .onTapGesture { advance() }
                         .accessibilityLabel("Next slide")
                 }
@@ -362,12 +407,46 @@ struct StoryViewerView: View {
                 carouselDots
                 header
                 Spacer()
+                interactionsBar
             }
 
             caption
-            slideCounter
+
+            // Double-tap heart burst (web like-burst, simplified).
+            if let burstAt {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 84))
+                    .foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.42))
+                    .position(burstAt)
+                    .scaleEffect(burstScale)
+                    .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+                    .task(id: burstAt) {
+                        burstScale = 0.55
+                        withAnimation(.easeOut(duration: 0.16)) { burstScale = 1.15 }
+                        try? await Task.sleep(nanoseconds: 90_000_000)
+                        withAnimation(.easeInOut(duration: 0.09)) { burstScale = 1.0 }
+                        try? await Task.sleep(nanoseconds: 430_000_000)
+                        self.burstAt = nil
+                    }
+                    .allowsHitTesting(false)
+            }
         }
         .clipped()
+        .sheet(isPresented: $activityOpen) {
+            StoryActivitySheet(interaction: interaction)
+                .presentationDetents([.medium, .large])
+        }
+        .alert("Delete story", isPresented: $confirmDeleteOpen) {
+            Button("Delete", role: .destructive) {
+                if let slide {
+                    onDelete(slide)
+                    confirmDeleteOpen = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Delete this story from your profile? BitOS will publish a delete event to your relays and remove this story from your device.")
+        }
     }
 
     // MARK: Slide backdrop
@@ -522,6 +601,18 @@ struct StoryViewerView: View {
                 }
             }
             Spacer()
+            if isMine {
+                Button {
+                    confirmDeleteOpen = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Circle())
+                }
+                .accessibilityLabel("Delete story")
+            }
             Button {
                 paused.toggle()
             } label: {
@@ -568,23 +659,166 @@ struct StoryViewerView: View {
         }
     }
 
-    /// "1 / 3 · 1/2" pill (web parity), multi-slide authors only.
+    // MARK: Interactions (web parity)
+
+    /// Bottom bar: slide counter, Reply/DM modes + privacy hint, input with
+    /// send/like/zap/activity actions, and the counts row.
     @ViewBuilder
-    private var slideCounter: some View {
-        if author.slides.count > 1 {
-            let carousel = images.count > 1 ? " · \(imageIndex + 1)/\(images.count)" : ""
-            VStack {
-                Spacer()
+    private var interactionsBar: some View {
+        VStack(spacing: 6) {
+            if author.slides.count > 1 {
+                let carousel = images.count > 1 ? " · \(imageIndex + 1)/\(images.count)" : ""
                 Text("\(index + 1) / \(author.slides.count)\(carousel)")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.8))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .background(Color.black.opacity(0.4), in: Capsule())
-                    .padding(.bottom, 8)
             }
-            .allowsHitTesting(false)
+            HStack {
+                HStack(spacing: 0) {
+                    modeChip("Reply", active: replyMode == "reply") {
+                        replyMode = "reply"
+                        paused = true
+                    }
+                    modeChip("DM", active: replyMode == "dm") {
+                        replyMode = "dm"
+                        paused = true
+                    }
+                }
+                .background(Color.white.opacity(0.1), in: Capsule())
+                Spacer()
+                Text(replyMode == "reply" ? "Visible in story activity" : "Only sent privately")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            HStack(spacing: 2) {
+                TextField(
+                    "",
+                    text: $replyText,
+                    prompt: Text(hasIdentity
+                        ? (replyMode == "reply" ? "Reply to \(FeedFormat.shortPubkey(author.pubkey))…" : "Message \(FeedFormat.shortPubkey(author.pubkey)) privately…")
+                        : "Sign in to reply")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.6))
+                )
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .textFieldStyle(.plain)
+                .disabled(!hasIdentity)
+                .submitLabel(.send)
+                .onSubmit(sendReply)
+                .padding(.horizontal, BitOSTheme.Spacing.base)
+                .frame(height: 40)
+                .background(Color.white.opacity(0.1), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.15)))
+                .onChange(of: replyText) { _, text in
+                    // Web parity: typing pauses the auto-advance.
+                    paused = hasIdentity && !text.isEmpty ? true : paused
+                }
+                actionButton(
+                    icon: replyMode == "reply" ? "bubble.left" : "paperplane",
+                    label: replyMode == "reply" ? "Reply to story" : "Message privately",
+                    action: sendReply
+                )
+                actionButton(
+                    icon: interaction?.likedByMe == true ? "heart.fill" : "heart",
+                    label: interaction?.likedByMe == true ? "Unlike story" : "Like story",
+                    tint: interaction?.likedByMe == true ? Color(red: 1.0, green: 0.30, blue: 0.42) : .white,
+                    action: likeCurrent
+                )
+                actionButton(
+                    icon: "bolt.fill",
+                    label: "Zap sats to this story",
+                    tint: Color(red: 1.0, green: 0.76, blue: 0.29),
+                    action: { if let slide { onZap(slide) } }
+                )
+                actionButton(
+                    icon: "chevron.up",
+                    label: "View activity",
+                    action: { activityOpen = true }
+                )
+            }
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                countButton(icon: "heart.fill", label: "\(interaction?.likeCount ?? 0)") { activityOpen = true }
+                if (interaction?.zapSats ?? 0) > 0 || (interaction?.zapCount ?? 0) > 0 {
+                    countButton(
+                        icon: "bolt.fill",
+                        label: (interaction?.zapSats ?? 0) > 0
+                            ? "\(FeedFormat.count(Int(interaction?.zapSats ?? 0))) sats"
+                            : "\(interaction?.zapCount ?? 0)",
+                        tint: Color(red: 1.0, green: 0.76, blue: 0.29)
+                    ) {
+                        if let slide { onZap(slide) }
+                    }
+                }
+                if isMine {
+                    countButton(icon: "eye", label: "\(interaction?.viewCount ?? 0)") { activityOpen = true }
+                }
+                countButton(icon: "bubble.left", label: "\(interaction?.replyCount ?? 0)") { activityOpen = true }
+            }
         }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.lg)
+        .padding(.bottom, BitOSTheme.Spacing.sm)
+        .background(
+            LinearGradient(colors: [.black.opacity(0.75), .black.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom),
+            alignment: .bottom
+        )
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private func sendReply() {
+        guard hasIdentity, let slide else { return }
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if replyMode == "dm" {
+            onDm(text)
+        } else {
+            onReply(slide, text)
+        }
+        replyText = ""
+    }
+
+    private func modeChip(_ label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(active ? .black : .white.opacity(0.85))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(active ? Color.white : .clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func actionButton(icon: String, label: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint.opacity(0.85))
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func countButton(icon: String, label: String, tint: Color = .white.opacity(0.85), action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.white.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private func parseGradient(_ token: String) -> [Color] {
@@ -597,6 +831,59 @@ struct StoryViewerView: View {
             Color(hex: Int(parts[0].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0),
             Color(hex: Int(parts[1].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0),
         ]
+    }
+}
+
+/// Story activity sheet (web `StoryActivity` parity): likes + replies.
+private struct StoryActivitySheet: View {
+    let interaction: StoriesStore.StoryInteractionMirror?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                let likes = interaction?.likes ?? []
+                let replies = interaction?.replies ?? []
+                if likes.isEmpty && replies.isEmpty {
+                    Text("No activity yet")
+                        .font(.system(size: 14))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                Section("Reactions") {
+                    ForEach(likes, id: \.eventId) { like in
+                        HStack(spacing: BitOSTheme.Spacing.sm) {
+                            PubkeyAvatarView(pubkey: like.pubkey, size: 28)
+                            Text(FeedFormat.shortPubkey(like.pubkey))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(BitOSTheme.textPrimary)
+                            Spacer()
+                            Text(like.emoji)
+                        }
+                    }
+                }
+                Section("Replies") {
+                    ForEach(replies, id: \.eventId) { reply in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: BitOSTheme.Spacing.sm) {
+                                PubkeyAvatarView(pubkey: reply.pubkey, size: 28)
+                                Text(FeedFormat.shortPubkey(reply.pubkey))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.textPrimary)
+                                Spacer()
+                                Text(FeedFormat.timeAgo(createdAt: reply.at))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(BitOSTheme.textSecondary)
+                            }
+                            Text(reply.text)
+                                .font(.system(size: 14))
+                                .foregroundStyle(BitOSTheme.textPrimary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .navigationTitle("Story activity")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 
