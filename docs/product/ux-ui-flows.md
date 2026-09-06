@@ -237,6 +237,10 @@ Comment bottom-sheet anatomy (both platforms):
 
 ```text
 Home -> poster/first frame -> autoplay visible Bitz
+     -> the stories rail is the list's FIRST item (web parity: it scrolls away
+        with the feed; it always starts with a Create story card, followed by
+        received stories, a Public stories marker, and a bounded relay-wide
+        public-story sample; re-tap Home scrolls back to it)
      -> poster prefers explicit publisher hints (top-level preview/image tag,
         then imeta preview/image value) before derived image attachments
      -> cached notes render immediately; relay head fills one bounded snapshot

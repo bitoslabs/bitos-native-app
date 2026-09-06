@@ -425,6 +425,16 @@ struct HomeView: View {
                 startPathMonitor()
                 store.holdNewNotes(false)
             }
+            // APP-006: drive the stories store with the resolved account +
+            // following (Android FeedScreen parity). Nothing else feeds it,
+            // and without an account the store never subscribes — the rail
+            // would stay empty forever.
+            .task(id: store.accountPubkey) {
+                environment.storiesStore.setAccount(store.accountPubkey, following: store.following)
+            }
+            .onChange(of: store.following) { _, _ in
+                environment.storiesStore.setAccount(store.accountPubkey, following: store.following)
+            }
             // APP-004: arrivals hold while scrolled into the pager;
             // being at the top (or unset) auto-reveals.
             .onChange(of: topId) { _, id in
@@ -633,17 +643,9 @@ struct HomeView: View {
         VStack(spacing: 0) {
             timelineTabs
             VStack(spacing: 0) {
-                    if identity.account == nil {
-                        GuestBanner(onGetStarted: onOpenProfile)
-            // APP-006: stories bar (above the timeline content).
-            if !videoOnly && !environment.storiesStore.authors.isEmpty {
-                StoriesBarView(
-                    authors: environment.storiesStore.authors,
-                    seenIds: environment.storiesStore.seenIds,
-                    onOpen: { environment.storiesStore.openViewer($0) }
-                )
-            }
-                    }
+                if identity.account == nil {
+                    GuestBanner(onGetStarted: onOpenProfile)
+                }
                 timelineContent
             }
         }
@@ -794,6 +796,22 @@ struct HomeView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    // APP-006: stories rail as the list's FIRST item (web
+                    // parity: it scrolls away with the feed) — no longer a
+                    // row pinned above the timeline, and visible to signed-in
+                    // users too.
+                    if !videoOnly {
+                        StoriesBarView(
+                            authors: environment.storiesStore.authors,
+                            publicAuthors: environment.storiesStore.publicAuthors,
+                            seenIds: environment.storiesStore.seenIds,
+                            onOpen: { environment.storiesStore.openViewer($0) },
+                            onCreateStory: { showCreateHub = true },
+                            onOpenPublicStories: onOpenDiscover
+                        )
+                        .padding(.vertical, BitOSTheme.Spacing.base)
+                        .id(HomeView.storiesTopId)
+                    }
                     ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
                         noteCardRow(note: note, index: index)
                     }
@@ -829,14 +847,27 @@ struct HomeView: View {
                 }
             }
             .onChange(of: listScrollToTopTick) { _, _ in
-                if let first = notes.first {
+                // Land on the stories rail when present — it is the true top
+                // of the list — otherwise the first note.
+                if let topId = topScrollTargetId {
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(first.id, anchor: .top)
+                        proxy.scrollTo(topId, anchor: .top)
                     }
                 }
             }
             .refreshable { store.refresh() }
         }
+    }
+
+    /// Scroll identity of the stories rail when it leads the list.
+    private static let storiesTopId = "stories-bar"
+
+    /// Re-tap Home scrolls here: the stories rail when shown, else note 0.
+    private var topScrollTargetId: String? {
+        if !videoOnly {
+            return HomeView.storiesTopId
+        }
+        return notes.first?.id
     }
 
     private var pager: some View {

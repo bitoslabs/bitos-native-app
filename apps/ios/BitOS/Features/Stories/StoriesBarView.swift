@@ -7,14 +7,24 @@ import SwiftUI
  */
 struct StoriesBarView: View {
     let authors: [StoriesStore.StoryAuthorMirror]
+    let publicAuthors: [StoriesStore.StoryAuthorMirror]
     let seenIds: Set<String>
     let onOpen: (StoriesStore.StoryAuthorMirror) -> Void
+    let onCreateStory: () -> Void
+    let onOpenPublicStories: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: BitOSTheme.Spacing.md) {
+                CreateStoryCard(onClick: onCreateStory)
                 ForEach(authors) { author in
-                    StoryAvatarView(author: author, seenIds: seenIds) {
+                    StoryCardView(author: author, seenIds: seenIds) {
+                        onOpen(author)
+                    }
+                }
+                PublicStoriesButton(onClick: onOpenPublicStories)
+                ForEach(publicAuthors) { author in
+                    StoryCardView(author: author, seenIds: seenIds) {
                         onOpen(author)
                     }
                 }
@@ -24,7 +34,46 @@ struct StoriesBarView: View {
     }
 }
 
-private struct StoryAvatarView: View {
+private struct CreateStoryCard: View {
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            VStack(spacing: 0) {
+                ZStack {
+                    LinearGradient(
+                        colors: [Color(hex: 0x39485A), Color(hex: 0x17202B)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    Circle()
+                        .fill(BitOSTheme.accent)
+                        .frame(width: 50, height: 50)
+                        .overlay {
+                            Circle().stroke(BitOSTheme.surface, lineWidth: 3)
+                            Image(systemName: "plus")
+                                .font(.system(size: 21, weight: .bold))
+                                .foregroundStyle(BitOSTheme.surface)
+                        }
+                }
+                .frame(height: 118)
+                Text("Create story")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, BitOSTheme.Spacing.sm)
+                    .padding(.vertical, BitOSTheme.Spacing.base)
+            }
+            .frame(width: 108, height: 154)
+            .background(BitOSTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Create story")
+    }
+}
+
+private struct StoryCardView: View {
     let author: StoriesStore.StoryAuthorMirror
     let seenIds: Set<String>
     let onClick: () -> Void
@@ -35,29 +84,95 @@ private struct StoryAvatarView: View {
 
     var body: some View {
         Button(action: onClick) {
-            VStack(spacing: 4) {
-                ZStack {
-                    // Ring
-                    Circle()
-                        .strokeBorder(
-                            hasUnseen ? AnyShapeStyle(LinearGradient(
-                                colors: [BitOSTheme.accent, Color(red: 1.0, green: 0.42, blue: 0.62), BitOSTheme.accent],
-                                startPoint: .topLeading, endPoint: .bottomTrailing
-                            )) : AnyShapeStyle(BitOSTheme.divider),
-                            lineWidth: 2.5
-                        )
-                    PubkeyAvatarView(pubkey: author.pubkey, size: 54)
-                        .padding(3)
+            ZStack(alignment: .topLeading) {
+                if let imageUrl = author.slides.first?.imageUrl, let url = URL(string: imageUrl) {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            BitOSTheme.surfaceElevated
+                        }
+                    }
+                } else {
+                    LinearGradient(
+                        colors: storyCardGradient(author.slides.first?.gradient),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 }
-                .frame(width: 64, height: 64)
-                Text(FeedFormat.shortPubkey(author.pubkey))
-                    .font(.system(size: 10))
-                    .foregroundStyle(hasUnseen ? BitOSTheme.textPrimary : BitOSTheme.textTertiary)
-                    .lineLimit(1)
+                LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
+                VStack {
+                    Spacer()
+                    Text(FeedFormat.shortPubkey(author.pubkey))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(BitOSTheme.Spacing.sm)
+                }
+                Circle()
+                    .strokeBorder(
+                        hasUnseen ? AnyShapeStyle(LinearGradient(
+                            colors: [BitOSTheme.accent, Color(red: 1.0, green: 0.42, blue: 0.62), BitOSTheme.accent],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )) : AnyShapeStyle(BitOSTheme.divider),
+                        lineWidth: 2.5
+                    )
+                    .frame(width: 36, height: 36)
+                    .overlay { PubkeyAvatarView(pubkey: author.pubkey, size: 30).padding(2) }
+                    .padding(BitOSTheme.Spacing.sm)
+                if author.isPublicDiscovery {
+                    Text("Public")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(BitOSTheme.Spacing.sm)
+                }
             }
+            .frame(width: 108, height: 154)
+            .background(BitOSTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("View \(FeedFormat.shortPubkey(author.pubkey))'s story")
+    }
+}
+
+private struct PublicStoriesButton: View {
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            VStack(spacing: BitOSTheme.Spacing.sm) {
+                Image(systemName: "safari")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x24DFA0))
+                    .frame(width: 30, height: 30)
+                    .background(Color(hex: 0x24DFA0).opacity(0.12), in: Circle())
+                Text("Public stories")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(width: 88, height: 154)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Browse public stories")
+    }
+}
+
+private func storyCardGradient(_ token: String?) -> [Color] {
+    guard let token,
+          let match = token.range(of: #"#([0-9a-fA-F]{6})>to>#([0-9a-fA-F]{6})"#, options: .regularExpression) else {
+        return [BitOSTheme.surfaceElevated, BitOSTheme.background]
+    }
+    let parts = token[match].components(separatedBy: ">to>")
+    guard parts.count == 2 else { return [BitOSTheme.surfaceElevated, BitOSTheme.background] }
+    return parts.map {
+        Color(hex: Int($0.replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0)
     }
 }
 

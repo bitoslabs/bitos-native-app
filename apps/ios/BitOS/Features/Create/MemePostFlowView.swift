@@ -63,11 +63,6 @@ struct MemePostFlowView: View {
                     )
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismissFlow() }
-                }
-            }
         }
         .preferredColorScheme(nil)
         .navigationBarBackButtonHidden(!path.isEmpty)
@@ -507,25 +502,23 @@ private struct MemePreflightView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-                // Summary card: thumb + kind + imeta facts + the caption
-                // rendered exactly as the feed card will show it.
-                VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-                    HStack(spacing: BitOSTheme.Spacing.md) {
-                        MemePostPreviewThumb(store: store)
-                            .frame(width: 64, height: 96)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(mediaSummary)
-                                .font(.subheadline.weight(.bold))
-                            Text("kind \(kindLabel) · imeta dims + sha256 pinned at upload\(draft.contentWarningOn ? " · CW on" : "")")
-                                .font(.caption)
-                                .foregroundStyle(BitOSTheme.textSecondary)
+                // Summary card: thumb + kind + imeta facts, with the caption
+                // rendered under the facts exactly as the feed card will
+                // show it.
+                HStack(alignment: .top, spacing: BitOSTheme.Spacing.md) {
+                    MemePostPreviewThumb(store: store)
+                        .frame(width: 64, height: 96)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(mediaSummary)
+                            .font(.subheadline.weight(.bold))
+                        Text("kind \(kindLabel) · imeta dims + sha256 pinned at upload\(draft.contentWarningOn ? " · CW on" : "")")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                        if !draft.caption.isEmpty {
+                            ExpandableRichText(json: captionRichJson)
                         }
-                        Spacer(minLength: 0)
                     }
-                    if !draft.caption.isEmpty {
-                        Divider()
-                        ExpandableRichText(json: captionRichJson)
-                    }
+                    Spacer(minLength: 0)
                 }
                 .padding(BitOSTheme.Spacing.md)
                 .background(BitOSTheme.surface)

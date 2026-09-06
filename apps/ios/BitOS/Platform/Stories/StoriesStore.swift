@@ -7,6 +7,7 @@ import Observation
 @Observable
 final class StoriesStore {
     private(set) var authors: [StoryAuthorMirror] = []
+    private(set) var publicAuthors: [StoryAuthorMirror] = []
     private(set) var seenIds: Set<String> = []
     private(set) var hasAccount = false
 
@@ -20,6 +21,7 @@ final class StoriesStore {
     private var watchTask: Task<Void, Never>?
     private var requested = false
     private var slidesById: [String: StorySlideMirror] = [:]
+    private var publicSlidesById: [String: StorySlideMirror] = [:]
     private var deletedIds: Set<String> = []
 
     private static let seenKey = "bitos_story_seen_ids"
@@ -41,8 +43,9 @@ final class StoriesStore {
     struct StoryAuthorMirror: Identifiable, Equatable, Sendable {
         let pubkey: String
         let slides: [StorySlideMirror]
+        let isPublicDiscovery: Bool
         var id: String { pubkey }
-        var latestAt: Int64 { slides.last?.createdAt ?? 0 }
+        var latestAt: Int64 { slides.first?.createdAt ?? 0 }
         var hasUnseen: Bool { true } // computed at render with seenIds
     }
 
@@ -58,11 +61,11 @@ final class StoriesStore {
         followingPubkeys = following
         requested = false
         slidesById.removeAll()
+        publicSlidesById.removeAll()
         hasAccount = pubkey != nil
         watchTask?.cancel()
         watchTask = nil
         rebuild()
-        guard pubkey != nil else { return }
         Task { await start() }
     }
 
@@ -85,6 +88,9 @@ final class StoriesStore {
             let authors = Array(([accountPubkey].compactMap { $0 } + Array(followingPubkeys)).prefix(50))
             if !authors.isEmpty,
                let request = (bridge.storiesRequest(subscriptionId: "bitos-stories", authorPubkeys: authors) as String?) {
+                Task { await pool.broadcast(request) }
+            }
+            if let request = bridge.publicStoriesRequest(subscriptionId: "bitos-public-stories") as String? {
                 Task { await pool.broadcast(request) }
             }
         }
@@ -128,17 +134,28 @@ final class StoriesStore {
 
     private func absorbSlide(_ mirror: StorySlideMirror) {
         if deletedIds.contains(mirror.id) { return }
-        slidesById[mirror.id] = mirror
+        if mirror.pubkey == accountPubkey || followingPubkeys.contains(mirror.pubkey) {
+            slidesById[mirror.id] = mirror
+        } else {
+            publicSlidesById[mirror.id] = mirror
+        }
         rebuild()
     }
 
     private func rebuild() {
         let now = Int64(Date.now.timeIntervalSince1970)
-        let active = slidesById.values.filter { !$0.isExpired(now: now) }
-        authors = Dictionary(grouping: active, by: \.pubkey)
+        func grouped(_ slides: [StorySlideMirror], publicDiscovery: Bool) -> [StoryAuthorMirror] {
+            Dictionary(grouping: slides, by: \.pubkey)
             .map { pubkey, slides in
-                StoryAuthorMirror(pubkey: pubkey, slides: slides.sorted { $0.createdAt > $1.createdAt })
+                StoryAuthorMirror(
+                    pubkey: pubkey,
+                    slides: slides.sorted { $0.createdAt > $1.createdAt },
+                    isPublicDiscovery: publicDiscovery
+                )
             }
             .sorted { $0.latestAt > $1.latestAt }
+        }
+        authors = grouped(slidesById.values.filter { !$0.isExpired(now: now) }, publicDiscovery: false)
+        publicAuthors = grouped(publicSlidesById.values.filter { !$0.isExpired(now: now) }, publicDiscovery: true)
     }
 }

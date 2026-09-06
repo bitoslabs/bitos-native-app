@@ -1159,6 +1159,12 @@ class BusinessCoreBridge {
         )
     }
 
+    /** APP-006: bounded relay-wide discovery lane, separate from followed stories. */
+    fun publicStoriesRequest(subscriptionId: String): String = NostrEventCodec.encodeRequest(
+        subscriptionId,
+        """{"kinds":[${space.bitos.core.model.Stories.STORY_KIND}],"limit":24}""",
+    )
+
     /** APP-006: parse a verified kind-30315 frame → slide map (null = not a valid story). */
     fun storyFromFrame(message: String, relayUrl: String, nowSeconds: Long): Map<String, Any>? {
         val relay = RelayUrl.parse(relayUrl) ?: return null

@@ -20,6 +20,15 @@ class BusinessCoreBridgeTest {
     private val bridge = BusinessCoreBridge()
 
     @Test
+    fun publicStoriesRequestIsBoundedAndDoesNotExposeAnAuthorScope() {
+        val request = bridge.publicStoriesRequest("bitos-public-stories")
+        assertTrue(request.contains("\"bitos-public-stories\""), request)
+        assertTrue(request.contains("\"kinds\":[30315]"), request)
+        assertTrue(request.contains("\"limit\":24"), request)
+        assertFalse(request.contains("\"authors\""), request)
+    }
+
+    @Test
     fun decodesIdVerifiedSignedEvents() {
         val event = bridge.decodeEvent(VALID_TEXT_NOTE_MESSAGE, "wss://relay.damus.io")
         assertNotNull(event)

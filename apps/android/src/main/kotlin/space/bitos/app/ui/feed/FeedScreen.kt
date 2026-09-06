@@ -331,6 +331,20 @@ fun FeedScreen(
                             )
                         } else NotesList(
                             notes = feedNotes, content = feedContent, actions = actions, viewModel = viewModel,
+                            // APP-006: stories rail as the list's first item
+                            // (scrolls away with the feed) instead of a pinned
+                            // overlay floating over the notes.
+                            header = {
+                                space.bitos.app.ui.stories.StoriesBar(
+                                    authors = storiesState.authors,
+                                    publicAuthors = storiesState.publicAuthors,
+                                    seenIds = storiesState.seenIds,
+                                    onOpenViewer = { storyViewerTarget = it },
+                                    onCreateStory = onOpenCreate,
+                                    onOpenPublicStories = onOpenDiscover,
+                                    modifier = Modifier.padding(top = BitOSSpacing.base, bottom = BitOSSpacing.sm),
+                                )
+                            },
                             onLoadOlder = viewModel::loadOlder,
                             compact = settingsSnapshot.compactMode,
                             listState = listState, onComment = { showCommentsFor = it }, onZap = { viewModel.selectZapAmount(settingsSnapshot.defaultZapAmount.toLong()); zapTarget = it },
@@ -360,17 +374,7 @@ fun FeedScreen(
                         )
                     }
                 }
-                // APP-006: stories bar (top, scrolls with content via the header).
-        if (!videoOnly && storiesState.authors.isNotEmpty()) {
-            space.bitos.app.ui.stories.StoriesBar(
-                authors = storiesState.authors,
-                seenIds = storiesState.seenIds,
-                onOpenViewer = { storyViewerTarget = it },
-                modifier = Modifier.padding(top = 48.dp),
-            )
-        }
-
-        // APP-006: story viewer full-screen overlay.
+                // APP-006: story viewer full-screen overlay.
         storyViewerTarget?.let { storyAuthor ->
             space.bitos.app.ui.stories.StoryViewer(
                 author = storyAuthor,
@@ -1306,6 +1310,10 @@ private fun NotesList(
     onOpenNoteRef: (String) -> Unit = {},
     /** Profile-mention tap → the mentioned user's profile sheet. */
     onOpenMentionProfile: (String) -> Unit = {},
+    /** APP-006: optional first list item (stories rail) — scrolls away with
+     *  the feed like the web shell; own key + contentType so it never shares
+     *  the note-row reuse pool. */
+    header: (@Composable () -> Unit)? = null,
     onLoadOlder: () -> Unit,
     /** APP-008 poll voting. */
     pollTallies: Map<String, space.bitos.core.model.PollTally> = emptyMap(),
@@ -1314,6 +1322,11 @@ private fun NotesList(
     onOpenAttachment: (String) -> Unit = {},
 ) {
     androidx.compose.foundation.lazy.LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        // The stories rail rides INSIDE the list (web parity: it scrolls away
+        // with the feed). Re-tap Home lands here as the true top.
+        if (header != null) {
+            item(key = "feed-header", contentType = { "feed_header" }) { header() }
+        }
         itemsIndexed(
             notes,
             key = { _, note -> note.id },

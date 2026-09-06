@@ -21,6 +21,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,14 +36,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.BitOSColors
+import space.bitos.app.ui.theme.BitOSRadius
 import space.bitos.app.ui.theme.BitOSSpacing
 import space.bitos.core.model.StoryAuthor
 import space.bitos.core.model.StorySlide
@@ -66,8 +74,11 @@ object StorySeenPrefs {
 @Composable
 fun StoriesBar(
     authors: List<StoryAuthor>,
+    publicAuthors: List<StoryAuthor>,
     seenIds: Set<String>,
     onOpenViewer: (StoryAuthor) -> Unit,
+    onCreateStory: () -> Unit,
+    onOpenPublicStories: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyRow(
@@ -75,20 +86,101 @@ fun StoriesBar(
         horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = BitOSSpacing.screen),
     ) {
+        item(key = "create-story") { CreateStoryCard(onClick = onCreateStory) }
         items(authors, key = { it.pubkey }) { author ->
-            StoryAvatar(author, seenIds) { onOpenViewer(author) }
+            StoryCard(author, seenIds) { onOpenViewer(author) }
+        }
+        item(key = "public-stories") { PublicStoriesButton(onClick = onOpenPublicStories) }
+        items(publicAuthors, key = { "public-${it.pubkey}" }) { author ->
+            StoryCard(author, seenIds) { onOpenViewer(author) }
         }
     }
 }
 
 @Composable
-private fun StoryAvatar(author: StoryAuthor, seenIds: Set<String>, onClick: () -> Unit) {
+private fun CreateStoryCard(onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(108.dp)
+            .clip(RoundedCornerShape(BitOSRadius.md))
+            .background(BitOSColors.surface)
+            .clickable(onClickLabel = "Create story", onClick = onClick),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(118.dp)
+                .background(Brush.verticalGradient(listOf(Color(0xFF39485A), Color(0xFF17202B)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(50.dp)
+                    .background(BitOSColors.primary, CircleShape)
+                    .padding(3.dp)
+                    .background(BitOSColors.surface, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = null, tint = BitOSColors.primary)
+            }
+        }
+        Text(
+            "Create story",
+            modifier = Modifier.padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.base),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W700,
+            color = BitOSColors.textPrimary,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun StoryCard(author: StoryAuthor, seenIds: Set<String>, onClick: () -> Unit) {
     val hasUnseen = author.slides.any { it.id !in seenIds }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        // Ring: gradient hex = unseen, muted = seen.
+    val latest = author.slides.first()
+    val gradient = latest.gradient
+    val storyBackground = if (gradient != null) {
+        parseGradient(gradient)
+    } else {
+        Brush.verticalGradient(listOf(BitOSColors.surfaceElevated, BitOSColors.background))
+    }
+    Box(
+        modifier = Modifier
+            .width(108.dp)
+            .height(154.dp)
+            .clip(RoundedCornerShape(BitOSRadius.md))
+            .background(BitOSColors.surface)
+            .clickable(onClickLabel = "View ${shortPubkey(author.pubkey)}'s story", onClick = onClick),
+    ) {
+        if (latest.imageUrl != null) {
+            AsyncImage(
+                model = latest.imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                Modifier.fillMaxSize().background(
+                    storyBackground,
+                ),
+            )
+        }
         Box(
             Modifier
-                .size(64.dp)
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
+                .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.sm),
+        ) {
+            Text(shortPubkey(author.pubkey), style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1)
+        }
+        // Ring: gradient = unseen, muted = seen.
+        Box(
+            Modifier
+                .padding(BitOSSpacing.sm)
+                .size(36.dp)
                 .background(
                     if (hasUnseen) {
                         Brush.sweepGradient(listOf(BitOSColors.primary, Color(0xFFFF6B9D), BitOSColors.primary))
@@ -96,19 +188,50 @@ private fun StoryAvatar(author: StoryAuthor, seenIds: Set<String>, onClick: () -
                         Brush.sweepGradient(listOf(BitOSColors.border, BitOSColors.border))
                     },
                     CircleShape,
-                )
-                .clickable(onClickLabel = "View ${shortPubkey(author.pubkey)}'s story") { onClick() },
+                ),
         ) {
-            Box(Modifier.padding(3.dp).fillMaxSize().background(BitOSColors.background, CircleShape), contentAlignment = Alignment.Center) {
-                PubkeyAvatar(pubkey = author.pubkey, size = 54)
+            Box(Modifier.padding(2.dp).fillMaxSize().background(BitOSColors.background, CircleShape), contentAlignment = Alignment.Center) {
+                PubkeyAvatar(pubkey = author.pubkey, size = 30)
             }
         }
-        Spacer(Modifier.height(4.dp))
+        if (author.isPublicDiscovery) {
+            Text(
+                "Public",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(BitOSSpacing.sm)
+                    .background(Color(0xB33B2D12), RoundedCornerShape(BitOSRadius.pill))
+                    .padding(horizontal = BitOSSpacing.xs, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.W700,
+                color = Color.White,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicStoriesButton(onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(88.dp)
+            .height(154.dp)
+            .clickable(onClickLabel = "Browse public stories", onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(30.dp).background(Color(0x1F24DFA0), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Explore, contentDescription = null, tint = Color(0xFF24DFA0), modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.height(BitOSSpacing.sm))
         Text(
-            shortPubkey(author.pubkey),
+            "Public stories",
             style = MaterialTheme.typography.labelSmall,
-            color = if (hasUnseen) BitOSColors.textPrimary else BitOSColors.textTertiary,
-            maxLines = 1,
+            color = BitOSColors.textSecondary,
+            maxLines = 2,
         )
     }
 }

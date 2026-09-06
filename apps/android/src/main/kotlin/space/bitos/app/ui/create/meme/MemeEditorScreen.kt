@@ -3977,9 +3977,6 @@ private fun MemePostFlowScreen(
                 fontWeight = FontWeight.W700,
             )
             Spacer(Modifier.weight(1f))
-            if (step == 0 && !busy) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
         }
 
         Column(
@@ -4292,18 +4289,19 @@ private fun MemePostFlowScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = BitOSColors.textSecondary,
                         )
+                        if (caption.isNotEmpty()) {
+                            // Real caption preview — the same shared NIP-27
+                            // tokenizer the feed cards render with, so
+                            // hashtags/mentions highlight exactly as they
+                            // will post.
+                            space.bitos.app.ui.components.RichText(
+                                tokens = remember(caption) {
+                                    space.bitos.core.nostr.Nip27.tokenize(caption)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
-                }
-                if (caption.isNotEmpty()) {
-                    // Real caption preview — the same shared NIP-27 tokenizer
-                    // the feed cards render with, so hashtags/mentions
-                    // highlight exactly as they will post.
-                    space.bitos.app.ui.components.RichText(
-                        tokens = remember(caption) {
-                            space.bitos.core.nostr.Nip27.tokenize(caption)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
                 Column(
                     Modifier

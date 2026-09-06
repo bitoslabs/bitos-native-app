@@ -158,6 +158,12 @@ from secure storage) before any websocket finishes connecting, so the
 first account heads are silently lost and the You surface would stay
 anonymous with an empty follow set.
 
+Stories use the same connected-relay retry rule. The native stories adapter
+issues one account/following-scoped request and one bounded, relay-wide public
+discovery request (24 kind-30315 events). Both still pass the verified-frame
+gate; events from followed authors remain in the social lane, while other
+authors are projected separately as public discovery cards.
+
 Since the 2026-09 identity rework (performance audit R13), iOS cold start
 no longer blocks on identity: `IdentityStore.init` renders the active
 registry row as a provisional account (public projection only) and
