@@ -403,12 +403,15 @@ interleave correctly with overlay/style edits through one undo affordance
 per-mode bottom bar. Post details
 collects caption, explicit t-tags (≤ 8), the cover row (video, with an Edit
 action that drops back onto the editor stage's Set cover), the audience row,
-the Zap settings switch (viewers can zap this post; OFF stamps the shared
-advisory `["bitz:zaps", "off"]` tag and BitOS feed cards hide the zap action
-on that note — advisory like `license`, and NOT pay-per-view: zap-gated
-unlocking needs invoice + preimage verification and stays future work), the
+the Zap settings switch (DEFAULT OFF — viewers can zap this post; OFF stamps
+the shared advisory `["bitz:zaps", "off"]` tag and BitOS feed cards hide the
+zap action on that note — advisory like `license`, and NOT pay-per-view:
+zap-gated unlocking needs invoice + preimage verification and stays future
+work), the
 Allow-remix switch (one view of the `license` tag: off is exactly Nostr-only; on restores
-the last remixable chip), content warning + reason, and the license chips
+the last remixable chip), content warning (toggle only — the fixed
+"Sensitive content" reason rides the NIP-36 cover, no free-text input), and
+the license chips
 (CC0 / CC-BY / Nostr-only — rides the `license` tag). Remix lineage is NEVER
 typed by hand: when a remix source rides the draft (auto-added by the remix
 handoff, MST-042) the form previews it read-only — source + author short refs

@@ -3924,7 +3924,7 @@ private fun MemePostFlowScreen(
     var cwOn by remember { mutableStateOf(false) }
     var cwReason by remember { mutableStateOf("Sensitive content") }
     var license by remember { mutableStateOf("CC0-1.0") }
-    var allowZaps by remember { mutableStateOf(true) }
+    var allowZaps by remember { mutableStateOf(false) }
     var remixOf by remember { mutableStateOf("") }
     var remixAuthor by remember { mutableStateOf("") }
     // Allow-remix and the license chips are one `license` tag seen two ways:
@@ -4169,15 +4169,6 @@ private fun MemePostFlowScreen(
                             modifier = Modifier.weight(1f),
                         )
                         Switch(checked = cwOn, onCheckedChange = { cwOn = it })
-                    }
-                    if (cwOn) {
-                        space.bitos.app.ui.components.BitosTextField(
-                            value = cwReason,
-                            onValueChange = { cwReason = it },
-                            placeholder = "Warning reason",
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = BitOSSpacing.xs),
-                        )
                     }
                     if (remixOf.isNotEmpty()) {
                         HorizontalDivider(color = BitOSColors.border)

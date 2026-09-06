@@ -96,7 +96,7 @@ struct MemePostDraft {
     /// Explicit t-tags (beyond caption #hashtags), ≤ 8, deduped.
     var tags: [String] = []
     var audience: MemeAudience = .everyone
-    var allowZaps = true
+    var allowZaps = false
     var allowRemix = true
     var contentWarningOn = false
     var contentWarningReason = "Sensitive content"
@@ -340,14 +340,6 @@ private struct MemePostDetailsView: View {
                 )
             }
             .padding(.vertical, 2)
-            if draft.contentWarningOn {
-                Divider().padding(.leading, 48)
-                BitosField("Warning reason", text: $draft.contentWarningReason)
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(BitOSTheme.background)
-            }
             if !draft.remixOf.isEmpty {
                 Divider().padding(.leading, 48)
                 remixLineagePreview
