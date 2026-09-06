@@ -892,6 +892,39 @@ class BusinessCoreBridge {
         return space.bitos.core.store.TagsCodec.encode(tags)
     }
 
+    /** Recent-hashtags ledger merge (RecentHashtags JSON in, merged JSON out). */
+    fun recentHashtagsMerge(storeJson: String, usedJson: String, nowMs: Long): String {
+        val used = try {
+            Json.parseToJsonElement(usedJson).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return space.bitos.core.publish.RecentHashtags.toJson(
+            space.bitos.core.publish.RecentHashtags.merge(
+                space.bitos.core.publish.RecentHashtags.fromJson(storeJson),
+                used,
+                nowMs,
+            )
+        )
+    }
+
+    /** Recent-hashtags chip row (tags minus the post's own, as JSON array). */
+    fun recentHashtagsSuggest(storeJson: String, excludeJson: String, limit: Int = 8): String {
+        val exclude = try {
+            Json.parseToJsonElement(excludeJson).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val tags = space.bitos.core.publish.RecentHashtags.suggestions(
+            space.bitos.core.publish.RecentHashtags.fromJson(storeJson),
+            exclude.toSet(),
+            limit,
+        )
+        return kotlinx.serialization.json.JsonArray(tags.map { kotlinx.serialization.json.JsonPrimitive(it) }).toString()
+    }
+
     /** Quick-emoji palette (32, legacy parity). */
     fun composerEmojis(): List<String> = space.bitos.core.publish.ComposerRules.COMPOSER_EMOJIS
 
@@ -1205,6 +1238,11 @@ class BusinessCoreBridge {
             "expiresAt" to slide.expiresAt,
             "d" to (slide.d ?: ""),
             "imageUrl" to (slide.imageUrl ?: ""),
+            "imageUrls" to ArrayList(slide.imageUrls),
+            "videoUrl" to (slide.videoUrl ?: ""),
+            "videoPoster" to (slide.videoPoster ?: ""),
+            "videoDurationMs" to (slide.videoDurationMs ?: 0L),
+            "sensitive" to slide.sensitive,
             "gradient" to (slide.gradient ?: ""),
             "pow" to (slide.pow ?: 0),
         )

@@ -65,6 +65,8 @@ final class MemeEditorStore {
     private(set) var packs: [MemeStickerPack] = []
     private(set) var recents: [String] = []
     private(set) var exportState: MemeExportState = .idle
+    /// Exact bytes of the most recently rendered export, never a source-file estimate.
+    private(set) var lastExportSizeBytes: Int?
 
     struct MemeStickerPack: Identifiable, Equatable {
         let id: String
@@ -1268,6 +1270,7 @@ final class MemeEditorStore {
                     guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
                         throw MemeRaster.ExportError(message: "Could not persist the render")
                     }
+                    lastExportSizeBytes = data.count
                     exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                     try await MemeRaster.saveVideoToPhotos(data)
                     exportJobs.finish(exportJob)
@@ -1302,6 +1305,7 @@ final class MemeEditorStore {
                     guard exportJobs.artifactReady(exportJob, bytes: result.data, nowMs: nowMs()) else {
                         throw MemeRaster.ExportError(message: "Could not persist the render")
                     }
+                    lastExportSizeBytes = result.data.count
                     exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                     try await MemeRaster.saveToPhotos(result.data)
                     exportJobs.finish(exportJob)
@@ -1332,6 +1336,7 @@ final class MemeEditorStore {
                 guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
                     throw MemeRaster.ExportError(message: "Could not persist the render")
                 }
+                lastExportSizeBytes = data.count
                 exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
                 try await MemeRaster.saveToPhotos(data)
                 exportJobs.finish(exportJob)
@@ -1351,6 +1356,7 @@ final class MemeEditorStore {
               let job = exportJobs.job(jobId),
               let data = exportJobs.loadArtifact(job) else { return }
         exportState = .saving
+        lastExportSizeBytes = data.count
         exportJobs.update(jobId, phase: "saving", clearError: true, nowMs: nowMs())
         Task {
             do {
@@ -3840,6 +3846,10 @@ struct ExportSettingsSheet: View {
             store.overlays.contains { !$0.isSticker && !$0.text.isEmpty }
     }
 
+    private func sizeText(_ bytes: Int) -> String {
+        String(format: "%.1f MB", Double(bytes) / 1_000_000)
+    }
+
     /// The profile facts, derived from the same rules the exporters use.
     private var formatRow: (String, String) {
         if store.isVideoMode, !store.clips.isEmpty {
@@ -3876,11 +3886,16 @@ struct ExportSettingsSheet: View {
                     Text("Destination: \(store.isVideoMode ? "Movies" : "Photos")")
                         .font(.caption)
                         .foregroundStyle(BitOSTheme.textSecondary)
-                    Text("File size is shown after the render (estimates would be guesses).")
+                    Text(store.lastExportSizeBytes.map { "Rendered size: \(sizeText($0))" }
+                         ?? "Size is shown after rendering; estimates would be guesses.")
                         .font(.caption2)
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
             }
+            Text("Public-safe export: a fresh render removes source location, device and creation metadata.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text(formatRow.1)
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
@@ -3894,7 +3909,7 @@ struct ExportSettingsSheet: View {
                 ForEach(store.exportJobs.recoverable) { job in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("\(job.format.uppercased()) · \(job.artifactBytes / 1024) KB")
+                            Text("\(job.format.uppercased()) · \(sizeText(job.artifactBytes))")
                                 .font(.caption.weight(.semibold))
                             Spacer()
                             if job.phase == "needsReview" {

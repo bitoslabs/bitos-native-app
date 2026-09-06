@@ -52,10 +52,97 @@ class StoriesTest {
         val slide = Stories.parseSlide(event, now)!!
         assertEquals(now + 3_600, slide.expiresAt)
         assertEquals("https://cdn.example/pic.png", slide.imageUrl)
+        assertEquals(listOf("https://cdn.example/pic.png"), slide.imageUrls)
         assertEquals("#ff6600>to>#3300cc", slide.gradient)
         // Image URL stripped from the caption.
         assertTrue(!slide.content.contains("cdn.example"))
         assertTrue(slide.content.contains("check"))
+    }
+
+    @Test
+    fun parsesCarouselFromImetaThenContentLinksCappedAndDeduped() {
+        val event = storyEvent(
+            content = "carousel https://a.example/one.png and https://a.example/one.png plus https://a.example/seven.webp",
+            tags = listOf(
+                listOf("imeta", "url https://a.example/two.jpg", "alt two friends"),
+                listOf("imeta", "url https://a.example/three.gif"),
+                // 4..8 exceed the cap of 6 total.
+                listOf("imeta", "url https://a.example/four.png"),
+                listOf("imeta", "url https://a.example/five.png"),
+                listOf("imeta", "url https://a.example/six.png"),
+            ),
+        )
+        val slide = Stories.parseSlide(event, now)!!
+        assertEquals(
+            listOf(
+                "https://a.example/two.jpg",
+                "https://a.example/three.gif",
+                "https://a.example/four.png",
+                "https://a.example/five.png",
+                "https://a.example/six.png",
+                "https://a.example/one.png",
+            ),
+            slide.imageUrls,
+        )
+        // Deduped bare link never appears twice; over-cap link dropped from
+        // the carousel (web keeps it in the caption — same quirk, kept).
+        assertTrue(!slide.imageUrls.contains("https://a.example/seven.webp"))
+        assertEquals("carousel and plus https://a.example/seven.webp", slide.content)
+    }
+
+    @Test
+    fun parsesVideoFromVideoMimeImetaWithThumbAndDuration() {
+        val event = storyEvent(
+            content = "watch this https://cdn.example/clip.mp4",
+            tags = listOf(
+                listOf("imeta", "url https://cdn.example/clip.mp4", "m video/mp4", "thumb https://cdn.example/poster.jpg", "duration 12.5s"),
+            ),
+        )
+        val slide = Stories.parseSlide(event, now)!!
+        assertEquals("https://cdn.example/clip.mp4", slide.videoUrl)
+        assertEquals("https://cdn.example/poster.jpg", slide.videoPoster)
+        assertEquals(12_500L, slide.videoDurationMs)
+        // Video URL stripped from the caption; the imeta thumb is not a
+        // `url` line, so the carousel stays empty (web parity).
+        assertEquals(emptyList<String>(), slide.imageUrls)
+        assertEquals("watch this", slide.content)
+    }
+
+    @Test
+    fun parsesBareVideoLinkWhenNoImetaMime() {
+        val slide = Stories.parseSlide(
+            storyEvent(content = "no tags https://cdn.example/funny.mov ok"), now,
+        )!!
+        assertEquals("https://cdn.example/funny.mov", slide.videoUrl)
+        assertNull(slide.videoPoster)
+        assertEquals("no tags ok", slide.content)
+    }
+
+    @Test
+    fun sensitiveOnlyWithNonBlankWarningTagValue() {
+        val warned = Stories.parseSlide(
+            storyEvent(tags = listOf(listOf("content-warning", "Sensitive media"))), now,
+        )!!
+        assertTrue(warned.sensitive)
+        val shorthand = Stories.parseSlide(storyEvent(tags = listOf(listOf("cw", "nsfw"))), now)!!
+        assertTrue(shorthand.sensitive)
+        val blank = Stories.parseSlide(storyEvent(tags = listOf(listOf("content-warning", ""))), now)!!
+        assertTrue(!blank.sensitive)
+    }
+
+    @Test
+    fun gradientPrefersBackgroundTagHexColorsOverContentToken() {
+        val tagged = Stories.parseSlide(
+            storyEvent(
+                content = "hello",
+                tags = listOf(listOf("background", "linear-gradient(135deg, #112233, #445566)")),
+            ),
+            now,
+        )!!
+        assertEquals("#112233>to>#445566", tagged.gradient)
+        // Legacy mobile events keep the content token working.
+        val legacy = Stories.parseSlide(storyEvent(content = "hi #aabbcc>to>#ddeeff"), now)!!
+        assertEquals("#aabbcc>to>#ddeeff", legacy.gradient)
     }
 
     @Test

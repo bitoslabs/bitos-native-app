@@ -1077,3 +1077,68 @@ private final class NoopWindow: FeedWindowing {
     func count() -> Int { 0 }
     func retainAuthors(_ keepPubkeys: Set<String>) {}
 }
+
+// MARK: - Recent hashtags (composer + meme details "Recent" chips)
+
+/// Recently used hashtags: the shared `RecentHashtags` ledger as versioned
+/// JSON in UserDefaults (shape validation, recency merge and the 64-entry
+/// cap all live in the shared rule via the bridge — nothing re-implemented
+/// here). Recorded when a note/meme publish succeeds; the chip rows read
+/// `suggestions(exclude:)` for one-tap reuse.
+@MainActor
+final class RecentHashtagsStore: ObservableObject {
+    static let shared = RecentHashtagsStore()
+    private static let defaultsKey = "bitos.recentHashtags.v1"
+    @Published private(set) var ledgerJson: String
+    private let defaults: UserDefaults
+    private let bridge = BusinessCoreBridge()
+
+    private init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        self.ledgerJson = defaults.string(forKey: Self.defaultsKey) ?? ""
+    }
+
+    /// Fold the tags a publish just used into the ledger (merge + cap in
+    /// the shared rule); persists immediately.
+    func record(used: [String]) {
+        guard !used.isEmpty else { return }
+        let merged = bridge.recentHashtagsMerge(
+            storeJson: ledgerJson,
+            usedJson: encodeStringArray(used),
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000)
+        )
+        ledgerJson = merged
+        defaults.set(merged, forKey: Self.defaultsKey)
+    }
+
+    /// Chip row input: recent tags minus what this post already carries.
+    func suggestions(exclude: [String], limit: Int32 = 8) -> [String] {
+        decodeStringArray(
+            bridge.recentHashtagsSuggest(
+                storeJson: ledgerJson,
+                excludeJson: encodeStringArray(exclude),
+                limit: limit
+            )
+        )
+    }
+
+    /// Loose `#word` scan for recording — the shared merge validates and
+    /// normalizes whatever lands here.
+    static func hashtagsIn(_ content: String) -> [String] {
+        content.split(whereSeparator: \.isWhitespace)
+            .filter { $0.hasPrefix("#") }
+            .map(String.init)
+    }
+
+    private func encodeStringArray(_ values: [String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: values),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
+    private func decodeStringArray(_ json: String) -> [String] {
+        guard let data = json.data(using: .utf8),
+              let array = (try? JSONSerialization.jsonObject(with: data)) as? [String] else { return [] }
+        return array
+    }
+}

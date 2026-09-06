@@ -74,6 +74,9 @@ struct MemePostFlowView: View {
         publisher.dismiss()
         let bridge = (environment.businessCore as? FrameworkBusinessCoreClient)?
             .bridgeForFollowing() ?? BusinessCoreBridge()
+        RecentHashtagsStore.shared.record(
+            used: Array(draft.captionHashtags) + draft.tags
+        )
         store.publishActiveAsset(
             caption: draft.caption,
             altText: draft.altText,
@@ -276,6 +279,7 @@ private struct MemePostDetailsView: View {
             }
             .padding(.top, 4)
             .overlay(alignment: .top) { Divider() }
+            recentHashtagChips
         }
         .padding(BitOSTheme.Spacing.md)
         .background(BitOSTheme.surface)
@@ -288,9 +292,39 @@ private struct MemePostDetailsView: View {
             .replacingOccurrences(of: "#", with: "")
             .lowercased()
         tagInput = ""
+        addTag(tag)
+    }
+
+    private func addTag(_ tag: String) {
         guard !tag.isEmpty, !draft.tags.contains(tag),
               draft.tags.count < Self.maxTags else { return }
         draft.tags.append(tag)
+    }
+
+    /// Recently used hashtags — one-tap reuse (shared `RecentHashtags`
+    /// ledger recorded on publish). Tags this post already carries drop out.
+    private var recentHashtagChips: some View {
+        let exclude = draft.tags + Array(draft.captionHashtags)
+        let recent = RecentHashtagsStore.shared.suggestions(exclude: exclude)
+        return Group {
+            if !recent.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(recent, id: \.self) { tag in
+                            Button("#\(tag)") { addTag(tag) }
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(BitOSTheme.background))
+                                .overlay(Capsule().strokeBorder(BitOSTheme.border))
+                                .foregroundStyle(BitOSTheme.accent)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
     }
 
     // ── Settings rows ─────────────────────────────────────────────────

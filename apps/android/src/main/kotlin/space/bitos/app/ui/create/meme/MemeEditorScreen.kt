@@ -594,6 +594,8 @@ fun MemeEditorScreen(
     var draftSaveState by remember { mutableStateOf<DraftSaveState>(DraftSaveState.IDLE) }
     /** MUX-02: typed export outcome — display copy can't change state. */
     var exportOutcome by remember { mutableStateOf<ExportOutcome?>(null) }
+    /** Exact bytes from the rendered artifact; never inferred from source media. */
+    var lastExportSizeBytes by remember { mutableStateOf<Int?>(null) }
     /** MUX-04: output settings before export fires. */
     var showExportSheet by remember { mutableStateOf(false) }
     /** MUX-05: durable export jobs — retry reuses the persisted artifact. */
@@ -603,6 +605,7 @@ fun MemeEditorScreen(
     fun retryExportSave(jobId: Int) {
         if (exporting) return
         val (bytes, format) = exportJobs.loadArtifact(jobId) ?: return
+        lastExportSizeBytes = bytes.size
         exporting = true
         exportStatus = null
         exportJobs.update(jobId, phase = "saving")
@@ -917,7 +920,10 @@ fun MemeEditorScreen(
                 }
                 exporting = false
                 exportJobsRevision += 1
-                result.onSuccess { exportJobs.finish(exportJob) }
+                result.onSuccess {
+                    lastExportSizeBytes = exportJobs.list().firstOrNull { it.id == exportJob }?.artifactBytes
+                    exportJobs.finish(exportJob)
+                }
                     .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
                 exportOutcome = result.fold(
                     onSuccess = {
@@ -967,7 +973,10 @@ fun MemeEditorScreen(
                 }
                 exporting = false
                 exportJobsRevision += 1
-                result.onSuccess { exportJobs.finish(exportJob) }
+                result.onSuccess {
+                    lastExportSizeBytes = exportJobs.list().firstOrNull { it.id == exportJob }?.artifactBytes
+                    exportJobs.finish(exportJob)
+                }
                     .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
                 exportOutcome = result.fold(
                     onSuccess = { ExportOutcome.Success("Saved to Movies ✓") },
@@ -1015,7 +1024,10 @@ fun MemeEditorScreen(
             }
             exporting = false
             exportJobsRevision += 1
-            result.onSuccess { exportJobs.finish(exportJob) }
+            result.onSuccess {
+                lastExportSizeBytes = exportJobs.list().firstOrNull { it.id == exportJob }?.artifactBytes
+                exportJobs.finish(exportJob)
+            }
                 .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
             exportOutcome = result.fold(
                 onSuccess = { ExportOutcome.Success("Saved to Photos ✓") },
@@ -1698,6 +1710,7 @@ fun MemeEditorScreen(
                     },
                     durationSeconds = (timelineDurationMs / 1000).toInt(),
                     gifDelayMs = gifUniformDelayMs,
+                    renderedSizeBytes = lastExportSizeBytes,
                     exporting = exporting,
                     failure = (exportOutcome as? ExportOutcome.Failure)?.message,
                     onExport = {
@@ -2247,6 +2260,9 @@ fun MemeEditorScreen(
                             Triple(bytes, width, height) to "image/png"
                         }
                     }
+                    // Recently used hashtags feed the "Recent" chip rows.
+                    space.bitos.app.data.publish.RecentHashtagsStore.get(context)
+                        .record(space.bitos.core.publish.RecentHashtags.hashtagsIn(caption) + tags)
                     // Post-details extras ride the same verified machine:
                     // explicit t-tags + license merge with the remix lineage.
                     val mergedTags = postExtraTagsJson(
@@ -2948,10 +2964,12 @@ private fun ExportSettingsContent(
     dims: String,
     durationSeconds: Int,
     gifDelayMs: Int,
+    renderedSizeBytes: Int?,
     exporting: Boolean,
     failure: String?,
     onExport: () -> Unit,
 ) {
+    fun sizeText(bytes: Int): String = String.format(java.util.Locale.US, "%.1f MB", bytes / 1_000_000.0)
     val format = when {
         isVideo -> "MP4 · $dims · $durationSeconds s"
         isGif -> "GIF · $dims" + if (gifDelayMs > 0) " · $gifDelayMs ms/frame" else " · source timing"
@@ -2973,7 +2991,14 @@ private fun ExportSettingsContent(
         Text("Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
         Text(format, style = MaterialTheme.typography.titleSmall)
         Text(
-            "Destination: " + (if (isVideo) "Movies" else "Photos") + " · file size is shown after the render (estimates would be guesses).",
+            "Destination: " + (if (isVideo) "Movies" else "Photos") + " · " +
+                (renderedSizeBytes?.let { "rendered size: ${sizeText(it)}" }
+                    ?: "size is shown after rendering; estimates would be guesses."),
+            style = MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+        )
+        Text(
+            "Public-safe export: a fresh render removes source location, device and creation metadata.",
             style = MaterialTheme.typography.bodySmall,
             color = BitOSColors.textSecondary,
         )
@@ -2996,7 +3021,7 @@ private fun ExportSettingsContent(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            job.format.uppercase() + " · " + (job.artifactBytes / 1024) + " KB",
+                            job.format.uppercase() + " · " + sizeText(job.artifactBytes),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.W600,
                             modifier = Modifier.weight(1f),
@@ -3939,10 +3964,15 @@ private fun MemePostFlowScreen(
     val busy = phase == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
         phase == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
 
-    fun commitTag() {
-        val tag = tagInput.trim().replace("#", "").lowercase()
-        tagInput = ""
+    fun addTag(raw: String) {
+        val tag = raw.trim().replace("#", "").lowercase()
         if (tag.isNotEmpty() && tag !in tags && tags.size < 8) tags = tags + tag
+    }
+
+    fun commitTag() {
+        val typed = tagInput
+        tagInput = ""
+        addTag(typed)
     }
 
     Column(
@@ -4066,6 +4096,7 @@ private fun MemePostFlowScreen(
                             placeholder = "Add tag and press space",
                         )
                     }
+                    recentHashtagChips(tags, caption, onAddTag = ::addTag)
                 }
 
                 // ── Settings rows ────────────────────────────────────────
@@ -4840,6 +4871,49 @@ private fun PublishMachineSection(
 }
 
 /** TagsCodec `[[name,…],…]` JSON: remix lineage + explicit t-tags + license. */
+/** Recently used hashtags — one-tap reuse (shared `RecentHashtags` ledger
+ *  recorded on publish). Tags this post already carries drop out. */
+@Composable
+private fun recentHashtagChips(
+    tags: List<String>,
+    caption: String,
+    onAddTag: (String) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val recent = remember(tags, caption) {
+        space.bitos.app.data.publish.RecentHashtagsStore.get(context).suggestions(
+            exclude = tags.toSet() + space.bitos.core.publish.RecentHashtags.hashtagsIn(caption).toSet(),
+        )
+    }
+    if (recent.isEmpty()) return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(top = BitOSSpacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        recent.forEach { tag ->
+            TextButton(
+                onClick = { onAddTag(tag) },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(BitOSColors.background)
+                    .border(1.dp, BitOSColors.border, RoundedCornerShape(50)),
+            ) {
+                Text(
+                    "#$tag",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.W600,
+                    color = BitOSColors.primary,
+                )
+            }
+        }
+    }
+}
+
 private fun postExtraTagsJson(
     remixJson: String,
     tags: List<String>,

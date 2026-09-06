@@ -34,6 +34,11 @@ final class StoriesStore {
         let expiresAt: Int64
         let d: String?
         let imageUrl: String?
+        let imageUrls: [String]
+        let videoUrl: String?
+        let videoPoster: String?
+        let videoDurationMs: Int64?
+        let sensitive: Bool
         let gradient: String?
         let pow: Int?
 
@@ -126,6 +131,11 @@ final class StoriesStore {
                 createdAt: createdAt, expiresAt: expiresAt,
                 d: (slide["d"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 imageUrl: (slide["imageUrl"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                imageUrls: ((slide["imageUrls"] as? [Any]) as? [String])?.filter { !$0.isEmpty } ?? [],
+                videoUrl: (slide["videoUrl"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                videoPoster: (slide["videoPoster"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                videoDurationMs: (slide["videoDurationMs"] as? NSNumber).flatMap { $0.int64Value > 0 ? $0.int64Value : nil },
+                sensitive: (slide["sensitive"] as? Bool) ?? false,
                 gradient: (slide["gradient"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 pow: (slide["pow"] as? NSNumber).flatMap { $0.intValue > 0 ? $0.intValue : nil }
             )

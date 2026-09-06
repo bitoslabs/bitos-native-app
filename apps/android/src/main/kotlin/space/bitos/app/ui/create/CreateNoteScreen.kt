@@ -247,6 +247,9 @@ fun CreateNoteScreen(
                 uploadStatus = "Publishing…"
                 val rewritten = ComposerRules.rewriteMentions(field.text, trackedMentions)
                 val content = ComposerRules.composeContent(rewritten, remoteImageUrls + uploadedUrls)
+                // Recently used hashtags feed the "Recent" chip rows.
+                space.bitos.app.data.publish.RecentHashtagsStore.get(context)
+                    .record(space.bitos.core.publish.RecentHashtags.hashtagsIn(content))
                 // Seed tags (remix/attribution) ride first, deduped against
                 // the composer's derived tags by shared rule.
                 val tags = space.bitos.core.feed.RemixRules.mergeTags(
@@ -370,6 +373,45 @@ fun CreateNoteScreen(
                         .fillMaxWidth()
                         .onFocusChanged { fieldFocused = it.isFocused },
                 )
+                // Recently used hashtags — one-tap reuse (shared
+                // `RecentHashtags` ledger recorded on publish).
+                val recentTags = remember(field.text) {
+                    space.bitos.app.data.publish.RecentHashtagsStore.get(context).suggestions(
+                        exclude = space.bitos.core.publish.RecentHashtags.hashtagsIn(field.text).toSet(),
+                    )
+                }
+                if (recentTags.isNotEmpty()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        recentTags.forEach { tag ->
+                            TextButton(
+                                onClick = {
+                                    val glue = if (field.text.isEmpty() || field.text.endsWith(" ")) "" else " "
+                                    field = TextFieldValue(
+                                        field.text + glue + "#$tag ",
+                                        androidx.compose.ui.text.TextRange((field.text + glue + "#$tag ").length),
+                                    )
+                                },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(BitOSColors.surfaceElevated)
+                                    .border(1.dp, BitOSColors.border, RoundedCornerShape(50)),
+                            ) {
+                                Text(
+                                    "#$tag",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.W600,
+                                    color = BitOSColors.primary,
+                                )
+                            }
+                        }
+                    }
+                }
                 // Mention autocomplete (≤6, web `candidates` parity).
                 if (suggestions.isNotEmpty()) {
                     Surface(

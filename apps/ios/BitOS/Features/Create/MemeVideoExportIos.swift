@@ -157,6 +157,7 @@ enum MemeVideoExportIos {
         ) else { return nil }
         export.outputURL = output
         export.outputFileType = .mp4
+        export.metadata = []
         export.videoComposition = composition
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             export.exportAsynchronously { continuation.resume() }
@@ -250,6 +251,7 @@ enum MemeVideoExportIos {
         }
         export.outputURL = output
         export.outputFileType = .mp4
+        export.metadata = []
         export.audioMix = mix
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             export.exportAsynchronously { continuation.resume() }
@@ -506,6 +508,8 @@ enum MemeVideoExportIos {
         export.audioMix = audioMix
         export.outputURL = outputURL
         export.outputFileType = .mp4
+        // Public Studio output must not inherit location, device or creation tags.
+        export.metadata = []
         await export.export()
         defer {
             try? FileManager.default.removeItem(at: outputURL)

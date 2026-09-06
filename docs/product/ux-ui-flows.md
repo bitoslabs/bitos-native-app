@@ -241,6 +241,20 @@ Home -> poster/first frame -> autoplay visible Bitz
         with the feed; it always starts with a Create story card, followed by
         received stories, a Public stories marker, and a bounded relay-wide
         public-story sample; re-tap Home scrolls back to it)
+     -> story tiles frame the hex avatar in a matching HEX ring (web
+        `story-ring-frame hex-clip`: gradient = unseen, muted = seen),
+        preview the note text on gradient covers, and show the video poster
+        + play badge for video slides
+     -> opening a tile shows the web-parity 9:16 viewer: white-on-white/30
+        progress bars, header with hex-ringed avatar + relative time +
+        pause/close, left-third / right-two-thirds tap zones, slide counter
+        pill
+     -> slides render every web media shape: image carousels (NIP-92 imeta
+        urls + bare links, ≤6, dots + per-image 5 s segments), animated
+        GIFs, video slides (controls-free muted player, measured/imeta
+        duration capped 60 s, advance on end), sensitive media blurred
+        until tapped (content-warning tag), and text-only slides centered
+        on their gradient (7 s; background tag or `#hex>to>#hex` token)
      -> poster prefers explicit publisher hints (top-level preview/image tag,
         then imeta preview/image value) before derived image attachments
      -> cached notes render immediately; relay head fills one bounded snapshot
@@ -423,6 +437,10 @@ plus the keep-it-remixable license note — and publish stamps the machine
 `remix` + `p` tags via the shared `RemixRules` seam. Its preview/caption row
 and tag entry use the compact, flat
 prototype treatment; caption input enforces the displayed 300-character limit.
+Recently used hashtags are reused in one tap: a shared bounded ledger
+(`RecentHashtags`, newest-first, ≤ 64, recorded when a note or meme publish
+is initiated) feeds "Recent" chip rows under the note composer's field and
+the meme details tag input — chips the post already carries drop out.
 Preflight shows the real checklist (media, tags, license,
 audience, relays, signer) and previews the caption with the SAME shared
 NIP-27 rich renderer the feed cards use (hashtags/mentions highlighted

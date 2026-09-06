@@ -1,7 +1,12 @@
 package space.bitos.app
 
 import android.app.Application
+import android.os.Build
 import android.util.Log
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +25,21 @@ import space.bitos.app.data.relay.relayHttpClient
  * stores once; activities receive dependencies by construction, never by
  * global lookup. Scope is cancelled when the process dies.
  */
-class BitOsApplication : Application() {
+class BitOsApplication : Application(), ImageLoaderFactory {
+
+    /**
+     * Coil's default loader has no animated-GIF support; the shared image
+     * pipeline (feed media, story tiles/viewer) registers the platform GIF
+     * decoder so `.gif` attachments animate everywhere.
+     */
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .components {
+                if (Build.VERSION.SDK_INT >= 28) add(ImageDecoderDecoder.Factory())
+                else add(GifDecoder.Factory())
+            }
+            .crossfade(true)
+            .build()
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

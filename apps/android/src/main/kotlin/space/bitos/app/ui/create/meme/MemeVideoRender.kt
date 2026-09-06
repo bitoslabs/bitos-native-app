@@ -2,9 +2,18 @@ package space.bitos.app.ui.create.meme
 
 import android.content.Context
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultMuxer
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
+import androidx.media3.common.Format
+import androidx.media3.common.Metadata
+import androidx.media3.container.Mp4OrientationData
+import androidx.media3.muxer.BufferInfo
+import androidx.media3.muxer.Muxer
+import androidx.media3.muxer.MuxerException
+import com.google.common.collect.ImmutableList
+import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -12,7 +21,13 @@ import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** Owns Transformer on its application looper until completion or cancellation. */
+/**
+ * Owns Transformer on its application looper until completion or cancellation.
+ *
+ * Studio output is a new public artifact, never a container copy of the picked
+ * clip. The muxer deliberately drops source metadata (location, device and
+ * creation fields) rather than relying on an exporter default that may change.
+ */
 internal object MemeVideoRender {
     suspend fun render(context: Context, composition: Composition, path: String, timeoutMs: Long) {
         withContext(Dispatchers.Main) {
@@ -21,6 +36,7 @@ internal object MemeVideoRender {
                 withTimeout(timeoutMs) {
                     suspendCancellableCoroutine<Unit> { continuation ->
                         transformer = Transformer.Builder(context)
+                            .setMuxerFactory(PrivacySafeMuxerFactory())
                             .addListener(object : Transformer.Listener {
                                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                                     if (continuation.isActive) continuation.resume(Unit)
@@ -38,5 +54,34 @@ internal object MemeVideoRender {
                 transformer?.cancel()
             }
         }
+    }
+
+    /** Allows media samples through while refusing every input metadata entry. */
+    private class PrivacySafeMuxerFactory : Muxer.Factory {
+        private val delegate = DefaultMuxer.Factory()
+
+        override fun create(path: String): Muxer = PrivacySafeMuxer(delegate.create(path))
+
+        override fun getSupportedSampleMimeTypes(trackType: Int): ImmutableList<String> =
+            delegate.getSupportedSampleMimeTypes(trackType)
+
+        override fun supportsWritingNegativeTimestampsInEditList(): Boolean =
+            delegate.supportsWritingNegativeTimestampsInEditList()
+    }
+
+    private class PrivacySafeMuxer(private val delegate: Muxer) : Muxer {
+        override fun addTrack(format: Format): Int = delegate.addTrack(format)
+
+        override fun writeSampleData(trackId: Int, byteBuffer: ByteBuffer, bufferInfo: BufferInfo) {
+            delegate.writeSampleData(trackId, byteBuffer, bufferInfo)
+        }
+
+        override fun addMetadataEntry(metadataEntry: Metadata.Entry) {
+            // Orientation is needed for correct playback. Everything else may
+            // identify the source device, location or its creation history.
+            if (metadataEntry is Mp4OrientationData) delegate.addMetadataEntry(metadataEntry)
+        }
+
+        override fun close() = delegate.close()
     }
 }

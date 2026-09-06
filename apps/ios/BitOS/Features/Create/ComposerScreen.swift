@@ -227,6 +227,39 @@ struct ComposerScreen: View {
         return ""
     }
 
+    /// Recently used hashtags — one-tap reuse (shared `RecentHashtags`
+    /// ledger recorded on publish). Already-typed tags drop out.
+    private var recentHashtagChips: some View {
+        let recent = RecentHashtagsStore.shared.suggestions(
+            exclude: RecentHashtagsStore.hashtagsIn(text)
+        )
+        return Group {
+            if !recent.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Text("Recent")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(BitOSTheme.textTertiary)
+                        ForEach(recent, id: \.self) { tag in
+                            Button("#\(tag)") {
+                                let glue = text.isEmpty || text.hasSuffix(" ") ? "" : " "
+                                text += glue + "#\(tag) "
+                            }
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(BitOSTheme.surfaceElevated))
+                            .overlay(Capsule().strokeBorder(BitOSTheme.border))
+                            .foregroundStyle(BitOSTheme.accent)
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
     private var editorContent: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -270,6 +303,7 @@ struct ComposerScreen: View {
                     if !suggestions.isEmpty {
                         mentionSuggestions
                     }
+                    recentHashtagChips
                     if showPowPanel {
                         powPanel
                     }
@@ -828,7 +862,9 @@ struct ComposerScreen: View {
         busy = true
         Task {
             defer { busy = false }
-            await environment.notePublisher.publishNote(content: question.trimmingCharacters(in: .whitespacesAndNewlines), tagsJson: tagsJson)
+            let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+            RecentHashtagsStore.shared.record(used: RecentHashtagsStore.hashtagsIn(trimmedQuestion))
+            await environment.notePublisher.publishNote(content: trimmedQuestion, tagsJson: tagsJson)
             if environment.notePublisher.result == .published {
                 published = true
                 clearDraft()
@@ -877,6 +913,7 @@ struct ComposerScreen: View {
                 content: contentWithMedia,
                 contentWarningReason: contentWarningOn ? contentWarningReason : nil
             ) ?? "[]"
+            RecentHashtagsStore.shared.record(used: RecentHashtagsStore.hashtagsIn(contentWithMedia))
             // Seed tags (remix/attribution) merge first, deduped by shared rule.
             let mergedTagsJson = seeded
                 ? bridge.mergeTagsJson(baseJson: baseTagsJson, derivedJson: tagsJson)

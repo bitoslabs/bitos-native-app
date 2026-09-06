@@ -1,10 +1,45 @@
 import SwiftUI
 
 /**
- * APP-006 Stories bar + viewer (iOS parity with Android).
- * Bar: gradient hex ring = unseen, muted = seen. Viewer: full-screen,
- * progress bars, auto-advance, tap left/right.
+ * APP-006 Stories bar + viewer (web `StoriesBar`/`StoryViewer` parity).
+ * Bar: gradient hex ring = unseen, muted = seen. Viewer: full-screen 9:16
+ * canvas, white progress bars, header with hex-ringed avatar, auto-advance
+ * (5 s image / 7 s text), left-third / right-two-thirds tap zones.
  */
+
+/// Signature story-ring gradient (web `from-primary-500 via-accent-500
+/// to-warm-500`, app palette): unseen stories / own story. Computed so the
+/// in-app accent override stays live.
+private var unseenRing: AnyShapeStyle {
+    AnyShapeStyle(LinearGradient(
+        colors: [BitOSTheme.accent, Color(red: 1.0, green: 0.42, blue: 0.62), BitOSTheme.accent],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    ))
+}
+
+/// Layered hex story ring (web `story-ring-frame hex-clip` parity): a 3 pt
+/// gradient (unseen) or muted (seen) hex ring, a 2 pt inner gap, then the hex
+/// avatar — the ring shape always matches the avatar clip.
+private struct StoryHexRingAvatar: View {
+    let pubkey: String
+    let avatarSize: CGFloat
+    let ring: AnyShapeStyle
+    var inner: Color = BitOSTheme.surface
+
+    var body: some View {
+        HexShape()
+            .fill(ring)
+            .frame(width: avatarSize + 10, height: avatarSize + 10)
+            .overlay(
+                HexShape()
+                    .fill(inner)
+                    .frame(width: avatarSize + 4, height: avatarSize + 4)
+                    .overlay(PubkeyAvatarView(pubkey: pubkey, size: avatarSize))
+            )
+            .accessibilityHidden(true)
+    }
+}
+
 struct StoriesBarView: View {
     let authors: [StoriesStore.StoryAuthorMirror]
     let publicAuthors: [StoriesStore.StoryAuthorMirror]
@@ -85,7 +120,11 @@ private struct StoryCardView: View {
     var body: some View {
         Button(action: onClick) {
             ZStack(alignment: .topLeading) {
-                if let imageUrl = author.slides.first?.imageUrl, let url = URL(string: imageUrl) {
+                // Web parity: video tiles preview the poster, image tiles the
+                // first image; a play badge marks video slides.
+                if let latest = author.slides.first,
+                   let preview = latest.videoPoster ?? latest.imageUrls.first ?? latest.imageUrl,
+                   let url = URL(string: preview) {
                     AsyncImage(url: url) { phase in
                         if let image = phase.image {
                             image.resizable().scaledToFill()
@@ -99,6 +138,16 @@ private struct StoryCardView: View {
                         startPoint: .top,
                         endPoint: .bottom
                     )
+                    // Web parity: gradient tiles preview the note text.
+                    Text(author.slides.first { !$0.content.isEmpty }?.content ?? FeedFormat.shortPubkey(author.pubkey))
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.45), radius: 1, y: 1)
+                        .lineLimit(4)
+                        .multilineTextAlignment(.center)
+                        .padding(BitOSTheme.Spacing.md)
+                        .padding(.bottom, 20)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 VStack {
@@ -110,26 +159,34 @@ private struct StoryCardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(BitOSTheme.Spacing.sm)
                 }
-                Circle()
-                    .strokeBorder(
-                        hasUnseen ? AnyShapeStyle(LinearGradient(
-                            colors: [BitOSTheme.accent, Color(red: 1.0, green: 0.42, blue: 0.62), BitOSTheme.accent],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )) : AnyShapeStyle(BitOSTheme.divider),
-                        lineWidth: 2.5
-                    )
-                    .frame(width: 36, height: 36)
-                    .overlay { PubkeyAvatarView(pubkey: author.pubkey, size: 30).padding(2) }
+                // Hex ring (web `hex-clip` parity): gradient = unseen, muted = seen.
+                StoryHexRingAvatar(
+                    pubkey: author.pubkey,
+                    avatarSize: 34,
+                    ring: hasUnseen ? unseenRing : AnyShapeStyle(BitOSTheme.divider)
+                )
+                .padding(BitOSTheme.Spacing.sm)
+                if author.isPublicDiscovery || author.slides.first?.videoUrl != nil {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if author.slides.first?.videoUrl != nil {
+                            Image(systemName: AppIcons.play)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 24, height: 24)
+                                .background(.black.opacity(0.55), in: Circle())
+                                .accessibilityLabel("Video story")
+                        }
+                        if author.isPublicDiscovery {
+                            Text("Public")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(.black.opacity(0.55), in: Capsule())
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .padding(BitOSTheme.Spacing.sm)
-                if author.isPublicDiscovery {
-                    Text("Public")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(BitOSTheme.Spacing.sm)
                 }
             }
             .frame(width: 108, height: 154)
@@ -184,105 +241,349 @@ struct StoryViewerView: View {
     let onClose: () -> Void
 
     @State private var index = 0
+    @State private var imageIndex = 0
     @State private var progress: Double = 0
+    @State private var paused = false
+    @State private var imageFailed = false
+    @State private var revealed = false
+    @State private var measuredVideoSeconds: Double?
 
     private var slide: StoriesStore.StorySlideMirror? {
         author.slides.indices.contains(index) ? author.slides[index] : nil
     }
 
+    /// All images on the current slide — carousels get one timer per image.
+    private var images: [String] { slide?.imageUrls ?? [] }
+
+    /// Video slides replace the image carousel entirely (web parity).
+    private var isVideo: Bool { slide?.videoUrl != nil && images.isEmpty }
+
+    /// Sensitive image slides stay blurred until the viewer taps to reveal.
+    private var hidden: Bool { slide?.sensitive == true && !images.isEmpty && !revealed }
+
+    /// Web parity: images 5 s per carousel frame, text-only 7 s, video its
+    /// measured (or imeta-declared) duration capped at 60 s / 15 s fallback.
+    private var segmentSeconds: Double {
+        if isVideo {
+            let seconds = measuredVideoSeconds ?? slide.map { Double($0.videoDurationMs ?? 0) / 1000 } ?? 0
+            return min(seconds > 0 ? seconds : 15, 60)
+        }
+        return images.isEmpty ? 7 : 5
+    }
+
     var body: some View {
         ZStack {
-            // Background.
-            if let gradient = slide?.gradient {
-                let colors = parseGradient(gradient)
-                LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
-                    .ignoresSafeArea()
-            } else {
-                BitOSTheme.background.ignoresSafeArea()
-            }
-
-            VStack(spacing: 0) {
-                // Progress bars.
-                HStack(spacing: 4) {
-                    ForEach(Array(author.slides.enumerated()), id: \.element.id) { i, s in
-                        GeometryReader { geo in
-                            Capsule()
-                                .fill(i < index ? BitOSTheme.accent : (i == index ? BitOSTheme.accent.opacity(max(0.05, progress)) : Color.white.opacity(0.2)))
-                                .frame(height: 3)
-                        }
-                        .frame(height: 3)
+            Color.black.ignoresSafeArea()
+            // Phone-portrait fills the safe area; wider screens (iPad)
+            // letterbox a 9:16 canvas (web `aspect-[9/16]` parity).
+            GeometryReader { geo in
+                let wide = geo.size.width / geo.size.height > 9.0 / 16.0
+                Group {
+                    if wide {
+                        canvas.aspectRatio(9.0 / 16.0, contentMode: .fit)
+                    } else {
+                        canvas
                     }
                 }
-                .padding(.horizontal, BitOSTheme.Spacing.base)
-                .padding(.top, BitOSTheme.Spacing.lg)
-
-                // Header.
-                HStack(spacing: BitOSTheme.Spacing.sm) {
-                    PubkeyAvatarView(pubkey: author.pubkey, size: 32)
-                    Text(FeedFormat.shortPubkey(author.pubkey))
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: AppIcons.close)
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                    .accessibilityLabel("Close story")
-                }
-                .padding(.horizontal, BitOSTheme.Spacing.base)
-                .padding(.top, BitOSTheme.Spacing.md)
-
-                Spacer()
-
-                // Content.
-                Text(slide?.content ?? "")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, BitOSTheme.Spacing.xl)
-
-                Spacer()
-
-                // Tap zones.
-                HStack(spacing: 0) {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if index > 0 {
-                                index -= 1
-                                progress = 0
-                            }
-                        }
-                        .accessibilityLabel("Previous slide")
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if index < author.slides.count - 1 {
-                                index += 1
-                                progress = 0
-                            } else {
-                                onClose()
-                            }
-                        }
-                        .accessibilityLabel("Next slide")
-                }
-                .frame(height: 200)
+                .frame(width: geo.size.width, height: geo.size.height)
             }
         }
-        .task(id: slide?.id) {
+        // Restart per carousel frame too — every image gets a full segment.
+        .task(id: "\(slide?.id ?? "")#\(imageIndex)") {
             guard let slide else { return }
+            imageFailed = false
             onSeen(slide.id)
             while progress < 1.0 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                progress += 0.05 / 5.0
+                if paused { continue }
+                progress += 0.05 / segmentSeconds
             }
-            if index < author.slides.count - 1 {
-                index += 1
-                progress = 0
-            } else {
-                onClose()
+            advance()
+        }
+        .onChange(of: index) { _ in
+            // New slide: restart the carousel and re-hide sensitive media.
+            imageIndex = 0
+            revealed = false
+            measuredVideoSeconds = nil
+        }
+    }
+
+    /// Carousel-first navigation (web `advance`/`back` parity).
+    private func advance() {
+        if imageIndex < images.count - 1 {
+            progress = 0
+            imageIndex += 1
+        } else if index < author.slides.count - 1 {
+            progress = 0
+            index += 1
+        } else {
+            onClose()
+        }
+    }
+
+    private func back() {
+        if imageIndex > 0 {
+            progress = 0
+            imageIndex -= 1
+        } else if index > 0 {
+            progress = 0
+            index -= 1
+        }
+    }
+
+    private var canvas: some View {
+        ZStack {
+            slideBackground
+
+            // Tap zones (web: left third = previous, right two thirds = next)
+            // sit above the media but below the header chrome.
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: geo.size.width / 3)
+                        .contentShape(Rectangle())
+                        .onTapGesture { back() }
+                        .accessibilityLabel("Previous slide")
+                    Color.clear
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture { advance() }
+                        .accessibilityLabel("Next slide")
+                }
             }
+
+            // Sensitive reveal sits above the tap zones so its tap wins.
+            if hidden {
+                sensitiveReveal
+            }
+
+            VStack(spacing: 0) {
+                progressBars
+                carouselDots
+                header
+                Spacer()
+            }
+
+            caption
+            slideCounter
+        }
+        .clipped()
+    }
+
+    // MARK: Slide backdrop
+
+    @ViewBuilder
+    private var slideBackground: some View {
+        if isVideo, let videoUrl = slide?.videoUrl.flatMap(URL.init(string:)) {
+            ZStack {
+                if let poster = slide?.videoPoster.flatMap(URL.init(string:)) {
+                    AsyncImage(url: poster) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        }
+                    }
+                }
+                StoryVideoLayer(
+                    url: videoUrl,
+                    paused: paused || hidden,
+                    onEnded: { advance() },
+                    onDurationMeasured: { measuredVideoSeconds = $0 }
+                )
+            }
+        } else if images.indices.contains(imageIndex),
+                  let url = URL(string: images[imageIndex]), !imageFailed {
+            slideImage(url)
+                .blur(radius: hidden ? 30 : 0)
+                .overlay(Color.black.opacity(hidden ? 0.5 : 0))
+                .clipped()
+        } else {
+            gradientBackdrop
+        }
+    }
+
+    /// GIF attachments animate; still images load through AsyncImage.
+    @ViewBuilder
+    private func slideImage(_ url: URL) -> some View {
+        let isGif = url.path.lowercased().hasSuffix(".gif")
+        if isGif {
+            StoryGifView(url: url)
+        } else {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else if phase.error != nil {
+                    LinearGradient(colors: gradientColors, startPoint: .top, endPoint: .bottom)
+                        .onAppear { imageFailed = true }
+                } else {
+                    // Loading: gradient only, no text (web shows the bare pane).
+                    LinearGradient(colors: gradientColors, startPoint: .top, endPoint: .bottom)
+                }
+            }
+        }
+    }
+
+    private var gradientColors: [Color] {
+        slide?.gradient.map { parseGradient($0) } ?? [BitOSTheme.background, BitOSTheme.background]
+    }
+
+    /// Text-only slides render their content centered on the slide gradient;
+    /// a broken image falls back to the same text (web `Image unavailable`).
+    @ViewBuilder
+    private var gradientBackdrop: some View {
+        let text = slide?.content ?? ""
+        ZStack {
+            LinearGradient(colors: gradientColors, startPoint: .top, endPoint: .bottom)
+            Text(text.isEmpty && imageFailed ? "Image unavailable" : text)
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, BitOSTheme.Spacing.xl)
+        }
+    }
+
+    /// Sensitive media gate (web parity): blur + tap-to-reveal.
+    private var sensitiveReveal: some View {
+        Button {
+            revealed = true
+        } label: {
+            VStack(spacing: BitOSTheme.Spacing.base) {
+                AppIcons.image(for: AppIcons.eyeClosed)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(Circle().fill(Color.black.opacity(0.6)))
+                    .overlay(Circle().stroke(Color.white.opacity(0.2)))
+                Text("Sensitive content · tap to view")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.3))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sensitive content. Tap to view")
+    }
+
+    // MARK: Chrome
+
+    /// White-on-white/30 progress bars with an animated fill (web parity).
+    private var progressBars: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(author.slides.enumerated()), id: \.element.id) { i, _ in
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Color.white.opacity(0.3))
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: geo.size.width * (i < index ? 1 : (i == index ? min(max(progress, 0), 1) : 0)))
+                    }
+                }
+                .clipShape(Capsule())
+                .frame(height: 3)
+            }
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.base)
+        .padding(.top, BitOSTheme.Spacing.sm)
+    }
+
+    /// Carousel dots for multi-image slides (web parity, tappable).
+    @ViewBuilder
+    private var carouselDots: some View {
+        if images.count > 1 {
+            HStack(spacing: 6) {
+                ForEach(images.indices, id: \.self) { i in
+                    Circle()
+                        .fill(Color.white.opacity(i == imageIndex ? 1 : 0.4))
+                        .frame(width: i == imageIndex ? 16 : 6, height: 6)
+                        .onTapGesture { imageIndex = i }
+                        .accessibilityLabel("Image \(i + 1) of \(images.count)")
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            StoryHexRingAvatar(
+                pubkey: author.pubkey,
+                avatarSize: 32,
+                ring: unseenRing,
+                inner: Color.black.opacity(0.45)
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(FeedFormat.shortPubkey(author.pubkey))
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                if let slide {
+                    Text(FeedFormat.timeAgo(createdAt: slide.createdAt))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            Spacer()
+            Button {
+                paused.toggle()
+            } label: {
+                Image(systemName: paused ? AppIcons.play : AppIcons.pause)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel(paused ? "Play" : "Pause")
+            Button(action: onClose) {
+                Image(systemName: AppIcons.close)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("Close story")
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.sm)
+    }
+
+    /// Image slides keep their caption over a bottom scrim (web parity).
+    @ViewBuilder
+    private var caption: some View {
+        if let text = slide?.content, !text.isEmpty, !images.isEmpty, !imageFailed, !hidden {
+            VStack {
+                Spacer()
+                Text(text)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, BitOSTheme.Spacing.lg)
+                    .padding(.top, BitOSTheme.Spacing.xl)
+                    .padding(.bottom, BitOSTheme.Spacing.lg)
+                    .background(
+                        LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom),
+                        alignment: .bottom
+                    )
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// "1 / 3 · 1/2" pill (web parity), multi-slide authors only.
+    @ViewBuilder
+    private var slideCounter: some View {
+        if author.slides.count > 1 {
+            let carousel = images.count > 1 ? " · \(imageIndex + 1)/\(images.count)" : ""
+            VStack {
+                Spacer()
+                Text("\(index + 1) / \(author.slides.count)\(carousel)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.4), in: Capsule())
+                    .padding(.bottom, 8)
+            }
+            .allowsHitTesting(false)
         }
     }
 
