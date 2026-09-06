@@ -116,6 +116,14 @@ class Nip27Test {
         assertTrue(json.contains("\"k\":\"l\",\"v\":\"https://x.example/a\""))
         assertTrue(json.contains("\"k\":\"h\",\"v\":\"tag\""))
     }
+
+    @Test
+    fun markdownLinkKeepsItsLabelAndTokenizesOnlyItsTarget() {
+        assertEquals(
+            listOf(RichToken.Link("https://example.com/photo?format=jpg", "photo")),
+            Nip27.tokenize("[photo](https://example.com/photo?format=jpg)"),
+        )
+    }
 }
 
 /**
@@ -160,5 +168,18 @@ class FeedNoteContentWarningTest {
         assertTrue(note(emptyList(), "behind the scenes #Porn").contentWarning)
         assertTrue(note(emptyList(), "warning #nudity").contentWarning)
         assertTrue(note(emptyList(), "safe discussion of explicit permissions").contentWarning.not())
+    }
+}
+
+class InlineMediaUrlsTest {
+    @Test
+    fun markdownXFormatImageBecomesOneInlineAttachment() {
+        val url = "https://pbs.twimg.com/media/HJIgOO2aAAAdBOc?format=jpg"
+        assertEquals(listOf(url), space.bitos.core.feed.InlineMediaUrls.fromContent("[$url]($url)"))
+    }
+
+    @Test
+    fun ordinaryMarkdownLinkIsNotAnAttachment() {
+        assertTrue(space.bitos.core.feed.InlineMediaUrls.fromContent("[site](https://example.com/page)").isEmpty())
     }
 }

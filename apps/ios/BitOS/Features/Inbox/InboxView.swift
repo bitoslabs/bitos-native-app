@@ -421,7 +421,7 @@ struct InboxView: View {
                 replyTo: nil,
                 hashtags: [],
                 mentions: [],
-                mediaUrls: [],
+                mediaUrls: origin.mediaUrls,
                 isProtocolPayload: false
             )
         } else {
@@ -443,7 +443,7 @@ struct InboxView: View {
                 replyTo: nil,
                 hashtags: [],
                 mentions: [],
-                mediaUrls: [],
+                mediaUrls: origin.mediaUrls,
                 isProtocolPayload: false
             )
         } else {
@@ -694,11 +694,16 @@ private struct GroupRowView: View {
     }
 
     /// "“note excerpt” · 2m ago" — the quote rides the verified origin.
+    /// Media-only origins show a "Media" stand-in (links never surface as text).
     private var subtitle: String? {
         let time = FeedFormat.timeAgo(createdAt: group.newestAt)
         var excerpt: String?
-        if case .ready(let note) = origin, !note.excerpt.isEmpty {
-            excerpt = note.excerpt
+        if case .ready(let note) = origin {
+            if !note.excerpt.isEmpty {
+                excerpt = note.excerpt
+            } else if !note.mediaUrls.isEmpty {
+                excerpt = "Media"
+            }
         }
         switch group.kind {
         case .follow:
@@ -866,8 +871,12 @@ private struct SentZapRowView: View {
 
     private var subtitle: String {
         var excerpt: String?
-        if case .ready(let note) = origin, !note.excerpt.isEmpty {
-            excerpt = note.excerpt
+        if case .ready(let note) = origin {
+            if !note.excerpt.isEmpty {
+                excerpt = note.excerpt
+            } else if !note.mediaUrls.isEmpty {
+                excerpt = "Media"
+            }
         }
         let time = FeedFormat.timeAgo(createdAt: record.createdAt)
         return [excerpt.map { "“\($0)”" }, "paid", time]

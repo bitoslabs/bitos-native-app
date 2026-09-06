@@ -475,6 +475,18 @@ final class MemeEditorStore {
         }
     }
 
+    /// Stack position (Layers sheet): moves one overlay by `delta` paint
+    /// slots — +1 toward the front, −1 toward the back — as the shared
+    /// `reorder` command; clamped at the ends, one undo step per move.
+    func moveOverlay(_ id: String, delta: Int) {
+        guard let index = overlays.firstIndex(where: { $0.id == id }) else { return }
+        let target = min(max(index + delta, 0), overlays.count - 1)
+        guard target != index else { return }
+        let before = projectJson
+        apply(commandJson: Self.encode(["op": "reorder", "id": id, "index": target]))
+        if projectJson != before { pushHistory(before) }
+    }
+
     /// Selects one overlay by id (Layers sheet); unknown ids deselect.
     func select(_ id: String) {
         selectedId = overlays.contains { $0.id == id } ? id : nil
@@ -2983,6 +2995,10 @@ struct MemeEditorView: View {
             } else {
                 ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
                 ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
+                ClipTool(icon: "square.3.layers.3d", label: "Layers") {
+                    activePanel = nil
+                    showLayers = true
+                }
                 ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
                 ClipTool(icon: "slider.horizontal.3", label: "Adjust") { togglePanel(.fx) }
             }
@@ -5253,35 +5269,46 @@ private struct SuiteChip: View {
     }
 }
 
-/// Layers sheet (source-insert management): every IMAGE overlay with its
-/// thumbnail, select and delete; "Insert image…" opens the picker. GIF
-/// inserts paint their first frame (V1 semantics, said out loud).
+/// Layers sheet (stack management): every overlay top-first — the first
+/// row paints in front — with its badge, select, delete and ±1 stack
+/// moves (the shared `reorder` command, one undo step each). "Insert
+/// image…" opens the picker; new layers land on top, same as video mode.
+/// GIF inserts paint their first frame (V1 semantics, said out loud).
 private struct LayersSheetView: View {
     @Bindable var store: MemeEditorStore
     var onInsert: () -> Void
 
-    private var layers: [MemeOverlayUi] {
-        store.overlays.filter(\.isImage)
+    /// Paint order = wire order, so the display runs reversed: row 0 is
+    /// the front; "up" moves an overlay toward the front (+1 paint slot).
+    private var stack: [MemeOverlayUi] {
+        store.overlays.reversed()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             Text("Layers").font(.headline)
-            Text("Insert image or GIF sources over the clip (≤\(MemeEditorStore.videoLayerCap)). GIFs paint their first frame.")
+            Text("Top of the list paints in front. New layers land on top — restack with the arrows (image inserts ≤\(MemeEditorStore.videoLayerCap); GIFs paint their first frame).")
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
-            if layers.isEmpty {
-                Text("No layers yet — insert a source to stack it over the clip.")
+            if stack.isEmpty {
+                Text("No layers yet — add text, stickers or image sources to stack them.")
                     .font(.caption)
                     .foregroundStyle(BitOSTheme.textSecondary)
             }
-            ForEach(layers) { layer in
+            ForEach(Array(stack.enumerated()), id: \.element.id) { position, layer in
                 HStack(spacing: BitOSTheme.Spacing.sm) {
                     Group {
-                        if let assetId = layer.assetId, let image = store.layerImages[assetId] {
+                        if layer.isImage, let assetId = layer.assetId,
+                           let image = store.layerImages[assetId] {
                             Image(uiImage: image).resizable().scaledToFill()
-                        } else {
+                        } else if layer.isImage {
                             AppIcons.image(for: AppIcons.photo)
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                        } else if layer.isSticker {
+                            AppIcons.image(for: AppIcons.sticker)
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                        } else {
+                            Image(systemName: "textformat")
                                 .foregroundStyle(BitOSTheme.textSecondary)
                         }
                     }
@@ -5289,15 +5316,30 @@ private struct LayersSheetView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .background(RoundedRectangle(cornerRadius: 8).fill(BitOSTheme.surface))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Layer \(layer.assetId ?? "?")")
+                        Text(layer.isImage
+                             ? "Layer \(layer.assetId ?? "?")"
+                             : (layer.isSticker ? "Sticker" : "Text"))
                             .font(.caption.weight(.semibold))
-                        Text(layer.startMs != nil || layer.endMs != nil
-                             ? "\(suiteClock(layer.startMs ?? 0)) – \(suiteClock(layer.endMs ?? 0))"
-                             : "always visible")
+                        Text(subtitle(for: layer))
                             .font(.caption2)
                             .foregroundStyle(BitOSTheme.textSecondary)
+                            .lineLimit(1)
                     }
                     Spacer()
+                    Button {
+                        store.moveOverlay(layer.id, delta: 1)
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .disabled(position == 0)
+                    .accessibilityLabel("Move to front one slot")
+                    Button {
+                        store.moveOverlay(layer.id, delta: -1)
+                    } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .disabled(position == stack.count - 1)
+                    .accessibilityLabel("Move to back one slot")
                     Button("Select") {
                         store.select(layer.id)
                     }
@@ -5325,6 +5367,17 @@ private struct LayersSheetView: View {
             Spacer(minLength: 0)
         }
         .padding(BitOSTheme.Spacing.md)
+    }
+
+    private func subtitle(for layer: MemeOverlayUi) -> String {
+        if layer.isImage {
+            if layer.startMs != nil || layer.endMs != nil {
+                return "\(suiteClock(layer.startMs ?? 0)) – \(suiteClock(layer.endMs ?? 0))"
+            }
+            return "always visible"
+        }
+        if layer.isSticker { return "tap to place" }
+        return layer.text.isEmpty ? "empty caption" : layer.text
     }
 
 }

@@ -207,4 +207,15 @@ class StoriesTest {
         // Slides newest-first within each author.
         assertEquals(listOf(s2.createdAt, s1.createdAt), authors[1].slides.map { it.createdAt })
     }
+
+    @Test
+    fun ownAuthorIsPinnedAheadOfNewerFollowedStories() {
+        val other = "bb".repeat(32)
+        val own = Stories.parseSlide(storyEvent(pubkey = author, createdAt = now), now)!!
+        val followed = Stories.parseSlide(storyEvent(id = "66".repeat(32), pubkey = other, createdAt = now + 500), now)!!
+
+        val authors = Stories.authors(listOf(own, followed), now, ownPubkey = author)
+
+        assertEquals(listOf(author, other), authors.map { it.pubkey })
+    }
 }

@@ -115,7 +115,7 @@ fun RichText(
                                 }
                             }
                         },
-                    ) { append(token.url) }
+                    ) { append(token.label ?: token.url) }
                 }
                 is RichToken.Hashtag -> withLink(
                     androidx.compose.ui.text.LinkAnnotation.Clickable(

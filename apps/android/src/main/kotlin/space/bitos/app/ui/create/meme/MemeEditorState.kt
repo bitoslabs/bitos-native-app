@@ -197,6 +197,19 @@ class MemeEditorState(
         if (selectedOverlayId == id) clearSelection()
     }
 
+    /**
+     * Stack position (Layers sheet): moves one overlay by [delta] paint
+     * slots — +1 toward the front, -1 toward the back; one undoable
+     * command, clamped at the ends by the shared rule.
+     */
+    fun moveOverlay(id: String, delta: Int) {
+        val index = project.overlays.indexOfFirst { it.id == id }
+        if (index == -1) return
+        val target = (index + delta).coerceIn(0, project.overlays.lastIndex)
+        if (target == index) return
+        commit(MemeCommand.ReorderOverlay(id, target))
+    }
+
     /** Source-media color grade (MST-043) — one undoable command. */
     fun setLook(lookId: String) {
         commit(MemeCommand.SetLook(lookId))

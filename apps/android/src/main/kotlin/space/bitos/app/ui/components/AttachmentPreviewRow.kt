@@ -35,8 +35,7 @@ import space.bitos.app.ui.theme.BitOSColors
 
 /** Video extensions the preview row renders with a play affordance. */
 fun isVideoMediaUrl(url: String): Boolean {
-    val ext = url.substringBeforeLast('#').substringBefore('?').substringAfterLast('.', "").lowercase()
-    return ext in setOf("mp4", "webm", "mov", "m4v")
+    return space.bitos.core.feed.InlineMediaUrls.isVideoUrl(url)
 }
 
 private fun isGifUrl(url: String): Boolean = url.substringBeforeLast('#').substringBefore('?').endsWith(".gif")

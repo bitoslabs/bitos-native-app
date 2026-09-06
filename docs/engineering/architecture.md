@@ -160,7 +160,7 @@ anonymous with an empty follow set.
 
 Stories use the same connected-relay retry rule. The native stories adapter
 issues one account/following-scoped request and one bounded, relay-wide public
-discovery request (24 kind-30315 events). Both still pass the verified-frame
+discovery request (20 kind-30315 events). Both still pass the verified-frame
 gate; events from followed authors remain in the social lane, while other
 authors are projected separately as public discovery cards.
 
@@ -188,6 +188,14 @@ window, now explicitly bounded by the registry pointer.
   both platforms. This is a manual recovery path for a one-shot bootstrap
   REQ that was sent before any relay socket opened; kind-3 remains the sole
   canonical source for the Following count and connections list.
+- Followers are a DERIVED projection, never canonical: a one-shot
+  `{"kinds":[3],"#p":[me]}` REQ (shared `FollowerIndex`, page limit 400)
+  returns other authors' contact lists, and the newest-head-per-follower
+  rule reconciles them — a newer list without our p-tag is an unfollow. The
+  You stat row renders that count, the Followers sheet lists those pubkeys
+  with the same kind-0 profile fan-in as Following, and the sheet footnotes
+  that other relays may know more. The set is scoped per identity: account
+  activation clears and re-requests it alongside the other account heads.
 - Because top-level tabs stay mounted after their first visit, tapping the
   Following stat also re-issues the account heads. Accepting a kind-3 publishes
   `followingResolved` and its follow set together so UI never observes a
@@ -210,6 +218,14 @@ window, now explicitly bounded by the registry pointer.
 - `ContactList.MAX_FOLLOWS` is 250 — just below the codec's 256-tag bound
   so any accepted kind-3 parses in full and a follow/unfollow republish
   never drops parsed follows.
+- REQ filters are ALWAYS built by the shared bridge/codec — never
+  hand-concatenated JSON. Android once assembled `{"kinds":[3],
+  "authors":[<pubkey>]}` with unquoted string values (and double-opened the
+  following filter's author array): the frame is invalid JSON, relays drop
+  it SILENTLY, and the You Following count froze at zero while
+  profile/notes/follower REQs (built correctly) kept working. The
+  adapter-contract tests therefore assert the exact quoted wire form
+  (`"authors":["<hex>"]`), not just substring presence.
 
 ## 7. Composition roots
 

@@ -452,7 +452,7 @@ fun ProfileScreen(
                         feedRepository.refreshProfileAndFollowing(account.pubkeyHex)
                         showFollowing = true
                     })
-                    StatPill("Followers", "—", onClick = { showFollowersInfo = true })
+                    StatPill("Followers", formatCount(feedState.followers.size), onClick = { showFollowersInfo = true })
                     // Web stats-row parity: truthful sats figure from the
                     // merged ledger (tapping opens the zap wallet).
                     StatPill("Sats zapped", space.bitos.core.model.ZapFormat.sats(zapSummary.totalSats), onClick = onOpenZaps)
@@ -756,7 +756,18 @@ fun ProfileScreen(
     }
 
     if (showFollowersInfo) {
-        FollowersInfoBottomSheet(onDismiss = { showFollowersInfo = false })
+        ConnectionsBottomSheet(
+            title = "Followers",
+            emptyText = "No followers on your connected relays yet.",
+            footnote = "Derived from contact lists on your connected relays; other relays may know more.",
+            pubkeys = homeViewModel.state.value.followers,
+            profiles = homeViewModel.state.value.profiles,
+            onDismiss = { showFollowersInfo = false },
+            onOpenProfile = { pubkey ->
+                showFollowersInfo = false
+                onOpenMentionProfile(pubkey)
+            },
+        )
     }
 
     if (showEdit && state.account != null) {
@@ -856,7 +867,7 @@ internal fun StatPill(label: String, value: String, onClick: (() -> Unit)? = nul
     }
 }
 
-/** Canonical contacts from the active account's newest verified kind-3. */
+/** Canonical connection rows (Following / Followers sheets) from verified kind-3 projections. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ConnectionsBottomSheet(
@@ -865,6 +876,8 @@ private fun ConnectionsBottomSheet(
     profiles: Map<String, space.bitos.core.model.ProfileMetadata>,
     onDismiss: () -> Unit,
     onOpenProfile: (String) -> Unit,
+    emptyText: String = "You are not following anyone yet.",
+    footnote: String? = null,
 ) {
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -875,7 +888,7 @@ private fun ConnectionsBottomSheet(
             Text(title, modifier = Modifier.fillMaxWidth(), fontSize = 18.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Spacer(Modifier.height(12.dp))
             if (pubkeys.isEmpty()) {
-                Text("You are not following anyone yet.", color = BitOSColors.textSecondary, modifier = Modifier.padding(vertical = 20.dp))
+                Text(emptyText, color = BitOSColors.textSecondary, modifier = Modifier.padding(vertical = 20.dp))
             } else {
                 pubkeys.sorted().take(100).forEach { pubkey ->
                     val profile = profiles[pubkey]
@@ -898,24 +911,10 @@ private fun ConnectionsBottomSheet(
                     }
                 }
             }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-/** Nostr relays cannot truthfully enumerate followers from a profile alone. */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun FollowersInfoBottomSheet(onDismiss: () -> Unit) {
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = BitOSColors.surface,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(20.dp)) {
-            Text("Followers", modifier = Modifier.fillMaxWidth(), fontSize = 18.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            Spacer(Modifier.height(12.dp))
-            Text("Follower lists are not a canonical Nostr profile field. Connected relays may omit unfollows or older contact lists, so BitOS does not show an unreliable count.", color = BitOSColors.textSecondary)
+            footnote?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, fontSize = 11.sp, color = BitOSColors.textTertiary)
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

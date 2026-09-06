@@ -15,8 +15,8 @@ import kotlinx.serialization.json.put
  * values clamped by [MemeRules.apply]. Unknown ops decode to null.
  *
  * `{"op":"add","overlay":{…}} · {"op":"remove","id":…} ·
- *  {"op":"update","id":…,"x":…,…} · {"op":"trim","start":…,"end":…} ·
- *  {"op":"delay","ms":…}`
+ *  {"op":"reorder","id":…,"index":…} · {"op":"update","id":…,"x":…,…} ·
+ *  {"op":"trim","start":…,"end":…} · {"op":"delay","ms":…}`
  */
 object MemeCommandCodec {
 
@@ -32,6 +32,12 @@ object MemeCommandCodec {
             is MemeCommand.RemoveOverlay -> {
                 put("op", "remove")
                 put("id", command.id)
+            }
+
+            is MemeCommand.ReorderOverlay -> {
+                put("op", "reorder")
+                put("id", command.id)
+                put("index", command.toIndex)
             }
 
             is MemeCommand.UpdateOverlay -> {
@@ -128,6 +134,12 @@ object MemeCommandCodec {
 
                 "remove" -> obj["id"]?.jsonPrimitive?.content
                     ?.let(MemeCommand::RemoveOverlay)
+
+                "reorder" -> obj["id"]?.jsonPrimitive?.content?.let { id ->
+                    intOf(obj, "index")?.let { index ->
+                        MemeCommand.ReorderOverlay(id, index)
+                    }
+                }
 
                 "update" -> obj["id"]?.jsonPrimitive?.content?.let { id ->
                     MemeCommand.UpdateOverlay(

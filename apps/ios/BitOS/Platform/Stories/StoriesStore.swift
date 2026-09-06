@@ -154,7 +154,11 @@ final class StoriesStore {
 
     private func rebuild() {
         let now = Int64(Date.now.timeIntervalSince1970)
-        func grouped(_ slides: [StorySlideMirror], publicDiscovery: Bool) -> [StoryAuthorMirror] {
+        func grouped(
+            _ slides: [StorySlideMirror],
+            publicDiscovery: Bool,
+            ownFirst: Bool = false
+        ) -> [StoryAuthorMirror] {
             Dictionary(grouping: slides, by: \.pubkey)
             .map { pubkey, slides in
                 StoryAuthorMirror(
@@ -163,9 +167,20 @@ final class StoriesStore {
                     isPublicDiscovery: publicDiscovery
                 )
             }
-            .sorted { $0.latestAt > $1.latestAt }
+            .sorted { lhs, rhs in
+                if ownFirst {
+                    let lhsIsOwn = lhs.pubkey == accountPubkey
+                    let rhsIsOwn = rhs.pubkey == accountPubkey
+                    if lhsIsOwn != rhsIsOwn { return lhsIsOwn }
+                }
+                return lhs.latestAt > rhs.latestAt
+            }
         }
-        authors = grouped(slidesById.values.filter { !$0.isExpired(now: now) }, publicDiscovery: false)
+        authors = grouped(
+            slidesById.values.filter { !$0.isExpired(now: now) },
+            publicDiscovery: false,
+            ownFirst: true
+        )
         publicAuthors = grouped(publicSlidesById.values.filter { !$0.isExpired(now: now) }, publicDiscovery: true)
     }
 }

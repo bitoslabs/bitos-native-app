@@ -614,8 +614,12 @@ class FeedRepositoryTest {
                 kotlinx.coroutines.delay(10)
             }
         }
+        // The contacts REQ must carry the account as a QUOTED JSON string —
+        // the hand-concatenated filter once emitted an unquoted authors
+        // array (invalid JSON silently dropped by relays) and froze the
+        // Following count at zero (2026-09 regression).
         assertTrue(transport.sent.any { it.contains(account) && it.contains("\"kinds\":[0]") })
-        assertTrue(transport.sent.any { it.contains(account) && it.contains("\"kinds\":[3]") })
+        assertTrue(transport.sent.any { it.contains("\"bitos-contacts\"") && it.contains("\"kinds\":[3]") && it.contains("\"authors\":[\"$account\"]") })
     }
 
     @Test
@@ -634,6 +638,52 @@ class FeedRepositoryTest {
                 kotlinx.coroutines.delay(10)
             }
         }
+    }
+
+    @Test
+    fun youRefreshRequestsAndProjectsTheDerivedFollowerHead() = runBlocking {
+        val account = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        repository.start()
+        repository.setAccount(account)
+        transport.sent.clear()
+
+        repository.refreshProfileAndFollowing(account)
+
+        // The You refresh re-asks for the derived follower head (kind-3 #p).
+        withTimeout(20_000) {
+            while (transport.sent.none { it.contains("\"bitos-followers\"") }) {
+                kotlinx.coroutines.delay(10)
+            }
+        }
+        assertTrue(transport.sent.any { it.contains("\"kinds\":[3]") && it.contains("\"#p\":[\"$account\"]") })
+
+        // A foreign verified kind-3 that p-tags the account projects into
+        // state.followers (never into the account's own following set).
+        val signer = DeterministicTestSigner("4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d")
+        val follower = signer.publicKeyHex()
+        transport.emit(signedContactListFrame(signer, listOf(account), 1_710_000_500))
+        val followed = withTimeout(20_000) { repository.state.first { it.followers.isNotEmpty() } }
+        assertEquals(setOf(follower), followed.followers)
+        assertFalse(followed.following.contains(follower))
+
+        // A newer head without the p-tag is an unfollow: the set reconciles.
+        transport.emit(signedContactListFrame(signer, emptyList(), 1_710_000_600))
+        val unfollowed = withTimeout(20_000) { repository.state.first { it.followers.isEmpty() } }
+        assertTrue(follower !in unfollowed.followers)
+    }
+
+    /** Signed `["EVENT", subId, {kind-3}]` frame authored by [signer]'s key. */
+    private suspend fun signedContactListFrame(
+        signer: DeterministicTestSigner,
+        pTags: List<String>,
+        createdAt: Long,
+    ): String {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAt })
+        val author = signer.publicKeyHex()
+        val tags = pTags.map { listOf("p", it) }
+        val id = NostrEventCodec.computeId(hasher, author, createdAt, NostrKinds.CONTACT_LIST, tags, "")
+        val unsigned = space.bitos.core.publish.UnsignedNote(id, author, createdAt, NostrKinds.CONTACT_LIST, tags, "")
+        return withSubscriptionId(composer.publishMessage(unsigned, signer.sign(unsigned.messageBytes())!!)!!)
     }
 
     @Test

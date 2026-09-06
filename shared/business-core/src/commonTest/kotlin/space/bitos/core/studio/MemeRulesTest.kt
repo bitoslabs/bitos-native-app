@@ -102,6 +102,29 @@ class MemeRulesTest {
     }
 
     @Test
+    fun reorderMovesOverlayThroughThePaintStack() {
+        var project = empty
+        listOf("o1", "o2", "o3").forEach { id ->
+            project = MemeRules.apply(project, MemeCommand.AddOverlay(textOverlay(id)))
+        }
+        // Bottom layer to the front: paint order o2, o3, o1.
+        val front = MemeRules.apply(project, MemeCommand.ReorderOverlay("o1", 2))
+        assertEquals(listOf("o2", "o3", "o1"), front.overlays.map { it.id })
+        assertEquals("o1", MemeRules.hitTest(front, 0.5f, 0.5f)?.id, "front layer wins hits")
+        // Front layer to the back again.
+        val back = MemeRules.apply(front, MemeCommand.ReorderOverlay("o1", 0))
+        assertEquals(listOf("o1", "o2", "o3"), back.overlays.map { it.id })
+        // Out-of-range targets clamp; a same-position or unknown-id move is a no-op.
+        assertEquals(listOf("o1", "o3", "o2"), MemeRules.apply(back, MemeCommand.ReorderOverlay("o2", 99)).overlays.map { it.id })
+        assertEquals(back, MemeRules.apply(back, MemeCommand.ReorderOverlay("o2", 1)))
+        assertEquals(back, MemeRules.apply(back, MemeCommand.ReorderOverlay("nope", 0)))
+        assertEquals(empty, MemeRules.apply(empty, MemeCommand.ReorderOverlay("o1", 0)), "empty project stays empty")
+        // The command round-trips through the wire codec.
+        val encoded = MemeCommandCodec.encode(MemeCommand.ReorderOverlay("o2", 0))
+        assertEquals(MemeCommand.ReorderOverlay("o2", 0), MemeCommandCodec.decode(encoded))
+    }
+
+    @Test
     fun hitTestPicksTopMost() {
         val project = MemeRules.apply(
             MemeRules.apply(empty, MemeCommand.AddOverlay(textOverlay("back", y = 0.5f))),

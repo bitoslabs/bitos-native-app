@@ -82,6 +82,10 @@ final class FeedStore {
     /** APP-009 X-style display list per thread (shared assembly rule). */
     private(set) var threads: [String: [ThreadDisplayItem]] = [:]
     private(set) var following: Set<String> = []
+    /** Derived follower set (kind-3 heads by other authors that p-tag the
+     *  account — shared `FollowerIndex` newest-head rule). Relay-derived,
+     *  never canonical; refreshed with the You account heads. */
+    private(set) var followers: Set<String> = []
     private(set) var bookmarkedIds: Set<String> = []
     /// APP-015 saved notes (newest-saved first; window + by-id refetch).
     private(set) var bookmarkedNotes: [FeedNote] = []
@@ -127,6 +131,8 @@ final class FeedStore {
     /// decide whether it belongs to the active identity.
     private var cachedContactHeads: [String: VerifiedEvent] = [:]
     private var followingSubscribed = false
+    /// Shared newest-head-per-follower projection backing `followers`.
+    private let followerIndex = FollowerIndex()
     private var commentThreads: [String: [FeedNote]] = [:]
     private var bookmarked: [String] = []
     private var zapCountsBuffer: [String: Int] = [:]
@@ -694,10 +700,19 @@ final class FeedStore {
                 myReactionEventIds[target] = event.id
             }
         } else if event.kind == 3 {
-            absorbContactList(gated)
-            // DAT-003: retain the verified newest contact-list head so the
-            // following projection is available at the next cold start.
-            if event.pubkey == accountPubkey { persist(event, tagsJson: tagsJson) }
+            if event.pubkey == accountPubkey {
+                absorbContactList(gated)
+                // DAT-003: retain the verified newest contact-list head so the
+                // following projection is available at the next cold start.
+                persist(event, tagsJson: tagsJson)
+            } else if let account = accountPubkey,
+                bridgeFacade().absorbFollowerHead(
+                    index: followerIndex,
+                    event: event.bridgeEvent(bridge: bridgeFacade()),
+                    accountPubkey: account
+                ) {
+                publishState()
+            }
         } else if event.kind == 9735 {
             let target = event.tags.first { $0.first == "e" }?.dropFirst().first
             if let target {
@@ -1213,6 +1228,9 @@ final class FeedStore {
         contactHeadAt = nil
         followingSubscribed = false
         followingResolved = pubkey == nil
+        // Derived follower projection is scoped to one identity.
+        followerIndex.clear()
+        followers = []
         // Shared `AccountBootstrap`: a new account episode re-arms the head
         // re-issue budget and the received flags.
         accountHeadAttempts = [0, 0, 0, 0]
@@ -1231,6 +1249,9 @@ final class FeedStore {
             // the follow set is known (≤200 lookups, once).
             reprojectFollowingFromHydratedWindow()
             requestAccountHeads(for: pubkey)
+            // Followers are per-identity derived state; the You surface and
+            // its stat row re-request with every account-head refresh.
+            requestFollowers(pubkey)
         }
         bookmarked.removeAll()
         blocked.removeAll()
@@ -1264,6 +1285,9 @@ final class FeedStore {
         ) as String?) {
             Task { await pool.broadcast(request) }
         }
+        // The You stat row renders following AND follower; one entry refresh
+        // re-asks for both heads.
+        requestFollowers(pubkey)
     }
 
     /// The Following sheet owns its presentation, while this store owns the
@@ -1281,10 +1305,24 @@ final class FeedStore {
             self.followingProfileRefreshPending.removeAll()
             self.isRefreshingFollowingProfiles = false
         }
-        let profilesToRequest = Array(authors)
-        for start in stride(from: 0, to: profilesToRequest.count, by: Self.profileBatchSize) {
-            let end = min(start + Self.profileBatchSize, profilesToRequest.count)
-            let batch = Array(profilesToRequest[start..<end])
+        requestConnectionProfileBatches(Array(authors))
+    }
+
+    /// The Followers sheet resolves its rows through the same bounded kind-0
+    /// fan-in, driven by the derived follower projection. Rows render the
+    /// hex-avatar fallback immediately; verified profiles replace them.
+    func refreshFollowerProfiles() {
+        let authors = Array(followers).sorted().prefix(200)
+        guard !authors.isEmpty else { return }
+        requestConnectionProfileBatches(Array(authors))
+    }
+
+    /// Shared batch REQ path for connection surfaces (Following / Followers
+    /// sheets): one one-shot kind-0 REQ per [profileBatchSize] authors.
+    private func requestConnectionProfileBatches(_ authors: [String]) {
+        for start in stride(from: 0, to: authors.count, by: Self.profileBatchSize) {
+            let end = min(start + Self.profileBatchSize, authors.count)
+            let batch = Array(authors[start..<end])
             profileRequestCounter += 1
             let subId = "bitos-following-profiles-\(profileRequestCounter)"
             let request = client.profileRequest(
@@ -1322,6 +1360,18 @@ final class FeedStore {
         if let request = (bridgeFacade().encodeBlockListRequest(subscriptionId: "bitos-blocks", accountPubkey: pubkey) as String?) {
             Task { await pool.broadcast(request) }
         }
+    }
+
+    /// Followers head (derived projection): kind-3 events by other authors
+    /// that p-tag the account. Same one-shot REQ + close discipline as the
+    /// other account heads; the shared `FollowerIndex` merges the verified
+    /// frames (newest head per follower wins, unfollows reconcile).
+    private func requestFollowers(_ pubkey: String) {
+        let request = bridgeFacade().followersRequest(
+            subscriptionId: "bitos-followers",
+            accountPubkey: pubkey
+        )
+        broadcastOneShot(request, subscriptionId: "bitos-followers")
     }
 
     /// Called from the health poll with the current connected-relay count.
@@ -1827,6 +1877,7 @@ final class FeedStore {
         assembledThreadsCache = assembledThreadsCache.filter { commentThreads[$0.key] != nil }
         threads = assembled
         following = followingAuthors
+        followers = Set(followerIndex.pubkeys())
         bookmarkedIds = Set(bookmarked)
         // APP-015: newest-saved first; window notes fill ids not yet fetched.
         if bookmarked.isEmpty {

@@ -139,7 +139,7 @@ class StoriesRepository(
         // when the account does not follow anyone with an active story.
         pool.broadcast(NostrEventCodec.encodeRequest(
             "bitos-public-stories",
-            """{"kinds":[${Stories.STORY_KIND}],"limit":24}""",
+            """{"kinds":[${Stories.STORY_KIND}],"limit":20}""",
         ))
     }
 
@@ -149,7 +149,7 @@ class StoriesRepository(
     private fun publishState() {
         val now = System.currentTimeMillis() / 1000
         mutableState.value = StoriesUiState(
-            authors = Stories.authors(slides.values.toList(), now),
+            authors = Stories.authors(slides.values.toList(), now, ownPubkey = accountPubkey),
             publicAuthors = Stories.authors(publicSlides.values.toList(), now)
                 .map { it.copy(isPublicDiscovery = true) },
             seenIds = seenIds,

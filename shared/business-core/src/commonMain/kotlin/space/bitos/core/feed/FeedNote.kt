@@ -46,9 +46,6 @@ data class FeedNote(
     companion object {
         private val hashtagPattern = Regex("(?:^|\\s)#([\\p{L}\\p{N}_-]{2,60})")
         private val mentionPattern = Regex("@([\\w.]{1,100})")
-        private val mediaUrlPattern = Regex("https?://\\S+\\.(?:apng|avif|gif|jpe?g|png|webp)(?:[?#]\\S*)?", RegexOption.IGNORE_CASE)
-        private val videoUrlPattern = Regex("https?://\\S+\\.(?:mp4|webm|mov|m4v)(?:[?#]\\S*)?", RegexOption.IGNORE_CASE)
-
         fun from(event: NostrEvent): FeedNote {
             // Kind-6 reposts resolve to the embedded original with attribution.
             if (event.kind == space.bitos.core.model.NostrKinds.REPOST) {
@@ -87,8 +84,7 @@ data class FeedNote(
             poll = space.bitos.core.model.PollContract.poll(event),
             hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
             mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
-            mediaUrls = (mediaUrlPattern.findAll(event.content) + videoUrlPattern.findAll(event.content))
-                .map { it.value }.distinct().take(8).toList(),
+            mediaUrls = InlineMediaUrls.fromContent(event.content),
             externalVideoPreviews = ExternalVideoPreviews.fromContent(event.content),
             isProtocolPayload = space.bitos.core.nostr.ContentClassification.isProtocolPayload(event.content),
             video = MediaMetadata.fromEvent(event),
@@ -102,6 +98,29 @@ data class FeedNote(
 
         fun isFeedKind(kind: Int): Boolean = kind in NostrKinds.feedKinds
     }
+}
+
+/**
+ * Extracts image/video attachments from bare or Markdown links. Hosts such as
+ * X commonly put the media type in `?format=jpg`, so path extensions alone
+ * are insufficient. The extractor is pure, allowlisted and bounded because
+ * its result drives native image/video loading.
+ */
+object InlineMediaUrls {
+    private val imageType = Regex("\\.(?:apng|avif|gif|jpe?g|png|webp)(?:$|[?#])|[?&](?:format|fm|ext)=(?:apng|avif|gif|jpe?g|png|webp)(?:$|[&#])", RegexOption.IGNORE_CASE)
+    private val videoType = Regex("\\.(?:mp4|webm|mov|m4v)(?:$|[?#])|[?&](?:format|fm|ext)=(?:mp4|webm|mov|m4v)(?:$|[&#])", RegexOption.IGNORE_CASE)
+
+    fun fromContent(content: String): List<String> =
+        space.bitos.core.nostr.Nip27.tokenize(content)
+            .filterIsInstance<space.bitos.core.nostr.RichToken.Link>()
+            .map { it.url }
+            .filter(::isMediaUrl)
+            .distinct()
+            .take(8)
+
+    fun isMediaUrl(url: String): Boolean = imageType.containsMatchIn(url) || videoType.containsMatchIn(url)
+
+    fun isVideoUrl(url: String): Boolean = videoType.containsMatchIn(url)
 }
 
 /**

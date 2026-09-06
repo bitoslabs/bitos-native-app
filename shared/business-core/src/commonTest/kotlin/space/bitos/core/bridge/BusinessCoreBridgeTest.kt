@@ -24,7 +24,7 @@ class BusinessCoreBridgeTest {
         val request = bridge.publicStoriesRequest("bitos-public-stories")
         assertTrue(request.contains("\"bitos-public-stories\""), request)
         assertTrue(request.contains("\"kinds\":[30315]"), request)
-        assertTrue(request.contains("\"limit\":24"), request)
+        assertTrue(request.contains("\"limit\":20"), request)
         assertFalse(request.contains("\"authors\""), request)
     }
 

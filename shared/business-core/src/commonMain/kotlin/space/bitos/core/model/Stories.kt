@@ -143,16 +143,25 @@ object Stories {
 
     /**
      * Groups active slides per author (expired pruned), newest-first
-     * slides within each author; authors ordered by latest slide.
+     * slides within each author. When [ownPubkey] is supplied, the active
+     * account is pinned ahead of followed authors; the remaining authors are
+     * ordered by latest slide.
      */
-    fun authors(slides: List<StorySlide>, nowSeconds: Long): List<StoryAuthor> {
+    fun authors(
+        slides: List<StorySlide>,
+        nowSeconds: Long,
+        ownPubkey: String? = null,
+    ): List<StoryAuthor> {
         val active = slides.filter { !it.isExpired(nowSeconds) }
         return active
             .groupBy { it.pubkey }
             .map { (pubkey, list) ->
                 StoryAuthor(pubkey = pubkey, slides = list.sortedByDescending { it.createdAt })
             }
-            .sortedByDescending { it.latestAt }
+            .sortedWith(
+                compareBy<StoryAuthor> { it.pubkey != ownPubkey }
+                    .thenByDescending { it.latestAt },
+            )
     }
 
     /**

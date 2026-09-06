@@ -78,6 +78,38 @@ class MemeEditorStateTest {
     }
 
     @Test
+    fun moveOverlayRestacksAndUndoRestoresOrder() {
+        val state = MemeEditorState()
+        state.addOverlay(MemeOverlayKind.TEXT, "back")
+        state.addOverlay(MemeOverlayKind.TEXT, "mid")
+        val front = state.addOverlay(MemeOverlayKind.IMAGE, "")!!
+        assertEquals(listOf("o1", "o2", "o3"), state.project.overlays.map { it.id }, "adds append on top")
+        assertEquals("o3", front)
+
+        // Toward the back twice: front → mid slot → back slot (clamped).
+        state.moveOverlay(front, -1)
+        state.moveOverlay(front, -1)
+        state.moveOverlay(front, -1)
+        assertEquals(front, state.project.overlays.first().id, "front layer now paints at the back")
+        assertEquals(5, state.undoDepth, "two real moves; the clamped third adds no history")
+
+        // Selection follows the moved overlay; undo steps the moves back.
+        assertEquals(front, state.selectedOverlayId)
+        assertTrue(state.undo())
+        assertEquals(front, state.project.overlays[1].id)
+        assertTrue(state.undo())
+        assertEquals(front, state.project.overlays.last().id, "back on top again")
+
+        // Unknown ids and single-layer stacks are no-ops.
+        state.moveOverlay("nope", 1)
+        val solo = MemeEditorState()
+        solo.addOverlay(MemeOverlayKind.TEXT, "gm")
+        solo.moveOverlay(solo.project.overlays.single().id, 1)
+        solo.moveOverlay(solo.project.overlays.single().id, -1)
+        assertEquals(1, solo.undoDepth, "nothing to move around a single overlay")
+    }
+
+    @Test
     fun styleBurstsCoalesceWithinTheWindow() {
         val clock = Clock()
         val state = clock.state()

@@ -15,7 +15,12 @@ import kotlinx.serialization.json.buildJsonObject
  */
 sealed interface RichToken {
     data class Text(val value: String) : RichToken
-    data class Link(val url: String) : RichToken
+    /** A regular URL, optionally written as a Markdown link. */
+    data class Link(
+        val url: String,
+        /** Markdown label; null means render the URL itself. */
+        val label: String? = null,
+    ) : RichToken
     data class Hashtag(val tag: String) : RichToken
     data class Nostr(
         /** Raw entity as written (without `nostr:`/`@` prefix). */
@@ -37,7 +42,10 @@ object Nip27 {
 
     // Entity first, so `nostr:npub1…` wins over a URL swallowing it.
     private val pattern = Regex(
-        "(?:nostr:)?@?(npub1|nprofile1|note1|nevent1|naddr1)[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,}" +
+        // Parse Markdown links before bare URLs. This prevents their target
+        // URL from leaving the surrounding []() syntax in the rendered body.
+        "\\[([^\\]\\r\\n]{0,512})\\]\\((https?://[^\\s)]+)\\)" +
+            "|(?:nostr:)?@?(npub1|nprofile1|note1|nevent1|naddr1)[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,}" +
             "|https?://\\S+" +
             "|(?:^|[\\s(\\[])#([\\p{L}\\p{N}_-]{2,60})"
     )
@@ -49,8 +57,10 @@ object Nip27 {
             val start = match.range.first
             if (start > cursor) out += RichToken.Text(content.substring(cursor, start))
             val value = match.value
-            val hashtag = match.groupValues[2]
+            val markdownTarget = match.groupValues[2]
+            val hashtag = match.groupValues[4]
             when {
+                markdownTarget.isNotEmpty() -> out += RichToken.Link(markdownTarget, match.groupValues[1])
                 hashtag.isNotEmpty() -> {
                     // Re-emit the captured leading whitespace if present.
                     if (value.length > hashtag.length + 1) {
@@ -109,7 +119,11 @@ object Nip27 {
         tokenize(content).joinToString(prefix = "[", separator = ",", postfix = "]") { token ->
             when (token) {
                 is RichToken.Text -> obj("t", token.value)
-                is RichToken.Link -> obj("l", token.url)
+                is RichToken.Link -> buildJsonObject {
+                    put("k", JsonPrimitive("l"))
+                    put("v", JsonPrimitive(token.url))
+                    token.label?.let { put("d", JsonPrimitive(it)) }
+                }.toString()
                 is RichToken.Hashtag -> obj("h", token.tag)
                 is RichToken.Nostr -> buildJsonObject {
                     put("k", JsonPrimitive("n"))

@@ -1195,7 +1195,7 @@ class BusinessCoreBridge {
     /** APP-006: bounded relay-wide discovery lane, separate from followed stories. */
     fun publicStoriesRequest(subscriptionId: String): String = NostrEventCodec.encodeRequest(
         subscriptionId,
-        """{"kinds":[${space.bitos.core.model.Stories.STORY_KIND}],"limit":24}""",
+        """{"kinds":[${space.bitos.core.model.Stories.STORY_KIND}],"limit":20}""",
     )
 
     /** APP-006: parse a verified kind-30315 frame → slide map (null = not a valid story). */
@@ -2725,6 +2725,33 @@ class BusinessCoreBridge {
     /** REQ for the account's own newest kind-3 contact list. */
     fun contactListRequest(subscriptionId: String, accountPubkey: String): String =
         NostrEventCodec.encodeRequest(subscriptionId, """{"kinds":[3],"authors":["$accountPubkey"],"limit":1}""")
+
+    /**
+     * REQ for the account's derived follower set: kind-3 contact lists by
+     * any author that p-tag [accountPubkey]. The shared
+     * [space.bitos.core.model.FollowerIndex] applies the
+     * newest-head-per-follower rule to the verified frames this request
+     * returns; the count is relay-derived, never canonical.
+     */
+    fun followersRequest(subscriptionId: String, accountPubkey: String): String =
+        NostrEventCodec.encodeRequest(
+            subscriptionId,
+            """{"kinds":[${space.bitos.core.model.NostrKinds.CONTACT_LIST}],"#p":["$accountPubkey"],"limit":${space.bitos.core.model.FollowerIndex.REQUEST_LIMIT}}""",
+        )
+
+    /**
+     * Absorbs an ALREADY-VERIFIED kind-3 event into [index] (the pool's
+     * decode-once stage owns the trust gate; this seam only projects).
+     * True when the follower set changed.
+     */
+    fun absorbFollowerHead(
+        index: space.bitos.core.model.FollowerIndex,
+        event: Event,
+        accountPubkey: String,
+    ): Boolean {
+        val core = coreEvent(event) ?: return false
+        return index.absorb(core, accountPubkey)
+    }
 
     /** REQ for followed authors' notes (the Following timeline). */
     fun followingRequest(subscriptionId: String, authors: List<String>): String {

@@ -692,7 +692,7 @@ private fun originFeedNote(targetEventId: String, origin: space.bitos.core.model
     replyTo = null,
     hashtags = emptyList(),
     mentions = emptyList(),
-    mediaUrls = emptyList(),
+    mediaUrls = origin.mediaUrls,
     isProtocolPayload = false,
 )
 
@@ -994,7 +994,10 @@ private fun SentZapRow(
     onOpen: () -> Unit,
 ) {
     val name = profiles[record.recipientPubkey]?.bestDisplayName ?: shortPubkey(record.recipientPubkey)
-    val excerpt = (origin as? OriginNoteState.Ready)?.note?.excerpt?.takeIf { it.isNotBlank() }
+    // Media-only origins show a "Media" stand-in (links never surface as text).
+    val ready = (origin as? OriginNoteState.Ready)?.note
+    val excerpt = ready?.excerpt?.takeIf { it.isNotBlank() }
+        ?: ready?.mediaUrls?.takeIf { it.isNotEmpty() }?.let { "Media" }
     Box(
         Modifier
             .fillMaxWidth()
@@ -1246,9 +1249,12 @@ private fun groupTitle(
     }
 }
 
-/** "“note excerpt” · 2m ago" — the quote rides the verified origin preview. */
+/** "“note excerpt” · 2m ago" — the quote rides the verified origin preview.
+ * Media-only origins show a "Media" stand-in (links never surface as text). */
 private fun groupSubtitle(group: NotificationGroup, origin: OriginNoteState?): String? {
-    val excerpt = (origin as? OriginNoteState.Ready)?.note?.excerpt?.takeIf { it.isNotBlank() }
+    val ready = (origin as? OriginNoteState.Ready)?.note
+    val excerpt = ready?.excerpt?.takeIf { it.isNotBlank() }
+        ?: ready?.mediaUrls?.takeIf { it.isNotEmpty() }?.let { "Media" }
     val time = formatTimeAgo(group.newestAt, nowSeconds())
     return when (group.kind) {
         NotificationKind.FOLLOW -> time

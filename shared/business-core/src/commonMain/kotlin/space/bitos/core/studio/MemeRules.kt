@@ -8,6 +8,13 @@ package space.bitos.core.studio
 sealed interface MemeCommand {
     data class AddOverlay(val overlay: MemeOverlay) : MemeCommand
     data class RemoveOverlay(val id: String) : MemeCommand
+
+    /**
+     * Stack position edit (Layers sheet): moves one overlay to an absolute
+     * paint index. Paint order = list order, so index 0 paints at the back
+     * and the last index paints in front; the target clamps into range.
+     */
+    data class ReorderOverlay(val id: String, val toIndex: Int) : MemeCommand
     data class UpdateOverlay(
         val id: String,
         val x: Float? = null,
@@ -168,6 +175,22 @@ object MemeRules {
 
         is MemeCommand.RemoveOverlay ->
             project.copy(overlays = project.overlays.filterNot { it.id == command.id })
+
+        is MemeCommand.ReorderOverlay -> {
+            val from = project.overlays.indexOfFirst { it.id == command.id }
+            if (from == -1) {
+                project
+            } else {
+                val to = command.toIndex.coerceIn(0, project.overlays.lastIndex)
+                if (to == from) {
+                    project
+                } else {
+                    val reordered = project.overlays.toMutableList()
+                    reordered.add(to, reordered.removeAt(from))
+                    project.copy(overlays = reordered)
+                }
+            }
+        }
 
         is MemeCommand.UpdateOverlay ->
             // A nonsensical window (end ≤ start) means "always visible" —

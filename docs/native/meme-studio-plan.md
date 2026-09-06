@@ -753,6 +753,12 @@ video-mode source insert as IMAGE layers [image/GIF, ≤6, wire-local] +
 the V2 suite dock shell [track lanes, playhead, tool chips, redo] on
 both platforms; see tracker APP-019. The full timeline engine — clip
 windows, zoom/speed tracks, draw, sound-seed — stays sequenced here.)*
+*(2026-09-06 — stack management shipped: shared `ReorderOverlay` command
++ `reorder` wire op; the Layers sheet became the whole-stack manager on
+both platforms — every overlay kind, top-first, ±1 moves, select/delete/
+insert — and image mode got the Layers tool, so added images stack on top
+uniformly with video inserts and any layer's paint position is editable
+and undoable.)*
 
 ---
 

@@ -15,6 +15,7 @@ import UIKit
 struct RichTokenModel: Codable, Equatable {
     let k: String
     let v: String
+    let d: String?
     let e: String?
     let x: String?
 }
@@ -56,6 +57,7 @@ struct RichTextView: View {
                 return "@\(name)"
             }
             return token.v.count > 14 ? "\(token.v.prefix(10))…" : token.v
+        case "l": return token.d ?? token.v
         default: return token.v
         }
     }
@@ -179,7 +181,19 @@ struct MediaGrid: View {
     }
 
     private static func isVideo(_ url: String) -> Bool {
-        videoExtensions.contains((url as NSString).pathExtension.lowercased())
+        let lower = url.lowercased()
+        return videoExtensions.contains { fileExtension in
+            lower.hasSuffix(".\(fileExtension)") ||
+                lower.contains(".\(fileExtension)?") ||
+                lower.contains(".\(fileExtension)#") ||
+                lower.contains(".\(fileExtension)&") ||
+                lower.contains("format=\(fileExtension)&") ||
+                lower.hasSuffix("format=\(fileExtension)") ||
+                lower.contains("fm=\(fileExtension)&") ||
+                lower.hasSuffix("fm=\(fileExtension)") ||
+                lower.contains("ext=\(fileExtension)&") ||
+                lower.hasSuffix("ext=\(fileExtension)")
+        }
     }
 
     private let columns = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]

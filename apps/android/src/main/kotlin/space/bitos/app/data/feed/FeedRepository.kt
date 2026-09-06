@@ -110,6 +110,10 @@ data class FeedUiState(
     val threads: Map<String, List<space.bitos.core.feed.ThreadItem>> = emptyMap(),
     /** Current optimistic + relay-reconciled follow set. */
     val following: Set<String> = emptySet(),
+    /** Derived follower set: kind-3 heads by other authors that p-tag the
+     *  account (shared `FollowerIndex` newest-head rule). Relay-derived,
+     *  never canonical; refreshed with the You account heads. */
+    val followers: Set<String> = emptySet(),
     /** Saved event ids from the account's NIP-51 list (optimistic + relay). */
     val bookmarkedIds: Set<String> = emptySet(),
     /** APP-015 saved notes (newest-saved first; window + by-id refetch). */
@@ -172,6 +176,8 @@ class FeedRepository(
     private var blockedPubkeys: Set<String> = emptySet()
     private val blockCandidates = mutableListOf<NostrEvent>()
     private var followingSubscribed = false
+    /** Shared newest-head-per-follower projection backing [FeedUiState.followers]. */
+    private val followerIndex = space.bitos.core.model.FollowerIndex()
     private val commentThreads = mutableMapOf<String, LinkedHashMap<String, FeedNote>>()
 
     /** APP-007 Chain: fetched remix ancestors (bounded; tags feed the walk). */
@@ -302,7 +308,8 @@ class FeedRepository(
                         val event = gated.event
                         val relaySubscriptionId = gated.subscriptionId
                         when {
-                            event.kind == NostrKinds.CONTACT_LIST -> absorbContactList(event)
+                            event.kind == NostrKinds.CONTACT_LIST ->
+                                if (event.pubkey.value == accountPubkey) absorbContactList(event) else absorbFollowerHead(event)
                             event.kind == space.bitos.core.model.BookmarkList.KIND -> absorbBookmarkList(event)
                             event.kind == space.bitos.core.model.BlockList.KIND -> absorbBlockList(event)
                             event.kind == space.bitos.core.model.ZapReceipt.RECEIPT_KIND -> absorbZapReceipt(event)
@@ -717,8 +724,7 @@ class FeedRepository(
 
     /** Loads zap receipts for one note (NIP-01 tagged #e filter). */
     fun loadZaps(targetEventId: String) {
-        val filter = ZAP_FILTER_PREFIX + targetEventId + ZAP_FILTER_SUFFIX
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-zaps-$targetEventId".take(64), filter))
+        pool.broadcast(bridge.zapReceiptsRequest("bitos-zaps-$targetEventId".take(64), targetEventId))
     }
 
     private fun absorbZapReceipt(event: NostrEvent) {
@@ -808,16 +814,10 @@ class FeedRepository(
         if (commentThreads.size > COMMENT_TARGETS_MAX) {
             commentThreads.remove(commentThreads.keys.first())
         }
-        val filter = COMMENT_FILTER_PREFIX + targetEventId + COMMENT_FILTER_SUFFIX
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-comments-$targetEventId".take(64), filter))
+        pool.broadcast(bridge.commentsRequest("bitos-comments-$targetEventId".take(64), targetEventId))
         // NIP-22 companion REQ: uppercase-`E` rooted comments are invisible
         // to the plain `#e` filter (relay tag filters are case-sensitive).
-        pool.broadcast(
-            NostrEventCodec.encodeRequest(
-                "bitos-comments-e-$targetEventId".take(64),
-                COMMENT_ROOT_FILTER_PREFIX + targetEventId + COMMENT_FILTER_SUFFIX,
-            )
-        )
+        pool.broadcast(bridge.commentsRootRequest("bitos-comments-e-$targetEventId".take(64), targetEventId))
         publishFromIntent()
     }
 
@@ -839,6 +839,8 @@ class FeedRepository(
         accountPubkey = pubkey
         lastActivatedAccount = pubkey
         followingAuthors.clear()
+        // Derived follower projection is scoped to one identity.
+        followerIndex.clear()
         contactCandidates.clear()
         bookmarkCandidates.clear()
         bookmarked.clear()
@@ -854,6 +856,7 @@ class FeedRepository(
         mutableState.value = mutableState.value.copy(
             accountPubkey = pubkey,
             followingResolved = pubkey == null,
+            followers = emptySet(),
         )
         if (pubkey != null) {
             // Restore runs on the ordered intent lane: the projection store
@@ -882,6 +885,9 @@ class FeedRepository(
                 requestContactHead(pubkey)
                 requestBookmarkHead(pubkey)
                 requestBlockHead(pubkey)
+                // Followers are per-identity derived state; the You stat row
+                // and its sheet re-request with every account-head refresh.
+                requestFollowers(pubkey)
                 publishState()
             }
         }
@@ -896,21 +902,24 @@ class FeedRepository(
     // `AccountBootstrap` budget, reset when connectivity grows).
 
     private fun requestContactHead(pubkey: String) {
-        pool.broadcast(
-            NostrEventCodec.encodeRequest(
-                "bitos-contacts",
-                CONTACT_FILTER_PREFIX + pubkey + CONTACT_FILTER_SUFFIX,
-            ),
-        )
+        // Shared bridge builds the filter (hand-concatenated JSON here once
+        // emitted an UNQUOTED authors array — invalid JSON the relay silently
+        // dropped, leaving the You Following count stuck at zero).
+        pool.broadcast(bridge.contactListRequest("bitos-contacts", pubkey))
+    }
+
+    /**
+     * Followers head (derived projection): kind-3 events by other authors
+     * that p-tag the account. Same one-shot REQ + close discipline as the
+     * other account heads; the shared `FollowerIndex` merges the verified
+     * frames (newest head per follower wins, unfollows reconcile).
+     */
+    private fun requestFollowers(pubkey: String) {
+        broadcastOneShot(bridge.followersRequest("bitos-followers", pubkey), "bitos-followers")
     }
 
     private fun requestBookmarkHead(pubkey: String) {
-        pool.broadcast(
-            NostrEventCodec.encodeRequest(
-                "bitos-bookmarks",
-                BOOKMARK_FILTER_PREFIX + pubkey + BOOKMARK_FILTER_SUFFIX,
-            ),
-        )
+        pool.broadcast(bridge.bookmarkListRequest("bitos-bookmarks", pubkey))
     }
 
     private fun requestBlockHead(pubkey: String) {
@@ -1346,6 +1355,24 @@ class FeedRepository(
         if (!deferPublish) publishState()
     }
 
+    /**
+     * Follower head absorption: a verified kind-3 authored by someone other
+     * than the active account. The shared `FollowerIndex` applies the
+     * newest-head-per-follower rule (a newer list without our p-tag is an
+     * unfollow); the UI projection only moves when that set changed.
+     */
+    private fun absorbFollowerHead(event: NostrEvent) {
+        val account = accountPubkey ?: return
+        if (!followerIndex.absorb(event, account)) return
+        val followers = followerIndex.pubkeys()
+        // Resolve kind-0 metadata for connection rows (enqueueProfile skips
+        // already-resolved pubkeys; the fan-in stays bounded).
+        followers.forEach(::enqueueProfile)
+        mutableState.value = mutableState.value.copy(followers = followers.toSet())
+        // A followers page can land as a relay burst — coalesce the repaint.
+        requestPublish()
+    }
+
     private fun cacheContactHead(event: NostrEvent) {
         if (event.kind != NostrKinds.CONTACT_LIST) return
         val existing = cachedContactHeads[event.pubkey.value]
@@ -1388,15 +1415,16 @@ class FeedRepository(
     private fun subscribeFollowing() {
         if (followingSubscribed || followingAuthors.isEmpty()) return
         followingSubscribed = true
-        // Chunked filters (100 authors each): several relays cap author-array
-        // length and would silently truncate a single 200-author filter.
-        val filters = followingAuthors.take(ContactList.MAX_FOLLOWS)
-            .chunked(FOLLOWING_FILTER_AUTHORS)
-            .map { authors ->
-                val joined = authors.joinToString(prefix = "[\"", separator = "\",\"", postfix = "\"]")
-                FOLLOWING_FILTER_PREFIX + joined + FOLLOWING_FILTER_SUFFIX
-            }
-        pool.broadcast(NostrEventCodec.encodeRequest("bitos-following", filters))
+        // Shared bridge builds the chunked filters (100 authors each — relays
+        // cap author-array length). The hand-concatenated variant double-opened
+        // the authors array (`["["…`) and emitted invalid JSON the relays
+        // silently dropped, so the Following timeline never loaded.
+        pool.broadcast(
+            bridge.followingRequest(
+                "bitos-following",
+                followingAuthors.take(ContactList.MAX_FOLLOWS).toList(),
+            )
+        )
     }
 
     private fun absorbProfile(event: NostrEvent) {
@@ -1602,6 +1630,9 @@ class FeedRepository(
         }
         requestProfile(pubkey, force = true)
         requestContactHead(pubkey)
+        // The You stat row renders following AND follower; one entry refresh
+        // re-asks for both heads.
+        requestFollowers(pubkey)
     }
 
     /** One-shot REQ discipline: a pure head/lookup fetch has no live
@@ -1805,21 +1836,7 @@ class FeedRepository(
 
         /** Two consecutive all-duplicate pages = relays exhausted for now. */
         const val OLDER_EMPTY_EXHAUST = 2
-        const val CONTACT_FILTER_PREFIX = """{"kinds":[3],"authors":["""
-        const val CONTACT_FILTER_SUFFIX = """],"limit":1}"""
-        /** Authors per following filter chunk (relay author-cap headroom). */
-        const val FOLLOWING_FILTER_AUTHORS = 100
-        const val FOLLOWING_FILTER_PREFIX = """{"kinds":[1,21,22],"authors":[""""
-        const val FOLLOWING_FILTER_SUFFIX = """],"limit":40}"""
-        const val COMMENT_FILTER_PREFIX = """{"kinds":[1,1111,7,6,9735],"#e":["""
-    /** NIP-22 companion: kind-1111 comments root-tagged with UPPERCASE `E`. */
-    const val COMMENT_ROOT_FILTER_PREFIX = """{"kinds":[1111],"#E":["""
-        const val BOOKMARK_FILTER_PREFIX = """{"kinds":[30003],"authors":["""
-        const val BOOKMARK_FILTER_SUFFIX = """],"#d":[""],"limit":1}"""
-        const val ZAP_FILTER_PREFIX = """{"kinds":[9735],"#e":["""
-        const val ZAP_FILTER_SUFFIX = """],"limit":50}"""
         const val ZAP_TARGETS_MAX = 16
-        const val COMMENT_FILTER_SUFFIX = """],"limit":50}"""
         const val COMMENT_TARGETS_MAX = 16
         /** APP-008 poll vote window bound (matches the thread cache). */
         const val POLL_TARGETS_MAX = 16

@@ -121,7 +121,11 @@ struct ProfileView: View {
         }) {
             connectionsSheet
         }
-        .sheet(isPresented: $showFollowersInfo) {
+        .sheet(isPresented: $showFollowersInfo, onDismiss: {
+            guard let pubkey = pendingFollowingProfilePubkey else { return }
+            pendingFollowingProfilePubkey = nil
+            followingProfilePubkey = pubkey
+        }) {
             followersInfoSheet
         }
         .fullScreenCover(isPresented: Binding(
@@ -321,7 +325,9 @@ struct ProfileView: View {
                 .accessibilityLabel("Following connections")
                 Spacer()
                 Button { showFollowersInfo = true } label: {
-                    stat("Followers", "—")
+                    // Derived from relay kind-3 heads that p-tag us (shared
+                    // `FollowerIndex` rule) — refetched with the You heads.
+                    stat("Followers", FeedFormat.count(feed.followers.count))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Followers information")
@@ -396,52 +402,60 @@ struct ProfileView: View {
         .padding(.horizontal, BitOSTheme.Spacing.base)
     }
 
-    private var connectionsSheet: some View {
-        NavigationStack {
-            List(Array(environment.feedStore.following).sorted(), id: \.self) { pubkey in
-                let profile = environment.feedStore.profiles[pubkey]
-                Button {
-                    pendingFollowingProfilePubkey = pubkey
-                    showFollowing = false
-                } label: {
-                    HStack(spacing: 12) {
-                        HexAvatarView(
-                            pubkey: pubkey,
-                            size: 42,
-                            imageURL: safeProfilePictureURL(profile?.picture),
-                            label: profile?.bestDisplayName,
-                            hasLightning: !(profile?.lud16 ?? "").isEmpty
-                        )
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .lineLimit(1)
-                                if !(profile?.nip05 ?? "").isEmpty {
-                                    Image(systemName: AppIcons.checkCircle)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(BitOSTheme.cyan)
-                                }
-                                if !(profile?.lud16 ?? "").isEmpty {
-                                    AppIcons.image(for: AppIcons.zap)
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(BitOSTheme.zap)
-                                }
+    /// Shared connection rows (Following / Followers sheets): avatar, display
+    /// name, NIP-05 and lightning affordances; tap opens the author page.
+    @ViewBuilder
+    private func connectionsList(_ pubkeys: [String], emptyTitle: String) -> some View {
+        List(pubkeys, id: \.self) { pubkey in
+            let profile = environment.feedStore.profiles[pubkey]
+            Button {
+                pendingFollowingProfilePubkey = pubkey
+                showFollowing = false
+                showFollowersInfo = false
+            } label: {
+                HStack(spacing: 12) {
+                    HexAvatarView(
+                        pubkey: pubkey,
+                        size: 42,
+                        imageURL: safeProfilePictureURL(profile?.picture),
+                        label: profile?.bestDisplayName,
+                        hasLightning: !(profile?.lud16 ?? "").isEmpty
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey))
+                                .font(.system(size: 15, weight: .semibold))
+                                .lineLimit(1)
+                            if !(profile?.nip05 ?? "").isEmpty {
+                                Image(systemName: AppIcons.checkCircle)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.cyan)
                             }
-                            if let name = profile?.name, !name.isEmpty {
-                                Text("@\(name)").font(.system(size: 12)).foregroundStyle(BitOSTheme.textSecondary)
+                            if !(profile?.lud16 ?? "").isEmpty {
+                                AppIcons.image(for: AppIcons.zap)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(BitOSTheme.zap)
                             }
+                        }
+                        if let name = profile?.name, !name.isEmpty {
+                            Text("@\(name)").font(.system(size: 12)).foregroundStyle(BitOSTheme.textSecondary)
                         }
                     }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey)) profile")
             }
-            .overlay {
-                if environment.feedStore.following.isEmpty {
-                    ContentUnavailableView("No following yet", systemImage: "person.2", description: Text("Follow creators to build your timeline."))
-                }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(pubkey)) profile")
+        }
+        .overlay {
+            if pubkeys.isEmpty {
+                ContentUnavailableView(emptyTitle, systemImage: "person.2", description: Text("Profiles appear here as relays answer."))
             }
+        }
+    }
+
+    private var connectionsSheet: some View {
+        NavigationStack {
+            connectionsList(Array(environment.feedStore.following).sorted(), emptyTitle: "No following yet")
             .safeAreaInset(edge: .top) {
                 if environment.feedStore.isRefreshingFollowingProfiles {
                     Label("Loading profile details from relays…", systemImage: "arrow.triangle.2.circlepath")
@@ -461,16 +475,29 @@ struct ProfileView: View {
         }
     }
 
+    /// Followers sheet: the derived follower projection (kind-3 heads that
+    /// p-tag us) with the same row treatment as Following. The footnote keeps
+    /// the honest caveat — the count reflects connected relays, not a
+    /// canonical total.
     private var followersInfoSheet: some View {
-        VStack(spacing: 12) {
-            Text("Followers").font(.system(size: 18, weight: .bold))
-            Text("Follower lists are not a canonical Nostr profile field. Connected relays may omit unfollows or older contact lists, so BitOS does not show an unreliable count.")
-                .font(.system(size: 14))
-                .foregroundStyle(BitOSTheme.textSecondary)
-                .multilineTextAlignment(.center)
+        NavigationStack {
+            connectionsList(Array(environment.feedStore.followers).sorted(), emptyTitle: "No followers yet")
+            .safeAreaInset(edge: .bottom) {
+                Text("Derived from contact lists on your connected relays; other relays may know more.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(BitOSTheme.background)
+            }
+            .navigationTitle("Followers")
+            .presentationDetents([.medium, .large])
+            .task {
+                environment.feedStore.refreshFollowerProfiles()
+            }
         }
-        .padding(24)
-        .presentationDetents([.height(230)])
     }
 
     private func chip(icon: String, label: String, foreground: Color) -> some View {

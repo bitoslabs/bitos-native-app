@@ -1,5 +1,8 @@
 package space.bitos.core.model
 
+import space.bitos.core.nostr.Nip27
+import space.bitos.core.nostr.RichToken
+
 /**
  * Notification extraction from verified events (SOC-005). One event maps to
  * at most one notification targeting the account; extraction is bounded and
@@ -20,6 +23,9 @@ enum class NotificationKind { REPLY, MENTION, REACTION, REPOST, ZAP, FOLLOW }
 
 object NotificationExtractor {
 
+    /** Row-summary bound (chars) — persisted/window schemas stay size-bounded. */
+    const val SUMMARY_MAX = 120
+
     /**
      * Extracts a notification for [accountPubkey] from a verified event.
      * Returns null when the event does not target the account. Classification
@@ -36,7 +42,7 @@ object NotificationExtractor {
         if (!tagsTargetAccount && event.kind != ZapReceipt.RECEIPT_KIND) return null
 
         val eventTags = event.tags.filter { it.firstOrNull() == "e" && !it.getOrNull(1).isNullOrEmpty() }
-        val summary = event.content.trim().let { if (it.length > 120) it.take(119) + "…" else it }
+        val summary = plainSummary(event.content)
 
         return when (event.kind) {
             NostrKinds.SHORT_TEXT_NOTE -> {
@@ -117,6 +123,28 @@ object NotificationExtractor {
             }
             else -> null
         }
+    }
+
+    /**
+     * Plain-text summary shown in list rows: links (media included) and
+     * nostr entities are stripped — the platform renders media as tiles, so
+     * a raw `https://…/img1.gif` must never surface as row text. Same token
+     * rule as `OriginNotes` excerpts; hashtags survive, output is bounded.
+     */
+    private fun plainSummary(content: String): String {
+        val builder = StringBuilder()
+        for (token in Nip27.tokenize(content)) {
+            when (token) {
+                is RichToken.Link -> Unit // URLs render as media/tiles, not text
+                is RichToken.Nostr -> Unit // entity text dropped; names need profile data
+                is RichToken.Hashtag -> builder.append('#').append(token.tag).append(' ')
+                is RichToken.Text -> builder.append(token.value)
+            }
+        }
+        return builder.toString()
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .let { if (it.length > SUMMARY_MAX) it.take(SUMMARY_MAX - 1) + "…" else it }
     }
 
     /** Thread-targeted reply detection: `e` tags carrying root/reply markers. */

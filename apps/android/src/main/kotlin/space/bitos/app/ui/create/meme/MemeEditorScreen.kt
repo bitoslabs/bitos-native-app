@@ -2049,6 +2049,7 @@ fun MemeEditorScreen(
                     showLayers = false
                 },
                 onDelete = { state.removeOverlay(it) },
+                onMove = { id, delta -> state.moveOverlay(id, delta) },
                 onInsert = {
                     showLayers = false
                     layerPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -3183,6 +3184,7 @@ private fun PerModeBar(
         } else {
             ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
             ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
+            ClipToolButton(AppIcons.AppsGrid, "Layers") { onOpenLayers() }
             ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
             ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
         }
@@ -6287,9 +6289,11 @@ private fun SuiteToolChip(
 }
 
 /**
- * Layers sheet (source insert management): every IMAGE overlay with its
- * thumbnail, select and delete; "Insert image…" opens the picker. GIF
- * inserts paint their first frame (V1 semantics, said out loud).
+ * Layers sheet (stack management): every overlay top-first — the first row
+ * paints in front — with its badge, select, delete and ±1 stack moves
+ * (the shared ReorderOverlay command, one undo step each). "Insert
+ * image…" opens the picker; new layers land on top, same as video mode.
+ * GIF inserts paint their first frame (V1 semantics, said out loud).
  */
 @Composable
 private fun LayersSheetContent(
@@ -6298,26 +6302,30 @@ private fun LayersSheetContent(
     selectedId: String?,
     onSelect: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onMove: (id: String, delta: Int) -> Unit,
     onInsert: () -> Unit,
 ) {
-    val layers = project.overlays.filter { it.kind == MemeOverlayKind.IMAGE }
+    // Paint order = list order, so the display runs reversed: row 0 is the
+    // front; "up" moves an overlay toward the front (+1 paint slot).
+    val stack = project.overlays.asReversed()
     Column(Modifier.padding(BitOSSpacing.base)) {
         Text("Layers", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
         Text(
-            "Insert image or GIF sources over the clip (≤${MemeProjectContract.MAX_IMAGE_LAYERS}). GIFs paint their first frame.",
+            "Top of the list paints in front. New layers land on top — restack with the arrows " +
+                "(image inserts ≤${MemeProjectContract.MAX_IMAGE_LAYERS}; GIFs paint their first frame).",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
             modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
         )
-        if (layers.isEmpty()) {
+        if (stack.isEmpty()) {
             Text(
-                "No layers yet — insert a source to stack it over the clip.",
+                "No layers yet — add text, stickers or image sources to stack them.",
                 style = MaterialTheme.typography.bodySmall,
                 color = BitOSColors.textSecondary,
                 modifier = Modifier.padding(bottom = BitOSSpacing.sm),
             )
         }
-        layers.forEach { layer ->
+        stack.forEachIndexed { position, layer ->
             val asset = layer.assetId?.let { id -> assets.firstOrNull { it.id == id } }
             Row(
                 Modifier
@@ -6332,29 +6340,76 @@ private fun LayersSheetContent(
                     border = if (layer.id == selectedId) BorderStroke(1.dp, BitOSColors.primary) else null,
                     modifier = Modifier.size(44.dp),
                 ) {
-                    coil.compose.AsyncImage(
-                        model = asset?.uri,
-                        contentDescription = "Layer ${layer.id}",
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    when {
+                        layer.kind == MemeOverlayKind.IMAGE && asset != null -> coil.compose.AsyncImage(
+                            model = asset.uri,
+                            contentDescription = "Layer ${layer.id}",
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        layer.kind == MemeOverlayKind.IMAGE -> Icon(
+                            AppIcons.Photo,
+                            contentDescription = null,
+                            tint = BitOSColors.textTertiary,
+                            modifier = Modifier.padding(10.dp).fillMaxSize(),
+                        )
+                        layer.kind == MemeOverlayKind.STICKER -> SolarStudioIconImage(
+                            SolarStudioIcon.Sticker,
+                            contentDescription = null,
+                            tint = BitOSColors.textTertiary,
+                            modifier = Modifier.padding(10.dp).fillMaxSize(),
+                        )
+                        else -> Icon(
+                            AppIcons.TextGlyph,
+                            contentDescription = null,
+                            tint = BitOSColors.textTertiary,
+                            modifier = Modifier.padding(10.dp).fillMaxSize(),
+                        )
+                    }
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Layer ${layer.assetId ?: "?"}",
+                        when (layer.kind) {
+                            MemeOverlayKind.IMAGE -> "Layer ${layer.assetId ?: "?"}"
+                            MemeOverlayKind.STICKER -> "Sticker"
+                            MemeOverlayKind.TEXT -> "Text"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.W600,
                     )
                     Text(
-                        if (layer.startMs != null || layer.endMs != null) {
-                            "${suiteClock(layer.startMs ?: 0)} – ${suiteClock(layer.endMs ?: 0)}"
-                        } else {
-                            "always visible"
+                        when {
+                            layer.kind == MemeOverlayKind.IMAGE && (layer.startMs != null || layer.endMs != null) ->
+                                "${suiteClock(layer.startMs ?: 0)} – ${suiteClock(layer.endMs ?: 0)}"
+                            layer.kind == MemeOverlayKind.IMAGE -> "always visible"
+                            layer.kind == MemeOverlayKind.TEXT ->
+                                layer.text.ifEmpty { "empty caption" }
+                            else -> "tap to place"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = BitOSColors.textSecondary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                 }
+                Icon(
+                    AppIcons.NudgeUp,
+                    contentDescription = null,
+                    tint = if (position > 0) BitOSColors.textPrimary else BitOSColors.textTertiary,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clickable(enabled = position > 0) { onMove(layer.id, 1) }
+                        .semantics { contentDescription = "Move to front one slot" },
+                )
+                Icon(
+                    AppIcons.NudgeDown,
+                    contentDescription = null,
+                    tint = if (position < stack.lastIndex) BitOSColors.textPrimary else BitOSColors.textTertiary,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clickable(enabled = position < stack.lastIndex) { onMove(layer.id, -1) }
+                        .semantics { contentDescription = "Move to back one slot" },
+                )
                 androidx.compose.material3.TextButton(onClick = { onSelect(layer.id) }) {
                     Text("Select", color = BitOSColors.primary, fontWeight = androidx.compose.ui.text.font.FontWeight.W600)
                 }

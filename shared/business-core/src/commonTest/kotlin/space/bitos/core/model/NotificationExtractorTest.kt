@@ -208,4 +208,43 @@ class NotificationExtractorTest {
         assertEquals(120, mention.summary.length)
         assertEquals("…", mention.summary.last().toString())
     }
+
+    @Test
+    fun summaryStripsMediaLinksSoRowsNeverShowRawUrls() {
+        // Media-only note: the platform renders tiles; the summary is empty.
+        val mediaOnly = NotificationExtractor.extract(
+            event(1, listOf(listOf("p", me)), "https://xxx.com/img1.gif https://yyy.com/clip.mp4"), me,
+        )!!
+        assertEquals("", mediaOnly.summary)
+
+        // Mixed content: text survives, the media link is dropped.
+        val mixed = NotificationExtractor.extract(
+            event(1, listOf(listOf("p", me)), "look at this https://xxx.com/pic.png lol"), me,
+        )!!
+        assertEquals("look at this lol", mixed.summary)
+
+        // Non-media links are stripped too (same rule as origin excerpts).
+        val article = NotificationExtractor.extract(
+            event(1, listOf(listOf("p", me)), "read https://example.com/post/42 now"), me,
+        )!!
+        assertEquals("read now", article.summary)
+    }
+
+    @Test
+    fun summaryStripsNostrEntitiesAndKeepsHashtags() {
+        val npub = space.bitos.core.identity.NostrKeyCodec.npub(me)!!
+        val mention = NotificationExtractor.extract(
+            event(1, listOf(listOf("p", me)), "hi nostr:$npub nice #nostr post"), me,
+        )!!
+        assertEquals("hi nice #nostr post", mention.summary)
+    }
+
+    @Test
+    fun mediaOnlySummaryStillFallsBackForReactions() {
+        // Reaction content is an emoji payload; sanitization keeps it intact.
+        val reaction = NotificationExtractor.extract(
+            event(7, listOf(listOf("e", targetId), listOf("p", me)), "🔥"), me,
+        )!!
+        assertEquals("🔥", reaction.summary)
+    }
 }

@@ -182,6 +182,10 @@ User stories:
    same thread. Opening an image uses a dark, full-screen lightbox that fits
    the complete image inside the viewport (never crops it); multi-image posts
    show a position label and previous/next controls, disabled at either end.
+   The shared attachment extractor supports both bare links and Markdown
+   links; an allowlisted image/video extension in either the path or a
+   `format`/`fm`/`ext` query value is an inline attachment (for example,
+   X's `?format=jpg`). The Markdown wrapper never appears as body text.
 7. **Own notes are deletable (NIP-09)** — the shared core composes bounded
    kind-5 deletions (`composeDeletion`, ≤50 targets, hex-validated); the
    thread sheet offers Delete on the root card and reply rows for the
@@ -239,7 +243,8 @@ Comment bottom-sheet anatomy (both platforms):
 Home -> poster/first frame -> autoplay visible Bitz
      -> the stories rail is the list's FIRST item (web parity: it scrolls away
         with the feed; it always starts with a Create story card, followed by
-        received stories, a Public stories marker, and a bounded relay-wide
+        the active account's story (when present), followed stories newest-first,
+        a Public stories marker, and a bounded (20-event) relay-wide
         public-story sample; re-tap Home scrolls back to it)
      -> story tiles frame the hex avatar in a matching HEX ring (web
         `story-ring-frame hex-clip`: gradient = unseen, muted = seen),
@@ -418,7 +423,15 @@ second source strip in the basic editor) — timeline clip edits (split, delete,
 move, mute/volume, trim, per-clip look, picker-added clips) are UNDOABLE and
 interleave correctly with overlay/style edits through one undo affordance
 (seeding a session from the camera is not an undo step), and a
-per-mode bottom bar. Post details
+per-mode bottom bar. Layer stacking is uniform across modes: paint order is
+the overlay list order and adding an image always lands ON TOP — video-mode
+inserts and image mode's multi-pick (first pick = background, later picks =
+draggable image layers) use the same IMAGE overlay binding. The Layers sheet
+(video Overlay tool, image-mode Layers tool) manages the WHOLE stack: every
+text/sticker/image row, top-first (row 1 paints in front), with select,
+delete, insert and ±1 stack moves (the shared `reorder` command — clamped,
+one undo step per move; arrows stay reachable without drag gestures per the
+accessibility rule). Post details
 collects caption, explicit t-tags (≤ 8), the cover row (video, with an Edit
 action that drops back onto the editor stage's Set cover), the audience row,
 the Zap settings switch (DEFAULT OFF — viewers can zap this post; OFF stamps
@@ -587,6 +600,13 @@ on both platforms:
   quoted note, zap targets prefer the receipt's second `e` tag, titles name up
   to two actors ("A, B and 3 others"), and mention/reply cards render the
   note's own cleaned excerpt plus a media strip behind the NIP-36 cover.
+- Media links never surface as row text (shared extractor rule): notification
+  summaries strip links and nostr entities via the NIP-27 tokenizer, so a
+  media-only note renders its excerpt empty with the media strip carrying the
+  row. Compact zap/like/repost and zap-out rows show a "Media" stand-in quote
+  when the verified origin has media but no text, and row taps pass the
+  origin's media URLs into the thread sheet so the media grid renders there
+  instead of raw link text.
 
 ## 12. Visual system
 
