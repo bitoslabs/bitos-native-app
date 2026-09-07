@@ -33,7 +33,6 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -125,7 +124,6 @@ fun FeedScreen(
     viewModel: HomeViewModel,
     identityViewModel: IdentityViewModel,
     notePublisher: NotePublisher,
-    mediaPublishViewModel: MediaPublishViewModel,
     authorRepository: space.bitos.app.data.feed.AuthorRepository,
     settingsStore: space.bitos.app.data.settings.SettingsStore,
     videoOnly: Boolean = false,
@@ -154,8 +152,6 @@ fun FeedScreen(
     val actions by viewModel.localActions.collectAsStateWithLifecycle()
     val publishState by notePublisher.state.collectAsStateWithLifecycle()
     var showComposer by rememberSaveable { mutableStateOf(false) }
-    var showImportMedia by rememberSaveable { mutableStateOf(false) }
-    val mediaState by mediaPublishViewModel.state.collectAsStateWithLifecycle()
     var showCommentsFor by androidx.compose.runtime.remember { mutableStateOf<FeedNote?>(null) }
     var zapTarget by androidx.compose.runtime.remember { mutableStateOf<FeedNote?>(null) }
     /** External-link confirm sheet (never opens the browser unattended). */
@@ -298,7 +294,6 @@ fun FeedScreen(
                 onOpenDiscover = onOpenDiscover,
                 onOpenHub = onOpenHub,
                 onOpenCreate = onOpenCreate,
-                onImportMedia = { showImportMedia = true },
             )
             // Float within the feed area, below (not over) the tabs. This
             // keeps the control visible while preserving tab hit targets.
@@ -736,25 +731,6 @@ fun FeedScreen(
                 onDismiss = {
                     notePublisher.dismiss()
                     showComposer = false
-                },
-            )
-        }
-    }
-
-    // APP-019 quick entry: gallery import → hash-verified upload → kind-22
-    // (feed-level fast path; opened from the app-bar photo icon — iOS
-    // HomeView parity. The studio Create hub routes imports into the editor.)
-    if (showImportMedia) {
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showImportMedia = false }) {
-            ImportMediaContent(
-                state = mediaState,
-                onPublish = { caption, altText, contentWarning ->
-                    mediaPublishViewModel.publish(caption, altText, contentWarning)
-                },
-                onPick = { uri, _ -> mediaPublishViewModel.mediaPicked(uri) },
-                onCancel = {
-                    mediaPublishViewModel.cancel()
-                    showImportMedia = false
                 },
             )
         }
@@ -1540,10 +1516,6 @@ private fun FeedHeader(
     onOpenDiscover: () -> Unit,
     onOpenHub: () -> Unit,
     onOpenCreate: () -> Unit = {},
-    /** Quick gallery import → kind-22 publish sheet — iOS Home app-bar
-     *  photo-icon parity (the studio Create hub routes into the editor
-     *  instead; the feed keeps the no-editing fast path). */
-    onImportMedia: () -> Unit = {},
 ) {
     var filterExpanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Column {
@@ -1587,12 +1559,6 @@ private fun FeedHeader(
             // (record Bitz / import media) instead of nothing.
             IconButton(onClick = onOpenCreate) {
                 Icon(AppIcons.Camera, contentDescription = "Create video", tint = BitOSColors.textSecondary)
-            }
-            // iOS app-bar parity: quick import → publish without editing
-            // (HomeView “Import and publish a video”). The header stays
-            // feed-focused: the studio editor path stays in the Create hub.
-            IconButton(onClick = onImportMedia) {
-                Icon(AppIcons.Photo, contentDescription = "Import and publish a video", tint = BitOSColors.textSecondary)
             }
             // Solar widget-linear opens the account hub.
             IconButton(onClick = onOpenHub) {

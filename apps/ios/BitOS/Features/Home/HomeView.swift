@@ -54,7 +54,6 @@ struct HomeView: View {
     @State private var showStoryComposer = false
     /** APP-006: story zap target (author + the slide the 9735 tags). */
     @State private var storyZapTarget: StoryZapTarget?
-    @State private var showMediaImport = false
     /** Create hub (record/import/studio) from the app-bar camera. */
     @State private var showCreateHub = false
     @State private var authorTarget: String?
@@ -406,15 +405,6 @@ struct HomeView: View {
                     .frame(width: 34, height: 34)
             }
             .accessibilityLabel("Create")
-            Button {
-                showMediaImport = true
-            } label: {
-                AppIcons.image(for: AppIcons.photo)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(BitOSTheme.textSecondary)
-                    .frame(width: 34, height: 34)
-            }
-            .accessibilityLabel("Import and publish a video")
         }
     }
 
@@ -648,11 +638,6 @@ struct HomeView: View {
                 )
                 .environment(identity)
                 .presentationDetents([.medium, .large])
-            }
-            .sheet(isPresented: $showMediaImport) {
-                ImportMediaSheet(onClose: { showMediaImport = false })
-                    .environment(identity)
-                    .presentationDetents([.medium, .large])
             }
             // Create hub from the app-bar camera (BitzView presentation parity).
             .fullScreenCover(isPresented: $showCreateHub) {

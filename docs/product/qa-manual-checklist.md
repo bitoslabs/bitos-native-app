@@ -41,14 +41,13 @@
 | 4 | Deny camera permission → "Import from library instead" | Same picker → editor path works without the camera |
 | 5 | Publish from the editor | Post details → render → upload → sign machine; note appears in the feed |
 
-## S3 — Feed quick-import (the no-editing fast path)
+## S3 — Feed app-bar (no direct-publish entry; removed 2026-09-07)
 
 | # | Step | Expected |
 |---|---|---|
-| 1 | Home app-bar photo icon | "New video" bottom sheet on BOTH platforms |
-| 2 | Pick → caption/alt/CW → Upload & publish | Stage feedback at every step; "Published ✓" |
-| 3 | Oversized/unreadable pick | Named failure surfaced; dismiss keeps the feed stable |
-| 4 | Bitz rail header | NO import entry (both platforms) |
+| 1 | Home app-bar | Filter/search/camera/hub icons only — NO photo "Import and publish" icon on either platform |
+| 2 | App-bar camera icon | Create hub opens; "Import media" routes through the studio editor (S1 path) |
+| 3 | Bitz rail header | NO import entry (both platforms) |
 
 ## S4 — Create hub layout & drafts
 

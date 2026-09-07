@@ -423,6 +423,25 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-07 — **Feed quick-import REMOVED** (user ask; reverses the
+  same-day "Android feed quick-import parity" entry below): the Home
+  app-bar photo icon ("Import and publish a video") is gone on BOTH
+  platforms, and with it the feed's no-editing kind-22 fast path — the
+  division of labor that split FEED quick-publish from STUDIO editor is
+  over; every publish now goes through the one editor pipeline. Android:
+  `FeedHeader` drops the icon + `onImportMedia`, `FeedScreen` drops the
+  `showImportMedia` sheet, its `mediaPublishViewModel` param and the
+  BitOSApp arg; the dead `ImportMediaContent` composable + CW helpers
+  deleted, `ImportMediaSheet.kt` keeps only the `MediaPublish*`/meme
+  state types (renamed `MediaPublishState.kt` — the VM stays, shared by
+  Create mass-batch + meme editor). iOS: `HomeView` drops the photo
+  button + `ImportMediaSheet` presentation; orphaned
+  `Features/Home/ImportMediaSheet.swift` deleted incl. pbxproj refs.
+  `qa-manual-checklist.md` S3 retargeted to the removal regression.
+  ux-ui-flows §6 + meme-studio-plan §2.1 updated (single entry: camera
+  icon → Create hub). Verified: Android compile + unit suite green;
+  iOS Swift 6 strict-concurrency typecheck 0 errors.
+
 - 2026-09-07 — Manual QA checklist born: `docs/product/qa-manual-checklist.md`
   (+ pyramid tier 0 in `docs/engineering/testing.md`). The shipped flow
   work (Create-hub import → editor, camera rerouting, feed quick-import,

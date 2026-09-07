@@ -1,7 +1,6 @@
 package space.bitos.app.ui.feed
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -18,9 +17,9 @@ import space.bitos.app.data.publish.NotePublisher
 import space.bitos.core.model.Blossom
 
 /**
- * Activity-scoped media publish flow shared by Create (record/import) and
- * Home (import): picked or captured bytes → hash-verified Blossom upload →
- * kind-22 through the receipt machine. All heavy work runs off the main
+ * Activity-scoped meme publish machine shared by the studio editor and the
+ * Create mass-batch flow: rendered bytes → hash-verified Blossom upload →
+ * kind-20/22 through the receipt machine. All heavy work runs off the main
  * thread; failures surface in state, never crash.
  */
 class MediaPublishViewModel(
@@ -32,10 +31,6 @@ class MediaPublishViewModel(
     private val uploader = BlossomUploader()
     private val jobLedger = MemePublishJobStore(application)
 
-    private val mutableState = MutableStateFlow(MediaPublishUiState())
-    val state: StateFlow<MediaPublishUiState> = mutableState.asStateFlow()
-
-    /** MST-017 meme lane — separate flow so the import path stays untouched. */
     private val mutableMemeState = MutableStateFlow(MemePublishUiState())
     val memeState: StateFlow<MemePublishUiState> = mutableMemeState.asStateFlow()
 
@@ -293,24 +288,6 @@ class MediaPublishViewModel(
     private fun parseTags(json: String): List<List<String>> =
         space.bitos.core.store.TagsCodec.decode(json) ?: emptyList()
 
-    /** Reads picked gallery content (bounded) into the flow. */
-    fun mediaPicked(uri: Uri) {
-        val resolver = getApplication<Application>().contentResolver
-        viewModelScope.launch {
-            val picked = withContext(Dispatchers.IO) { readBounded(uri, resolver) }
-            mutableState.value = if (picked != null) {
-                MediaPublishUiState(picked = picked)
-            } else {
-                MediaPublishUiState(failure = "Media exceeds the ${Blossom.MAX_FILE_BYTES / (1024 * 1024)}MB limit or could not be read.")
-            }
-        }
-    }
-
-    fun cancel() {
-        mutableState.value = MediaPublishUiState()
-        mutableMemeState.value = MemePublishUiState()
-    }
-
     /**
      * MST-017 meme publish: rendered PNG bytes → hash-verified Blossom
      * upload → kind-20 picture meme through the same receipt machine. The
@@ -400,46 +377,6 @@ class MediaPublishViewModel(
             }
         }
     }
-
-    /** hash → upload (hash-verified) → kind-22 → sign → relay fan-out. */
-    fun publish(caption: String, altText: String = "", contentWarningReason: String? = null) {
-        val picked = mutableState.value.picked ?: return
-        mutableState.value = MediaPublishUiState(picked = picked, phase = MediaPublishPhase.UPLOADING)
-        viewModelScope.launch {
-            try {
-                val signer = identity.createSigner()
-                    ?: throw BlossomUploader.UploadFailure("Importing needs an identity (Profile tab).")
-                val media = withContext(Dispatchers.IO) {
-                    uploader.upload(picked.bytes, picked.mimeType, signer, DefaultBlossomServer.url)
-                }
-                mutableState.value = MediaPublishUiState(picked = picked, phase = MediaPublishPhase.PUBLISHING)
-                publisher.publishMediaNote(
-                    caption, media, { signer }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
-                    altText, contentWarningReason,
-                )
-                mutableState.value = MediaPublishUiState(phase = MediaPublishPhase.DONE)
-            } catch (failure: Exception) {
-                mutableState.value = MediaPublishUiState(picked = picked, failure = failure.message ?: "Media publish failed.")
-            }
-        }
-    }
-
-    private fun readBounded(uri: Uri, resolver: android.content.ContentResolver): PickedMedia? = runCatching {
-        resolver.openInputStream(uri)?.use { input ->
-            val buffer = java.io.ByteArrayOutputStream()
-            val chunk = ByteArray(64 * 1024)
-            var total = 0L
-            while (true) {
-                val read = input.read(chunk)
-                if (read < 0) break
-                total += read
-                if (total > Blossom.MAX_FILE_BYTES) return null
-                buffer.write(chunk, 0, read)
-            }
-            val mime = resolver.getType(uri) ?: "video/mp4"
-            PickedMedia(buffer.toByteArray(), mime)
-        }
-    }.getOrNull()
 
     companion object {
         fun factory(

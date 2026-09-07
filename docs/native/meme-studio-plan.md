@@ -85,7 +85,7 @@ incl. hash mismatch and relaunch).
 
 | Entry | Today | Becomes |
 | --- | --- | --- |
-| Home app-bar camera (Android) / photo icon (iOS) | iOS opens import sheet directly; no Create route | **Both**: camera icon → Create hub (parity). iOS keeps a long-press → direct import shortcut. |
+| Home app-bar camera (Android) / photo icon (iOS) | iOS opens import sheet directly; no Create route | **Both**: camera icon → Create hub (parity). The direct photo-icon import entry was later removed (2026-09-07) — the editor is the single publish path. |
 | Create hub "Quick MEM" | Dead row | Opens editor with mode picker (Image default). |
 | Bitz header camera | Record Bitz | Unchanged (kind-22 pipeline). |
 | Trending sounds row (APP-021) | Absent | V1.x: "Use sound" seeds a video project (`soundSeed`). |
