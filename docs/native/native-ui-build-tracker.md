@@ -423,6 +423,15 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-07 — Manual QA checklist born: `docs/product/qa-manual-checklist.md`
+  (+ pyramid tier 0 in `docs/engineering/testing.md`). The shipped flow
+  work (Create-hub import → editor, camera rerouting, feed quick-import,
+  hub layout fix) is picker/camera/dialog territory automation cannot
+  reach — S1–S5 pin it on-device with a run log. NOTE: `QA.md` is NOT
+  this — it stays the platform-decision record (`docs/native/README.md`
+  authority #3); a replacement would have broken the doc chain (caught
+  during this change).
+
 - 2026-09-07 — **MST-050 Wave A — "use this sound" contract** (new plan
   doc `docs/product/use-this-sound-plan.md`): TikTok's sound loop,
   bootstrapped from EXISTING bitz audio instead of waiting for the

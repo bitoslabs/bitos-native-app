@@ -2,6 +2,9 @@
 
 ## Test pyramid
 
+0. Manual QA pass on device for the flow layer (system pickers, camera
+   handoffs, dialogs, cross-screen seeding): the checklists live in
+   [`../product/qa-manual-checklist.md`](../product/qa-manual-checklist.md).
 1. Pure BusinessCore/MediaCore unit and property tests: fastest and broadest.
 2. Native adapter contract tests: database, signer, relay, background upload and media bridges.
 3. Feature UI tests: state rendering and user intents.
