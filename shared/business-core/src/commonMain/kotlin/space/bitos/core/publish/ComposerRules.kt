@@ -29,10 +29,11 @@ object ComposerRules {
 
     /** Web COMPOSER_EMOJIS parity (32 quick emoji). */
     val COMPOSER_EMOJIS: List<String> = listOf(
+        "₿", "⚡", "🚀", "🌈", "🌊", "🌟", "🌸",
+        "❤️", "🔥", "✨", "🎉", "💯", "💩", "🐮",
         "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎",
         "🤔", "🥳", "😴", "🤯", "🥺", "😭", "😢", "😡",
         "👍", "👎", "👏", "🙌", "🙏", "💪", "🫂", "👀",
-        "❤️", "🔥", "✨", "⚡", "🎉", "💯", "💩", "🐮",
     )
 
     // ── Character counter (progress-ring presentation rule) ──────────

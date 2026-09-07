@@ -230,6 +230,36 @@ class NotePublisher(
     }
 
     /**
+     * Comment-sheet PoW path: kind-1111 comment with a pre-mined nonce tag
+     * (the mining template carried the same `commentTags` — PowCard
+     * `baseTags`).
+     */
+    fun publishPowCommentWith(
+        content: String,
+        tags: List<List<String>>,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val comment = composer.composeCommentWithPow(
+                signer.publicKeyHex(), content, nonce, targetDifficulty, createdAtSeconds, tags,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(comment, signer, writeRelays)
+        }
+    }
+
+    /**
      * APP-008 composer page PoW path: pre-mined nonce + derived tags (the
      * mining template included the same tags — PowCard `baseTags`).
      */

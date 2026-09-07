@@ -2772,6 +2772,66 @@ class BusinessCoreBridge {
         return composer.publishMessage(note, signatureHex)
     }
 
+    /**
+     * Comment-sheet PoW seam: same `nonce:id` output contract as
+     * [mineTextNotePowWithTags], but the template is the NIP-22 kind-1111
+     * comment built from [tagsJson] (`NoteComposer.commentTags` shape).
+     */
+    fun mineCommentPowWithTags(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        targetDifficulty: Int,
+        startNonce: Long,
+        maxAttempts: Long,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val base = composer.composeCommentWithTags(pubkeyHex, content, tags) ?: return null
+        return space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex,
+            base.createdAtSeconds,
+            base.kind,
+            base.tags,
+            base.content,
+            targetDifficulty,
+            startNonce,
+            maxAttempts,
+        )?.let { "${it.nonce}:${it.idHex}" }
+    }
+
+    /** Canonical id of the pow comment (verification parity for callers). */
+    fun powCommentWithTagsEventId(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        return composer.composeCommentWithPow(pubkeyHex, content, nonce, targetDifficulty, createdAtSeconds, tags)?.idHex
+    }
+
+    /** The ["EVENT", {...}] pow comment frame with the signature attached. */
+    fun powCommentWithTagsPublishMessage(
+        content: String,
+        pubkeyHex: String,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        signatureHex: String,
+        tagsJson: String,
+    ): String? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val note = composer.composeCommentWithPow(pubkeyHex, content, nonce, targetDifficulty, createdAtSeconds, tags) ?: return null
+        return composer.publishMessage(note, signatureHex)
+    }
+
     /** Composes the unsigned kind-1 note and returns its canonical id. */
     fun composeEventId(content: String, pubkeyHex: String, nowSeconds: Long): String? {
 

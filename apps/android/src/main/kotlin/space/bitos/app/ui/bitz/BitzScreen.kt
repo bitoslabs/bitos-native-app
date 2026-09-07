@@ -813,6 +813,9 @@ fun BitzScreen(
                 identityViewModel = identityViewModel,
                 publisherState = publishState,
                 actions = actions,
+                // Immersive pager: the video plays behind the sheet, so the
+                // origin card never repeats it.
+                showOriginCard = false,
                 onLoadComments = viewModel::loadComments,
                 onReply = { text, note, attachments, pow -> viewModel.reply(text, note, attachments, pow) },
                 onLike = viewModel::toggleLike,

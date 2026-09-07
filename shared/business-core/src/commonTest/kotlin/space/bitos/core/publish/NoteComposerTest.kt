@@ -145,4 +145,30 @@ class NoteComposerTest {
         assertEquals(baseTags + listOf(space.bitos.core.nostr.Pow.nonceTag(mined.nonce, target)), note.tags)
         assertTrue(space.bitos.core.nostr.Pow.difficulty(note.idHex) >= target)
     }
+
+    @Test
+    fun powCommentIsKind1111AndReproducesTheMinedIdByteForByte() {
+        // Same contract for NIP-22 comments: the mined template carries the
+        // commentTags base tags, the nonce tag rides last, and the published
+        // kind-1111 id is the mined id.
+        val baseTags = NoteComposer.commentTags(targetEventId = parentId, targetPubkey = author, targetKind = 22, parentEventId = null, parentPubkey = null, content = "great clip #bitz")!!
+        val target = 10
+        val createdAt = 1_710_000_000L
+        val mined = space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher, pubkey, createdAt, 1_111, baseTags, "great clip #bitz", target, 0, 500_000,
+        )!!
+        val comment = composer.composeCommentWithPow(pubkey, "great clip #bitz", mined.nonce, target, createdAt, baseTags)!!
+        assertEquals(1_111, comment.kind)
+        assertEquals(mined.idHex, comment.idHex)
+        assertEquals(baseTags + listOf(space.bitos.core.nostr.Pow.nonceTag(mined.nonce, target)), comment.tags)
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(comment.idHex) >= target)
+    }
+
+    @Test
+    fun powCommentRejectsInvalidInputs() {
+        val tags = listOf(listOf("E", parentId), listOf("P", author))
+        assertNull(composer.composeCommentWithPow(pubkey, "x", 1, 8, 0, tags))
+        assertNull(composer.composeCommentWithPow(pubkey, "  ", 1, 8, 1_700_000_000, tags))
+        assertNull(composer.composeCommentWithPow("NOPE", "x", 1, 8, 1_700_000_000, tags))
+    }
 }

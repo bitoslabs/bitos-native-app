@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -850,14 +852,21 @@ private fun ToolbarButton(
         active -> BitOSColors.primary
         else -> BitOSColors.textSecondary
     }
+    // Round touch feedback: the press paints a secondary-tinted ring that
+    // mirrors the active accent ring, and the ripple stays circular.
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
         if (active) {
             Box(Modifier.size(36.dp).background(BitOSColors.primary.copy(alpha = 0.15f), CircleShape))
+        } else if (pressed && enabled) {
+            Box(Modifier.size(36.dp).background(BitOSColors.textSecondary.copy(alpha = 0.15f), CircleShape))
         }
         Box(
             Modifier
                 .size(44.dp)
-                .clickable(enabled = enabled, onClickLabel = label) { onClick() }
+                .clip(CircleShape)
+                .clickable(interactionSource = interactionSource, enabled = enabled, onClickLabel = label) { onClick() }
                 .semantics { contentDescription = label },
             contentAlignment = Alignment.Center,
         ) {

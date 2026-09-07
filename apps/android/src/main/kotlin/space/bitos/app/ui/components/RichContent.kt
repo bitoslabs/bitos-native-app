@@ -218,9 +218,60 @@ fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String)
 // package); RichContent's former private copy was removed to keep one
 // helper.
 
+/**
+ * imeta video preview tile (comment-sheet origin cards): poster art (or an
+ * elevated tile) with a play glyph; tap opens the fullscreen player. The
+ * URL lives on `FeedNote.video`, not in content links, so [MediaRow] never
+ * sees it — without this tile a Bitz origin card renders an empty body.
+ */
+@Composable
+fun VideoPreviewTile(
+    url: String,
+    posterUrl: String?,
+    modifier: Modifier = Modifier,
+    aspectRatio: Float = 9f / 16f,
+) {
+    var play by remember { mutableStateOf(false) }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
+            .clip(RoundedCornerShape(12.dp))
+            .background(BitOSColors.surfaceElevated)
+            .clickable(onClickLabel = "Play video") { play = true },
+        contentAlignment = Alignment.Center,
+    ) {
+        posterUrl?.let { poster ->
+            coil.compose.AsyncImage(
+                model = poster,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(Color(0x99000000)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(AppIcons.Play, contentDescription = "Play video", tint = Color.White, modifier = Modifier.size(28.dp))
+        }
+    }
+    if (play) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { play = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            FullscreenVideoPlayer(url = url, onDismiss = { play = false })
+        }
+    }
+}
+
 /** Single-file fullscreen player for bare video links (released on close). */
 @Composable
-private fun FullscreenVideoPlayer(url: String, onDismiss: () -> Unit) {
+fun FullscreenVideoPlayer(url: String, onDismiss: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val player = androidx.compose.runtime.remember(url) {
         androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {

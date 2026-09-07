@@ -339,6 +339,49 @@ struct BareVideoPlayerScreen: View {
     }
 }
 
+/// imeta video preview tile (comment-sheet origin cards): poster art (or an
+/// elevated tile) with a play glyph; tap opens the fullscreen player. The
+/// URL lives on `FeedNote.video`, not in content links, so `MediaGrid`
+/// never sees it — without this tile a Bitz origin card renders an empty
+/// body.
+struct VideoPreviewTile: View {
+    let url: String
+    let posterUrl: String?
+    var aspectRatio: CGFloat = 9.0 / 16.0
+    @State private var play = false
+
+    var body: some View {
+        Button {
+            play = true
+        } label: {
+            ZStack {
+                Rectangle().fill(BitOSTheme.surfaceElevated)
+                if let poster = URL(string: posterUrl ?? "") {
+                    AsyncImage(url: poster) { phase in
+                        if let image = phase.image {
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        }
+                    }
+                }
+                Image(systemName: AppIcons.play)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(.black.opacity(0.6)))
+            }
+            .aspectRatio(aspectRatio, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Play video")
+        .fullScreenCover(isPresented: $play) {
+            BareVideoPlayerScreen(url: url, onDismiss: { play = false })
+        }
+    }
+}
+
 /// Fullscreen zoomable media viewer (lightbox).
 struct MediaLightbox: View {
     let urls: [String]

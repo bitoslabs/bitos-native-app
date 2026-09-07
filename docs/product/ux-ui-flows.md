@@ -242,13 +242,22 @@ Comment bottom-sheet anatomy (both platforms):
   root (video/picture Bitz) publishes kind-1111 comments — uppercase `E/K/P`
   root tags + lowercase `e/k` parent tags (parent = the answered comment, or
   the target for top-level) — while kind-1 roots keep NIP-10 replies; PoW
-  rides only the kind-1 path; thread REQs query BOTH `#e` and `#E`
-  (case-sensitive relay filters) with kinds `[1,1111,7,6,9735]`, and
+  rides BOTH paths (NIP-13 nonce tag appended last over the byte-matching
+  comment/reply tags) with the difficulty selector inline under the options
+  row (composer parity, never a nested sheet); thread REQs query BOTH `#e`
+  and `#E` (case-sensitive relay filters) with kinds `[1,1111,7,6,9735]`, and
   kind-1111 events project into the open thread only, never feed windows;
 - threaded replies behind depth rails, per-reply Like (+count) · Zap (+sats) ·
   Reply, reply avatars/names tappable → profile sheet; the interaction shape
   is capped at two levels (root comment → one reply), matching the web flow;
   older/deeper remote replies remain visible flattened at the second level.
+- Origin card per surface: card-list surfaces (Home, Discover, Bookmarks,
+  Profile, Inbox) always show the thread root card for context — imeta videos
+  ride `FeedNote.video` (not content links), so those cards preview the poster
+  + play glyph (`VideoPreviewTile`, aspect from the imeta dimensions, tap →
+  fullscreen player). The immersive Bitz pager HIDES the origin card — the
+  video already plays behind the sheet (TikTok-style: header, comments and
+  composer only).
 - identity-gated composer (sub-reply targeting chip, gallery · GIF · URL ·
   PoW options, pill input + circular send), keyboard never covers the bar.
 

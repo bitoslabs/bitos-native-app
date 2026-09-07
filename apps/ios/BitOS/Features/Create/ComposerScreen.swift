@@ -573,7 +573,7 @@ struct ComposerScreen: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressedHighlightStyle(active: active))
         .disabled(!enabled)
         .accessibilityLabel(label)
     }

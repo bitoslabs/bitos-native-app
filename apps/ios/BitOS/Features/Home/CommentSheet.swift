@@ -8,6 +8,9 @@ struct CommentSheet: View {
     let note: FeedNote
     let store: FeedStore
     let publisher: NotePublisher
+    /// Immersive surfaces (Bitz pager) hide the origin card — the video
+    /// already plays behind the sheet (TikTok-style comment sheet).
+    var showRootCard = true
     let onClose: () -> Void
     @Environment(AppEnvironment.self) private var environment
     @Environment(IdentityStore.self) private var identity
@@ -29,7 +32,7 @@ struct CommentSheet: View {
     @State private var gifSheet = false
     @State private var urlAlert = false
     @State private var urlField = ""
-    @State private var powSheet = false
+    @State private var showPowPanel = false
     @State private var powTarget = 0
     @State private var powOutcome: PowOutcome?
     @State private var awaitingReply = false
@@ -105,6 +108,13 @@ struct CommentSheet: View {
             }
             awaitingReply = false
         }
+        // PowCard enforces "a mined nonce is valid for exactly one template"
+        // while its sheet is open; the same edit rule must void a completed
+        // mine here, or send() would ride a nonce mined for older content or
+        // a different sub-reply target (main-composer parity).
+        .onChange(of: text) { _, _ in powOutcome = nil }
+        .onChange(of: attachments) { _, _ in powOutcome = nil }
+        .onChange(of: replyTarget?.id) { _, _ in powOutcome = nil }
         .sheet(isPresented: $gifSheet) {
             GifPickerSheet(
                 onPick: { gif in
@@ -115,14 +125,10 @@ struct CommentSheet: View {
             .presentationDetents([.large, .medium])
         }
         // Emoji insert (composer toolbar parity): the shared quick-emoji
-        // set, appended at the end of the reply (no cursor tracking here).
+        // set, appended to the end of the reply (no cursor tracking here).
         .sheet(isPresented: $emojiSheet) {
             emojiSheetContent
                 .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $powSheet) {
-            powSheetContent
-                .presentationDetents([.medium, .large])
         }
         .alert("Add media URL", isPresented: $urlAlert) {
             TextField("https://…", text: $urlField)
@@ -233,27 +239,31 @@ struct CommentSheet: View {
             }
             ScrollView {
                 VStack(spacing: BitOSTheme.Spacing.sm) {
-                    ThreadRootCard(
-                        note: note,
-                        profile: store.profiles[note.pubkey],
-                        replyCount: comments.count,
-                        tally: tally,
-                        isLiked: store.localActions.liked.contains(note.id),
-                        isBookmarked: store.bookmarkedIds.contains(note.id)
-                            || store.localActions.bookmarked.contains(note.id),
-                        richJson: store.richTokens(for: note.content),
-                        resolveMentionName: { store.profiles[$0]?.bestDisplayName },
-                        onOpenMentionProfile: { profileTarget = $0 },
-                        onOpenExternalLink: { externalLink = $0 },
-                        onOpenMedia: { lightboxUrl = $0 },
-                        mediaPreview: settings.state.mediaPreview,
-                        onLike: { like(note) },
-                        onRepost: { repost(note) },
-                        onBookmark: { toggleBookmark(note) },
-                        onZap: { openZap(note) },
-                        onOpenProfile: { profileTarget = note.pubkey },
-                        onDelete: note.pubkey == identity.account?.pubkeyHex ? { requestDelete(note) } : nil
-                    )
+                    // Bitz pager hosts hide the origin card — the video
+                    // already plays behind the sheet.
+                    if showRootCard {
+                        ThreadRootCard(
+                            note: note,
+                            profile: store.profiles[note.pubkey],
+                            replyCount: comments.count,
+                            tally: tally,
+                            isLiked: store.localActions.liked.contains(note.id),
+                            isBookmarked: store.bookmarkedIds.contains(note.id)
+                                || store.localActions.bookmarked.contains(note.id),
+                            richJson: store.richTokens(for: note.content),
+                            resolveMentionName: { store.profiles[$0]?.bestDisplayName },
+                            onOpenMentionProfile: { profileTarget = $0 },
+                            onOpenExternalLink: { externalLink = $0 },
+                            onOpenMedia: { lightboxUrl = $0 },
+                            mediaPreview: settings.state.mediaPreview,
+                            onLike: { like(note) },
+                            onRepost: { repost(note) },
+                            onBookmark: { toggleBookmark(note) },
+                            onZap: { openZap(note) },
+                            onOpenProfile: { profileTarget = note.pubkey },
+                            onDelete: note.pubkey == identity.account?.pubkeyHex ? { requestDelete(note) } : nil
+                        )
+                    }
                     if comments.isEmpty {
                         Text(store.hasLoadedAnyEvent ? "No replies yet." : "Loading replies…")
                             .font(.caption)
@@ -366,6 +376,11 @@ struct CommentSheet: View {
 
     private var replyBar: some View {
         VStack(spacing: BitOSTheme.Spacing.xs) {
+            // Sticky composer chrome: the hairline marks the pinned bottom
+            // bar (composer-toolbar parity) so scrolled comments read as
+            // passing under it, not colliding with it.
+            Divider()
+                .background(BitOSTheme.divider)
             if replyTarget != nil {
                 HStack {
                     Text("Reply to \(targetName(effectiveTarget))")
@@ -393,21 +408,25 @@ struct CommentSheet: View {
             }
             // Options row — the same Solar tokens as the composer toolbar:
             // gallery · GIF · URL · PoW · hashtag · emoji (legacy reply
-            // order, PoW only on the kind-1 reply path).
+            // order). PoW rides both paths: kind-1111 comments and kind-1
+            // replies.
             HStack(spacing: BitOSTheme.Spacing.xs) {
                 optionButton(AppIcons.photo, "Attach from gallery", enabled: canAddAttachment) { pickerPrompt = true }
                 optionButton(AppIcons.gifFilm, "Add GIF", enabled: canAddAttachment) { gifSheet = true }
                 optionButton(AppIcons.link, "Add media URL", enabled: canAddAttachment) { urlAlert = true }
-                if !commentMode {
-                    if powOutcome != nil || powTarget > 0 {
-                        optionButton(AppIcons.shieldCheck, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: true) { powSheet = true }
-                    } else {
-                        optionButton(AppIcons.shieldCheck, "Proof of work") { powSheet = true }
-                    }
+                if powOutcome != nil || powTarget > 0 {
+                    optionButton(AppIcons.shieldCheck, "Proof of work", text: "\(powOutcome?.targetDifficulty ?? powTarget) bits", active: showPowPanel || powOutcome != nil) { showPowPanel.toggle() }
+                } else {
+                    optionButton(AppIcons.shieldCheck, "Proof of work", active: showPowPanel) { showPowPanel.toggle() }
                 }
                 optionButton(AppIcons.hashtag, "Insert hashtag") { insertHashtag() }
                 optionButton(AppIcons.emoji, "Insert emoji") { emojiSheet = true }
                 Spacer(minLength: 0)
+            }
+            // Composer parity: the difficulty selector rides inline under
+            // the options row (no nested sheet).
+            if showPowPanel {
+                powPanel
             }
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 TextField("Write a reply…", text: $text, axis: .vertical)
@@ -427,13 +446,14 @@ struct CommentSheet: View {
                         } else {
                             AppIcons.image(for: AppIcons.send)
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(canSend ? BitOSTheme.accent : BitOSTheme.textTertiary)
+                                .foregroundStyle(
+                                    canSend ? BitOSTheme.accent : BitOSTheme.textTertiary.opacity(0.4)
+                                )
                         }
                     }
                     .frame(width: 40, height: 40)
-                    .background(Circle().fill(BitOSTheme.surfaceElevated))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SendButtonPressStyle(active: canSend))
                 .disabled(!canSend)
                 .accessibilityLabel("Send reply")
             }
@@ -441,26 +461,43 @@ struct CommentSheet: View {
         .photosPicker(isPresented: $pickerPrompt, selection: $pickerItem, matching: .images)
     }
 
+    /// Toolbar action button (gallery · GIF · URL · PoW · hashtag · emoji).
+    /// Composer-toolbar parity: the glyph centers in a fixed 40-pt square
+    /// (pill when a PoW label rides along), the active state gets the
+    /// accent ring, and a press rounds the touch feedback with a
+    /// secondary-tinted highlight.
     private func optionButton(_ symbol: String, _ label: String, text: String? = nil, enabled: Bool = true, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                AppIcons.image(for: symbol)
-                    .font(.system(size: 18))
-                    .foregroundStyle(
-                        !enabled ? BitOSTheme.textTertiary.opacity(0.4)
-                            : active ? BitOSTheme.accent : BitOSTheme.textSecondary
-                    )
+            Group {
                 if let text {
-                    Text(text)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                    HStack(spacing: 4) {
+                        optionGlyph(symbol, enabled: enabled, active: active)
+                        Text(text)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                    }
+                    .frame(height: 40)
+                } else {
+                    optionGlyph(symbol, enabled: enabled, active: active)
+                        .frame(width: 40, height: 40)
                 }
             }
-            .frame(height: 40)
+            .background {
+                if active { Capsule().fill(BitOSTheme.accent.opacity(0.15)) }
+            }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressedHighlightStyle(active: active))
         .disabled(!enabled)
         .accessibilityLabel(label)
+    }
+
+    private func optionGlyph(_ symbol: String, enabled: Bool, active: Bool) -> some View {
+        AppIcons.image(for: symbol)
+            .font(.system(size: 18))
+            .foregroundStyle(
+                !enabled ? BitOSTheme.textTertiary.opacity(0.4)
+                    : active ? BitOSTheme.accent : BitOSTheme.textSecondary
+            )
     }
 
     private func targetName(_ target: FeedNote) -> String {
@@ -548,7 +585,16 @@ struct CommentSheet: View {
         let content = composedContent()
         awaitingReply = true
         if commentMode, let tagsJson = commentTagsJson() {
-            Task { await publisher.publishComment(content: content, tagsJson: tagsJson) }
+            if let pow = powOutcome {
+                Task {
+                    await publisher.publishPowComment(
+                        content: content, nonce: pow.nonce, targetDifficulty: Int32(pow.targetDifficulty),
+                        createdAt: pow.createdAt, tagsJson: tagsJson
+                    )
+                }
+            } else {
+                Task { await publisher.publishComment(content: content, tagsJson: tagsJson) }
+            }
         } else if let tagsJson = replyTagsJson() {
             if let pow = powOutcome {
                 Task {
@@ -563,24 +609,51 @@ struct CommentSheet: View {
         }
     }
 
-    private var powSheetContent: some View {
+    /// Inline PoW difficulty selector (composer parity). The mining
+    /// template byte-matches the publish tags: NIP-22 comment tags in
+    /// comment mode, NIP-10 reply markers on the kind-1 path.
+    private var powPanel: some View {
         let content = composedContent()
-        let tagsJson = replyTagsJson() ?? "[]"
+        let tagsJson = commentMode
+            ? (commentTagsJson() ?? "[]")
+            : (replyTagsJson() ?? "[]")
         return PowCard(
             target: $powTarget,
             mineChunk: { createdAt, startNonce, attempts in
-                await publisher.minePowChunkWithTags(
-                    content: content, targetDifficulty: Int32(powTarget), createdAt: createdAt,
-                    startNonce: startNonce, attempts: attempts, tagsJson: tagsJson
-                )
+                if commentMode {
+                    await publisher.minePowCommentChunkWithTags(
+                        content: content, targetDifficulty: Int32(powTarget), createdAt: createdAt,
+                        startNonce: startNonce, attempts: attempts, tagsJson: tagsJson
+                    )
+                } else {
+                    await publisher.minePowChunkWithTags(
+                        content: content, targetDifficulty: Int32(powTarget), createdAt: createdAt,
+                        startNonce: startNonce, attempts: attempts, tagsJson: tagsJson
+                    )
+                }
             },
-            onMined: { outcome in
-                powOutcome = outcome
-                powSheet = false
-            }
+            onMined: { outcome in powOutcome = outcome }
         )
-        .padding(.horizontal, BitOSTheme.Spacing.screen)
-        .padding(.bottom, BitOSTheme.Spacing.xl)
+        // Fresh mining state per template (composer `powPanel` parity).
+        .id("\(powTarget)|\(content)|\(tagsJson)|\(replyTarget?.id ?? "")")
+    }
+}
+
+/// Circular send button in the option-button grammar: transparent base,
+/// accent ring once the reply can send ("active"), and a secondary-tinted
+/// circle while pressed (the press overlay wins over the ring).
+private struct SendButtonPressStyle: ButtonStyle {
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                if active { Circle().fill(BitOSTheme.accent.opacity(0.15)) }
+            }
+            .overlay {
+                Circle().fill(BitOSTheme.textSecondary.opacity(configuration.isPressed ? 0.15 : 0))
+            }
+            .animation(BitOSMotion.standard(BitOSMotion.fast), value: configuration.isPressed)
     }
 }
 
@@ -627,7 +700,7 @@ private struct ThreadRootCard: View {
             HStack(spacing: BitOSTheme.Spacing.sm) {
                 Button(action: { onOpenProfile?() }) {
                     HStack(spacing: BitOSTheme.Spacing.sm) {
-                        PubkeyAvatarView(pubkey: note.pubkey, size: 40, label: profile?.bestDisplayName)
+                        PubkeyAvatarView(pubkey: note.pubkey, size: 40, picture: profile?.picture, label: profile?.bestDisplayName)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))
                                 .font(.system(size: 14, weight: .bold))
@@ -650,6 +723,18 @@ private struct ThreadRootCard: View {
                 resolveMentionName: resolveMentionName,
                 onOpenLink: { onOpenExternalLink?($0) }
             )
+            // Bitz origin: imeta videos ride the dedicated `video` field
+            // (not content links), so the root card previews the poster +
+            // play instead of an empty body (feed-surface parity).
+            if mediaPreview, let video = note.video {
+                let w = video.width ?? 0
+                let h = video.height ?? 0
+                VideoPreviewTile(
+                    url: video.url,
+                    posterUrl: video.posterUrl,
+                    aspectRatio: w > 0 && h > 0 ? CGFloat(w) / CGFloat(h) : 9.0 / 16.0
+                )
+            }
             if mediaPreview, !note.mediaUrls.isEmpty {
                 MediaGrid(urls: note.mediaUrls) { onOpenMedia?($0) }
             }
@@ -815,7 +900,7 @@ private struct ReplyRow: View {
             }
             HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
                 Button(action: { onOpenProfile?() }) {
-                    PubkeyAvatarView(pubkey: reply.pubkey, size: depth == 0 ? 28 : 22, label: profile?.bestDisplayName)
+                    PubkeyAvatarView(pubkey: reply.pubkey, size: depth == 0 ? 28 : 22, picture: profile?.picture, label: profile?.bestDisplayName)
                 }
                 .buttonStyle(.plain)
                 .disabled(onOpenProfile == nil)

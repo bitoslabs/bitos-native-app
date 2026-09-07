@@ -327,6 +327,9 @@ struct BitzView: View {
                 note: target,
                 store: environment.feedStore,
                 publisher: environment.notePublisher,
+                // Immersive pager: the video plays behind the sheet, so the
+                // origin card never repeats it.
+                showRootCard: false,
                 onClose: { commentTarget = nil }
             )
             .environment(identity)

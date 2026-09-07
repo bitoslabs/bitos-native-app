@@ -129,6 +129,23 @@ struct PressedScaleStyle: ButtonStyle {
     }
 }
 
+/// Press feedback for toolbar icon buttons: a rounded secondary-tinted
+/// highlight while touched, mirroring the active accent ring (which wins —
+/// an already-active button keeps its accent fill).
+struct PressedHighlightStyle: ButtonStyle {
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                Capsule().fill(BitOSTheme.textSecondary.opacity(
+                    configuration.isPressed && !active ? 0.15 : 0
+                ))
+            )
+            .animation(BitOSMotion.standard(BitOSMotion.fast), value: configuration.isPressed)
+    }
+}
+
 /// Compact icon-only action target (48-equivalent square, same variants).
 struct AppIconButton: View {
     let systemIcon: String

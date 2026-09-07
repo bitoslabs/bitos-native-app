@@ -233,6 +233,65 @@ final class NotePublisher {
         await send(eventId: eventId, frame: frame)
     }
 
+    /// Comment-sheet PoW: mining window over the NIP-22 kind-1111 template
+    /// (the same `commentTags` the publisher will commit).
+    func minePowCommentChunkWithTags(
+        content: String,
+        targetDifficulty: Int32,
+        createdAt: Int64,
+        startNonce: Int64,
+        attempts: Int64,
+        tagsJson: String
+    ) async -> (nonce: Int64, idHex: String)? {
+        guard let account = identity.account else { return nil }
+        let bridge = self.bridge
+        let raw = await Task.detached(priority: .userInitiated) {
+            bridge.mineCommentPowWithTags(
+                content: content,
+                pubkeyHex: account.pubkeyHex,
+                createdAtSeconds: createdAt,
+                targetDifficulty: targetDifficulty,
+                startNonce: startNonce,
+                maxAttempts: attempts,
+                tagsJson: tagsJson
+            )
+        }.value
+        guard let raw, let separator = raw.firstIndex(of: ":") else { return nil }
+        let nonce = Int64(raw[raw.startIndex..<separator])
+        guard let nonce else { return nil }
+        return (nonce, String(raw[raw.index(after: separator)...]))
+    }
+
+    /// Comment-sheet PoW publish: kind-1111 comment + committed nonce tag.
+    func publishPowComment(
+        content: String,
+        nonce: Int64,
+        targetDifficulty: Int32,
+        createdAt: Int64,
+        tagsJson: String
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        guard let eventId = bridge.powCommentWithTagsEventId(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, tagsJson: tagsJson
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.powCommentWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signature, tagsJson: tagsJson
+              ) else {
+            result = .signingRefused
+            return
+        }
+        await send(eventId: eventId, frame: frame)
+    }
+
     /// Kind-7 reaction through the same machine (SOC-003). One at a time.
     func publishReaction(targetEventId: String, targetPubkey: String) async {
         guard result == nil, inFlightId == nil, !busy else { return }

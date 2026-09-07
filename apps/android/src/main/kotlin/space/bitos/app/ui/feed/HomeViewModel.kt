@@ -263,13 +263,14 @@ class HomeViewModel(
      * NIP-22 comment (kind 1111) on a non-kind-1 event — web `feed.comment`
      * parity: the composer switches automatically for media targets. [root]
      * is the commented event; [parent] is the comment being answered (null
-     * for top-level).
+     * for top-level). [pow] carries a pre-mined nonce over the same tags.
      */
     fun comment(
         text: String,
         root: space.bitos.core.feed.FeedNote,
         parent: space.bitos.core.feed.FeedNote?,
         attachments: List<String> = emptyList(),
+        pow: space.bitos.app.ui.components.PowOutcome? = null,
     ) {
         if (notePublisher == null || identityViewModel == null) return
         if (root.kind == space.bitos.core.model.NostrKinds.SHORT_TEXT_NOTE) return
@@ -283,10 +284,17 @@ class HomeViewModel(
             parentPubkey = parent?.pubkey?.takeIf { parent.id != root.id },
             content = content,
         ) ?: return
-        notePublisher.publishCommentWith(
-            content, tags,
-            { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
-        )
+        if (pow != null) {
+            notePublisher.publishPowCommentWith(
+                content, tags, pow.nonce, pow.targetDifficulty, pow.createdAtSeconds,
+                { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+            )
+        } else {
+            notePublisher.publishCommentWith(
+                content, tags,
+                { identityViewModel.createSigner() }, space.bitos.app.data.feed.DefaultRelays.writeUrls,
+            )
+        }
     }
 
     /** Follow/unfollow: optimistic local flip + kind-3 publish when signed in. */

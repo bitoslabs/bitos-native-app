@@ -574,6 +574,31 @@ class NoteComposer(
     }
 
     /**
+     * NIP-22 kind-1111 comment with a pre-mined NIP-13 nonce tag
+     * (comment-sheet PowCard path): mirrors [composeTextNoteWithPow] — the
+     * nonce tag is appended LAST so the published event byte-matches what
+     * [space.bitos.core.nostr.Pow.mineChunk] hashed over [baseTags]
+     * (built by [commentTags]).
+     */
+    fun composeCommentWithPow(
+        pubkeyHex: String,
+        content: String,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+        baseTags: List<List<String>> = emptyList(),
+    ): UnsignedNote? {
+        if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (createdAtSeconds <= 0) return null
+        val trimmed = content.trim()
+        if (trimmed.isEmpty() || trimmed.length > MAX_NOTE_LENGTH) return null
+        if (baseTags.size + 1 > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
+        val tags = baseTags + listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty))
+        val id = NostrEventCodec.computeId(hasher, pubkeyHex, createdAtSeconds, NostrKinds.VIDEO_COMMENT, tags, trimmed)
+        return UnsignedNote(id, pubkeyHex, createdAtSeconds, NostrKinds.VIDEO_COMMENT, tags, trimmed)
+    }
+
+    /**
      * Kind-1018 poll vote (web `votePoll` wire parity): empty content,
      * `["e", poll]` + `["response", optionIndex]` tags.
      */

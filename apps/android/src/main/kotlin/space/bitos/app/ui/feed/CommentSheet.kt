@@ -2,6 +2,8 @@ package space.bitos.app.ui.feed
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -74,13 +77,16 @@ fun CommentContent(
     /** Own-note deletion (NIP-09 kind-5) — hosts gate to own notes. */
     onDelete: (FeedNote) -> Unit = {},
     /** NIP-22 comment publish for non-kind-1 roots (web `feed.comment`). */
-    onComment: (String, FeedNote, FeedNote?, List<String>) -> Unit = { _, _, _, _ -> },
+    onComment: (String, FeedNote, FeedNote?, List<String>, space.bitos.app.ui.components.PowOutcome?) -> Unit = { _, _, _, _, _ -> },
+    /** Immersive surfaces (Bitz pager) hide the origin card — the video
+     *  already plays behind the sheet. */
+    showOriginCard: Boolean = true,
     onClose: () -> Unit,
 ) {
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     var text by remember { mutableStateOf("") }
     // NIP-22 mode (ADR-003): non-kind-1 roots publish kind-1111 comments
-    // instead of kind-1 replies; PoW rides only the kind-1 path.
+    // instead of kind-1 replies.
     val commentMode = note.kind != space.bitos.core.model.NostrKinds.SHORT_TEXT_NOTE
     // Own-note deletion: rows hide locally once the kind-5 is dispatched.
     val deletedIds = remember { mutableStateOf(setOf<String>()) }
@@ -125,6 +131,14 @@ fun CommentContent(
             }
             awaitingReply = false
         }
+    }
+
+    // PowCard enforces "a mined nonce is valid for exactly one template"
+    // while its sheet is open; the same edit rule must void a completed
+    // mine here, or publish would ride a nonce mined for older content or
+    // a different sub-reply target (main-composer parity).
+    androidx.compose.runtime.LaunchedEffect(text, attachments.size, replyTarget?.id) {
+        powOutcome = null
     }
 
     val galleryPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -188,8 +202,10 @@ fun CommentContent(
                 .weight(1f),
             verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
         ) {
-            // Legacy parity: the root post scrolls with its replies.
-            item(key = "root-${note.id}") {
+            // Legacy parity: the root post scrolls with its replies. The
+            // immersive Bitz pager hides it — the video already plays
+            // behind the sheet (TikTok-style comment sheet).
+            if (showOriginCard) item(key = "root-${note.id}") {
                 RootCard(
                     note = note,
                     profile = feedState.profiles[note.pubkey],
@@ -244,7 +260,11 @@ fun CommentContent(
             }
         }
 
-        Spacer(Modifier.height(BitOSSpacing.md))
+        // Sticky composer chrome: the hairline marks the pinned bottom bar
+        // (composer-toolbar parity) so scrolled comments read as passing
+        // under it, not colliding with it.
+        HorizontalDivider(thickness = 0.5.dp, color = BitOSColors.divider)
+        Spacer(Modifier.height(BitOSSpacing.sm))
         when {
             publisherState.result == PublishResult.SIGNING_REFUSED ->
                 Text("Signing refused — open Profile to add an identity.", color = BitOSColors.error)
@@ -270,14 +290,50 @@ fun CommentContent(
                 sending = sending,
                 powActive = powOutcome != null || powTarget > 0,
                 powLabel = (powOutcome?.targetDifficulty ?: powTarget).takeIf { it > 0 }?.let { "$it bits" },
-                powAvailable = !commentMode,
                 canAdd = attachments.size < space.bitos.core.publish.ComposerRules.MAX_IMAGES,
                 onClearTarget = { replyTarget = null },
                 onRemoveAttachment = { attachments.removeAt(it) },
                 onPickGallery = { galleryPicker.launch("image/*") },
                 onGif = { showGif = true },
                 onUrl = { showUrlDialog = true },
-                onPow = { showPow = true },
+                onPow = { showPow = !showPow },
+                // Composer parity: the difficulty selector rides inline under
+                // the options row (a nested modal sheet never shows above
+                // this sheet).
+                powPanel = {
+                    if (showPow) {
+                        val powContent = space.bitos.core.publish.ComposerRules.composeContent(text, attachments)
+                        space.bitos.app.ui.components.PowCard(
+                            target = powTarget,
+                            onTargetChange = { powTarget = it },
+                            content = powContent,
+                            pubkeyHex = identity.account?.pubkeyHex ?: "",
+                            // Template tags must byte-match the published event:
+                            // NIP-22 comment tags in comment mode, NIP-10 reply
+                            // markers on the kind-1 path (HomeViewModel parity).
+                            baseTags = if (commentMode) {
+                                val parent = replyTarget?.takeIf { it.id != note.id }
+                                space.bitos.core.publish.NoteComposer.commentTags(
+                                    targetEventId = note.id,
+                                    targetPubkey = note.pubkey,
+                                    targetKind = note.kind,
+                                    parentEventId = parent?.id,
+                                    parentPubkey = parent?.pubkey,
+                                    content = powContent,
+                                ).orEmpty()
+                            } else {
+                                space.bitos.core.publish.NoteComposer.replyTags(
+                                    rootEventId = effectiveTarget.threadRootId ?: effectiveTarget.id,
+                                    targetEventId = effectiveTarget.id,
+                                    targetPubkey = effectiveTarget.pubkey,
+                                    targetPTags = effectiveTarget.mentions,
+                                    content = powContent,
+                                ).orEmpty()
+                            },
+                            onMined = { outcome -> powOutcome = outcome },
+                        )
+                    }
+                },
                 onHashtag = {
                     // No cursor tracking in the pill field — insert at the end.
                     text = space.bitos.core.publish.ComposerRules.insertHashtag(text, text.length).first
@@ -287,7 +343,7 @@ fun CommentContent(
                     if (!sending && (text.isNotBlank() || attachments.isNotEmpty())) {
                         awaitingReply = true
                         if (commentMode) {
-                            onComment(text, note, replyTarget, attachments.toList())
+                            onComment(text, note, replyTarget, attachments.toList(), powOutcome)
                         } else {
                             onReply(text, effectiveTarget, attachments.toList(), powOutcome)
                         }
@@ -382,30 +438,6 @@ fun CommentContent(
         )
     }
 
-    if (showPow) {
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showPow = false }) {
-            space.bitos.app.ui.components.PowCard(
-                target = powTarget,
-                onTargetChange = { powTarget = it },
-                content = space.bitos.core.publish.ComposerRules.composeContent(text, attachments),
-                pubkeyHex = identity.account?.pubkeyHex ?: "",
-                // Template tags must byte-match the published reply.
-                baseTags = space.bitos.core.publish.NoteComposer.replyTags(
-                    rootEventId = effectiveTarget.threadRootId ?: effectiveTarget.id,
-                    targetEventId = effectiveTarget.id,
-                    targetPubkey = effectiveTarget.pubkey,
-                    targetPTags = effectiveTarget.mentions,
-                    content = space.bitos.core.publish.ComposerRules.composeContent(text, attachments),
-                ).orEmpty(),
-                onMined = { outcome ->
-                    powOutcome = outcome
-                    showPow = false
-                },
-                modifier = Modifier.padding(horizontal = BitOSSpacing.screen).padding(bottom = BitOSSpacing.xl),
-            )
-        }
-    }
-
     if (showUrlDialog) {
         var url by remember { mutableStateOf("") }
         androidx.compose.material3.AlertDialog(
@@ -473,8 +505,6 @@ private fun ReplyBar(
     sending: Boolean,
     powActive: Boolean,
     powLabel: String?,
-    /** NIP-22 comment mode: PoW rides only the kind-1 reply path. */
-    powAvailable: Boolean = true,
     canAdd: Boolean,
     onClearTarget: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -482,6 +512,8 @@ private fun ReplyBar(
     onGif: () -> Unit,
     onUrl: () -> Unit,
     onPow: () -> Unit,
+    /** Inline PoW difficulty selector (composer parity), shown when active. */
+    powPanel: @Composable () -> Unit = {},
     /** Text-insert helpers (composer toolbar parity). */
     onHashtag: () -> Unit = {},
     onEmoji: () -> Unit = {},
@@ -516,8 +548,7 @@ private fun ReplyBar(
         }
         space.bitos.app.ui.components.AttachmentPreviewRow(urls = attachments, onRemove = onRemoveAttachment)
         // Options row — the same Solar tokens as the composer toolbar:
-        // gallery · GIF · URL · PoW · hashtag · emoji (legacy reply order,
-        // PoW only on the kind-1 reply path).
+        // gallery · GIF · URL · PoW · hashtag · emoji (legacy reply order).
         Row(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
@@ -525,18 +556,17 @@ private fun ReplyBar(
             OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Gallery, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
             OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Film, "Add GIF", enabled = canAdd, onClick = onGif)
             OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.LinkCircle, "Add media URL", enabled = canAdd, onClick = onUrl)
-            if (powAvailable) {
-                OptionButton(
-                    space.bitos.app.ui.theme.SolarFeedIcon.ShieldCheck,
-                    "Proof of work",
-                    text = powLabel,
-                    active = powActive,
-                    onClick = onPow,
-                )
-            }
+            OptionButton(
+                space.bitos.app.ui.theme.SolarFeedIcon.ShieldCheck,
+                "Proof of work",
+                text = powLabel,
+                active = powActive,
+                onClick = onPow,
+            )
             OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Hashtag, "Insert hashtag", onClick = onHashtag)
             OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Emoji, "Insert emoji", onClick = onEmoji)
         }
+        powPanel()
         Row(verticalAlignment = Alignment.CenterVertically) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -553,38 +583,56 @@ private fun ReplyBar(
                 )
             }
             Spacer(Modifier.width(BitOSSpacing.sm))
-            Surface(
-                shape = androidx.compose.foundation.shape.CircleShape,
-                color = if (sending || (text.isBlank() && attachments.isEmpty())) BitOSColors.surfaceElevated else BitOSColors.primaryContainer,
+            // Submit mirrors the option-button grammar: rounded, transparent
+            // base, accent ring once the reply can send ("active"), and a
+            // secondary-tinted circle while pressed.
+            val canSendReply = !sending && (text.isNotBlank() || attachments.isNotEmpty())
+            val sendInteraction = remember { MutableInteractionSource() }
+            val sendPressed by sendInteraction.collectIsPressedAsState()
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(40.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(
+                        when {
+                            sendPressed && canSendReply -> BitOSColors.textSecondary.copy(alpha = 0.15f)
+                            canSendReply -> BitOSColors.primary.copy(alpha = 0.15f)
+                            else -> androidx.compose.ui.graphics.Color.Transparent
+                        },
+                    )
                     .clickable(
+                        interactionSource = sendInteraction,
                         onClickLabel = "Send reply",
-                        enabled = !sending && (text.isNotBlank() || attachments.isNotEmpty()),
+                        enabled = canSendReply,
                     ) { onSend() },
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    if (sending) {
-                        androidx.compose.material3.CircularProgressIndicator(
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(18.dp),
-                            color = BitOSColors.primary,
-                        )
-                    } else {
-                        // Solar "plain" (paper plane) — legacy send parity.
-                        space.bitos.app.ui.theme.SolarFeedIconImage(
-                            space.bitos.app.ui.theme.SolarFeedIcon.Send,
-                            contentDescription = null,
-                            tint = if (text.isBlank() && attachments.isEmpty()) BitOSColors.textTertiary else BitOSColors.primary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                if (sending) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp),
+                        color = BitOSColors.primary,
+                    )
+                } else {
+                    // Solar "plain" (paper plane) — legacy send parity.
+                    space.bitos.app.ui.theme.SolarFeedIconImage(
+                        space.bitos.app.ui.theme.SolarFeedIcon.Send,
+                        contentDescription = null,
+                        tint = if (canSendReply) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.4f),
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * Toolbar action button (gallery · GIF · URL · PoW · hashtag · emoji).
+ * Composer-toolbar parity: the glyph centers in a fixed square (pill when a
+ * PoW label rides along), the active state gets the accent ring, and a
+ * press rounds the touch feedback with a secondary-tinted highlight.
+ */
 @Composable
 private fun OptionButton(
     icon: space.bitos.app.ui.theme.SolarFeedIcon,
@@ -594,30 +642,43 @@ private fun OptionButton(
     active: Boolean = false,
     onClick: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val tint = when {
+        !enabled -> BitOSColors.textTertiary.copy(alpha = 0.4f)
+        active -> BitOSColors.primary
+        else -> BitOSColors.textSecondary
+    }
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(width = if (text != null) 72.dp else 40.dp, height = 40.dp)
-            .clickable(enabled = enabled, onClickLabel = label) { onClick() },
-    ) {
-        space.bitos.app.ui.theme.SolarFeedIconImage(
-            icon,
-            contentDescription = null,
-            tint = when {
-                !enabled -> BitOSColors.textTertiary.copy(alpha = 0.4f)
-                active -> BitOSColors.primary
-                else -> BitOSColors.textSecondary
-            },
-            modifier = Modifier.size(20.dp),
-        )
-        if (text != null) {
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.W700,
-                color = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+            .clip(if (text != null) RoundedCornerShape(20.dp) else androidx.compose.foundation.shape.CircleShape)
+            .background(
+                when {
+                    pressed && enabled -> BitOSColors.textSecondary.copy(alpha = 0.15f)
+                    active -> BitOSColors.primary.copy(alpha = 0.15f)
+                    else -> androidx.compose.ui.graphics.Color.Transparent
+                },
             )
+            .clickable(interactionSource = interactionSource, enabled = enabled, onClickLabel = label) { onClick() },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            space.bitos.app.ui.theme.SolarFeedIconImage(
+                icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(20.dp),
+            )
+            if (text != null) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.W700,
+                    color = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+                )
+            }
         }
     }
 }
@@ -707,7 +768,13 @@ private fun RootCard(
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(onClickLabel = "Open author profile") { onOpenAuthor() },
             ) {
-                PubkeyAvatar(pubkey = note.pubkey, size = 40, label = profile?.bestDisplayName)
+                PubkeyAvatar(
+                    pubkey = note.pubkey,
+                    size = 40,
+                    pictureUrl = profile?.picture,
+                    label = profile?.bestDisplayName,
+                    hasLightning = !profile?.lud16.isNullOrBlank(),
+                )
                 Spacer(Modifier.width(BitOSSpacing.sm))
                 Column {
                     Text(
@@ -732,6 +799,18 @@ private fun RootCard(
                 onOpenProfile = onOpenMentionProfile,
                 onOpenExternalLink = onOpenExternalLink,
             )
+            // Bitz origin: imeta videos ride the dedicated `video` field
+            // (not content links), so the root card previews the poster +
+            // play instead of an empty body (feed-surface parity).
+            note.video?.let { video ->
+                val w = video.width ?: 0
+                val h = video.height ?: 0
+                space.bitos.app.ui.components.VideoPreviewTile(
+                    url = video.url,
+                    posterUrl = video.posterUrl,
+                    aspectRatio = if (w > 0 && h > 0) w.toFloat() / h else 9f / 16f,
+                )
+            }
             if (note.mediaUrls.isNotEmpty()) {
                 space.bitos.app.ui.components.MediaRow(urls = note.mediaUrls, onOpen = onOpenMedia)
             }
@@ -879,6 +958,8 @@ private fun ReplyRow(
         PubkeyAvatar(
             pubkey = reply.pubkey,
             size = if (depth > 0) 22 else 28,
+            pictureUrl = profile?.picture,
+            label = profile?.bestDisplayName,
             modifier = Modifier.clickable(onClickLabel = "Open author profile") { onOpenAuthor() },
         )
         Spacer(Modifier.width(BitOSSpacing.sm))
