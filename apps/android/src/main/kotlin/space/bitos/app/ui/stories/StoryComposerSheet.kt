@@ -382,33 +382,40 @@ fun StoryComposerSheet(
                     textStyle = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable(onClickLabel = "Mark as sensitive") { sensitive = !sensitive },
-                    verticalAlignment = Alignment.CenterVertically,
+                // Same card chrome as the media-details content-warning gate.
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = BitOSColors.surface,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Box(
+                    Row(
                         Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .border(
-                                1.dp,
-                                if (sensitive) Color(0xFFFF755F) else BitOSColors.border,
-                                CircleShape,
-                            )
-                            .background(if (sensitive) Color(0x26FF755F) else Color.Transparent),
-                        contentAlignment = Alignment.Center,
+                            .clickable(onClickLabel = "Mark as sensitive") { sensitive = !sensitive }
+                            .padding(BitOSSpacing.base),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (sensitive) Text("✓", color = Color(0xFFFF755F), fontSize = 12.sp)
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .border(
+                                    1.dp,
+                                    if (sensitive) Color(0xFFFF755F) else BitOSColors.border,
+                                    CircleShape,
+                                )
+                                .background(if (sensitive) Color(0x26FF755F) else Color.Transparent),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (sensitive) Text("✓", color = Color(0xFFFF755F), fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.width(BitOSSpacing.sm))
+                        Text(
+                            "Mark as sensitive — blur until tapped",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (sensitive) Color(0xFFFF755F) else BitOSColors.textSecondary,
+                        )
                     }
-                    Spacer(Modifier.width(BitOSSpacing.sm))
-                    Text(
-                        "Mark as sensitive — blur until tapped",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.W600,
-                        color = if (sensitive) Color(0xFFFF755F) else BitOSColors.textSecondary,
-                    )
                 }
             }
 

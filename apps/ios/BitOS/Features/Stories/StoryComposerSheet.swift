@@ -136,6 +136,8 @@ struct StoryComposerSheet: View {
                         .onChange(of: altText) { _, value in
                             if value.count > 280 { altText = String(value.prefix(280)) }
                         }
+                        // Same card chrome as the media-details
+                        // content-warning gate.
                         Button {
                             sensitive.toggle()
                         } label: {
@@ -147,6 +149,12 @@ struct StoryComposerSheet: View {
                                     .foregroundStyle(sensitive ? Color(red: 1.0, green: 0.46, blue: 0.37) : BitOSTheme.textSecondary)
                                 Spacer()
                             }
+                            .padding(BitOSTheme.Spacing.base)
+                            .frame(maxWidth: .infinity, minHeight: BitOSTheme.minTouchTarget, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(BitOSTheme.surface)
+                            )
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Mark as sensitive")
