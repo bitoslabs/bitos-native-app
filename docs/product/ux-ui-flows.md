@@ -462,6 +462,18 @@ Back behavior:
 - leaving during render/upload offers Continue in background or Cancel safely;
 - awaiting signer can be dismissed and resumed from the queue.
 
+**One publish path from the studio hub (2026-09-07):** the Create hub's
+"Import media" action, the camera's used take and the camera's "Import
+from library instead" ALL route into the Quick Bitz editor — a picked
+library video seeds VIDEO mode as its own timeline clip (same CAP→MEM
+seeding as a camera take; cut rules applied). The standalone "New video"
+publish sheet (raw video → caption → kind-22 with no editing) is gone
+from the studio Create hub on both platforms; the feed/Home app-bar
+quick import keeps it. Rejections are named and non-destructive
+(unreadable pick, source over the 256 MB timeline cap — name the reason
+and the fix, keep the hub untouched), and a brief "Preparing your
+video…" stage covers the byte read before the editor opens.
+
 Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-details`
 → `#/create-review` parity): the editor screen follows the prototype layout —
 "Editor" header with draft save and the "Next" publish entry inline with it

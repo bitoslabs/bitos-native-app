@@ -66,6 +66,7 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import space.bitos.app.ui.create.meme.MemeRaster
 import space.bitos.app.ui.theme.AppIcons
@@ -90,6 +91,20 @@ private data class CreateAction(
     val enabled: Boolean,
 )
 
+/** Studio import-media gate (CAP/EDT): a picked library video seeds the
+ *  meme editor — the ONE publish path from the Create hub. Pure rule so
+ *  the rejection copy (name the reason AND the fix, keep the hub
+ *  untouched — ux-ui-flows §3) is unit-pinned. */
+internal object ImportedVideoRules {
+    /** Null = seed the editor; else the named rejection for the dialog. */
+    fun rejection(byteCount: Long?, maxBytes: Long = space.bitos.app.ui.create.meme.MemeVideoExport.MAX_SOURCE_BYTES): String? = when {
+        byteCount == null || byteCount <= 0L -> "This video could not be read. Try another file."
+        byteCount > maxBytes ->
+            "This video is larger than ${maxBytes / (1024 * 1024)} MB. Trim it first, then try again."
+        else -> null
+    }
+}
+
 private val quickActions = listOf(
     CreateAction(
         icon = { modifier ->
@@ -101,8 +116,8 @@ private val quickActions = listOf(
             )
         },
         title = "Import media",
-        subtitle = "Photos and files",
-        description = "Copy assets into the project catalog",
+        subtitle = "From your library",
+        description = "Pick a video and polish it in the studio editor",
         enabled = true,
     ),
     CreateAction(
@@ -203,7 +218,10 @@ fun CreateScreen(
     onClose: () -> Unit = {},
 ) {
     var showCamera by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    var showImport by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    /** Studio import (CAP/EDT): reading a picked library video into the
+     *  editor seed — the hub stays alive with a named progress state. */
+    var importing by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var importError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     var showMeme by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var templateSeed by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<space.bitos.core.studio.MemeTemplate?>(null)
@@ -215,7 +233,6 @@ fun CreateScreen(
     }
 
     var resumeSlotId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    val mediaState by mediaPublishViewModel.state.collectAsStateWithLifecycle()
 
     // MST-018 continuation slots: filesDir/studio, ≤6 LRU (EDT-001/002).
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -259,6 +276,30 @@ fun CreateScreen(
         resumeSlotId?.let { slotStore.loadSlot(it) }
     }
 
+    // ── Import media → editor (ONE studio pipeline) ───────────────────
+    // The Create hub has exactly one publish path: the meme editor's Post
+    // details → render → upload → sign machine. Picked library videos
+    // seed video mode as a timeline clip, exactly like a camera take
+    // (docs/product/ux-ui-flows.md §6) — the standalone "New video"
+    // publish sheet is gone (it conflicted with the studio meme flow).
+    val importPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        importing = true
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                space.bitos.app.ui.create.meme.readAssetBytes(context, uri)
+            }
+            importError = ImportedVideoRules.rejection(bytes?.size?.toLong())
+            importing = false
+            if (importError == null && bytes != null) {
+                memeSeeds = listOf(bytes)
+                showMeme = true
+            }
+        }
+    }
+
     if (showMeme) {
         space.bitos.app.ui.create.meme.MemeEditorScreen(
             onClose = {
@@ -286,18 +327,19 @@ fun CreateScreen(
 
     if (showCamera) {
         CameraScreen(
-            onCaptured = { bytes, mime ->
-                mediaPublishViewModel.mediaCaptured(bytes, mime)
+            onCaptured = { bytes, _ ->
+                // Record → editor: the used take seeds video mode as its
+                // own timeline clip; caption/publish flow through the
+                // editor's Post details pipeline (the ONE studio path).
                 showCamera = false
-                // Record → trim → caption/publish: the trimmed take flows
-                // straight into the import sheet's publish path.
-                showImport = true
+                memeSeeds = listOf(bytes)
+                showMeme = true
             },
             onImport = {
-                // Library path from the record screen (EXIF orientation is
-                // normalized in the import sheet before crop).
+                // Library path from the record screen: same picker → same
+                // editor pipeline as the hub's "Import media" action.
                 showCamera = false
-                showImport = true
+                importPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
             },
             onOpenMeme = { payload ->
                 // Quick MEM (M5): the takes seed video mode as individual
@@ -336,8 +378,44 @@ fun CreateScreen(
             }
         }
 
-        // Start something new (scr-home tiles): camera · quick MEM · batch.
+        // Start something new (scr-home tiles): camera · quick MEM · batch —
+        // tiles sit directly under their header (iOS hub order parity).
         Text("Start something new", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            startTiles.forEachIndexed { index, tile ->
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = BitOSColors.surface,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClickLabel = tile.title) {
+                            when (index) {
+                                0 -> showCamera = true
+                                1 -> showMeme = true
+                                2 -> mass = MassBatchUi(massFiles, scope)
+                            }
+                        }
+                        .semantics { contentDescription = "${tile.title}, ${tile.subtitle}" },
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(BitOSSpacing.base),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        space.bitos.app.ui.theme.SolarStudioIconImage(
+                            tile.icon,
+                            contentDescription = null,
+                            tint = BitOSColors.primary,
+                            modifier = Modifier.size(26.dp),
+                        )
+                        Spacer(Modifier.height(BitOSSpacing.xs))
+                        Text(tile.title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.W700)
+                        Text(tile.subtitle, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                    }
+                }
+            }
+        }
 
         // Templates rail (MST-040): the seeded built-in pack.
         Text("Templates", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
@@ -512,42 +590,6 @@ fun CreateScreen(
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-            startTiles.forEachIndexed { index, tile ->
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = BitOSColors.surface,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClickLabel = tile.title) {
-                            when (index) {
-                                0 -> showCamera = true
-                                1 -> showMeme = true
-                                2 -> mass = MassBatchUi(massFiles, scope)
-                            }
-                        }
-                        .semantics { contentDescription = "${tile.title}, ${tile.subtitle}" },
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(BitOSSpacing.base),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        space.bitos.app.ui.theme.SolarStudioIconImage(
-                            tile.icon,
-                            contentDescription = null,
-                            tint = BitOSColors.primary,
-                            modifier = Modifier.size(26.dp),
-                        )
-                        Spacer(Modifier.height(BitOSSpacing.xs))
-                        Text(tile.title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.W700)
-                        Text(tile.subtitle, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
-                    }
-                }
-            }
-        }
-
         // Continue creating (MST-018): one-tap resume into the exact state.
         if (slots.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -643,7 +685,11 @@ fun CreateScreen(
                     .alpha(if (action.enabled) 1f else 0.55f)
                     .then(
                         if (action.enabled && action.title == "Import media") {
-                            Modifier.clickable(onClickLabel = action.title) { showImport = true }
+                            Modifier.clickable(onClickLabel = action.title) {
+                                importPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                                )
+                            }
                         } else {
                             Modifier
                         },
@@ -697,17 +743,37 @@ fun CreateScreen(
         }
     }
 
-    if (showImport) {
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { mediaPublishViewModel.cancel(); showImport = false }) {
-            space.bitos.app.ui.feed.ImportMediaContent(
-                state = mediaState,
-                onPublish = { caption, altText, contentWarning ->
-                    mediaPublishViewModel.publish(caption, altText, contentWarning)
-                },
-                onPick = { uri, resolver -> mediaPublishViewModel.mediaPicked(uri) },
-                onCancel = { mediaPublishViewModel.cancel(); showImport = false },
-            )
+    // Import progress (named stage — the hub never looks dead while a
+    // large library video streams into memory).
+    if (importing) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = BitOSColors.surface,
+            ) {
+                Column(
+                    modifier = Modifier.padding(BitOSSpacing.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
+                ) {
+                    CircularProgressIndicator(color = BitOSColors.primary)
+                    Text("Preparing your video…", style = MaterialTheme.typography.titleSmall)
+                }
+            }
         }
+    }
+
+    // Named, non-destructive rejections (UX §3): the hub state stays
+    // untouched; the user learns exactly what to do next.
+    importError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text("Couldn't open that video") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) { Text("OK") }
+            },
+        )
     }
 }
 

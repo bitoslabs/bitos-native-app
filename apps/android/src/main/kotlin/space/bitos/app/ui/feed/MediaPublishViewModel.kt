@@ -299,15 +299,6 @@ class MediaPublishViewModel(
         }
     }
 
-    /** Accepts freshly captured bytes from the camera flow. */
-    fun mediaCaptured(bytes: ByteArray, mimeType: String) {
-        mutableState.value = if (bytes.size <= Blossom.MAX_FILE_BYTES && bytes.isNotEmpty()) {
-            MediaPublishUiState(picked = PickedMedia(bytes, mimeType))
-        } else {
-            MediaPublishUiState(failure = "Recording exceeds the ${Blossom.MAX_FILE_BYTES / (1024 * 1024)}MB limit.")
-        }
-    }
-
     fun cancel() {
         mutableState.value = MediaPublishUiState()
         mutableMemeState.value = MemePublishUiState()

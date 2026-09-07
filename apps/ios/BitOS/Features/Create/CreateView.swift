@@ -9,7 +9,14 @@ import BusinessCore
 /// stable entry contract.
 struct CreateView: View {
     @State private var showCamera = false
-    @State private var showImport = false
+    /// Studio import-media → editor (CAP/EDT): one picker, one seeding
+    /// path — the editor's Post details pipeline is the ONLY publish
+    /// route from this hub (the standalone "New video" sheet is gone;
+    /// ux-ui-flows §6 parity with Android's Import media action).
+    @State private var showImportPicker = false
+    @State private var importItem: PhotosPickerItem?
+    @State private var importing = false
+    @State private var importError: String?
     @State private var showMeme = false
     @State private var templateSeed: String?
     @State private var sharedSeed: (tagsJson: String, content: String)?
@@ -26,7 +33,6 @@ struct CreateView: View {
     @State private var batchSummary: MassBatchSummary?
     private let slotStore = MemeProjectStore()
     @Environment(AppEnvironment.self) private var environment
-    @Environment(IdentityStore.self) private var identity
 
     private var slots: [MemeProjectStore.SlotEntryUi] {
         slotsRevision // recompute on revision bump (delete/editor close)
@@ -48,7 +54,7 @@ struct CreateView: View {
 
     private let quickActions: [QuickAction] = [
         QuickAction(symbol: AppIcons.camera, title: "Record Bitz", description: "Record a portrait clip with segment control", enabled: true),
-        QuickAction(symbol: AppIcons.photo, title: "Import media", description: "Copy assets into the project catalog", enabled: true),
+        QuickAction(symbol: AppIcons.photo, title: "Import media", description: "Pick a video and polish it in the studio editor", enabled: true),
         // M1 wave 1: the image editing core is live (export/publish next).
         QuickAction(symbol: AppIcons.emoji, title: "Quick MEM", description: "Caption, look and stickers in seconds", enabled: true),
         QuickAction(symbol: AppIcons.musicNote, title: "Use a sound", description: "Start a project from a licensed sound"),
@@ -95,19 +101,26 @@ struct CreateView: View {
         .navigationTitle("Create")
         .fullScreenCover(isPresented: $showCamera) {
             CameraScreen(
-                onCaptured: { data, mime in
-                    // Camera takes flow straight into the publish sheet state.
+                onCaptured: { data, _ in
+                    // Record → editor: the used take seeds video mode as
+                    // its own timeline clip; caption/publish flow through
+                    // the editor's Post details pipeline (the ONE studio
+                    // publish path).
                     showCamera = false
-                    showImport = true
-                    capturedData = data
-                    capturedMime = mime
+                    memeSeeds = [data]
+                    showMeme = true
                 },
                 onImport: {
-                    // Library path from the record screen (EXIF
-                    // orientation is normalized in the import sheet).
+                    // Library path from the record screen: same picker →
+                    // same editor pipeline as the hub's Import media row.
+                    // Presenting right as the camera cover dismisses
+                    // would race SwiftUI's single-presentation rule, so
+                    // the picker opens a beat after the cover is gone.
                     showCamera = false
-                    showImport = true
-                    capturedData = nil
+                    Task {
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        showImportPicker = true
+                    }
                 },
                 onOpenMeme: { payload in
                     showCamera = false
@@ -146,17 +159,53 @@ struct CreateView: View {
                 }
             )
         }
-        .sheet(isPresented: $showImport) {
-            ImportMediaSheet(
-                onClose: {
-                    showImport = false
-                    capturedData = nil
-                },
-                capturedData: capturedData,
-                capturedMime: capturedMime
+        // Studio import-media → editor: a picked library video seeds
+        // video mode as its own timeline clip (CAP→MEM parity).
+        .photosPicker(isPresented: $showImportPicker, selection: $importItem, matching: .videos)
+        .onChange(of: importItem) { _, item in
+            guard let item else { return }
+            importItem = nil
+            importing = true
+            Task {
+                let data = try? await item.loadTransferable(type: Data.self)
+                importing = false
+                if let rejection = StudioImportRules.rejection(data?.count) {
+                    importError = rejection
+                } else if let data {
+                    memeSeeds = [data]
+                    showMeme = true
+                }
+            }
+        }
+        // Named progress stage — the hub never looks dead while a large
+        // library video streams into memory.
+        .overlay {
+            if importing {
+                ZStack {
+                    Rectangle().fill(.black.opacity(0.35)).ignoresSafeArea()
+                    VStack(spacing: BitOSTheme.Spacing.sm) {
+                        ProgressView().controlSize(.large)
+                        Text("Preparing your video…")
+                            .font(.subheadline)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    .padding(BitOSTheme.Spacing.xl)
+                    .background(BitOSTheme.surface, in: RoundedRectangle(cornerRadius: BitOSTheme.Radius.lg))
+                }
+            }
+        }
+        // Named, non-destructive rejections (ux-ui-flows §3): the hub
+        // stays untouched; the user learns exactly what to do next.
+        .alert(
+            "Couldn't open that video",
+            isPresented: Binding(
+                get: { importError != nil },
+                set: { if !$0 { importError = nil } }
             )
-            .environment(identity)
-            .presentationDetents([.medium, .large])
+        ) {
+            Button("OK") { importError = nil }
+        } message: {
+            Text(importError ?? "")
         }
     }
 
@@ -325,7 +374,7 @@ struct CreateView: View {
                         .onTapGesture {
                             guard action.enabled else { return }
                             if index == 0 { showCamera = true }
-                            if index == 1 { showImport = true }
+                            if index == 1 { showImportPicker = true }
                             if index == 2 { showMeme = true }
                         }
                     }
@@ -382,9 +431,26 @@ struct CreateView: View {
         }
         .buttonStyle(.plain)
     }
+}
 
-    @State private var capturedData: Data?
-    @State private var capturedMime = "video/mp4"
+/// Studio import-media gate (Android `ImportedVideoRules` parity): a
+/// picked library video seeds the meme editor — the ONE publish path
+/// from this hub. Rejections name the reason AND the fix; the hub state
+/// is never touched by a rejected pick.
+private enum StudioImportRules {
+    /// Android `MemeVideoExport.MAX_SOURCE_BYTES` parity (256 MB).
+    static let maxBytes = 256 * 1_024 * 1_024
+
+    /// nil = seed the editor; else the named rejection for the alert.
+    static func rejection(_ byteCount: Int?) -> String? {
+        guard let byteCount, byteCount > 0 else {
+            return "This video could not be read. Try another file."
+        }
+        guard byteCount <= maxBytes else {
+            return "This video is larger than \(maxBytes / (1024 * 1024)) MB. Trim it first, then try again."
+        }
+        return nil
+    }
 }
 
 /// One "Continue creating" row: poster thumb, label, relative time,

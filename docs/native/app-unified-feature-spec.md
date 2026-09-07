@@ -724,8 +724,11 @@ choice tiles + permission rows):
 - [x] Right-edge lens rail .5×/1×/2× (clamped to device zoom bounds)
 - [x] Takes strip: poster-frame thumbnails · per-take ✕ · dashed "+" ·
       "N takes · MM:SS" · tap → trim preview (Retake discards, Use hands
-      off to the publish pipeline)
-- [x] Capture row: Import (library sheet) · 76dp record button with morphing
+      off to the Quick Bitz editor — video mode seeded with the take as a
+      timeline clip; caption/publish flow through the editor's Post
+      details, the ONE studio publish path 2026-09-07)
+- [x] Capture row: Import (library video picker → same editor seeding as
+      the hub's "Import media") · 76dp record button with morphing
       red core · MEM (expert editor seeded with ALL takes — N ≥ 2 merge into
       one clip first: Media3 Transformer / AVMutableComposition passthrough,
       progress overlay, failure falls back to the newest take; video mode

@@ -576,7 +576,7 @@ fun MemeEditorScreen(
                 }
             }
             seedingProgress = null
-            if (failed) exportStatus = "A camera take could not be read"
+            if (failed) exportStatus = "A source clip could not be read"
         }
     }
     var activeAssetId by remember { mutableStateOf(resume?.document?.assets?.firstOrNull()?.id) }
@@ -2447,8 +2447,9 @@ private fun decodeAspect(resolver: android.content.ContentResolver, uri: Uri): F
     decodeBounds(resolver, uri)?.let { it.first.toFloat() / it.second }
 
 /** Asset bytes for slot persistence: content picks via resolver, restored
- * slot files (file://) straight off disk. */
-private fun readAssetBytes(context: android.content.Context, uri: Uri): ByteArray? = runCatching {
+ * slot files (file://) straight off disk. Shared with the Create hub's
+ * import-media → editor seeding. */
+internal fun readAssetBytes(context: android.content.Context, uri: Uri): ByteArray? = runCatching {
     when (uri.scheme?.lowercase()) {
         "content" -> context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         "file" -> uri.path?.let { path -> java.io.File(path).takeIf(File::exists)?.readBytes() }

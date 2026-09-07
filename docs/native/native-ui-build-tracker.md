@@ -423,6 +423,34 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-07 — Studio hub import unification (CAP/EDT; ux-ui-flows §6
+  alignment): **the Create hub now has exactly ONE publish path — the meme
+  editor.** The standalone "New video" bottom sheet (raw gallery video →
+  caption → direct kind-22, no editing) is REMOVED from the studio Create
+  hub on both platforms because it conflicted with the studio's meme
+  publish flow (two divergent publish pipelines from one screen). New
+  behavior, both platforms: "Import media" (copy now "Pick a video and
+  polish it in the studio editor") opens the system video picker; the
+  picked clip seeds the editor in VIDEO mode as its own timeline clip —
+  the same CAP→MEM seeding a camera take uses (cut rules applied, editor
+  shows its own progress). The camera's "Use" take and "Import from
+  library instead" route into the SAME editor pipeline. Errors are named
+  and non-destructive (dialog/alert with the reason AND the fix, hub
+  untouched): unreadable pick, > 256 MB source (Android
+  `MemeVideoExport.MAX_SOURCE_BYTES` parity, pinned by unit test
+  `ImportedVideoRulesTest`; iOS `StudioImportRules` mirror); a brief
+  "Preparing your video…" progress state covers the byte read. Android:
+  `CreateScreen` picker + `ImportedVideoRules`, editor seed-failure notice
+  reworded source-neutral ("A source clip could not be read"), dead
+  `MediaPublishViewModel.mediaCaptured` removed, editor's
+  `readAssetBytes` shared internal. iOS: `CreateView` `photosPicker` +
+  overlay/alert, camera-cover → picker presentation raced SwiftUI's
+  single-presentation rule so the picker opens ~350 ms after the cover
+  dismisses. The feed/Home app-bar quick import (Android `ImportMediaContent`
+  in FeedScreen, iOS `ImportMediaSheet` in HomeView) is unchanged. Verified:
+  Android compile + new test green; full Swift 6 strict-concurrency
+  typecheck 0 errors.
+
 - 2026-09-03 — Studio Draw pen wave (APP-019 EDT-008 slice; the scr-suite
   chip row is now 6/7 live — only Sound remains "soon"): **pen strokes on
   the stage, burned under the captions in every export path.** Shared
