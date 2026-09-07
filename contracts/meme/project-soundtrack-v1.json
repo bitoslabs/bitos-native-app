@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "mode": "video",
+  "assets": [],
+  "overlays": [],
+  "clips": [
+    {
+      "id": "v1",
+      "start": 0,
+      "end": 12000
+    }
+  ],
+  "sound": {
+    "url": "https://blossom.example/b/9f2c/audio.mp4",
+    "sha256": "9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a",
+    "ms": 12000,
+    "start": 1000,
+    "vol": 0.8,
+    "offset": 500,
+    "src": "aa11bb22cc33dd44ee55ff66778899aabbccddeeff00112233445566778899aa",
+    "author": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "label": "Original sound · satoshi"
+  },
+  "cw": "",
+  "alt": "clip over a borrowed sound",
+  "tags": []
+}

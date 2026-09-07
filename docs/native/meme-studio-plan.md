@@ -745,6 +745,7 @@ capture both in the composer plan when it starts.
 | MST-047 | Shared sounds: kind-30078 ingest (license gate + sha256) + local library (≤30/8 MB/15 s) + trending rank (3-day half-life) | both | MEM-003; unlicensed or hash-mismatch rejected |
 | MST-048 | Batch queue: multi-pick → per-item captions → sequential publish, crash-safe advance | both | kill mid-queue resumes at correct index |
 | MST-049 | AI suggestions (MEM-006): local DSP beat/peak detection, Mild/Funny/Chaos, ≤6 overlays/cues, opt-in + reviewable + `["ai","bitz-suggested"]` provenance only on explicit confirm | both | no silent project mutation; provenance tag only when toggled |
+| MST-050 | Use this sound (docs/product/use-this-sound-plan.md): borrow ANY video's audio as the project soundtrack — bitz "Use this sound" + editor "Pick sound from a video…"; `sound`/`p`/`attribution` provenance tags stamp only post-upload; trending = counting `sound` tags (APP-021 bootstrap). Wave A (wire + rules + bridge seam) shipped 2026-09-07 | both | round-trip + hostile battery green; nothing stamps pre-upload |
 
 V2 (full suite, EDT-005..009 / MEM-007..009): expert timeline + clip
 windows, drawing pen + replay, caption-beat sync, value splits, story

@@ -2103,6 +2103,28 @@ class BusinessCoreBridge {
     }
 
     /**
+     * "Use this sound" tags for a meme publish (docs/product/
+     * use-this-sound-plan.md): `["sound", url, sha256, sourceEventId?]` +
+     * `["p", sourceAuthor]` + `["attribution", "sound of …"]` from the
+     * project wire, as TagsCodec JSON; "" when the project carries no
+     * (usable, uploaded) soundtrack or the wire is corrupt — nothing
+     * stamps before the upload verifies.
+     */
+    fun memeSoundTagsFor(projectJson: String): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+            ?: return ""
+        val tags = space.bitos.core.studio.MemeSoundRules.tagsFor(project.soundtrack)
+        if (tags.isEmpty()) return ""
+        return buildJsonArray {
+            tags.forEach { tag ->
+                add(buildJsonArray {
+                    tag.forEach { value -> add(kotlinx.serialization.json.JsonPrimitive(value)) }
+                })
+            }
+        }.toString()
+    }
+
+    /**
      * MST-042 remix tags for a meme publish: `["remix", id, relays…]` +
      * `["meme", <compact payload ≤700 via the ladder>]` + `["p", author]`
      * (+ optional `license`/`attribution`), as TagsCodec JSON from the

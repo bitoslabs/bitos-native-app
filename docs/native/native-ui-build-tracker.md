@@ -423,6 +423,21 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-07 — **MST-050 Wave A — "use this sound" contract** (new plan
+  doc `docs/product/use-this-sound-plan.md`): TikTok's sound loop,
+  bootstrapped from EXISTING bitz audio instead of waiting for the
+  MST-047 marketplace. Shipped (shared, common-tested on both lanes):
+  `MemeSoundtrack` project row (additive wire key `"sound"`, junk
+  degrades to no-soundtrack — never a failed decode), `MemeSoundRules`
+  (normalize bounds: ≤ 60 s / volume 0–2 / 64-hex sha / url ≤ 2048;
+  `tagsFor` → `["sound", url, sha256, sourceEventId?]` + `["p", author]`
+  + `["attribution", "sound of …"]`, stamping NOTHING until the
+  hash-verified upload exists; `sourceOf` read seam for the feed chip /
+  re-attach / trending) + bridge `memeSoundTagsFor`. Tests: round-trip,
+  hostile wire, bounds battery, tag battery, bridge seam (incl.
+  pre-upload → ""). Waves B–D (editor attach + mixdown, bitz "Use this
+  sound", trending rail) planned in the doc. NEXT: Wave B.
+
 - 2026-09-07 — Android feed quick-import parity (follow-up to the studio
   import unification; closes the 2026-08-29 "unreachable `showImportMedia`
   sheet" note the other way round): Android's Home app-bar gained the

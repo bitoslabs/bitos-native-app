@@ -2,6 +2,7 @@ package space.bitos.core.studio
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -131,6 +132,9 @@ data class MemeProject(
     val drawStrokes: List<MemeStroke> = emptyList(),
     /** M5 ordered timeline clips (VIDEO mode; empty elsewhere). */
     val clips: List<MemeClip> = emptyList(),
+    /** Imported-audio soundtrack ("use this sound"; VIDEO mode only;
+     * null = original clip audio). Additive wire row `"sound"`. */
+    val soundtrack: MemeSoundtrack? = null,
     /** Video trim window in ms (VIDEO mode only; legacy v1 field — the
      * first clip's window mirrors it for old-reader compatibility). */
     val trimStartMs: Long = 0,
@@ -243,6 +247,21 @@ object MemeProjectContract {
                 add(JsonPrimitive(project.trimStartMs.coerceIn(0, MAX_DURATION_MS)))
                 add(JsonPrimitive(project.trimEndMs.coerceIn(0, MAX_DURATION_MS)))
             })
+            // "Use this sound" soundtrack: additive wire key (old readers
+            // ignore it); written only when set and normalizable.
+            MemeSoundRules.normalize(project.soundtrack)?.let { sound ->
+                put("sound", buildJsonObject {
+                    if (sound.url.isNotBlank()) put("url", sound.url)
+                    put("sha256", sound.sha256)
+                    put("ms", sound.durationMs)
+                    if (sound.startMs > 0) put("start", sound.startMs)
+                    if (sound.volume != 1f) put("vol", sound.volume)
+                    if (sound.offsetMs > 0) put("offset", sound.offsetMs)
+                    sound.sourceNoteId?.let { put("src", it) }
+                    sound.sourceAuthorPubkey?.let { put("author", it) }
+                    if (sound.label.isNotBlank()) put("label", sound.label)
+                })
+            }
             // M5 timeline clips: additive v1 wire key (old readers ignore it
             // and degrade to the first clip via `trim`); bounded + clamped.
             if (project.clips.isNotEmpty()) {
@@ -383,6 +402,23 @@ object MemeProjectContract {
             // M5 clips: v2 read; a clip needs end > start. Absent/empty →
             // v1 migration (the legacy whole-project trim becomes clip 1).
             val clips = decodeClips(root["clips"])
+            // Soundtrack: junk degrades to null (MemeSoundRules.normalize),
+            // never a failed project decode.
+            val soundtrack = (root["sound"] as? JsonObject)?.let { sound ->
+                MemeSoundRules.normalize(
+                    MemeSoundtrack(
+                        url = (sound["url"] as? JsonPrimitive)?.content ?: "",
+                        sha256 = (sound["sha256"] as? JsonPrimitive)?.content ?: "",
+                        durationMs = (sound["ms"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0,
+                        startMs = (sound["start"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0,
+                        volume = (sound["vol"] as? JsonPrimitive)?.content?.toFloatOrNull() ?: 1f,
+                        offsetMs = (sound["offset"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0,
+                        sourceNoteId = (sound["src"] as? JsonPrimitive)?.content,
+                        sourceAuthorPubkey = (sound["author"] as? JsonPrimitive)?.content,
+                        label = (sound["label"] as? JsonPrimitive)?.content ?: "",
+                    ),
+                )
+            }
             val migratedClips = when {
                 mode != MemeMode.VIDEO -> emptyList()
                 clips.isNotEmpty() -> clips
@@ -396,6 +432,7 @@ object MemeProjectContract {
                 assets = assets,
                 overlays = overlays,
                 clips = migratedClips,
+                soundtrack = if (mode == MemeMode.VIDEO) soundtrack else null,
                 trimStartMs = legacyTrimStart,
                 trimEndMs = legacyTrimEnd,
                 speed = clampSpeed(

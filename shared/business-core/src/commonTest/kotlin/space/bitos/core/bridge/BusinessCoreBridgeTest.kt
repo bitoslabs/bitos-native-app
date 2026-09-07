@@ -770,6 +770,35 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun memeSoundTagsSeamStampsProvenanceOnlyWhenUploaded() {
+        val sha = "a".repeat(64)
+        fun wire(soundtrack: space.bitos.core.studio.MemeSoundtrack?) =
+            space.bitos.core.studio.MemeProjectContract.encode(
+                space.bitos.core.studio.MemeProject(
+                    mode = space.bitos.core.studio.MemeMode.VIDEO,
+                    soundtrack = soundtrack,
+                ),
+            )
+        val sound = space.bitos.core.studio.MemeSoundtrack(
+            url = "https://blossom.example/b/audio.mp4",
+            sha256 = sha,
+            durationMs = 12_000,
+            sourceNoteId = "1".repeat(64),
+            sourceAuthorPubkey = "2".repeat(64),
+            label = "the OG memelord",
+        )
+        val tags = bridge.memeSoundTagsFor(wire(sound))
+        assertTrue(tags.contains("[\"sound\",\"https://blossom.example/b/audio.mp4\",\"$sha\",\"${"1".repeat(64)}\"]"), tags)
+        assertTrue(tags.contains("[\"p\",\"${"2".repeat(64)}\"]"), tags)
+        assertTrue(tags.contains("sound of the OG memelord"), tags)
+        // Attach-time (pre-upload): nothing stampable — never sign first.
+        assertEquals("", bridge.memeSoundTagsFor(wire(sound.copy(url = ""))))
+        // No soundtrack / corrupt wire → "".
+        assertEquals("", bridge.memeSoundTagsFor(wire(null)))
+        assertEquals("", bridge.memeSoundTagsFor("junk"))
+    }
+
+    @Test
     fun remixRelayHintsSeamMergesSourceAndWriteRelays() {
         val merged = bridge.remixRelayHintsJson(
             sourceRelaysJson = """["wss://src.one","wss://src.two"]""",

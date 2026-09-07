@@ -1,0 +1,99 @@
+# "Use this sound" — sound sourcing from any video (TikTok loop)
+
+> Status: **Wave A shipped** (shared contract, common-tested). Waves B–D
+> planned. Companion tracker: `docs/native/native-ui-build-tracker.md`
+> (MST-050); wire contract: `MemeSoundtrack`/`MemeSoundRules`
+> (`shared/business-core`, `space.bitos.core.studio`).
+
+## 1. Problem / opportunity
+
+TikTok's core creation loop is "hear a sound → use it → your video feeds
+the sound's virality". BitOS today has per-clip volume and synth SFX cues
+only — no imported audio. The existing roadmap sources sounds from a
+licensed marketplace (MST-047 kind-30078, APP-021). The cheaper, more
+native bootstrap: **every existing bitz already carries an audio track**.
+Let creators borrow it, with provenance Nostr can verify and credit.
+
+## 2. UX (two entries, one pipeline)
+
+1. **From any bitz** — feed card ⋯ menu, video player sheet and the remix
+   flow gain **"Use this sound"**: download the source video (the M4b
+   remix download machinery), extract the audio track, open the meme
+   editor in VIDEO mode with the soundtrack attached (no clip yet — the
+   creator adds theirs; TikTok parity: the sound IS the seed).
+2. **Inside the editor** — the Sound tool gains a **"Pick sound from a
+   video…"** row: photo-library video picker (and later "from my Bitz…")
+   → extract → attach. One soundtrack per project: attach replaces
+   attach; remove restores original clip audio.
+
+Editor semantics (VIDEO mode only):
+
+- Soundtrack row: label ("Original sound · author"), source chip
+  (♪ + author), volume 0–2, remove. Original-clip audio keeps its
+  per-clip volume — both mix at preview and export.
+- Playhead sync: the soundtrack starts at `offsetMs`, plays from its
+  `startMs` in-point, ends at its `durationMs`; scrub/seek moves both.
+- Sound-cued images (MST-041) and synth SFX cues keep baking on top.
+
+## 3. Provenance & protocol (the Nostr-native twist)
+
+Every publish that borrows a sound stamps (built by `MemeSoundRules`,
+exposed via bridge `memeSoundTagsFor`):
+
+```text
+["sound", <blossom-url>, <sha256-64hex>, <source-event-id>?]
+["p", <source-author-pubkey>]                — only for a bitz source
+["attribution", "sound of <label>"]          — ≤140 chars, web parity
+```
+
+- **Never before upload:** the URL exists only after the hash-verified
+  Blossom upload; `tagsFor` stamps NOTHING for an un-uploaded soundtrack
+  (repo safety rule: never sign before media is uploaded and verified).
+- **Credit is automatic**, not typed by hand — the source note id and
+  author ride the project wire (`sourceNoteId`/`sourceAuthorPubkey`).
+- **Trending falls out for free:** counting `sound` tags over the feed
+  window IS the usage rank (APP-021 bootstrap before any marketplace).
+- **License policy** stays advisory like remix: restrictive source
+  licenses (`RemixRules.ASK_REQUIRED_LICENSES`) ask for confirmation,
+  never hide the action.
+
+## 4. Wire contract (shipped in Wave A)
+
+Additive v1-compatible project row `"sound"` (old readers ignore it;
+junk degrades to "no soundtrack", never a failed decode):
+
+```json
+{"url":"https://…/audio.mp4","sha256":"<64hex>","ms":12000,
+ "start":1000,"vol":0.8,"offset":500,"src":"<event-id>","author":"<pubkey>",
+ "label":"Original sound · author"}
+```
+
+Bounds (MemeSoundRules): duration ≤ 60 s (`MemeVideoCutRules.MAX_CLIP_MS`),
+volume 0–2, url ≤ 2048, label ≤ 80, in-point inside the audio, sha256
+must be 64-hex canonical. Read side: `MemeSoundRules.sourceOf(tags)` is
+the one seam the feed chip, re-attach and trending all use.
+
+## 5. Waves (each shippable, leaves the app consistent)
+
+| Wave | Scope | Definition of done |
+| --- | --- | --- |
+| **A — contract (shipped)** | `MemeSoundtrack` + codec row + `MemeSoundRules` (normalize/tagsFor/sourceOf) + bridge `memeSoundTagsFor` + common tests (round-trip, hostile, bounds, tag battery) | all common tests green; old wires decode unchanged |
+| **B — editor attach + mixdown** | Sound tool "Pick sound from a video…" → extraction (Media3 Transformer / AVAssetExportSession, ≤60 s, off-thread) → attach/replace/remove; preview dual-player synced; export mixdown (PCM mix soundtrack + clip audio + SFX cues, one AAC track) | attach → caption → export round-trip on device; mixdown deterministic (golden sample); slot autosave carries the soundtrack |
+| **C — "Use this sound" from a bitz** | bitz ⋯ menu / player / remix surface action → download + extract + seed editor with the soundtrack; publish stamps sound+p+attribution; feed chip on published notes ("♪ sound of …" → source) | end-to-end on both platforms; provenance survives round-trip (fixture) |
+| **D — trending sounds (APP-021 bootstrap)** | count `sound` tags over the feed window → "Trending sounds" rail (More/Discover) with "Use in Studio" → re-attach by URL | rank deterministic from fixtures; re-attach = Wave C path |
+
+Out of scope V1: looping, per-overlay sound windows, voice-over record,
+licensed marketplace (MST-047 stays separate), zap-splits to sound
+authors (needs invoice + preimage verification — future).
+
+## 6. Risks / notes
+
+- **Extraction cost:** video download + audio transcode is seconds-scale;
+  progress states must name the stage (UX §3). Passthrough extract where
+  the container allows (m4a copy) before any transcode.
+- **Sync drift in preview:** dual-player sync is ±tens of ms — acceptable
+  for preview; the EXPORT mixdown is sample-accurate (single mix).
+- **Wire growth:** one bounded object; MAX_WIRE_LENGTH unchanged headroom.
+- **Cross-core rule:** extraction/mixdown is media-core (native) work;
+  timing/bounds/tags are business-core (shared) — never the other way
+  around (AGENTS.md).
