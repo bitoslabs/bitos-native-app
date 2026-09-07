@@ -489,10 +489,20 @@ fun MemeEditorScreen(
         return dropped
     }
 
-    val assets = remember(resume) {
-        mutableStateListOf<EditorAsset>().apply {
-            resume?.let { saved ->
-                if (saved.document.project.mode == MemeMode.VIDEO) {
+    // Restore after the first composition. Mutating the clip state while
+    // Compose builds the screen can leave the video preview attached to the
+    // empty timeline until another action happens to recompose it.
+    val assets = remember(resume) { mutableStateListOf<EditorAsset>() }
+    val slotId = remember(resume) {
+        resume?.document?.slotId ?: "s-" + java.util.UUID.randomUUID().toString().take(13)
+    }
+    var resumeSessionSeeded by remember(resume?.document?.slotId) { mutableStateOf(false) }
+
+    LaunchedEffect(resume?.document?.slotId) {
+        val saved = resume ?: return@LaunchedEffect
+        if (resumeSessionSeeded) return@LaunchedEffect
+        resumeSessionSeeded = true
+        if (saved.document.project.mode == MemeMode.VIDEO) {
                     // M5 resume: the wire's clip list + slot asset files
                     // rebuild the full timeline (windows from the wire; a
                     // v1 slot migrates into a single clip server-side).
@@ -522,11 +532,11 @@ fun MemeEditorScreen(
                             saved.assetFiles[asset.id]?.let { file ->
                                 decodeAspect(context.contentResolver, android.net.Uri.fromFile(file))
                                     ?.let { aspect ->
-                                        add(EditorAsset(asset.id, android.net.Uri.fromFile(file), aspect))
+                                        assets += EditorAsset(asset.id, android.net.Uri.fromFile(file), aspect)
                                     }
                             }
                         }
-                } else if (saved.document.project.mode == MemeMode.GIF) {
+        } else if (saved.document.project.mode == MemeMode.GIF) {
                     // GIF resume: slot files decode back into the frame tray
                     // (holds collapse to a uniform 100 ms — source delays are
                     // not part of the slot wire in V1). Same re-run guard as
@@ -542,18 +552,13 @@ fun MemeEditorScreen(
                             }
                         }
                     }
-                } else {
+        } else {
                     saved.document.assets.forEach { asset ->
                         saved.assetFiles[asset.id]?.let { file ->
-                            add(EditorAsset(asset.id, android.net.Uri.fromFile(file), asset.aspect))
+                            assets += EditorAsset(asset.id, android.net.Uri.fromFile(file), asset.aspect)
                         }
                     }
-                }
-            }
         }
-    }
-    val slotId = remember(resume) {
-        resume?.document?.slotId ?: "s-" + java.util.UUID.randomUUID().toString().take(13)
     }
 
     // Dropped-resume retry (UX bug: "resume opens without the video until
@@ -1265,6 +1270,7 @@ fun MemeEditorScreen(
             TextButton(
                 onClick = {
                     activePanel = null
+                    mediaPublishViewModel?.resetCompletedMemePublish()
                     showPublish = true
                 },
                 enabled = mediaPublishViewModel != null && headerHasMedia &&

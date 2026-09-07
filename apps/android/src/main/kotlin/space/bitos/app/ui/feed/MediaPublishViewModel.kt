@@ -50,6 +50,13 @@ class MediaPublishViewModel(
         )
     }
 
+    /** The ViewModel outlives an editor; a terminal attempt must not. */
+    fun resetCompletedMemePublish() {
+        if (!memePublishBusy()) {
+            mutableMemeState.value = MemePublishUiState()
+        }
+    }
+
     private fun freshJobId(): Int {
         memeJobCounter = (1000..9999).random()
         return memeJobCounter
@@ -59,7 +66,10 @@ class MediaPublishViewModel(
      * Completes the machine stepper when the receipt machine resolves:
      * CONFIRM + the relay hosts that accepted the event.
      */
-    private fun watchMemeResult(jobId: Int) {
+    private fun watchMemeResult(
+        jobId: Int,
+        onSettled: ((Boolean, String?) -> Unit)? = null,
+    ) {
         viewModelScope.launch {
             val resolved = withTimeoutOrNull(15_000) {
                 publisher.state.first { it.result != null }
@@ -69,18 +79,29 @@ class MediaPublishViewModel(
                 ?.filter { it.accepted == true }
                 ?.map { it.relay.value.removePrefix("wss://").removePrefix("ws://").substringBefore('/') }
                 .orEmpty()
-            mutableMemeState.value = mutableMemeState.value.copy(
-                stage = MemePublishStage.CONFIRM,
-                terminal = true,
-                confirmedRelayHosts = accepted,
-            )
             if (resolved?.result == space.bitos.app.data.publish.PublishResult.PUBLISHED) {
                 jobLedger.finish(jobId)
+                mutableMemeState.value = mutableMemeState.value.copy(
+                    phase = MemePublishPhase.DONE,
+                    stage = MemePublishStage.CONFIRM,
+                    terminal = true,
+                    confirmedRelayHosts = accepted,
+                )
+                onSettled?.invoke(true, null)
             } else {
+                val failure = "No relay confirmed the event — it may still land; verify before retrying."
                 jobLedger.update(
                     jobId, status = "failed",
-                    error = "No relay confirmed the event — it may still land; verify before retrying.",
+                    error = failure,
                 )
+                mutableMemeState.value = mutableMemeState.value.copy(
+                    phase = MemePublishPhase.IDLE,
+                    stage = MemePublishStage.CONFIRM,
+                    terminal = true,
+                    confirmedRelayHosts = accepted,
+                    failure = failure,
+                )
+                onSettled?.invoke(false, failure)
             }
         }
     }
@@ -134,7 +155,6 @@ class MediaPublishViewModel(
                         onStage = { s, id -> onMemeNoteStage(s, id, job.id) },
                     )
                 }
-                mutableMemeState.value = mutableMemeState.value.copy(phase = MemePublishPhase.DONE)
                 watchMemeResult(job.id)
             } catch (failure: Exception) {
                 mutableMemeState.value = mutableMemeState.value.copy(
@@ -191,6 +211,9 @@ class MediaPublishViewModel(
             "video", caption, altText, contentWarningReason, remixTagsJson, "", "",
             bytes, "video/mp4", width, height, durationMs, thumbUrl, System.currentTimeMillis(),
         )
+        // Once rendered bytes are durable, their ledger id is the canonical
+        // attempt id used by stage callbacks and receipt completion.
+        mutableMemeState.value = mutableMemeState.value.copy(jobId = ledgerId)
         viewModelScope.launch {
             try {
                 val signer = identity.createSigner()
@@ -228,10 +251,9 @@ class MediaPublishViewModel(
                     writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
                     extraTags = parseTags(remixTagsJson),
                     powBits = powBits,
-                    onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, jobId) },
+                    onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, ledgerId) },
                 )
-                mutableMemeState.value = mutableMemeState.value.copy(phase = MemePublishPhase.DONE)
-                watchMemeResult(jobId)
+                watchMemeResult(ledgerId)
             } catch (failure: Exception) {
                 mutableMemeState.value = mutableMemeState.value.copy(
                     phase = MemePublishPhase.IDLE,
@@ -329,6 +351,7 @@ class MediaPublishViewModel(
             caption, altText, contentWarningReason, remixTagsJson, "", "",
             bytes, mimeType, width, height, 0L, null, System.currentTimeMillis(),
         )
+        mutableMemeState.value = mutableMemeState.value.copy(jobId = ledgerId)
         viewModelScope.launch {
             try {
                 val signer = identity.createSigner()
@@ -362,11 +385,9 @@ class MediaPublishViewModel(
                     space.bitos.app.data.feed.DefaultRelays.writeUrls,
                     extraTags = parseTags(remixTagsJson),
                     powBits = powBits,
-                    onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, jobId) },
+                    onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, ledgerId) },
                 )
-                mutableMemeState.value = mutableMemeState.value.copy(phase = MemePublishPhase.DONE)
-                watchMemeResult(jobId)
-                onResult?.invoke(true, null)
+                watchMemeResult(ledgerId, onResult)
             } catch (failure: Exception) {
                 mutableMemeState.value = mutableMemeState.value.copy(
                     phase = MemePublishPhase.IDLE,

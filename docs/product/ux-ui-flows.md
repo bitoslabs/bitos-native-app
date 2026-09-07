@@ -624,6 +624,10 @@ Checking project -> Rendering -> Securing media hash -> Uploading
 - Partial relay success is success with a details/retry action.
 - Hash mismatch is a blocking integrity error, never an automatic retry loop.
 - Relaunch opens the queue card at the exact durable stage.
+- Reopening a video draft restores its persisted timeline before the player
+  binds; it must play without requiring a mode switch. A completed attempt is
+  scoped to that attempt only: opening Post details for a new draft begins
+  idle, and `Done` appears only after a relay receipt confirms publication.
 
 Native implementation (2026-09-05, prototype `#/publishing` + `#/queue`
 parity): after Preflight's "Sign & publish", a full publish-machine screen

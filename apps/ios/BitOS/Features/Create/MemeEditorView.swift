@@ -1503,6 +1503,18 @@ final class MemeEditorStore {
         case done
     }
 
+    /// The editor owns one attempt at a time. Returning to Post details for
+    /// a new draft must not inherit a terminal result from the prior one.
+    func resetCompletedPublish() {
+        guard publishState != .uploading, publishState != .publishing else { return }
+        publishState = .idle
+        publishFailure = nil
+        publishStep = nil
+        publishJobId = 0
+        publishEventId = nil
+        ledgerJobId = nil
+    }
+
     func publishActiveAsset(
         caption: String,
         altText: String,
@@ -1531,6 +1543,10 @@ final class MemeEditorStore {
             setNotice("\(estimate.label) — over the 64 MB cap. Pick a lower quality in Export.")
             return
         }
+        // NotePublisher is shared across creation surfaces. Clear only its
+        // terminal presentation before starting this independent attempt;
+        // otherwise its guard silently drops the new publish.
+        publisher.dismiss()
         publishState = .uploading
         publishFailure = nil
         publishStep = .render
@@ -1744,13 +1760,15 @@ final class MemeEditorStore {
                         onStage: onStage
                     )
                 }
-                publishState = .done
                 if publisher.result == .published {
                     jobStore.finish(ledgerId, nowMs: nowMs())
+                    publishState = .done
                 } else {
+                    publishState = .idle
+                    publishFailure = "No relay confirmed the event — it may still land; verify before retrying."
                     jobStore.update(
                         ledgerId, status: "failed",
-                        error: "No relay confirmed the event — it may still land; verify before retrying.",
+                        error: publishFailure,
                         nowMs: nowMs()
                     )
                 }
@@ -1843,13 +1861,15 @@ final class MemeEditorStore {
                         onStage: onStage
                     )
                 }
-                publishState = .done
                 if publisher.result == .published {
                     jobStore.finish(job.id, nowMs: nowMs())
+                    publishState = .done
                 } else {
+                    publishState = .idle
+                    publishFailure = "No relay confirmed the event — it may still land; verify before retrying."
                     jobStore.update(
                         job.id, status: "failed",
-                        error: "No relay confirmed the event — it may still land; verify before retrying.",
+                        error: publishFailure,
                         nowMs: nowMs()
                     )
                 }
@@ -2227,8 +2247,23 @@ struct MemeEditorView: View {
             if store.timelineRestoreDroppedClips > 0 {
                 store.setNotice(
                     "\(store.timelineRestoreDroppedClips) timeline clip(s) could not be restored — "
-                        + "the last saved draft is kept; reopen it to retry"
+                        + "the last saved draft is kept; retrying…"
                 )
+                // AVFoundation can reject a just-restored file while its
+                // file coordination is still settling after relaunch. Retry
+                // in this editor session rather than requiring a mode switch
+                // or a second reopen. `restoreClips` replaces by wire id, so
+                // this cannot duplicate timeline clips.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard !Task.isCancelled else { return }
+                    store.restoreClips(from: entries)
+                    let remaining = wireEntries.count - store.clips.count
+                    store.setTimelineRestoreDroppedClips(remaining)
+                    store.setNotice(remaining == 0 ? nil :
+                        "\(remaining) timeline clip(s) could not be restored — the last saved draft is kept"
+                    )
+                }
             }
             let videoClipIds = Set(store.clips.map(\.id))
             if !store.clips.isEmpty {
@@ -3227,6 +3262,8 @@ struct MemeEditorView: View {
         let restoreIncomplete = store.isVideoMode && store.timelineRestoreDroppedClips > 0
         return Button {
             activePanel = nil
+            store.resetCompletedPublish()
+            environment.notePublisher.dismiss()
             showDetailsFlow = true
         } label: {
             Text("Next")

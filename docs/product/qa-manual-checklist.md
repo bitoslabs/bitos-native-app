@@ -55,6 +55,7 @@
 |---|---|---|
 | 1 | Open the Create hub | "Start something new" tiles sit directly under their header, above Templates (Android fixed 2026-09-07; iOS parity) |
 | 2 | Continue creating → Resume | Editor returns to the exact persisted state |
+| 2a | Resume a saved video draft | Timeline and video preview load and play immediately; switching modes is not required |
 | 3 | Draft delete (✕) | Slot disappears, list reorders |
 | 4 | Templates / Shared templates card | Editor opens seeded with the template |
 
@@ -64,6 +65,7 @@
 |---|---|---|
 | 1 | Video meme export → save to device | File plays with per-clip volume, looks and SFX cues baked |
 | 2 | Publish a meme | Receipt-machine stages render (never a silent hang); CW/alt/imeta ride the note |
+| 2a | After a successful publish, start a new draft and open Post details | New draft shows the normal idle preflight, not the prior attempt's `Done`; `Done` appears only after a relay acceptance |
 | 3 | Kill the app mid-render → relaunch | Draft intact; no partial artifacts published |
 
 ## Run log
