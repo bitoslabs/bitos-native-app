@@ -86,23 +86,23 @@ struct StoryComposerSheet: View {
                 VStack(spacing: BitOSTheme.Spacing.md) {
                     preview
 
-                    TextField(
+                    // Caption + live counter (brand field, legacy Flutter
+                    // InputDecoration parity).
+                    BitosField(
                         images.isEmpty ? "What's on your mind?" : "Add a caption…",
                         text: $text,
                         axis: .vertical
                     )
-                    .font(.system(size: 14))
                     .lineLimit(1...3)
                     .onChange(of: text) { _, value in
                         if value.count > 280 { text = String(value.prefix(280)) }
                     }
-                    .padding(BitOSTheme.Spacing.base)
-                    .background(BitOSTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(alignment: .trailing) {
                         Text("\(text.count)/280")
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(BitOSTheme.textSecondary)
-                            .padding(.trailing, 8)
+                            .padding(.trailing, 12)
+                            .allowsHitTesting(false)
                     }
 
                     if images.isEmpty {
@@ -128,13 +128,14 @@ struct StoryComposerSheet: View {
                             .foregroundStyle(BitOSTheme.textSecondary)
                     } else {
                         imageStrip
-                        TextField("Describe the images for screen readers (alt text)…", text: $altText)
-                            .font(.system(size: 12))
-                            .padding(BitOSTheme.Spacing.base)
-                            .background(BitOSTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12))
-                            .onChange(of: altText) { _, value in
-                                if value.count > 280 { altText = String(value.prefix(280)) }
-                            }
+                        BitosField(
+                            "Describe the images for screen readers (alt text)…",
+                            text: $altText,
+                            size: .small
+                        )
+                        .onChange(of: altText) { _, value in
+                            if value.count > 280 { altText = String(value.prefix(280)) }
+                        }
                         Button {
                             sensitive.toggle()
                         } label: {

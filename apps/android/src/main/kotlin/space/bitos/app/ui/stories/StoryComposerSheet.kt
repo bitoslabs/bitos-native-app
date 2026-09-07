@@ -31,7 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -276,14 +275,16 @@ fun StoryComposerSheet(
                 }
             }
 
-            // Caption + live counter.
-            OutlinedTextField(
+            // Caption + live counter (brand field, legacy Flutter
+            // InputDecoration parity).
+            space.bitos.app.ui.components.BitosTextField(
                 value = text,
                 onValueChange = { if (it.length <= 280) text = it },
-                placeholder = { Text(if (images.isNotEmpty()) "Add a caption…" else "What's on your mind?") },
+                placeholder = if (images.isNotEmpty()) "Add a caption…" else "What's on your mind?",
                 supportingText = { Text("${text.length}/280", style = MaterialTheme.typography.labelSmall) },
-                modifier = Modifier.fillMaxWidth(),
+                singleLine = false,
                 minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
             )
 
             // Gradient swatches (text-only slides).
@@ -373,12 +374,13 @@ fun StoryComposerSheet(
                         }
                     }
                 }
-                OutlinedTextField(
+                space.bitos.app.ui.components.BitosTextField(
                     value = altText,
                     onValueChange = { if (it.length <= 280) altText = it },
-                    placeholder = { Text("Describe the images for screen readers (alt text)…") },
-                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = "Describe the images for screen readers (alt text)…",
+                    singleLine = false,
                     textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 Row(
                     Modifier
