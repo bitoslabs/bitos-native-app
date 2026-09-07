@@ -71,6 +71,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -721,6 +722,8 @@ fun MemeEditorScreen(
     /** Classic meme generator (prototype "Meme" hot tool). */
     var showSfx by remember { mutableStateOf(false) }
     var showLayers by remember { mutableStateOf(false) }
+    /** MST-054: Giphy GIF-sticker picker (the shared composer sheet). */
+    var showGifPicker by remember { mutableStateOf(false) }
     var showTrim by remember { mutableStateOf(false) }
     /** M5 per-clip management sheet (trim · reorder · remove · duplicate). */
     var showClipSheet by remember { mutableStateOf(false) }
@@ -991,10 +994,8 @@ fun MemeEditorScreen(
      * layer overlay bound to a fresh asset (GIFs paint their first frame —
      * V1 semantics, noted in the Layers sheet).
      */
-    val layerPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    /** Shared image-layer insert (pick + GIF sticker pick land here). */
+    fun insertImageLayer(uri: android.net.Uri) {
         scope.launch {
             val bounds = withContext(Dispatchers.IO) {
                 decodeBounds(context.contentResolver, uri)
@@ -1015,6 +1016,27 @@ fun MemeEditorScreen(
         }
     }
 
+    val layerPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        insertImageLayer(uri)
+    }
+
+    /**
+     * MST-053 animated GIF sticker pick: the system document picker with a
+     * strict `image/gif` MIME filter (the photo picker exposes no
+     * animated-only type). The pick lands as an image layer whose reel is
+     * decoded by the asset effect — it animates on the stage and loops
+     * through the whole export (web `gifLayerPainter` parity).
+     */
+    val gifLayerPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        insertImageLayer(uri)
+    }
+
     /** IMAGE layer sources for the stage/export: overlay asset id → (uri, aspect). */
     val imageAssetMap = remember(assets.toList(), dataRevision) {
         assets.associate { it.id to (it.uri to it.aspect) }
@@ -1022,6 +1044,23 @@ fun MemeEditorScreen(
     /** IMAGE layer sources for the exporter: id → uri only. */
     val imageAssetUris = remember(assets.toList(), dataRevision) {
         assets.associate { it.id to it.uri }
+    }
+
+    /**
+     * Animated GIF layer reels (MST-053, web `gifLayerPainter` parity):
+     * asset id → decoded frames. Decoded lazily for EVERY image-layer
+     * asset — picking AND draft resume both land here, so an animated GIF
+     * picked anywhere animates on the stage and burns per-frame in the
+     * export; stills simply never produce a reel.
+     */
+    val gifReels = remember { mutableStateMapOf<String, MemeVideoExport.GifLayerReel>() }
+    LaunchedEffect(imageAssetMap) {
+        imageAssetMap.forEach { (id, source) ->
+            if (gifReels.containsKey(id)) return@forEach
+            MemeVideoExport.decodeGifLayerReel(context.contentResolver, source.first)?.let {
+                gifReels[id] = it
+            }
+        }
     }
 
     fun launchPicker() {
@@ -1115,6 +1154,7 @@ fun MemeEditorScreen(
                             sfxMixTimeline(exportProject, timelineMs),
                             imageAssets = exportImages,
                             preset = exportPreset,
+                            gifReels = gifReels.toMap(),
                         )
                         savedBytes = exported.bytes.size
                         check(exportJobs.artifactReady(exportJob, exported.bytes)) {
@@ -1317,6 +1357,7 @@ fun MemeEditorScreen(
                 VideoStage(
                     clips = videoClips.toList(),
                     project = state.project,
+                    gifFrameAt = { id, atMs -> gifReels[id]?.frameAt(atMs) },
                     rate = videoRate,
                     stageWidthPx = stageWidth,
                     stageHeightPx = stageHeight,
@@ -2213,6 +2254,44 @@ fun MemeEditorScreen(
         }
     }
 
+    if (showGifPicker) {
+        // MST-054: the SAME GifPickerSheet the note/story composers use —
+        // recents, trending cache and search all live there already. The
+        // pick downloads the full source (bounded) and inserts an
+        // ANIMATED image layer through the MST-053 reel path.
+        space.bitos.app.ui.create.GifPickerSheet(
+            onPick = { choice ->
+                showGifPicker = false
+                scope.launch {
+                    val bytes = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val client = okhttp3.OkHttpClient.Builder()
+                                .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                                .build()
+                            client.newCall(okhttp3.Request.Builder().url(choice.url).build())
+                                .execute().use { response ->
+                                    if (!response.isSuccessful) null else response.body?.bytes()
+                                }
+                        }.getOrNull()
+                    }
+                    if (bytes == null || bytes.size > space.bitos.core.studio.GifDecoder.MAX_INPUT_BYTES) {
+                        exportStatus = "Sticker download failed — try another"
+                        return@launch
+                    }
+                    // A cache file feeds the SAME insert path as a device
+                    // pick: bounds, layer add, reel decode (animated!).
+                    val file = java.io.File(
+                        context.cacheDir,
+                        "gif-sticker-${System.currentTimeMillis()}.gif",
+                    )
+                    withContext(Dispatchers.IO) { file.writeBytes(bytes) }
+                    insertImageLayer(android.net.Uri.fromFile(file))
+                }
+            },
+            onDismiss = { showGifPicker = false },
+        )
+    }
+
     if (showLayers) {
         ModalBottomSheet(onDismissRequest = { showLayers = false }) {
             LayersSheetContent(
@@ -2228,6 +2307,10 @@ fun MemeEditorScreen(
                 onInsert = {
                     showLayers = false
                     layerPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onPickGif = {
+                    showLayers = false
+                    showGifPicker = true
                 },
             )
         }
@@ -2398,6 +2481,7 @@ fun MemeEditorScreen(
                                 sfxMixTimeline(state.project, timelineDurationMs),
                                 imageAssets = imageAssetUris,
                                 preset = exportPreset,
+                                gifReels = gifReels.toMap(),
                             )
                             var exported = exportNow()
                             var durationMs = timelineDurationMs
@@ -3678,6 +3762,9 @@ internal fun OverlayNode(
     fx: space.bitos.core.studio.MemeFxRules.FxTransform = space.bitos.core.studio.MemeFxRules.IDENTITY,
     /** IMAGE layers: overlay asset id → (picker uri, aspect). */
     imageAssets: Map<String, Pair<android.net.Uri, Float>> = emptyMap(),
+    /** Animated GIF layer frame (MST-053): bitmap active at the stage
+     *  clock — null = still image, keep the AsyncImage path. */
+    gifFrameAt: ((assetId: String) -> android.graphics.Bitmap?)? = null,
 ) {
     val density = LocalDensity.current
     // Font/outline px live on the 1080-HIGH reference (web `paintOverlay`:
@@ -3742,9 +3829,23 @@ internal fun OverlayNode(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
             if (imageAsset != null) {
-                // Source-insert layer: the imported image/GIF still, aspect
-                // kept, height on the same 1080 reference as text (WYSIWYG
-                // with the export rasterizer's drawImageItem).
+                // Source-insert layer: the imported image — or, for animated
+                // GIF layers (MST-053), the frame active at the playhead
+                // (shared looping rule: the sticker keeps moving). Aspect
+                // from the reel keeps WYSIWYG with the export rasterizer.
+                val gifFrame = overlay.assetId?.let { gifFrameAt?.invoke(it) }
+                if (gifFrame != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = gifFrame.asImageBitmap(),
+                        contentDescription = "Animated sticker layer",
+                        contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+                        modifier = Modifier
+                            .height(imageHeight)
+                            .aspectRatio(
+                                (gifFrame.width.toFloat() / gifFrame.height).coerceIn(0.2f, 5f),
+                            ),
+                    )
+                } else {
                 coil.compose.AsyncImage(
                     model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                         .data(imageAsset.first)
@@ -3756,6 +3857,7 @@ internal fun OverlayNode(
                         .height(imageHeight)
                         .aspectRatio(imageAsset.second.coerceIn(0.2f, 5f)),
                 )
+                }
             } else if (!isSticker && outlinePx > 0f) {
                 // Classic meme outline: stroke copy behind the fill copy.
                 Box {
@@ -6705,6 +6807,8 @@ private fun LayersSheetContent(
     onDelete: (String) -> Unit,
     onMove: (id: String, delta: Int) -> Unit,
     onInsert: () -> Unit,
+    /** MST-053: animated GIF sticker pick (photo picker, animated-only). */
+    onPickGif: () -> Unit = {},
 ) {
     // Paint order = list order, so the display runs reversed: row 0 is the
     // front; "up" moves an overlay toward the front (+1 paint slot).
@@ -6713,7 +6817,7 @@ private fun LayersSheetContent(
         Text("Layers", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
         Text(
             "Top of the list paints in front. New layers land on top — restack with the arrows " +
-                "(image inserts ≤${MemeProjectContract.MAX_IMAGE_LAYERS}; GIFs paint their first frame).",
+                "(image inserts ≤${MemeProjectContract.MAX_IMAGE_LAYERS}; animated GIF stickers keep moving).",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
             modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
@@ -6826,6 +6930,13 @@ private fun LayersSheetContent(
             Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
             Text("Insert image…")
+        }
+        // MST-053: animated GIF stickers — the photo picker's animated-only
+        // filter surfaces GIFs; picked layers loop for the whole video.
+        androidx.compose.material3.OutlinedButton(onClick = onPickGif, modifier = Modifier.padding(top = BitOSSpacing.xs)) {
+            Icon(AppIcons.Sparkles, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Add animated GIF sticker…")
         }
     }
 }

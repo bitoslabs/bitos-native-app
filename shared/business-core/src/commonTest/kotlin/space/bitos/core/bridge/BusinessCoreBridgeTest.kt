@@ -676,6 +676,18 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun gifLayerFrameIndexSeamServesTheSharedLoopingRule() {
+        // MST-053: Swift consumes the SAME looping selection as Android
+        // (delays [100,200,300]): first pass, loop wrap, deep selection.
+        assertEquals(1, bridge.memeGifFrameIndexAt("[100,200,300]", 250))
+        assertEquals(0, bridge.memeGifFrameIndexAt("[100,200,300]", 600))
+        assertEquals(1, bridge.memeGifFrameIndexAt("[100,200,300]", 5_000))
+        // Junk / empty → -1, never throws.
+        assertEquals(-1, bridge.memeGifFrameIndexAt("junk", 1_000))
+        assertEquals(-1, bridge.memeGifFrameIndexAt("[]", 1_000))
+    }
+
+    @Test
     fun memeFxTransformAndCueTrackSeamsFeedTimedExports() {
         var project = """{"v":1,"mode":"video","assets":[],"overlays":[]}"""
         project = bridge.memeApplyCommand(

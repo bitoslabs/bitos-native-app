@@ -249,6 +249,10 @@ protocol BusinessCoreClient: Sendable {
     /// `{"bytes","label","publishFits"}` for a preset × trimmed duration;
     /// "" on unknown tier ids.
     func memeExportEstimate(_ resolution: String, quality: String, durationMs: Int64) -> String
+    /// MST-053 animated GIF layer timing (shared looping rule — no Swift
+    /// mirror): frame index at [atMs] over a `[delaysMs]` JSON array; -1
+    /// on junk.
+    func memeGifFrameIndexAt(_ delaysJson: String, atMs: Int64) -> Int32
     /// MST post-details meme PoW (NIP-13): mine one bounded window over the
     /// EXACT meme template (media uploaded — the imeta is final); "nonce:id"
     /// or nil. `nowSeconds` IS the mining timestamp (publish must reuse it).
@@ -859,6 +863,11 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeExportEstimate(resolution: resolution, quality: quality, durationMs: durationMs)
     }
 
+    func memeGifFrameIndexAt(_ delaysJson: String, atMs: Int64) -> Int32 {
+        bridge.memeGifFrameIndexAt(delaysJson: delaysJson, atMs: atMs)
+    }
+
+
     func mineMemeVideoPow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
         bridge.mineMemeVideoPow(
             authorPubkey: authorPubkey, caption: caption, altText: altText,
@@ -1243,6 +1252,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeExportEstimate(_ resolution: String, quality: String, durationMs: Int64) -> String {
         FrameworkBusinessCoreClient().memeExportEstimate(resolution, quality: quality, durationMs: durationMs)
+    }
+    func memeGifFrameIndexAt(_ delaysJson: String, atMs: Int64) -> Int32 {
+        FrameworkBusinessCoreClient().memeGifFrameIndexAt(delaysJson, atMs: atMs)
     }
     func mineMemeVideoPow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
         FrameworkBusinessCoreClient().mineMemeVideoPow(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, portrait: portrait, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, durationMs: durationMs, nowSeconds: nowSeconds, thumbUrl: thumbUrl, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag, targetDifficulty: targetDifficulty, startNonce: startNonce, maxAttempts: maxAttempts)

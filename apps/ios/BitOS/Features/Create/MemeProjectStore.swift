@@ -72,7 +72,7 @@ struct MemeProjectStore: Sendable {
     func save(
         slotId: String,
         projectJson: String,
-        assets: [(id: String, image: UIImage)],
+        assets: [(id: String, image: UIImage, data: Data?)],
         dataAssets: [(id: String, data: Data, fileName: String)] = [],
         nowMs: Int64
     ) -> [String] {
@@ -81,11 +81,16 @@ struct MemeProjectStore: Sendable {
 
         var assetRows: [[String: Any]] = []
         for asset in assets {
-            let file = "asset-\(asset.id).png"
+            // MST-053: animated GIF assets persist their ORIGINAL bytes —
+            // PNG-encoding would freeze the sticker on its first frame.
+            let file = asset.data != nil ? "asset-\(asset.id).gif" : "asset-\(asset.id).png"
             let target = dir.appendingPathComponent(file)
-            if !FileManager.default.fileExists(atPath: target.path),
-               let png = asset.image.pngData() {
-                try? png.write(to: target)
+            if !FileManager.default.fileExists(atPath: target.path) {
+                if let bytes = asset.data {
+                    try? bytes.write(to: target)
+                } else if let png = asset.image.pngData() {
+                    try? png.write(to: target)
+                }
             }
             let size = (try? UIImage(contentsOfFile: target.path)?.size) ?? CGSize(width: 1, height: 1)
             let aspect = size.height > 0 ? size.width / size.height : 1

@@ -41,6 +41,10 @@ struct MemeEditorAsset: Identifiable, Equatable {
     let id: String
     let image: UIImage
     let aspect: CGFloat
+    /// MST-053: original bytes when the source is an animated GIF — the
+    /// slot persists them VERBATIM (PNG-encoding would freeze the sticker
+    /// on its first frame) and the reel decodes from them.
+    var data: Data? = nil
 }
 
 /// One pen stroke (V2 Draw chip): normalized polyline under the overlays.
@@ -488,7 +492,7 @@ final class MemeEditorStore {
     // MARK: - Assets (session ids a1…a9; refs live in `assets`)
 
     @discardableResult
-    func addAsset(image: UIImage) -> String? {
+    func addAsset(image: UIImage, data: Data? = nil) -> String? {
         // Video mode: assets are IMAGE layer sources only (≤6, the clip
         // lives in `videoClipData`) — and none becomes `activeAsset`
         // (Looks stays image-mode only).
@@ -497,10 +501,49 @@ final class MemeEditorStore {
         let id = "a\(assets.count + 1)-\(image.hashValue.magnitude % 100_000)"
         guard !assets.contains(where: { $0.id == id }) else { return nil }
         let aspect = image.size.height > 0 ? image.size.width / image.size.height : 1
-        let asset = MemeEditorAsset(id: id, image: image, aspect: aspect)
+        // MST-053: retain the original bytes only for GIF sources — they
+        // carry the animation (still images keep the PNG path).
+        let gifBytes = data.flatMap { bytes -> Data? in
+            bytes.starts(with: Array("GIF8".utf8)) ? bytes : nil
+        }
+        let asset = MemeEditorAsset(id: id, image: image, aspect: aspect, data: gifBytes)
         assets.append(asset)
         if activeAssetId == nil && !isVideoMode { activeAssetId = id }
+        if gifBytes != nil { refreshGifReels() }
         return id
+    }
+
+    /// Animated GIF layer reels (MST-053, web `gifLayerPainter` parity):
+    /// asset id → decoded frames. Decoded off-main for EVERY asset that
+    /// carried GIF bytes — picking and draft resume both land here.
+    private(set) var gifReels: [String: MemeVideoExportIos.GifLayerReel] = [:]
+
+    func refreshGifReels() {
+        let candidates = assets.filter { $0.data != nil && gifReels[$0.id] == nil }
+        guard !candidates.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var decoded: [String: MemeVideoExportIos.GifLayerReel] = [:]
+            for asset in candidates {
+                if let bytes = asset.data, let reel = MemeVideoExportIos.decodeGifLayerReel(data: bytes) {
+                    decoded[asset.id] = reel
+                }
+            }
+            guard !decoded.isEmpty else { return }
+            await MainActor.run {
+                self?.gifReels.merge(decoded) { _, new in new }
+            }
+        }
+    }
+
+    /// The frame active at [seconds] for an animated GIF layer — the
+    /// SHARED looping rule through the bridge (no Swift mirror), so the
+    /// stage preview and both exporters stay WYSIWYG.
+    func gifLayerFrame(assetId: String, seconds: Double) -> UIImage? {
+        guard let reel = gifReels[assetId] else { return nil }
+        let delays = "[\(reel.delaysMs.map(String.init).joined(separator: ","))]"
+        let index = client.memeGifFrameIndexAt(delays, atMs: Int64(seconds * 1000))
+        guard index >= 0 else { return nil }
+        return UIImage(cgImage: reel.frames[min(Int(index), reel.frames.count - 1)])
     }
 
     static let imageAssetCap = 9
@@ -1346,7 +1389,8 @@ final class MemeEditorStore {
                         clipURL: source.url, probe: source.probe,
                         projectJson: source.wire, client: client,
                         images: images,
-                        preset: exportPreset
+                        preset: exportPreset,
+                        gifReels: gifReels
                     )
                     guard exportJobs.artifactReady(exportJob, bytes: exported.data, nowMs: nowMs()) else {
                         throw MemeRaster.ExportError(message: "Could not persist the render")
@@ -1572,7 +1616,8 @@ final class MemeEditorStore {
                         clipURL: source.url, probe: source.probe,
                         projectJson: source.wire, client: client,
                         images: layerImages,
-                        preset: exportPreset
+                        preset: exportPreset,
+                        gifReels: gifReels
                     )
                     let maxBytes = 64 * 1024 * 1024
                     var durationMs = source.probe.durationMs
@@ -1608,7 +1653,8 @@ final class MemeEditorStore {
                             clipURL: source.url, probe: source.probe,
                             projectJson: source.wire, client: client,
                             images: self.layerImages,
-                            preset: exportPreset
+                            preset: exportPreset,
+                            gifReels: self.gifReels
                         )
                         }
                     }
@@ -2153,6 +2199,36 @@ struct MemeEditorView: View {
                 }
             )
         }
+        .sheet(isPresented: $showGifStickerPicker) {
+            // MST-054: the SAME GifPickerSheet the note/story composers
+            // use — recents, trending cache and search live there already.
+            // The pick downloads the full source (bounded ≤24 MiB) and
+            // inserts an ANIMATED image layer (MST-053 reel path).
+            GifPickerSheet(
+                onPick: { gif in
+                    showGifStickerPicker = false
+                    Task {
+                        do {
+                            guard let url = URL(string: gif.url),
+                                  let (bytes, response) = try? await URLSession.shared.data(from: url),
+                                  (response as? HTTPURLResponse)?.statusCode == 200,
+                                  !bytes.isEmpty,
+                                  bytes.count <= 24 * 1024 * 1024 else {
+                                store.setNotice("Sticker download failed — try another")
+                                return
+                            }
+                            guard let image = UIImage(data: bytes),
+                                  let id = store.addAsset(image: image, data: bytes) else {
+                                store.setNotice("Sticker unreadable — try another")
+                                return
+                            }
+                            store.addImageOverlay(assetId: id)
+                        }
+                    }
+                },
+                onDismiss: { showGifStickerPicker = false }
+            )
+        }
         .photosPicker(
             isPresented: $isPicking,
             selection: $pickerItems,
@@ -2271,11 +2347,15 @@ struct MemeEditorView: View {
                 // ride the same assetFiles map; GIF-inserts stay still).
                 for asset in resumeSlot.document.assets where !videoClipIds.contains(asset.id) {
                     if let url = resumeSlot.assetFiles[asset.id],
-                       let image = UIImage(contentsOfFile: url.path) {
-                        store.addAsset(image: image)
+                       let data = try? Data(contentsOf: url),
+                       let image = UIImage(data: data) {
+                        // Original bytes ride along — an animated GIF layer
+                        // resumes ANIMATED (MST-053).
+                        store.addAsset(image: image, data: data)
                     }
                 }
             }
+            store.refreshGifReels()
             return
         }
         for asset in resumeSlot.document.assets.sorted(by: { $0.id < $1.id }) {
@@ -2498,16 +2578,25 @@ struct MemeEditorView: View {
                 }
                 .accessibilityLabel("Add clip")
             }
-            Button {
-                isPicking = true
-            } label: {
-                AppIcons.image(for: AppIcons.photo)
-                    .foregroundStyle(BitOSTheme.textPrimary)
+            if store.isVideoMode {
+                // MST-054: the Giphy GIF-sticker picker (trending/search,
+                // transparent stickers — animated layers per MST-053).
+                Button {
+                    showGifStickerPicker = true
+                } label: {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                }
+                .accessibilityLabel("Add GIF sticker layer")
+            } else {
+                Button {
+                    isPicking = true
+                } label: {
+                    AppIcons.image(for: AppIcons.photo)
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                }
+                .accessibilityLabel(store.isGifMode ? "Add frames" : "Add image")
             }
-            .accessibilityLabel(
-                store.isGifMode ? "Add frames"
-                    : (store.isVideoMode ? "Add image layer" : "Add image")
-            )
             Button {
                 store.undo()
             } label: {
@@ -2565,6 +2654,9 @@ struct MemeEditorView: View {
                         store: store,
                         projectJson: store.projectJson,
                         client: environment.businessCore,
+                        gifFrameAt: { assetId, seconds in
+                            store.gifLayerFrame(assetId: assetId, seconds: seconds)
+                        },
                         coverSet: store.coverThumbUrl != nil,
                         onSetCover: { seconds in
                             guard let mapped = store.timelineToMedia(Int64(seconds * 1000)) else { return }
@@ -2772,6 +2864,8 @@ struct MemeEditorView: View {
     }
 
     @State private var isPicking = false
+    /// MST-054: Giphy GIF-sticker picker (video-mode layer source).
+    @State private var showGifStickerPicker = false
     @State private var isPickingVideo = false
 
     // ── Tray ────────────────────────────────────────────────────────────
@@ -3288,7 +3382,7 @@ struct MemeEditorView: View {
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let image = UIImage(data: data),
-                   let id = store.addAsset(image: image) {
+                   let id = store.addAsset(image: image, data: data) {
                     store.addImageOverlay(assetId: id)
                 }
             }
@@ -3304,7 +3398,7 @@ struct MemeEditorView: View {
         for item in items where added < room {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data),
-               let id = store.addAsset(image: image) {
+               let id = store.addAsset(image: image, data: data) {
                 added += 1
                 if hadBackground || added > 1 {
                     store.addImageOverlay(assetId: id)
@@ -3376,9 +3470,9 @@ struct MemeEditorView: View {
         }
         store.draftSaveState = .saving
         let wire = store.projectJson
-        var assets = store.assets.map { ($0.id, $0.image) }
+        var assets = store.assets.map { ($0.id, $0.image, $0.data) }
         // GIF frames persist as slot assets too (f1…fN, PNG bytes).
-        assets += store.gifFrames.map { ($0.id, $0.image) }
+        assets += store.gifFrames.map { ($0.id, $0.image, nil as Data?) }
         var dataAssets: [(id: String, data: Data, fileName: String)] = []
         // M5: every timeline clip source persists (v1…vN).
         for clip in store.clips {

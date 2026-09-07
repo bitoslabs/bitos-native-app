@@ -19,6 +19,44 @@ enum MemeVideoExportIos {
         var errorDescription: String? { message }
     }
 
+    /**
+     * Animated GIF layer reel (MST-053, web `DecodedGif`/`gifLayerPainter`
+     * parity): composited frames + encoded holds. Frame selection runs
+     * through the SHARED looping rule via the bridge seam — the sticker
+     * keeps moving for the whole export instead of freezing after its
+     * first pass. Still image layers have no reel.
+     */
+    struct GifLayerReel {
+        let frames: [CGImage]
+        /// Per-frame hold (ms); the web heuristic floors sub-2cs holds to 100 ms.
+        let delaysMs: [Int]
+    }
+
+    /** Animated-GIF input bound (shared `GifDecoder.MAX_INPUT_BYTES`). */
+    static let maxGifLayerBytes = 24 * 1024 * 1024
+
+    /** Decodes animated GIF data (≥2 frames); nil = still image. */
+    static func decodeGifLayerReel(data: Data) -> GifLayerReel? {
+        guard data.count <= maxGifLayerBytes,
+              data.starts(with: Array("GIF8".utf8)),
+              let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        guard count >= 2 else { return nil }
+        var frames: [CGImage] = []
+        var delays: [Int] = []
+        for index in 0..<count {
+            guard let image = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            frames.append(image)
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
+            let gif = properties?[kCGImagePropertyGIFDictionary as String] as? [String: Any]
+            let holdMs = Int((((gif?[kCGImagePropertyGIFDelayTime as String] as? Double) ?? 0) * 1000).rounded())
+            // Sub-2cs holds render as 10cs in every engine — floor them.
+            delays.append(holdMs < 20 ? 100 : max(1, holdMs))
+        }
+        guard frames.count >= 2, frames.count == delays.count else { return nil }
+        return GifLayerReel(frames: frames, delaysMs: delays)
+    }
+
     /// MST-036 export preset — tier ids are the shared enum names; the
     /// `memeEncoderPlan` seam is the single source (no Swift table
     /// mirror). AUTO = pre-MST-036 behavior (1080p / 6 Mbps / highest tier).
@@ -335,7 +373,8 @@ enum MemeVideoExportIos {
         projectJson: String,
         client: any BusinessCoreClient,
         images: [String: UIImage] = [:],
-        preset: ExportPreset = .auto
+        preset: ExportPreset = .auto,
+        gifReels: [String: GifLayerReel] = [:]
     ) async throws -> Exported {
         // MST-036: the shared encoder plan drives the output canvas (the
         // overlay envelope + layer transform + render size all live on it).
@@ -370,8 +409,17 @@ enum MemeVideoExportIos {
             let fx = (row["fx"] as? String).flatMap { $0.isEmpty || $0 == "none" ? nil : $0 } != nil
             return window || fx
         }
+        // MST-053: an animated GIF layer is ALWAYS timed — its contents
+        // keyframe over the output duration (the flattened fast path
+        // would freeze the sticker on its first frame).
+        func gifAssetId(_ row: [String: Any]) -> String? {
+            guard let assetId = row["asset"] as? String, !assetId.isEmpty,
+                  gifReels[assetId] != nil else { return nil }
+            return assetId
+        }
         let anyTimed = rows.contains { row in
-            (row["id"] as? String).flatMap { overlayRowsById[$0] }.map(isTimed) ?? false
+            (row["id"] as? String).flatMap { overlayRowsById[$0] }
+                .map { isTimed($0) || gifAssetId($0) != nil } ?? false
         }
 
         let asset = AVURLAsset(url: clipURL)
@@ -477,6 +525,13 @@ enum MemeVideoExportIos {
                 let staticRotDeg = (row["rot"] as? NSNumber)?.doubleValue ?? 0
                 layer.transform = CATransform3DMakeRotation(CGFloat(staticRotDeg) * .pi / 180, 0, 0, 1)
                 overlayLayer.addSublayer(layer)
+                if let assetId = overlayRowsById[id].flatMap(gifAssetId),
+                   let reel = gifReels[assetId] {
+                    applyGifContentsAnimation(
+                        to: layer, row: paintRow, assetId: assetId, reel: reel,
+                        baseImages: images, size: size, durationSec: durationSec
+                    )
+                }
                 if timed {
                     applyTimedAnimation(
                         to: layer,
@@ -769,6 +824,63 @@ enum MemeVideoExportIos {
     }
 
     /**
+     * MST-053: keyframes a GIF layer's CONTENTS over the whole output
+     * duration — one rendered content per GIF frame (the same paint path,
+     * only the frame image swaps), keyTimes normalized on the output
+     * clock, looping (shared rule parity: the sticker never freezes after
+     * its first pass). Bounded at 2400 keyframes for pathological cases.
+     */
+    private static func applyGifContentsAnimation(
+        to layer: CALayer,
+        row: [String: Any],
+        assetId: String,
+        reel: GifLayerReel,
+        baseImages: [String: UIImage],
+        size: CGSize,
+        durationSec: Double
+    ) {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        var frameContents: [CGImage] = []
+        for frame in reel.frames {
+            var frameImages = baseImages
+            frameImages[assetId] = UIImage(cgImage: frame)
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                MemeRaster.paint(
+                    row, in: context.cgContext, images: frameImages,
+                    centerOverride: CGPoint(x: size.width / 2, y: size.height / 2)
+                )
+            }
+            guard let cg = image.cgImage else { return }
+            frameContents.append(cg)
+        }
+        guard frameContents.count == reel.frames.count, !frameContents.isEmpty else { return }
+        let durationMs = max(1, Int(durationSec * 1000))
+        var values: [CGImage] = []
+        var keyTimes: [NSNumber] = []
+        var clock = 0
+        var lastFrame = frameContents[0]
+        while clock < durationMs && values.count < 2400 {
+            for (index, hold) in reel.delaysMs.enumerated() {
+                guard clock < durationMs else { break }
+                values.append(frameContents[index])
+                keyTimes.append(NSNumber(value: min(1.0, Double(clock) / Double(durationMs))))
+                lastFrame = frameContents[index]
+                clock += max(1, hold)
+            }
+        }
+        values.append(lastFrame)
+        keyTimes.append(1.0)
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = values
+        animation.keyTimes = keyTimes
+        animation.duration = durationSec
+        animation.fillMode = .both
+        animation.isRemovedOnCompletion = false
+        layer.add(animation, forKey: "memeGifContents")
+    }
+
+    /**
      * Keyframes one overlay layer over the whole output duration, sampled
      * from the shared `memeFxTransformAt` seam (scale|rot|dx|dy|alpha —
      * the window folds into alpha, so out-of-window samples are 0). The
@@ -882,6 +994,9 @@ struct VideoStageIos: View {
     @Bindable var store: MemeEditorStore
     let projectJson: String
     let client: any BusinessCoreClient
+    /// MST-053 animated GIF layers: frame active at the stage clock —
+    /// nil = still image, render `layerImages`.
+    var gifFrameAt: ((String, Double) -> UIImage?)? = nil
     var coverSet: Bool = false
     var onSetCover: (Double) -> Void = { _ in }
     /// SFX cue markers (MST-041) + playhead tracking for cue placement.
@@ -989,7 +1104,10 @@ struct VideoStageIos: View {
                                 selected: overlay.id == store.selectedId,
                                 paletteHex: store.paletteHex,
                                 fx: MemeFxBridge.paintState(overlay.id, projectJson: projectJson, atSec: positionSeconds, client: client),
-                                layerImage: overlay.isImage ? overlay.assetId.flatMap { layerImages[$0] } : nil
+                                layerImage: overlay.isImage
+                                    ? (overlay.assetId.flatMap { gifFrameAt?($0, positionSeconds) }
+                                        ?? overlay.assetId.flatMap { layerImages[$0] })
+                                    : nil
                             )
                         }
                     }

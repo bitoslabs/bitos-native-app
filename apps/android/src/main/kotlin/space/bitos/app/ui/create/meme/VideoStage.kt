@@ -85,6 +85,9 @@ internal fun VideoStage(
     onPositionChange: (Long) -> Unit = {},
     /** IMAGE layer sources: overlay asset id → (uri, aspect). */
     imageAssets: Map<String, Pair<android.net.Uri, Float>> = emptyMap(),
+    /** Animated GIF layers (MST-053): frame active at the passed time —
+     *  null = not animated, render the still. */
+    gifFrameAt: ((assetId: String, atMs: Long) -> android.graphics.Bitmap?)? = null,
     /** Suite mode hides the scrub row — the timeline dock owns transport. */
     showScrub: Boolean = true,
     /** Player control surface for the suite dock (registered, not owned). */
@@ -289,6 +292,11 @@ internal fun VideoStage(
                         selected = overlay.id == selectedId,
                         fx = space.bitos.core.studio.MemeFxRules.transformAt(overlay, timelineMs),
                         imageAssets = imageAssets,
+                        gifFrameAt = if (gifFrameAt != null) {
+                            { id -> gifFrameAt(id, timelineMs) }
+                        } else {
+                            null
+                        },
                     )
                 }
                 overlays.firstOrNull { it.id == selectedId }?.let { selected ->

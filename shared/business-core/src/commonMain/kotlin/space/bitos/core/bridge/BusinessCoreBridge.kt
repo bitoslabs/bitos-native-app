@@ -1,6 +1,8 @@
 package space.bitos.core.bridge
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -2387,6 +2389,23 @@ class BusinessCoreBridge {
         val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
         return space.bitos.core.studio.MemeExportRules.exportEnvelope(project, sourceWidth, sourceHeight)
     }
+
+    /**
+     * MST-053 animated GIF layer timing (Swift seam — no mirror): the
+     * shared [space.bitos.core.studio.GifLayerRules.frameIndexAt] looping
+     * selection over a `[delaysMs]` JSON array; -1 on junk (never throws).
+     */
+    fun memeGifFrameIndexAt(delaysJson: String, atMs: Long): Int {
+        val delays = try {
+            Json.parseToJsonElement(delaysJson).jsonArray
+                .mapNotNull { (it as? JsonPrimitive)?.intOrNull }
+        } catch (_: Exception) {
+            return -1
+        }
+        if (delays.isEmpty()) return -1
+        return space.bitos.core.studio.GifLayerRules.frameIndexAt(delays, atMs)
+    }
+
 
     /**
      * MST-036 export-quality seams: tier ids are the shared enum names,

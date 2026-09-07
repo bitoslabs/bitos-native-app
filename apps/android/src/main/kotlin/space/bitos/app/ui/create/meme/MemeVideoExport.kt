@@ -11,6 +11,8 @@ import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.Transformer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
@@ -52,6 +54,44 @@ object MemeVideoExport {
     }
 
     class ExportFailure(message: String) : Exception(message)
+
+    /**
+     * Animated GIF layer reel (web `DecodedGif`/`gifLayerPainter` parity,
+     * MST-053): composited frames + encoded holds. The active frame at
+     * media time comes from the SHARED looping rule — a GIF layer keeps
+     * moving for the whole export instead of freezing after its first
+     * pass. Still image layers have no reel.
+     */
+    class GifLayerReel(val frames: List<Bitmap>, val delaysMs: List<Int>) {
+        fun frameAt(atMs: Long): Bitmap =
+            frames[space.bitos.core.studio.GifLayerRules.frameIndexAt(delaysMs, atMs)]
+    }
+
+    /**
+     * Decodes an image-layer source into an animated reel when the bytes
+     * are an animated GIF (≥2 decoded frames, bounded input); null = still
+     * image — the caller keeps the static path. Off-thread by contract.
+     */
+    suspend fun decodeGifLayerReel(
+        resolver: android.content.ContentResolver,
+        uri: Uri,
+    ): GifLayerReel? = withContext(Dispatchers.IO) {
+        runCatching {
+            val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return@runCatching null
+            if (bytes.size > space.bitos.core.studio.GifDecoder.MAX_INPUT_BYTES) return@runCatching null
+            val decoded = space.bitos.core.studio.GifDecoder.decode(bytes) ?: return@runCatching null
+            if (!space.bitos.core.studio.GifLayerRules.isAnimated(decoded.frames.size)) {
+                return@runCatching null
+            }
+            val frames = decoded.frames.map { frame ->
+                Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888).also {
+                    it.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(frame.rgba))
+                }
+            }
+            GifLayerReel(frames, decoded.frames.map { it.delayMs })
+        }.getOrNull()
+    }
 
     /**
      * Export result (MST-036): the artifact bytes plus the ACTUAL output
@@ -96,6 +136,7 @@ object MemeVideoExport {
         sfxPcm16: ByteArray? = null,
         imageAssets: Map<String, Uri> = emptyMap(),
         preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+        gifReels: Map<String, GifLayerReel> = emptyMap(),
     ): Exported {
         require(clips.isNotEmpty()) { "no clips" }
         // One uniform output canvas for the whole timeline (a sequence muxes
@@ -106,9 +147,20 @@ object MemeVideoExport {
         val plan = MemeExportPresets.encoderPlan(
             preset, largestClip.probe.uprightWidth, largestClip.probe.uprightHeight,
         )
-        val imageFor: ((String) -> Bitmap?) = imageAssets.takeIf { it.isNotEmpty() }?.let { assets ->
-            { id -> assets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) } }
-        } ?: { null }
+        // Still image layers decode ONCE per export (the old per-frame
+        // decode re-read the source every onDraw); animated GIF layers
+        // resolve per frame through the shared looping rule.
+        val staticImages = HashMap<String, Bitmap>()
+        fun imageForAt(atMs: Long): (String) -> Bitmap? = { id ->
+            val frame = gifReels[id]?.frameAt(atMs)
+            if (frame != null) {
+                frame
+            } else {
+                staticImages[id]
+                    ?: imageAssets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) }
+                        ?.also { decoded -> staticImages[id] = decoded }
+            }
+        }
 
         val files = mutableListOf<File>()
         try {
@@ -138,6 +190,7 @@ object MemeVideoExport {
                             canvas,
                             space.bitos.core.studio.MemeExportRules.drawingPlan(project, frameWidth, frameHeight),
                         )
+                        val imageFor = imageForAt(timelineMs)
                         space.bitos.core.studio.MemeExportRules
                             .paintPlanAt(project, frameWidth, frameHeight, timelineMs)
                             .forEach { timed ->
@@ -307,6 +360,7 @@ object MemeVideoExport {
         sfxPcm16: ByteArray? = null,
         imageAssets: Map<String, Uri> = emptyMap(),
         preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+        gifReels: Map<String, GifLayerReel> = emptyMap(),
     ): Exported {
         val plan = MemeExportPresets.encoderPlan(preset, probe.uprightWidth, probe.uprightHeight)
         // Paint plans live on the output canvas (post-scale) — text burns
@@ -320,9 +374,20 @@ object MemeVideoExport {
         val clipEnd = (if (project.trimEndMs > 0) project.trimEndMs else probe.durationMs)
             .coerceIn(clipStart, probe.durationMs)
 
-        val imageFor: ((String) -> Bitmap?) = imageAssets.takeIf { it.isNotEmpty() }?.let { assets ->
-            { id -> assets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) } }
-        } ?: { null }
+        // Still image layers decode ONCE per export (the old per-frame
+        // decode re-read the source every onDraw); animated GIF layers
+        // resolve per frame through the shared looping rule.
+        val staticImages = HashMap<String, Bitmap>()
+        fun imageForAt(atMs: Long): (String) -> Bitmap? = { id ->
+            val frame = gifReels[id]?.frameAt(atMs)
+            if (frame != null) {
+                frame
+            } else {
+                staticImages[id]
+                    ?: imageAssets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) }
+                        ?.also { decoded -> staticImages[id] = decoded }
+            }
+        }
 
         // Timed burn-in (MST-044 close-out): windows + fx render per frame
         // from the shared plan — the export finally matches the stage.
@@ -338,6 +403,7 @@ object MemeVideoExport {
                     canvas,
                     space.bitos.core.studio.MemeExportRules.drawingPlan(project, frameWidth, frameHeight),
                 )
+                val imageFor = imageForAt(mediaMs)
                 space.bitos.core.studio.MemeExportRules
                     .paintPlanAt(project, frameWidth, frameHeight, mediaMs)
                     .forEach { timed ->
