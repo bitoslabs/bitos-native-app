@@ -439,11 +439,13 @@ class NoteComposer(
         media: space.bitos.core.model.UploadedMedia,
         altText: String = "",
         contentWarningReason: String? = null,
+        includeClientTag: Boolean = false,
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val trimmed = caption.trim().take(MAX_NOTE_LENGTH)
         val tags = mutableListOf<List<String>>()
         tags += ComposerRules.deriveTags(trimmed).filter { it.firstOrNull() == "t" }
+        if (includeClientTag) tags += clientTag()
         val alt = altText.ifBlank { trimmed }.trim().take(200)
         if (alt.isNotEmpty()) tags += listOf("alt", alt)
         tags += listOf(listOf("imeta") + media.imetaFields())
@@ -469,12 +471,16 @@ class NoteComposer(
         portrait: Boolean,
         media: space.bitos.core.model.UploadedMedia,
         extraTags: List<List<String>> = emptyList(),
+        includeClientTag: Boolean = false,
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val kind = if (portrait) NostrKinds.SHORT_VIDEO else NostrKinds.NORMAL_VIDEO
         val trimmedCaption = caption.trim().take(space.bitos.core.studio.MemeWire.MAX_CAPTION)
         val tags = mutableListOf<List<String>>()
         tags += ComposerRules.deriveTags(trimmedCaption).filter { it.firstOrNull() == "t" }
+        // Web `postBitz` prefix order: t-tags → client → extra tags
+        // (remix lineage) → alt → imeta.
+        if (includeClientTag) tags += clientTag()
         tags += extraTags
         val alt = altText.ifBlank { trimmedCaption }.trim().take(200)
         if (alt.isNotEmpty()) tags += listOf("alt", alt)
@@ -502,12 +508,15 @@ class NoteComposer(
         contentWarningReason: String?,
         media: space.bitos.core.model.UploadedMedia,
         extraTags: List<List<String>> = emptyList(),
+        includeClientTag: Boolean = false,
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val trimmedCaption = caption.trim().take(space.bitos.core.studio.MemeWire.MAX_CAPTION)
         val tags = mutableListOf<List<String>>()
         tags += ComposerRules.deriveTags(trimmedCaption).filter { it.firstOrNull() == "t" }
-        // Web `postBitz` order: extra tags (remix lineage) ride BEFORE alt.
+        // Web `postBitz` order: client branding, then extra tags (remix
+        // lineage), both BEFORE alt.
+        if (includeClientTag) tags += clientTag()
         tags += extraTags
         val alt = altText.ifBlank { trimmedCaption }.trim().take(200)
         if (alt.isNotEmpty()) tags += listOf("alt", alt)
@@ -650,6 +659,15 @@ class NoteComposer(
     }
 
     /**
+     * NIP-89-ish client branding tag (web `client-tag.ts` parity — the
+     * exact `["client","BitOS"]` the web postBitz emits). Opt-in: callers
+     * pass the `PrivacyPrefs.includeClientTag` resolution; the composer
+     * itself stays pure.
+     */
+    private fun clientTag(): List<String> = listOf("client", CLIENT_NAME)
+
+
+    /**
      * Kind-1 note with a pre-mined NIP-13 nonce tag (APP-008 PowCard path):
      * `nonce` was found by [space.bitos.core.nostr.Pow.mineChunk] over the
      * same fields; the ID is recomputed with the committed tag so the frame
@@ -707,6 +725,9 @@ class NoteComposer(
     companion object {
         /** UI-side bound, deliberately far below the protocol limit. */
         const val MAX_NOTE_LENGTH: Int = 16_000
+
+        /** Branding value for the opt-in `client` tag (web client-tag.ts). */
+        const val CLIENT_NAME = "BitOS"
 
         /** APP-009 participant p-tag bound (hostile targets stay bounded). */
         const val MAX_REPLY_PARTICIPANTS: Int = 16

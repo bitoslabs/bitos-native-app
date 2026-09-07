@@ -173,6 +173,45 @@ object MemeRemix {
 
     private val KNOWN_KEYS = setOf("v", "o", "c", "l")
 
+    /**
+     * Web `applyRemixPayload` parity: clone the compact payload's overlays,
+     * cues and look onto [project] with FRESH ids so each remix is an
+     * independently editable copy (mirrors memeTemplates.apply semantics —
+     * ids strip first, normalization hands out new ones). REPLACE, not
+     * append: a remix session starts from the source layout, it does not
+     * stack on whatever the project already held.
+     *
+     * Custom-sound cues drop (the local project cue has no library id slot;
+     * a cue without its sound is noise). Tracks the native editor cannot
+     * model or re-emit (`g`/`z`/`f`/`s` passthrough) drop too — carrying
+     * them would claim effects the export never burns in.
+     */
+    fun applyTo(project: MemeProject, payload: String?): MemeProject {
+        val document = decode(payload) ?: return project
+        val seeded = MemeWireConvert.wireToLocal(document)
+        val taken = HashSet<String>()
+        project.overlays.forEach { taken.add(it.id) }
+        project.sfxCues.forEach { taken.add(it.id) }
+
+        fun freshId(prefix: String): String {
+            var n = 0
+            while (true) {
+                n += 1
+                val candidate = "$prefix$n"
+                if (taken.add(candidate)) return candidate
+            }
+        }
+
+        return project.copy(
+            overlays = seeded.overlays.map { it.copy(id = freshId("r")) },
+            sfxCues = document.sfxCues
+                .filter { it.sfx != MemeWire.CUSTOM_SOUND_KEY }
+                .map { cue -> MemeSfxCue(id = freshId("s"), sfx = cue.sfx, atMs = cue.atMs, gain = cue.gain) },
+            lookId = document.lookId ?: project.lookId,
+        )
+    }
+
+
     /** Web `cleanColor` parity: valid #hex survives, junk → white. */
     private fun cleanColor(raw: String?): String {
         val trimmed = raw?.trim() ?: return "#ffffff"

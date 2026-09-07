@@ -74,6 +74,39 @@ class RemixTest {
     }
 
     @Test
+    fun relayHintsMergeSourceFirstDedupeAndCap() {
+        // Web remixReel parity: source hints first, write relays fill, cap 3.
+        assertEquals(
+            listOf("wss://a.example", "wss://b.example", "wss://c.example"),
+            RemixRules.relayHints(
+                sourceRelays = listOf("wss://a.example"),
+                writeRelays = listOf("wss://b.example", "wss://c.example", "wss://d.example"),
+            ),
+        )
+        // Duplicates across the two lists collapse; blanks drop.
+        assertEquals(
+            listOf("wss://a.example", "wss://b.example"),
+            RemixRules.relayHints(
+                sourceRelays = listOf("wss://a.example", "wss://b.example"),
+                writeRelays = listOf("wss://b.example", " ", ""),
+            ),
+        )
+        // A source with no hints falls back to the write relays alone.
+        assertEquals(
+            listOf("wss://w1.example", "wss://w2.example", "wss://w3.example"),
+            RemixRules.relayHints(
+                sourceRelays = emptyList(),
+                writeRelays = listOf("wss://w1.example", "wss://w2.example", "wss://w3.example", "wss://w4.example"),
+            ),
+        )
+        // Over-long relay URLs are hostile data, dropped.
+        assertTrue(
+            RemixRules.relayHints(listOf("wss://" + "x".repeat(3_000)), listOf("wss://ok.example"))
+                .all { it.length <= RemixRules.MAX_RELAY_URL_LENGTH },
+        )
+    }
+
+    @Test
     fun mergeDedupesSeedTagsAgainstDerivedTags() {
         val seed = listOf(
             listOf("remix", "ab".repeat(32)),
@@ -107,9 +140,10 @@ class RemixTest {
             createdAt = 1_710_000_000,
             kind = space.bitos.core.model.NostrKinds.VIDEO,
             tags = listOf(
-                listOf("remix", "33".repeat(32)),
+                listOf("remix", "33".repeat(32), "wss://src.example", "wss://src2.example"),
                 listOf("p", "44".repeat(32)),
                 listOf("license", "bitz/all-reserved"),
+                listOf("meme", """{"v":1,"o":[],"c":[]}"""),
             ),
             content = "remixed clip",
             signature = null,
@@ -118,11 +152,24 @@ class RemixTest {
         val note = FeedNote.from(event)
         assertEquals("33".repeat(32), note.remixOfEventId)
         assertEquals("44".repeat(32), note.remixOfPubkey)
+        assertEquals(listOf("wss://src.example", "wss://src2.example"), note.remixRelays)
+        assertEquals("""{"v":1,"o":[],"c":[]}""", note.memeTag)
         assertEquals("bitz/all-reserved", note.license)
         // Originals project nulls.
         val original = FeedNote.from(event.copy(tags = emptyList()))
         assertNull(original.remixOfEventId)
+        assertNull(original.memeTag)
+        assertTrue(original.remixRelays.isEmpty())
         assertNull(original.license)
+        // Hostile over-long meme payloads drop (they can never decode).
+        val hostile = FeedNote.from(
+            event.copy(
+                tags = listOf(
+                    listOf("meme", "x".repeat(space.bitos.core.studio.MemeRemix.MAX_TAG_CHARS + 1)),
+                ),
+            ),
+        )
+        assertNull(hostile.memeTag)
     }
 
     // MARK: - Chain walk (web remixChainOf parity)

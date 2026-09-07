@@ -51,6 +51,28 @@ struct MemeStrokeUi: Identifiable, Equatable {
     let points: [Float]
 }
 
+/// M4b remix handoff (web `RemixHandoff` parity): everything the editor
+/// needs to open a bitz as an editable remix — the source media to fetch,
+/// the `meme` layout payload to clone, and the lineage facts that ride the
+/// publish (`remix`/`p` tags, relay hints, attribution label).
+struct MemeRemixSeed: Equatable {
+    let eventId: String
+    let pubkey: String
+    /// Author display name for the `attribution` credit ("remix of …").
+    let label: String
+    /// Relay hints for the remix tag (source-tag relays + write relays, ≤3).
+    let relays: [String]
+    let mediaUrl: String
+    let isVideo: Bool
+    let memeTag: String?
+}
+
+/// Remix source fetch failure (bounded download / decode).
+private struct RemixSourceError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 @MainActor
 @Observable
 final class MemeEditorStore {
@@ -1197,6 +1219,14 @@ final class MemeEditorStore {
         refresh()
     }
 
+    /// M4b: clone a source `meme` layout payload onto the current project
+    /// with fresh ids (web `applyRemixPayload` parity). A missing/junk
+    /// payload leaves the project untouched.
+    func applyRemix(memeTag: String?) {
+        let seeded = client.memeApplyRemix(projectJson: projectJson, memeTag: memeTag)
+        if !seeded.isEmpty { restore(projectJson: seeded) }
+    }
+
     // MARK: - Stickers
 
     func addSticker(_ emoji: String) {
@@ -1440,6 +1470,9 @@ final class MemeEditorStore {
         contentWarningReason: String?,
         remixEventId: String = "",
         remixAuthor: String = "",
+        remixRelays: [String] = [],
+        remixLabel: String = "",
+        license: String = "",
         extraTags: [[String]] = [],
         identity: IdentityStore,
         publisher: NotePublisher,
@@ -1544,11 +1577,15 @@ final class MemeEditorStore {
                     mime = "image/png"
                 }
                 // Ledger: persist the attempt + rendered bytes (durable job).
+                // A remix's draft extras drop their license row here too —
+                // the lineage supplies it (see the publish merge below).
                 ledgerJobId = jobStore.begin(
                     mode: isVideoMode ? "video" : isGifMode ? "gif" : "image",
                     caption: caption, altText: altText,
                     contentWarningReason: contentWarningReason,
-                    extraTagsJson: Self.encodeTags(extraTags),
+                    extraTagsJson: Self.encodeTags(
+                        remixEventId.isEmpty ? extraTags : extraTags.filter { $0.first != "license" }
+                    ),
                     remixEventId: remixEventId, remixAuthor: remixAuthor,
                     bytes: bytes, mime: mime, width: width, height: height,
                     durationMs: videoDurationMs, coverThumbUrl: coverThumbUrl,
@@ -1574,21 +1611,32 @@ final class MemeEditorStore {
                     }
                 )
                 // 3. Kind-20 through the receipt machine. Post-details
-                // extras (explicit t-tags + license) ride every mode;
-                // remix lineage merges ahead of them on the picture path.
+                // extras (explicit t-tags + license) ride every mode; a
+                // remix's lineage (remix/meme/p/license/attribution, web
+                // tag order) merges ahead of them and supplies the license
+                // itself — the draft's own license row drops to avoid a
+                // duplicate.
                 publishState = .publishing
                 var lineageTags: [[String]] = []
+                let effectiveExtras = remixEventId.isEmpty
+                    ? extraTags
+                    : extraTags.filter { $0.first != "license" }
                 if !remixEventId.isEmpty {
                     let remixJson = client.memeRemixTagsFor(
                         projectJson: project, sourceEventId: remixEventId,
-                        sourcePubkey: remixAuthor
+                        sourcePubkey: remixAuthor,
+                        relays: remixRelays, license: license,
+                        attributionLabel: remixLabel
                     )
                     if let data = remixJson.data(using: .utf8),
                        let array = try? JSONSerialization.jsonObject(with: data) as? [[String]] {
                         lineageTags = array
                     }
                 }
-                let extrasJson = Self.encodeTags(lineageTags + extraTags)
+                let extrasJson = Self.encodeTags(lineageTags + effectiveExtras)
+                // The merged extras ride the ledger so a queue retry
+                // republishes the SAME lineage, not just the draft tags.
+                jobStore.update(ledgerId, extraTagsJson: extrasJson, nowMs: nowMs())
                 publishStep = .build
                 jobStore.update(
                     ledgerId, stage: 4, mediaUrl: uploaded.url, sha256: uploaded.hash,
@@ -1816,6 +1864,8 @@ struct MemeEditorView: View {
     let videoSeed: Data?
     /// M5 take-native handoff: ALL camera takes as timeline clips.
     let videoSeeds: [Data]?
+    /// M4b remix handoff: source bitz media + layout + lineage.
+    let remixSeed: MemeRemixSeed?
     /// MUX-06: hand the frozen design + rendered poster to mass production.
     var onMakeVariations: ((String, Data) -> Void)? = nil
     let onSlotsChanged: () -> Void
@@ -1828,6 +1878,7 @@ struct MemeEditorView: View {
         sharedContent: String? = nil,
         videoSeed: Data? = nil,
         videoSeeds: [Data]? = nil,
+        remixSeed: MemeRemixSeed? = nil,
         onSlotsChanged: @escaping () -> Void = {},
         onMakeVariations: ((String, Data) -> Void)? = nil
     ) {
@@ -1838,6 +1889,7 @@ struct MemeEditorView: View {
         self.sharedContent = sharedContent
         self.videoSeed = videoSeed
         self.videoSeeds = videoSeeds
+        self.remixSeed = remixSeed
         self.onSlotsChanged = onSlotsChanged
         self.onMakeVariations = onMakeVariations
         let seed = resumeSlot?.document.projectJson
@@ -1903,6 +1955,9 @@ struct MemeEditorView: View {
             store.advanceGifPreview()
         }
         .onAppear { seedEditorSession() }
+        // M4b: fetch the remix source media off-thread, import it as the
+        // session's media, then clone the source layout onto the project.
+        .task(id: "remix-seed") { await seedRemixSession() }
 
         .confirmationDialog(
             pendingVideoMode ? "Start a video project?"
@@ -2005,6 +2060,7 @@ struct MemeEditorView: View {
                 store: store,
                 identity: identity,
                 publisher: environment.notePublisher,
+                remixSeed: remixSeed,
                 onPublished: {
                     showDetailsFlow = false
                     dismiss()
@@ -2134,6 +2190,44 @@ struct MemeEditorView: View {
                     store.addAsset(image: image)
                 }
             }
+        }
+    }
+
+    /// M4b remix seeding (web `consumeRemixHandoff` parity): fetch the
+    /// source bitz media, import it as this session's media (video clip or
+    /// image asset), then clone the source `meme` layout with fresh ids.
+    /// Runs once against an empty session; the lineage itself rides the
+    /// post-details draft (`remixSeed` → `MemePostDraft`).
+    private func seedRemixSession() async {
+        guard let remixSeed, store.clips.isEmpty, store.assets.isEmpty,
+              store.videoClipData == nil, store.gifFramesCount == 0 else { return }
+        guard let url = URL(string: remixSeed.mediaUrl),
+              url.scheme == "https" || url.host == "localhost" || url.host == "127.0.0.1" else {
+            store.setExportFailure("Remix source URL is not loadable")
+            return
+        }
+        store.setNotice("Loading source bitz…")
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard data.count <= 64 * 1024 * 1024 else {
+                throw RemixSourceError(message: "source over 64 MiB")
+            }
+            if remixSeed.isVideo {
+                store.switchModeToVideo()
+                guard store.appendClip(data: data, undoable: false) else {
+                    throw RemixSourceError(message: "clip unreadable")
+                }
+            } else {
+                guard let image = UIImage(data: data) else {
+                    throw RemixSourceError(message: "image unreadable")
+                }
+                store.addAsset(image: image)
+            }
+            store.applyRemix(memeTag: remixSeed.memeTag)
+            store.setNotice(nil)
+        } catch {
+            store.setNotice(nil)
+            store.setExportFailure("Remix source could not be loaded")
         }
     }
 

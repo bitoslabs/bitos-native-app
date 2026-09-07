@@ -49,6 +49,10 @@ class NotePublisher(
     private val pool: RelayPool,
     private val clock: () -> Long = { System.currentTimeMillis() / 1000 },
     private val ackTimeoutMs: Long = 10_000,
+    /** Live supplier: `["client","BitOS"]` rides bitz/media publishes when
+     *  the privacy pref allows branding (web clientTag() parity). Read at
+     *  publish time so a settings flip applies without a restart. */
+    private val includeClientTag: () -> Boolean = { false },
 ) {
     private val composer = NoteComposer(clock = clock::invoke)
 
@@ -505,6 +509,7 @@ class NotePublisher(
             }
             val note = composer.composeMediaNote(
                 signer.publicKeyHex(), caption, media, altText, contentWarningReason,
+                includeClientTag = includeClientTag(),
             )
                 ?: run {
                     mutableState.value = PublishUiState(result = PublishResult.INVALID)
@@ -538,6 +543,7 @@ class NotePublisher(
             }
             val note = composer.composeMemeVideoNote(
                 signer.publicKeyHex(), caption, altText, contentWarningReason, portrait, media, extraTags,
+                includeClientTag = includeClientTag(),
             ) ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
@@ -571,6 +577,7 @@ class NotePublisher(
             }
             val note = composer.composeMemePictureNote(
                 signer.publicKeyHex(), caption, altText, contentWarningReason, media, extraTags,
+                includeClientTag = includeClientTag(),
             ) ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch

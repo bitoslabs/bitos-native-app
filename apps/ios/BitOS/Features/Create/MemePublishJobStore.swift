@@ -97,12 +97,16 @@ struct MemePublishJobStore {
     }
 
     /// Stage checkpoint update (render…confirm index); optional facts.
+    /// `extraTagsJson` re-persists the merged extras once the remix lineage
+    /// has joined the draft tags, so a queue retry republishes the same set.
     mutating func update(_ id: Int, stage: Int? = nil, mediaUrl: String? = nil,
                          sha256: String? = nil, eventId: String? = nil,
-                         status: String? = nil, error: String? = nil, nowMs: Int64) {
+                         status: String? = nil, error: String? = nil,
+                         extraTagsJson: String? = nil, nowMs: Int64) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         if let stage { jobs[index].stage = stage }
         if let mediaUrl { jobs[index].mediaUrl = mediaUrl }
+        if let extraTagsJson { jobs[index].extraTagsJson = extraTagsJson }
         if let sha256 { jobs[index].mediaSha256 = sha256 }
         if let eventId { jobs[index].eventId = eventId }
         if let status { jobs[index].status = status }

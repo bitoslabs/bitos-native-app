@@ -770,6 +770,37 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun remixRelayHintsSeamMergesSourceAndWriteRelays() {
+        val merged = bridge.remixRelayHintsJson(
+            sourceRelaysJson = """["wss://src.one","wss://src.two"]""",
+            writeRelaysJson = """["wss://src.two","wss://w.one","wss://w.two","wss://w.three"]""",
+        )
+        // Source-first dedupe, then write relays fill, cap 3.
+        assertEquals("""["wss://src.one","wss://src.two","wss://w.one"]""", merged)
+        // Corrupt JSON inputs degrade to empty lists, never throw.
+        assertEquals("[]", bridge.remixRelayHintsJson("not json", "also not json"))
+    }
+
+    @Test
+    fun memeApplyRemixSeamClonesLayoutOntoTheProject() {
+        val project = """{"v":1,"mode":"image","assets":[],"overlays":[],"tags":[]}"""
+        val payload = """{"v":1,"o":[{"t":"gm","x":0.4,"y":0.2,"s":0.09}],"c":[],"l":"vhs"}"""
+        val seeded = bridge.memeApplyRemix(project, payload)
+        assertTrue(seeded.contains("\"text\":\"gm\""), seeded)
+        assertTrue(seeded.contains("\"look\":\"vhs\""), seeded)
+        // Fresh ids — never the compact decode's literal "o" row id.
+        assertTrue(!seeded.contains("\"id\":\"o\""), seeded)
+        // Undecodable payload / missing tag → project unchanged (the seam
+        // re-encodes canonically, so compare the decoded shape).
+        fun overlaysOf(json: String) =
+            space.bitos.core.studio.MemeProjectContract.decode(json)?.overlays
+        assertEquals(emptyList(), overlaysOf(bridge.memeApplyRemix(project, null)))
+        assertEquals(emptyList(), overlaysOf(bridge.memeApplyRemix(project, """{"v":1,"o":[],"c":[]}""")))
+        // Corrupt project wire → "".
+        assertEquals("", bridge.memeApplyRemix("junk", payload))
+    }
+
+    @Test
     fun csvPreviewMapsColumnsAndCapsRowsBeforeImport() {
         // MUX-07: dry-run analysis + the operational cap (UX-14) — imports
         // over 100 rows refuse with the split instruction, never truncate.

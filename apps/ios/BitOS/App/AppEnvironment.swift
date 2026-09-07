@@ -45,14 +45,15 @@ final class AppEnvironment {
         self.businessCore = businessCore
         self.feedStore = FeedStore(pool: relayPool, client: businessCore, eventStore: eventStore, interaction: interaction)
         self.identityStore = IdentityStore()
-        self.notePublisher = NotePublisher(pool: relayPool, identity: identityStore)
+        let privacyPrefs = PrivacyPrefsStore()
+        self.privacyPrefs = privacyPrefs
+        self.notePublisher = NotePublisher(pool: relayPool, identity: identityStore, privacyPrefs: privacyPrefs)
         self.inboxStore = InboxStore(pool: relayPool)
         self.searchStore = SearchStore(pool: relayPool, client: businessCore)
         self.authorStore = AuthorStore(pool: relayPool, client: businessCore)
         self.relayManager = RelayManagerStore(pool: relayPool)
         let algorithm = AlgorithmStore()
         self.algorithmStore = algorithm
-        self.privacyPrefs = PrivacyPrefsStore()
         self.storiesStore = StoriesStore(pool: relayPool)
         self.dmStore = DmStore(pool: relayPool) {
             // Active registry pointer first; legacy single-secret slot only

@@ -154,6 +154,19 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * M4b remix pre-flight (web studio `remixChainOf` guard parity): true
+     * when the note's own lineage loops — the remix must be refused BEFORE
+     * the editor opens (the lineage that would be stamped is fixed here).
+     * Notes without a source never cycle.
+     */
+    suspend fun remixLineageCycles(note: space.bitos.core.feed.FeedNote): Boolean {
+        val sourceId = note.remixOfEventId ?: return false
+        val source = space.bitos.core.feed.RemixRules.Source(sourceId, note.remixOfPubkey, emptyList())
+        return repository.loadRemixChain(note.id, source) is
+            space.bitos.core.feed.RemixChain.Outcome.Cycle
+    }
+
     /** Ancestor lookup for sheet row tap-through (opens its thread). */
     fun remixAncestorNote(id: String): space.bitos.core.feed.FeedNote? = repository.remixAncestorNote(id)
 

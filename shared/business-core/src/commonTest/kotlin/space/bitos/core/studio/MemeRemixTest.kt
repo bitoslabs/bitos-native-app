@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -148,5 +149,49 @@ class MemeRemixTest {
         val reEncoded = MemeRemix.encode(decoded)
         assertTrue(reEncoded.contains("\"z\":[[0,1000,1.5,0.5,0.5]]"), reEncoded)
         assertTrue(reEncoded.contains("\"f\":"), reEncoded)
+    }
+
+    @Test
+    fun applyToClonesLayoutWithFreshIdsAndCuesLook() {
+        // Web applyRemixPayload parity: a source layout clones onto the
+        // project with fresh overlay/cue ids (independent copy) and its look.
+        val payload = MemeRemix.encode(
+            document(
+                overlays = listOf(overlay(text = "when nigredo"), overlay(text = "gm")),
+                cues = listOf(
+                    MemeWireCue(id = "c", sfx = "boom", atMs = 500, gain = 0.8f, lane = null, soundId = null),
+                    MemeWireCue(id = "c", sfx = "custom", atMs = 900, gain = 1f, lane = null, soundId = "lib-1"),
+                ),
+            ).copy(lookId = "vhs"),
+        )
+        val project = MemeProject(mode = MemeMode.IMAGE, overlays = emptyList())
+        val applied = MemeRemix.applyTo(project, payload)
+
+        assertEquals(2, applied.overlays.size)
+        // Fresh ids, distinct from each other (the compact decode hands
+        // every row the same literal id — the clone must not keep them).
+        assertEquals(2, applied.overlays.map { it.id }.toSet().size)
+        assertEquals(listOf("when nigredo", "gm"), applied.overlays.map { it.text })
+        // Custom-sound cues drop (no library id slot on the local cue).
+        assertEquals(listOf("boom"), applied.sfxCues.map { it.sfx })
+        assertEquals(1, applied.sfxCues.map { it.id }.toSet().size)
+        assertEquals("vhs", applied.lookId)
+        // REPLACE semantics with collision-free ids against prior content.
+        val busy = project.copy(
+            overlays = listOf(MemeOverlay(id = "r1", kind = MemeOverlayKind.TEXT, text = "x", font = MemeFontSlot.IMPACT, size = 90, colorIndex = 0, outline = 0, shadow = false, x = 0.5f, y = 0.5f, scale = 1f, rotationDeg = 0f)),
+        )
+        val reApplied = MemeRemix.applyTo(busy, payload)
+        assertEquals(2, reApplied.overlays.size)
+        assertTrue(reApplied.overlays.none { it.id == "r1" })
+    }
+
+    @Test
+    fun applyToLeavesTheProjectAloneWithoutAPayload() {
+        // The example wire remix `{"v":1,"o":[],"c":[]}` has no overlays —
+        // decode yields null and the project rides unchanged.
+        val project = MemeProject(mode = MemeMode.VIDEO)
+        assertSame(project, MemeRemix.applyTo(project, null))
+        assertSame(project, MemeRemix.applyTo(project, """{"v":1,"o":[],"c":[]}"""))
+        assertSame(project, MemeRemix.applyTo(project, "junk"))
     }
 }

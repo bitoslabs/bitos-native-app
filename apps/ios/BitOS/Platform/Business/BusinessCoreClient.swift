@@ -59,6 +59,10 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     /** APP-007 remix source (id + author); nulls = original work. */
     var remixOfEventId: String? = nil
     var remixOfPubkey: String? = nil
+    /** APP-007 relay hints from the remix tag (≤ RemixRules.MAX_RELAY_HINTS). */
+    var remixRelays: [String] = []
+    /** MST-042 raw `meme` layout payload; nil = the note carries none. */
+    var memeTag: String? = nil
     /** APP-007 `license` tag (remix advisory gate); nil = permissive. */
     var license: String? = nil
     /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
@@ -291,8 +295,18 @@ protocol BusinessCoreClient: Sendable {
     func memeSharedTemplateSummary(tagsJson: String, content: String) -> String
     /// Apply a shared template onto a project wire (fresh-id clone).
     func memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String) -> String
-    /// MST-042 remix lineage tags (TagsCodec JSON) from the project wire.
-    func memeRemixTagsFor(projectJson: String, sourceEventId: String, sourcePubkey: String) -> String
+    /// MST-042 remix lineage tags (TagsCodec JSON) from the project wire:
+    /// remix marker + relay hints, meme payload, p attribution, license,
+    /// human credit.
+    func memeRemixTagsFor(
+        projectJson: String, sourceEventId: String, sourcePubkey: String,
+        relays: [String], license: String, attributionLabel: String
+    ) -> String
+    /// M4b remix editor seed: clone the source `meme` layout onto the
+    /// project with fresh ids; "" when the project wire is corrupt.
+    func memeApplyRemix(projectJson: String, memeTag: String?) -> String
+    /// APP-007 remix relay hints: source-tag relays + write relays, ≤3.
+    func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String]
     /// Built-in template pack `[{"id","label","emoji"}]` (MST-040 rail).
     func memeTemplates() -> String
     /// Apply a template onto a project wire (fresh-id clone); "" corrupt.
@@ -304,6 +318,14 @@ protocol BusinessCoreClient: Sendable {
 }
 
 extension BusinessCoreClient {
+    /// Legacy three-argument seam: lineage without hints/license/credit.
+    func memeRemixTagsFor(projectJson: String, sourceEventId: String, sourcePubkey: String) -> String {
+        memeRemixTagsFor(
+            projectJson: projectJson, sourceEventId: sourceEventId, sourcePubkey: sourcePubkey,
+            relays: [], license: "", attributionLabel: ""
+        )
+    }
+
     /// Default two-step gate for clients without the one-parse seam (test
     /// fixtures): decode first, then scan the subscription id.
     func decodeVerifiedEventFrame(message: String, relay: String?) -> VerifiedEventFrame? {
@@ -553,6 +575,8 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
             pollOptions: note.pollOptions.map { $0 as String },
             remixOfEventId: note.remixOfEventId,
             remixOfPubkey: note.remixOfPubkey,
+            remixRelays: note.remixRelays.map { $0 as String },
+            memeTag: note.memeTag,
             license: note.license,
             zapsDisabled: note.zapsDisabled,
             externalVideoPreviews: note.externalVideoPreviews.map {
@@ -730,11 +754,44 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeApplySharedTemplate(projectJson: projectJson, tagsJson: tagsJson, content: content)
     }
 
-    func memeRemixTagsFor(projectJson: String, sourceEventId: String, sourcePubkey: String) -> String {
-        bridge.memeRemixTagsFor(
+    /// MST-042 remix lineage tags: remix marker (+ relay hints), compact
+    /// meme payload, p attribution, license and human credit.
+    func memeRemixTagsFor(
+        projectJson: String,
+        sourceEventId: String,
+        sourcePubkey: String,
+        relays: [String],
+        license: String,
+        attributionLabel: String
+    ) -> String {
+        let relaysData = (try? JSONSerialization.data(withJSONObject: relays)) ?? Data()
+        let relaysJson = String(data: relaysData, encoding: .utf8) ?? "[]"
+        return bridge.memeRemixTagsFor(
             projectJson: projectJson, sourceEventId: sourceEventId,
-            sourcePubkey: sourcePubkey, relaysJson: "[]", license: "", attribution: ""
+            sourcePubkey: sourcePubkey, relaysJson: relaysJson,
+            license: license, attribution: attributionLabel
         )
+    }
+
+    /// M4b remix editor seed: clone the source note's `meme` layout onto the
+    /// project with fresh ids (web `applyRemixPayload` parity).
+    func memeApplyRemix(projectJson: String, memeTag: String?) -> String {
+        bridge.memeApplyRemix(projectJson: projectJson, memeTag: memeTag)
+    }
+
+    /// APP-007 remix relay hints: source-tag relays + write relays, deduped,
+    /// capped at 3 (web `remixReel` parity).
+    func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String] {
+        func encode(_ values: [String]) -> String {
+            let data = (try? JSONSerialization.data(withJSONObject: values)) ?? Data()
+            return String(data: data, encoding: .utf8) ?? "[]"
+        }
+        let merged = bridge.remixRelayHintsJson(
+            sourceRelaysJson: encode(sourceRelays), writeRelaysJson: encode(writeRelays)
+        )
+        guard let data = merged.data(using: .utf8),
+              let array = (try? JSONSerialization.jsonObject(with: data)) as? [String] else { return [] }
+        return array
     }
 
     func memeApplyTemplate(_ projectJson: String, templateId: String) -> String {
@@ -827,6 +884,8 @@ private final class SharedFeedWindow: FeedWindowing {
                 pollOptions: note.pollOptions.map { $0 as String },
                 remixOfEventId: note.remixOfEventId,
                 remixOfPubkey: note.remixOfPubkey,
+                remixRelays: note.remixRelays.map { $0 as String },
+                memeTag: note.memeTag,
                 license: note.license,
                 zapsDisabled: note.zapsDisabled
             )
@@ -868,6 +927,8 @@ private extension FeedNote {
             pollOptions: pollOptions,
             remixOfEventId: remixOfEventId,
             remixOfPubkey: remixOfPubkey,
+            remixRelays: remixRelays,
+            memeTag: memeTag,
             license: license,
             zapsDisabled: zapsDisabled,
             fallbackUrls: video?.fallbackUrls ?? [],
@@ -1039,10 +1100,20 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String) -> String {
         FrameworkBusinessCoreClient().memeApplySharedTemplate(projectJson: projectJson, tagsJson: tagsJson, content: content)
     }
-    func memeRemixTagsFor(projectJson: String, sourceEventId: String, sourcePubkey: String) -> String {
+    func memeRemixTagsFor(
+        projectJson: String, sourceEventId: String, sourcePubkey: String,
+        relays: [String], license: String, attributionLabel: String
+    ) -> String {
         FrameworkBusinessCoreClient().memeRemixTagsFor(
-            projectJson: projectJson, sourceEventId: sourceEventId, sourcePubkey: sourcePubkey
+            projectJson: projectJson, sourceEventId: sourceEventId, sourcePubkey: sourcePubkey,
+            relays: relays, license: license, attributionLabel: attributionLabel
         )
+    }
+    func memeApplyRemix(projectJson: String, memeTag: String?) -> String {
+        FrameworkBusinessCoreClient().memeApplyRemix(projectJson: projectJson, memeTag: memeTag)
+    }
+    func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String] {
+        FrameworkBusinessCoreClient().remixRelayHints(sourceRelays: sourceRelays, writeRelays: writeRelays)
     }
     func memeApplyTemplate(_ projectJson: String, templateId: String) -> String {
         FrameworkBusinessCoreClient().memeApplyTemplate(projectJson, templateId: templateId)

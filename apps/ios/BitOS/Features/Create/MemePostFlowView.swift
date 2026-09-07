@@ -12,9 +12,26 @@ struct MemePostFlowView: View {
     let store: MemeEditorStore
     let identity: IdentityStore
     let publisher: NotePublisher
+    /** M4b remix lineage carried from the editor handoff, if any. */
+    let remixSeed: MemeRemixSeed?
     let onPublished: () -> Void
-    @State private var draft = MemePostDraft()
+    @State private var draft: MemePostDraft
     @State private var path: [FlowStep] = []
+
+    init(
+        store: MemeEditorStore,
+        identity: IdentityStore,
+        publisher: NotePublisher,
+        remixSeed: MemeRemixSeed? = nil,
+        onPublished: @escaping () -> Void
+    ) {
+        self.store = store
+        self.identity = identity
+        self.publisher = publisher
+        self.remixSeed = remixSeed
+        self.onPublished = onPublished
+        _draft = State(initialValue: MemePostDraft(remix: remixSeed))
+    }
 
     enum FlowStep: Hashable { case preflight, publishing, queue }
 
@@ -83,6 +100,9 @@ struct MemePostFlowView: View {
             contentWarningReason: draft.contentWarningOn ? draft.contentWarningReason : nil,
             remixEventId: draft.remixOf,
             remixAuthor: draft.remixAuthor,
+            remixRelays: draft.remixRelays,
+            remixLabel: draft.remixLabel,
+            license: draft.license.rawValue,
             extraTags: draft.extraTags,
             identity: identity,
             publisher: publisher,
@@ -108,6 +128,21 @@ struct MemePostDraft {
     /// Optional remix lineage (MST-042): manual source event + author.
     var remixOf = ""
     var remixAuthor = ""
+    /// Relay hints for the remix tag (source-tag relays + write relays, ≤3).
+    var remixRelays: [String] = []
+    /// Source author label — feeds the `attribution` credit on publish.
+    var remixLabel = ""
+
+    /// M4b: a bitz handoff prefills the lineage and picks the web studio's
+    /// remix default license (CC-BY-4.0) instead of CC0.
+    init(remix seed: MemeRemixSeed? = nil) {
+        guard let seed else { return }
+        remixOf = seed.eventId
+        remixAuthor = seed.pubkey
+        remixRelays = seed.relays
+        remixLabel = seed.label
+        license = .ccBy
+    }
 
     /// Caption #hashtags (the composer already derives these itself).
     var captionHashtags: Set<String> {

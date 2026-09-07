@@ -235,8 +235,13 @@ data class MediaMetadata(
             out.add(MediaRendition(url, minOf(dim.first, dim.second), bitrate))
         }
 
+        /** Web publishers write `duration 4.861` (NIP-71 fractional seconds);
+         *  round half-up to whole seconds (JS `Math.round`) for the display
+         *  projection. */
         private fun parseDuration(raw: String): Long? =
-            raw.toLongOrNull()?.takeIf { it in 1..MAX_DURATION_SECONDS }
+            raw.toDoubleOrNull()?.takeIf { it.isFinite() }
+                ?.let { kotlin.math.floor(it + 0.5).toLong() }
+                ?.takeIf { it in 1..MAX_DURATION_SECONDS }
 
         private fun parseImetaFields(tag: List<String>): Map<String, String> {
             val fields = mutableMapOf<String, String>()

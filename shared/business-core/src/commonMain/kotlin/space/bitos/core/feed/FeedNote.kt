@@ -38,6 +38,13 @@ data class FeedNote(
     val remixOfEventId: String? = null,
     /** APP-007 remix source author (first p tag alongside the remix marker). */
     val remixOfPubkey: String? = null,
+    /** APP-007 relay hints from the remix tag (≤ [RemixRules.MAX_RELAY_HINTS]). */
+    val remixRelays: List<String> = emptyList(),
+    /**
+     * MST-042 raw `meme` layout payload (≤ [space.bitos.core.studio.MemeRemix.MAX_TAG_CHARS]);
+     * null = the note carries none. Editor-side decode seeds a remix.
+     */
+    val memeTag: String? = null,
     /** APP-007 `license` tag value (remix advisory gate), null = permissive. */
     val license: String? = null,
     /** Advisory `["bitz:zaps", "off"]` marker — cards hide the zap action. */
@@ -91,12 +98,23 @@ data class FeedNote(
             contentWarning = space.bitos.core.nostr.Nip36.hasContentWarning(event.tags, event.content),
             remixOfEventId = remixSource?.eventId,
             remixOfPubkey = remixSource?.pubkey,
+            remixRelays = remixSource?.relays ?: emptyList(),
+            memeTag = memeTagOf(event.tags),
             license = RemixRules.licenseOf(event.tags),
             zapsDisabled = ZapPolicy.isDisabled(event.tags),
         )
         }
 
         fun isFeedKind(kind: Int): Boolean = kind in NostrKinds.feedKinds
+
+        /**
+         * Raw `meme` layout payload, bounded at the compact codec's own cap
+         * (longer tags decode to nothing, so projecting them is pointless).
+         */
+        private fun memeTagOf(tags: List<List<String>>): String? =
+            tags.firstOrNull { it.firstOrNull() == "meme" && it.size >= 2 }
+                ?.get(1)
+                ?.takeIf { it.length <= space.bitos.core.studio.MemeRemix.MAX_TAG_CHARS }
     }
 }
 

@@ -38,10 +38,13 @@ final class NotePublisher {
     private let pool: RelayPool
     private let bridge: BusinessCoreBridge
     private let identity: IdentityStore
+    /** Privacy prefs — read at publish time (web clientTag() opt-in parity). */
+    private let privacyPrefs: PrivacyPrefsStore?
     private var watchTask: Task<Void, Never>?
 
-    init(pool: RelayPool, identity: IdentityStore, bridge: BusinessCoreBridge = BusinessCoreBridge()) {
+    init(pool: RelayPool, identity: IdentityStore, bridge: BusinessCoreBridge = BusinessCoreBridge(), privacyPrefs: PrivacyPrefsStore? = nil) {
         self.pool = pool
+        self.privacyPrefs = privacyPrefs
         self.identity = identity
         self.bridge = bridge
     }
@@ -694,7 +697,8 @@ final class NotePublisher {
                   authorPubkey: account.pubkeyHex, caption: caption,
                   url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
                   width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
-                  nowSeconds: now, altText: altText, contentWarningReason: contentWarningReason
+                  nowSeconds: now, altText: altText, contentWarningReason: contentWarningReason,
+                  includeClientTag: includeClientTag
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.mediaNotePublishMessage(
@@ -702,7 +706,8 @@ final class NotePublisher {
                   url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
                   width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
                   createdAtSeconds: now, signatureHex: signature,
-                  altText: altText, contentWarningReason: contentWarningReason
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  includeClientTag: includeClientTag
               ) else {
             result = .invalid
             return
@@ -736,7 +741,8 @@ final class NotePublisher {
                   altText: altText, contentWarningReason: contentWarningReason,
                   url: url, sha256Hex: hash, mimeType: "image/png",
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
-                  nowSeconds: now, extraTagsJson: remixTagsJson
+                  nowSeconds: now, extraTagsJson: remixTagsJson,
+                  includeClientTag: includeClientTag
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.memePicturePublishMessage(
@@ -745,7 +751,8 @@ final class NotePublisher {
                   url: url, sha256Hex: hash, mimeType: "image/png",
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
                   createdAtSeconds: now, signatureHex: signature,
-                  extraTagsJson: remixTagsJson
+                  extraTagsJson: remixTagsJson,
+                  includeClientTag: includeClientTag
               ) else {
             result = .invalid
             return
@@ -785,7 +792,8 @@ final class NotePublisher {
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
                   durationMs: durationMs, nowSeconds: now,
                   thumbUrl: thumbUrl,
-                  extraTagsJson: extraTagsJson
+                  extraTagsJson: extraTagsJson,
+                  includeClientTag: includeClientTag
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.memeVideoPublishMessage(
@@ -796,7 +804,8 @@ final class NotePublisher {
                   sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
                   durationMs: durationMs, createdAtSeconds: now, signatureHex: signature,
                   thumbUrl: thumbUrl,
-                  extraTagsJson: extraTagsJson
+                  extraTagsJson: extraTagsJson,
+                  includeClientTag: includeClientTag
               ) else {
             result = .invalid
             return
@@ -865,6 +874,11 @@ final class NotePublisher {
         _ = content; _ = account; _ = now
         return .invalid
     }
+
+    /// `["client","BitOS"]` rides bitz/media publishes when the privacy
+    /// pref allows branding (web clientTag() parity); read live so a
+    /// settings flip applies to the next publish without a restart.
+    private var includeClientTag: Bool { privacyPrefs?.state.includeClientTag ?? false }
 
     private func send(eventId: String, frame: String, writeUrls: [RelayURL] = DefaultRelays.writeUrls) async {
         inFlightId = eventId

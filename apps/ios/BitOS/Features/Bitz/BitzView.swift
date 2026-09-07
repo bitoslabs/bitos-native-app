@@ -31,6 +31,22 @@ struct BitzBridgeRules {
         bridge.remixRequiresAsk(license: license)
     }
 
+    /// M4b remix relay hints (shared rule): the source's own remix-tag
+    /// relays first, then the app's write relays, deduped, ≤3.
+    func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String] {
+        func encode(_ values: [String]) -> String {
+            guard let data = try? JSONSerialization.data(withJSONObject: values),
+                  let json = String(data: data, encoding: .utf8) else { return "[]" }
+            return json
+        }
+        let merged = bridge.remixRelayHintsJson(
+            sourceRelaysJson: encode(sourceRelays), writeRelaysJson: encode(writeRelays)
+        )
+        guard let data = merged.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [String] else { return [] }
+        return array
+    }
+
     /// Compact rail-count labels (legacy `_formatCount` / `_compactBitSats`
     /// parity) through the shared rules.
     func formatCount(_ value: Int64) -> String {
@@ -145,6 +161,11 @@ struct BitzView: View {
     /** APP-007 remix: seeded composer tags + the advisory-ask target. */
     @State private var composerSeedTagsJson = "[]"
     @State private var remixAskTarget: FeedNote?
+    /** M4b pre-flight: the tapped note's lineage loops — refuse the remix. */
+    @State private var remixCycleBlocked = false
+    /** M4b remix: the editor handoff (media + layout + lineage). */
+    @State private var memeRemixSeed: MemeRemixSeed?
+    private let remixSlotStore = MemeProjectStore()
     @State private var shareText: String?
     /** Swipe-right on settled Bitz video → full-screen profile for that creator. */
     @State private var fullProfileTarget: String?
@@ -347,6 +368,20 @@ struct BitzView: View {
                 baseTagsJson: composerSeedTagsJson
             )
         }
+        // M4b: a bitz remix opens the meme EDITOR with the source media,
+        // its decoded layout and the lineage attached (web studio parity).
+        .fullScreenCover(isPresented: Binding(
+            get: { memeRemixSeed != nil },
+            set: { if !$0 { memeRemixSeed = nil } }
+        )) {
+            if let memeRemixSeed {
+                MemeEditorView(
+                    slotStore: remixSlotStore,
+                    remixSeed: memeRemixSeed
+                )
+                .preferredColorScheme(nil)
+            }
+        }
         .fullScreenCover(isPresented: $showSearch) {
             BitzSearchOverlay(onOpenNote: openInPlayer, onDismiss: { showSearch = false })
                 .environment(environment)
@@ -383,14 +418,23 @@ struct BitzView: View {
         ) {
             Button("Remix") {
                 if let target = remixAskTarget {
-                    composerSeedTagsJson = remixSeedTags(target)
-                    showComposer = true
+                    openRemixTarget(target)
                 }
                 remixAskTarget = nil
             }
             Button("Cancel", role: .cancel) { remixAskTarget = nil }
         } message: {
             Text("This creator marked this bitz \"\(remixAskTarget?.license ?? "")\".\n\nCredit is added automatically when you publish.")
+        }
+        // M4b cycle pre-flight outcome (web "This remix chain loops" parity).
+        .confirmationDialog(
+            "Remix chain loops",
+            isPresented: $remixCycleBlocked,
+            titleVisibility: .visible
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This bitz's remix lineage loops back on itself, so remaking it would break the chain. It can still be watched and shared.")
         }
     }
 
@@ -463,15 +507,55 @@ struct BitzView: View {
         }
     }
 
-    /// APP-007 remix: advisory license gate → composer seeded with the
-    /// shared wire tags (remix marker + p attribution + human credit).
+    /// APP-007/M4b remix: advisory license gate → cycle pre-flight → the
+    /// meme editor seeded with the source media, its `meme` layout and the
+    /// lineage facts (web `remixReel` + studio guard parity). A note
+    /// without loadable media falls back to the note composer seeded with
+    /// the attribution tags.
     private func handleRemix(_ note: FeedNote) {
         if rules.remixRequiresAsk(license: note.license) {
             remixAskTarget = note
         } else {
-            composerSeedTagsJson = remixSeedTags(note)
-            showComposer = true
+            openRemixTarget(note)
         }
+    }
+
+    /// Cycle pre-flight (web studio guard parity), then the editor handoff.
+    private func openRemixTarget(_ note: FeedNote) {
+        Task {
+            if await environment.feedStore.remixLineageCycles(note: note) {
+                remixCycleBlocked = true
+                return
+            }
+            if let seed = remixEditorSeed(for: note) {
+                memeRemixSeed = seed
+            } else {
+                composerSeedTagsJson = remixSeedTags(note)
+                showComposer = true
+            }
+        }
+    }
+
+    /// Builds the editor handoff: source media URL, decoded-layout payload
+    /// id, relay hints (source-tag relays + write relays, ≤3) and the
+    /// author label for the attribution credit.
+    private func remixEditorSeed(for note: FeedNote) -> MemeRemixSeed? {
+        let mediaUrl = note.video?.url ?? note.mediaUrls.first
+        guard let mediaUrl else { return nil }
+        let label = environment.feedStore.profiles[note.pubkey]?.bestDisplayName
+            ?? FeedFormat.shortPubkey(note.pubkey)
+        return MemeRemixSeed(
+            eventId: note.id,
+            pubkey: note.pubkey,
+            label: label,
+            relays: rules.remixRelayHints(
+                sourceRelays: note.remixRelays,
+                writeRelays: DefaultRelays.writeUrls.map(\.rawValue)
+            ),
+            mediaUrl: mediaUrl,
+            isVideo: note.video != nil,
+            memeTag: note.memeTag
+        )
     }
 
     private func remixSeedTags(_ note: FeedNote) -> String {

@@ -200,8 +200,11 @@ fun BitzScreen(
     onOpenComposer: () -> Unit = {},
     /** Spec §3.7 record entry: opens the Create hub (camera/import). */
     onOpenCreate: () -> Unit = {},
-    /** APP-007 remix: opens the composer seeded with remix attribution tags. */
+    /** APP-007 remix: opens the composer seeded with remix attribution tags
+     *  (the no-media fallback). */
     onOpenRemixComposer: (List<List<String>>) -> Unit = {},
+    /** M4b remix: opens the meme editor with the source bitz attached. */
+    onOpenRemixEditor: (space.bitos.app.ui.create.meme.MemeRemixSeed) -> Unit = {},
     /** UX-010: opens the in-app full profile page for a pubkey. */
     onOpenAuthorProfile: (String) -> Unit = {},
 ) {
@@ -363,6 +366,8 @@ fun BitzScreen(
 
     // ── Remix (web remix.ts parity: advisory license gate → seeded composer)
     var remixAskTarget by remember { mutableStateOf<FeedNote?>(null) }
+    /** M4b pre-flight: the tapped note's lineage loops — refuse the remix. */
+    var remixCycleBlocked by remember { mutableStateOf(false) }
 
     fun remixSeedTags(note: FeedNote): List<List<String>> {
         val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
@@ -370,12 +375,47 @@ fun BitzScreen(
         return base + listOfNotNull(space.bitos.core.feed.RemixRules.attributionTag(label))
     }
 
+    /** Builds the editor handoff: source media, decoded-layout payload id,
+     *  relay hints (source-tag relays + write relays, ≤3) and the author
+     *  label for the attribution credit. Null when nothing can load. */
+    fun remixEditorSeed(note: FeedNote): space.bitos.app.ui.create.meme.MemeRemixSeed? {
+        val mediaUrl = note.video?.url ?: note.mediaUrls.firstOrNull() ?: return null
+        val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
+        val writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls.map { it.value }
+        return space.bitos.app.ui.create.meme.MemeRemixSeed(
+            eventId = note.id,
+            pubkey = note.pubkey,
+            label = label,
+            relays = space.bitos.core.feed.RemixRules.relayHints(note.remixRelays, writeRelays),
+            mediaUrl = mediaUrl,
+            isVideo = note.video != null,
+            memeTag = note.memeTag,
+        )
+    }
+
+    /** Cycle pre-flight (web studio guard parity), then the editor handoff
+     *  (or the seeded-composer fallback when nothing can load). */
+    fun openRemixTarget(note: FeedNote) {
+        scope.launch {
+            if (viewModel.remixLineageCycles(note)) {
+                remixCycleBlocked = true
+                return@launch
+            }
+            val seed = remixEditorSeed(note)
+            if (seed != null) {
+                onOpenRemixEditor(seed)
+            } else {
+                onOpenRemixComposer(remixSeedTags(note))
+            }
+        }
+    }
+
     fun handleRemix(note: FeedNote) {
         // Restrictive licenses ask (advisory, never hidden) — web parity.
         if (space.bitos.core.feed.RemixRules.requiresAsk(note.license)) {
             remixAskTarget = note
         } else {
-            onOpenRemixComposer(remixSeedTags(note))
+            openRemixTarget(note)
         }
     }
 
@@ -878,11 +918,30 @@ fun BitzScreen(
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     remixAskTarget = null
-                    onOpenRemixComposer(remixSeedTags(target))
+                    openRemixTarget(target)
                 }) { Text("Remix", color = BitOSColors.primary) }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { remixAskTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // M4b cycle pre-flight outcome (web "This remix chain loops" parity).
+    if (remixCycleBlocked) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { remixCycleBlocked = false },
+            title = { Text("Remix chain loops") },
+            text = {
+                Text(
+                    "This bitz's remix lineage loops back on itself, so remaking it " +
+                        "would break the chain. It can still be watched and shared.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { remixCycleBlocked = false }) {
+                    Text("OK", color = BitOSColors.primary)
+                }
             },
         )
     }

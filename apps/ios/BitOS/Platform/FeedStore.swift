@@ -903,8 +903,29 @@ final class FeedStore {
         remixChainState = RemixChainUiState(isLoading: true, rootId: rootId)
         chainTask?.cancel()
         chainTask = Task { [weak self] in
-            await self?.runRemixChainWalk(rootId: rootId, sourceId: sourceId, sourcePubkey: note.remixOfPubkey)
+            guard let self else { return }
+            let walk = await self.walkRemixLineage(rootId: rootId, sourceId: sourceId, sourcePubkey: note.remixOfPubkey)
+            self.remixChainState = RemixChainUiState(
+                isLoading: false,
+                rootId: rootId,
+                steps: walk.steps,
+                truncated: walk.truncated,
+                isCycle: walk.isCycle,
+                isCompleted: true
+            )
         }
+    }
+
+    /**
+     * M4b remix pre-flight (web studio `remixChainOf` guard parity): true
+     * when the note's own lineage loops — the remix must be refused BEFORE
+     * the editor opens (the lineage that would be stamped is fixed here).
+     * Notes without a source never cycle.
+     */
+    func remixLineageCycles(note: FeedNote) async -> Bool {
+        guard let sourceId = note.remixOfEventId else { return false }
+        let walk = await walkRemixLineage(rootId: note.id, sourceId: sourceId, sourcePubkey: note.remixOfPubkey)
+        return walk.isCycle
     }
 
     /** Ancestor note for sheet row tap-through (opens its thread). */
@@ -984,23 +1005,27 @@ final class FeedStore {
         return nil
     }
 
-    private func runRemixChainWalk(rootId: String, sourceId: String, sourcePubkey: String?) async {
+    private struct RemixLineageWalk {
         var steps: [RemixChainStep] = []
+        var truncated = false
+        var isCycle = false
+    }
+
+    private func walkRemixLineage(rootId: String, sourceId: String, sourcePubkey: String?) async -> RemixLineageWalk {
+        var walk = RemixLineageWalk()
         var visited: Set<String> = [rootId]
         var currentId: String? = sourceId
         var currentPubkey = sourcePubkey
-        var truncated = false
-        var isCycle = false
         while let id = currentId {
             guard Self.isLowercaseHex64(id) else { break }
             if visited.contains(id) {
-                isCycle = true
+                walk.isCycle = true
                 break
             }
             visited.insert(id)
-            steps.append(RemixChainStep(eventId: id, pubkey: currentPubkey, depth: steps.count))
-            if steps.count >= 32 {
-                truncated = true
+            walk.steps.append(RemixChainStep(eventId: id, pubkey: currentPubkey, depth: walk.steps.count))
+            if walk.steps.count >= 32 {
+                walk.truncated = true
                 break
             }
             guard let tags = await fetchRemixAncestorTags(id) else { break } // natural end
@@ -1014,14 +1039,7 @@ final class FeedStore {
                 currentId = nil
             }
         }
-        remixChainState = RemixChainUiState(
-            isLoading: false,
-            rootId: rootId,
-            steps: steps,
-            truncated: truncated,
-            isCycle: isCycle,
-            isCompleted: true
-        )
+        return walk
     }
 
     /// Single-id REQ + bounded wait (3 s); tags of the ancestor or nil.

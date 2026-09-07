@@ -18,6 +18,9 @@ object RemixRules {
     /** Relay hints ride inside the remix tag, capped like the web studio. */
     const val MAX_RELAY_HINTS = 3
 
+    /** Hostile-input bound for one relay hint URL. */
+    const val MAX_RELAY_URL_LENGTH = 2048
+
     /** Human credit bound (legacy `slice(0, 140)`). */
     const val ATTRIBUTION_MAX = 140
 
@@ -62,6 +65,22 @@ object RemixRules {
         val pubkey = tags.firstOrNull { it.firstOrNull() == "p" && it.size >= 2 }
             ?.get(1)?.takeIf { it.length in 1..128 }
         return Source(eventId = id, pubkey = pubkey, relays = relays)
+    }
+
+    /**
+     * Relay hints for a remix publish (web `remixReel` parity): the source
+     * event's own remix-tag hints first, then the composer's write relays,
+     * deduped (insertion order) and capped at [MAX_RELAY_HINTS]. Blank and
+     * over-long entries drop — relay data is untrusted.
+     */
+    fun relayHints(sourceRelays: List<String>, writeRelays: List<String>): List<String> {
+        val seen = LinkedHashSet<String>()
+        for (relay in sourceRelays + writeRelays) {
+            val trimmed = relay.trim()
+            if (trimmed.isEmpty() || trimmed.length > MAX_RELAY_URL_LENGTH) continue
+            seen.add(trimmed)
+        }
+        return seen.toList().take(MAX_RELAY_HINTS)
     }
 
     /** Wire tags for a remix publish: remix marker + p attribution. */

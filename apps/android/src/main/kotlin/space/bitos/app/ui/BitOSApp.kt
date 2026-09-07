@@ -184,6 +184,14 @@ fun BitOSApp(
             composerSeedTags = tags
             showCreateNote = true
         }
+        // M4b remix: the meme editor opens with the source bitz attached
+        // (media + decoded layout + lineage — web studio parity).
+        var memeRemixSeed by remember {
+            mutableStateOf<space.bitos.app.ui.create.meme.MemeRemixSeed?>(null)
+        }
+        fun openRemixEditor(seed: space.bitos.app.ui.create.meme.MemeRemixSeed) {
+            memeRemixSeed = seed
+        }
         // APP-014: zap wallet overlay.
         var showZaps by remember { mutableStateOf(false) }
         // APP-020: static pages overlay (about/privacy/terms).
@@ -439,6 +447,21 @@ fun BitOSApp(
                         mediaPublishViewModel = mediaPublishViewModel,
                         onClose = { showCreateHub = false },
                     )
+                } else if (memeRemixSeed != null) {
+                    // M4b: a bitz remix opens the meme EDITOR full-screen
+                    // with the source media + layout + lineage attached.
+                    val remixContext = androidx.compose.ui.platform.LocalContext.current
+                    val remixSlotStore = remember {
+                        space.bitos.app.ui.create.meme.MemeProjectStore(
+                            java.io.File(remixContext.filesDir, "studio"),
+                        )
+                    }
+                    space.bitos.app.ui.create.meme.MemeEditorScreen(
+                        onClose = { memeRemixSeed = null },
+                        mediaPublishViewModel = mediaPublishViewModel,
+                        store = remixSlotStore,
+                        remixSeed = memeRemixSeed,
+                    )
                 } else if (showMore) {
                     space.bitos.app.ui.more.MoreScreen(
                         identityViewModel = identityViewModel,
@@ -491,6 +514,7 @@ fun BitOSApp(
                         onOpenComposer = { showCreateNote = true },
                         onOpenCreate = { showCreateHub = true },
                         onOpenRemixComposer = { openSeededComposer(it) },
+                        onOpenRemixEditor = { openRemixEditor(it) },
                         onOpenAuthorProfile = { authorPageTarget = it },
                     )
                 } else if (authorPageTarget != null) {
@@ -527,6 +551,7 @@ fun BitOSApp(
                                 onOpenComposer = { showCreateNote = true },
                                 onOpenCreate = { showCreateHub = true },
                                 onOpenRemixComposer = { openSeededComposer(it) },
+                                onOpenRemixEditor = { openRemixEditor(it) },
                                 onOpenAuthorProfile = { authorPageTarget = it },
                             )
                             TopLevelDestination.DISCOVER -> space.bitos.app.ui.discover.DiscoverScreen(

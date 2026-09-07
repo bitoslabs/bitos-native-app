@@ -167,6 +167,24 @@ internal data class SessionClip(
 private const val MAX_TIMELINE_CLIPS = 8
 
 /**
+ * M4b remix handoff (web `RemixHandoff` parity): everything the editor
+ * needs to open a bitz as an editable remix — the source media to fetch,
+ * the `meme` layout payload to clone, and the lineage facts that ride the
+ * publish (`remix`/`p` tags, relay hints, attribution label).
+ */
+data class MemeRemixSeed(
+    val eventId: String,
+    val pubkey: String,
+    /** Author display name for the `attribution` credit ("remix of …"). */
+    val label: String,
+    /** Relay hints for the remix tag (source-tag relays + write relays, ≤3). */
+    val relays: List<String>,
+    val mediaUrl: String,
+    val isVideo: Boolean,
+    val memeTag: String?,
+)
+
+/**
  * Quick MEM image editor (plan MST-010..015; wave 1 of the M1 execution
  * note in `docs/native/meme-studio-plan.md`). Layout per the app-15
  * `scr-quick` mockup: chrome (✕ · mode chips · undo) → stage (media +
@@ -189,6 +207,8 @@ fun MemeEditorScreen(
     sharedContent: String? = null,
     /** CAP handoff (M5): camera record-screen takes that seed video mode. */
     videoSeeds: List<ByteArray>? = null,
+    /** M4b remix handoff: source bitz media + layout + lineage. */
+    remixSeed: MemeRemixSeed? = null,
     onSlotsChanged: () -> Unit = {},
     /** MUX-06: hand the frozen design + rendered poster to mass production. */
     onMakeVariations: ((String, ByteArray) -> Unit)? = null,
@@ -560,6 +580,93 @@ fun MemeEditorScreen(
         }
     }
     var activeAssetId by remember { mutableStateOf(resume?.document?.assets?.firstOrNull()?.id) }
+
+    // M4b remix seeding (web `consumeRemixHandoff` parity): fetch the
+    // source bitz media, import it as this session's media (video clip or
+    // image background), then clone the source `meme` layout with fresh
+    // ids. Runs once against an empty session; the lineage rides the
+    // publish sheet (remixSeed → onPublish).
+    LaunchedEffect(remixSeed) {
+        val seed = remixSeed ?: return@LaunchedEffect
+        if (state.project.assets.isNotEmpty() || videoClips.isNotEmpty() ||
+            assets.isNotEmpty() || gifFrames.isNotEmpty()
+        ) {
+            return@LaunchedEffect
+        }
+        val url = runCatching { java.net.URI(seed.mediaUrl).toURL() }.getOrNull()
+        if (url == null || (url.protocol != "https" && url.host != "localhost" && url.host != "127.0.0.1")) {
+            exportStatus = "Remix source URL is not loadable"
+            return@LaunchedEffect
+        }
+        seedingProgress = 0 to 1
+        val bytes = withContext(Dispatchers.IO) {
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            try {
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 30_000
+                check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                connection.inputStream.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                        check(out.size() <= space.bitos.core.model.Blossom.MAX_FILE_BYTES) { "source too large" }
+                    }
+                    out.toByteArray()
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+        try {
+            if (seed.isVideo) {
+                val probe = withContext(Dispatchers.IO) {
+                    val temp = java.io.File.createTempFile("meme-remix", ".mp4")
+                    try {
+                        temp.writeBytes(bytes)
+                        MemeVideoExport.probe(context.contentResolver, android.net.Uri.fromFile(temp))
+                    } finally {
+                        runCatching { temp.delete() }
+                    }
+                }
+                checkNotNull(probe) { "clip unreadable" }
+                state.switchMode(MemeMode.VIDEO)
+                appendClip(bytes, probe, undoable = false)
+            } else {
+                val bounds = withContext(Dispatchers.IO) {
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let {
+                        it.width to it.height
+                    }
+                }
+                checkNotNull(bounds) { "image unreadable" }
+                val temp = java.io.File.createTempFile("meme-remix", ".img")
+                withContext(Dispatchers.IO) { temp.writeBytes(bytes) }
+                val uri = android.net.Uri.fromFile(temp)
+                val id = "a1"
+                if (id in state.addAssets(listOf(id))) {
+                    assets += EditorAsset(
+                        id, uri,
+                        bounds.first.toFloat() / bounds.second,
+                        bounds.first, bounds.second,
+                    )
+                    activeAssetId = id
+                }
+            }
+            // Clone the source layout (fresh ids); missing/junk payloads
+            // leave the project untouched.
+            val seeded = space.bitos.core.bridge.BusinessCoreBridge()
+                .memeApplyRemix(MemeProjectContract.encode(state.project), seed.memeTag)
+            if (seeded.isNotEmpty()) {
+                MemeProjectContract.decode(seeded)?.let { state.restore(it) }
+            }
+        } catch (error: IllegalStateException) {
+            exportStatus = "Remix source could not be loaded (${error.message})"
+        } finally {
+            seedingProgress = null
+        }
+    }
     // Compose observation: one read subscribes the whole editor scope.
     val dataRevision = state.revision
     var stagePx by remember { mutableStateOf(IntSize.Zero) }
@@ -2178,7 +2285,8 @@ fun MemeEditorScreen(
             coverPreview = coverPreview,
             coverUploading = coverUploading,
             publishState = memePublishState,
-            onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor ->
+            remixSeed = remixSeed,
+            onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor, remixRelays, remixLabel ->
                 val project = state.project
                 // Video/GIF modes have no `activeAsset` (their media lives in
                 // session bytes) — the mode itself gates readiness here.
@@ -2265,9 +2373,14 @@ fun MemeEditorScreen(
                     space.bitos.app.data.publish.RecentHashtagsStore.get(context)
                         .record(space.bitos.core.publish.RecentHashtags.hashtagsIn(caption) + tags)
                     // Post-details extras ride the same verified machine:
-                    // explicit t-tags + license merge with the remix lineage.
+                    // explicit t-tags merge with the remix lineage, which
+                    // supplies the license itself on a remix (web tag
+                    // order: remix, meme, p, license, attribution).
+                    val lineageJson = remixTagsFor(
+                        state.project, remixOf, remixAuthor, remixRelays, license, remixLabel,
+                    )
                     val mergedTags = postExtraTagsJson(
-                        remixTagsFor(state.project, remixOf, remixAuthor),
+                        lineageJson,
                         tags,
                         license,
                         allowZaps,
@@ -3926,6 +4039,8 @@ private fun MemePostFlowScreen(
     coverPreview: android.graphics.Bitmap?,
     coverUploading: Boolean,
     publishState: space.bitos.app.ui.feed.MemePublishUiState?,
+    /** M4b remix lineage carried from the editor handoff, if any. */
+    remixSeed: MemeRemixSeed? = null,
     onPublish: (
         caption: String,
         altText: String,
@@ -3935,6 +4050,8 @@ private fun MemePostFlowScreen(
         allowZaps: Boolean,
         remixEventId: String,
         remixAuthor: String,
+        remixRelays: List<String>,
+        remixLabel: String,
     ) -> Unit,
     onDismiss: () -> Unit,
     onPublished: () -> Unit,
@@ -3952,8 +4069,14 @@ private fun MemePostFlowScreen(
     var cwReason by remember { mutableStateOf("Sensitive content") }
     var license by remember { mutableStateOf("CC0-1.0") }
     var allowZaps by remember { mutableStateOf(false) }
-    var remixOf by remember { mutableStateOf("") }
-    var remixAuthor by remember { mutableStateOf("") }
+    var remixOf by remember(remixSeed) { mutableStateOf(remixSeed?.eventId ?: "") }
+    var remixAuthor by remember(remixSeed) { mutableStateOf(remixSeed?.pubkey ?: "") }
+    val remixRelays = remember(remixSeed) { remixSeed?.relays ?: emptyList() }
+    val remixLabel = remember(remixSeed) { remixSeed?.label ?: "" }
+    // M4b: a bitz handoff picks the web studio's remix default license.
+    LaunchedEffect(remixSeed) {
+        if (remixSeed != null && license == "CC0-1.0") license = "CC-BY-4.0"
+    }
     // Allow-remix and the license chips are one `license` tag seen two ways:
     // the switch restores the last remixable code after "Nostr only".
     var lastRemixableLicense by remember { mutableStateOf("CC0-1.0") }
@@ -4417,6 +4540,8 @@ private fun MemePostFlowScreen(
                                     allowZaps,
                                     remixOf,
                                     remixAuthor,
+                                    remixRelays,
+                                    remixLabel,
                                 )
                                 step = 2
                             },
@@ -4453,6 +4578,8 @@ private fun MemePostFlowScreen(
                             allowZaps,
                             remixOf,
                             remixAuthor,
+                            remixRelays,
+                            remixLabel,
                         )
                     },
                     onLater = onDismiss,
@@ -4923,14 +5050,21 @@ private fun postExtraTagsJson(
     allowZaps: Boolean = true,
 ): String {
     val out = org.json.JSONArray()
+    var lineageHasLicense = false
     if (remixJson.isNotBlank()) {
         runCatching {
             val parsed = org.json.JSONArray(remixJson)
-            for (i in 0 until parsed.length()) out.put(parsed.getJSONArray(i))
+            for (i in 0 until parsed.length()) {
+                val tag = parsed.getJSONArray(i)
+                // A remix's lineage supplies the validated license tag
+                // (web tag order); the draft's own row would duplicate it.
+                if (tag.optString(0) == "license") lineageHasLicense = true
+                out.put(tag)
+            }
         }
     }
     tags.forEach { out.put(org.json.JSONArray().put("t").put(it)) }
-    out.put(org.json.JSONArray().put("license").put(license))
+    if (!lineageHasLicense) out.put(org.json.JSONArray().put("license").put(license))
     // Zap settings off → shared advisory marker (cards hide the zap action).
     if (!allowZaps) out.put(org.json.JSONArray().put(space.bitos.core.feed.ZapPolicy.OFF_TAG).put("off"))
     return out.toString()
@@ -5313,11 +5447,15 @@ private fun remixTagsFor(
     project: space.bitos.core.studio.MemeProject,
     remixOf: String,
     remixAuthor: String,
+    relays: List<String> = emptyList(),
+    license: String = "",
+    attributionLabel: String = "",
 ): String {
     if (remixOf.isBlank()) return ""
+    val relaysJson = org.json.JSONArray(relays).toString()
     return space.bitos.core.bridge.BusinessCoreBridge().memeRemixTagsFor(
         space.bitos.core.studio.MemeProjectContract.encode(project),
-        remixOf, remixAuthor, "[]", "", "",
+        remixOf, remixAuthor, relaysJson, license, attributionLabel,
     )
 }
 

@@ -101,7 +101,12 @@ class BitOsApplication : Application(), ImageLoaderFactory {
     }
 
     val notePublisher: space.bitos.app.data.publish.NotePublisher by lazy {
-        space.bitos.app.data.publish.NotePublisher(applicationScope, relayPool)
+        space.bitos.app.data.publish.NotePublisher(
+            applicationScope, relayPool,
+            // Web clientTag() parity: branding rides bitz/media publishes
+            // while the privacy pref allows it (read live).
+            includeClientTag = { privacyPrefs.state.value.includeClientTag },
+        )
     }
 
     val storiesRepository: space.bitos.app.data.stories.StoriesRepository by lazy {

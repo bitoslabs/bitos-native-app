@@ -58,9 +58,14 @@ class MediaMetadataTest {
 
         assertEquals(59L, videoWithDuration("59"))
         assertEquals(14_400L, videoWithDuration("14400"))
+        // Web publishers (and this app since M4b) write `duration 4.861`
+        // (NIP-71 fractional seconds) — parsed, rounded, still bounded.
+        assertEquals(5L, videoWithDuration("4.861"))
+        assertEquals(59L, videoWithDuration("58.500"))
         // Malformed / zero / negative / beyond the 4 h bound → unknown.
         assertNull(videoWithDuration("soon"))
         assertNull(videoWithDuration("0"))
+        assertNull(videoWithDuration("-3"))
         assertNull(videoDurationUnknownLegacyTag())
         assertNull(videoWithDuration("14401"))
     }

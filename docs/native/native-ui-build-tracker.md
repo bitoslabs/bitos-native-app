@@ -748,6 +748,58 @@ fixed, what's next.
   (license-gated advisory); the editor seeds overlays from a decoded
   payload with the source attached and publishes with the tags; the
   RemixChain dialog (RemixChain.walk already exists).
+- 2026-09-07 — M4b remix UI reach SHIPPED (web `remixReel`/studio
+  parity, BOTH platforms): (1) FEED PROJECTION: `FeedNote` (+ bridge
+  `Note`, iOS Swift mirror) now carries `remixRelays` (the remix tag's
+  ≤3 relay hints) and `memeTag` (raw `meme` payload, bounded at the
+  compact codec's 700-char cap — longer tags can never decode).
+  (2) RELAY HINTS: `RemixRules.relayHints(source, write)` merges the
+  source's own remix-tag relays with the app's write relays (deduped,
+  source-first, cap 3 — web `remixReel` parity); bridge seam
+  `remixRelayHintsJson`; both apps pass the result through
+  `memeRemixTagsFor`, so published `remix` tags carry hints like the
+  web event (`["remix", id, wss://…, wss://…, wss://…]`).
+  (3) EDITOR HANDOFF: new `MemeRemixSeed` (eventId, pubkey, label,
+  relays, mediaUrl, isVideo, memeTag) rides Bitz → full-screen meme
+  editor on both platforms; the editor downloads the source media
+  (HTTPS, ≤64 MiB), imports it (video → timeline clip, image →
+  background asset), then clones the layout via the new shared
+  `MemeRemix.applyTo`/bridge `memeApplyRemix` — fresh overlay/cue ids
+  (web `applyRemixPayload` parity), REPLACE semantics, custom-sound
+  cues drop (no library slot), look carries. Notes without loadable
+  media fall back to the seeded note composer. (4) PUBLISH: lineage
+  now rides `memeRemixTagsFor(project, id, pubkey, relays, license,
+  attribution)` — relay hints + license + "remix of <label>" credit
+  (≤140); the draft's own license row drops when lineage supplies it
+  (no duplicate `license` tag); a remix defaults the license chips to
+  CC-BY-4.0 (web studio default). iOS additionally persists the MERGED
+  extras into the publish-job ledger (queue retries republish the same
+  lineage — previously a retried remix lost its tags). (5) IMETA web
+  parity: `UploadedMedia.imetaFields()` writes web field order
+  (url, m, size, dim, thumb, x, duration, bitrate), `duration` keeps
+  ms precision (`4.861`), `bitrate` = bytes×8÷s rounded (clips >0.2 s);
+  readers parse fractional durations (JS `Math.round` half-up).
+  Fixture `docs/source/event-remix-app.json`. Remaining M4b: the
+  RemixChain dialog from the feed rail (walk already exists).
+- 2026-09-07 (cont.) — client tag + cycle pre-flight close the last two
+  web-parity gaps: (1) CLIENT TAG: `composeMediaNote`/
+  `composeMemePictureNote`/`composeMemeVideoNote` (+ all six bridge
+  seams) grew `includeClientTag` — `["client","BitOS"]` rides between
+  the t-tags and the remix lineage (web `client-tag.ts` order, pinned
+  by a BlossomTest case). Opt-in from the EXISTING
+  `PrivacyPrefs.includeClientTag` (default on): iOS `NotePublisher`
+  takes the `PrivacyPrefsStore` and reads it live at publish;
+  Android's `NotePublisher` takes a live `includeClientTag` supplier
+  wired in `BitOsApplication` — no editor/plumbing changes, every
+  publish path picks it up. (2) CYCLE PRE-FLIGHT (web studio
+  `remixChainOf` guard parity): tapping Remix now walks the tapped
+  note's ancestry BEFORE the editor opens — iOS `FeedStore`
+  `remixLineageCycles(note:)` (the Chain-sheet walk extracted into
+  `walkRemixLineage`), Android `HomeViewModel.remixLineageCycles`;
+  a looping lineage surfaces a "Remix chain loops" dialog and refuses
+  the handoff. Web's post-sign `wouldCycle` adds nothing on top (the
+  new event id is fresh; the stamped lineage is fixed at tap time) —
+  documented decision.
 
 - 2026-09-02 — Meme Studio M3 wave c: cover frames (APP-019 MST-032) —
   **M3 code-complete** (video memes: trim → stage → cover → burn-in →

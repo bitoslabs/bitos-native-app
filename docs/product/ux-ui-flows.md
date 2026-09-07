@@ -500,10 +500,18 @@ the last remixable chip), content warning (toggle only — the fixed
 "Sensitive content" reason rides the NIP-36 cover, no free-text input), and
 the license chips
 (CC0 / CC-BY / Nostr-only — rides the `license` tag). Remix lineage is NEVER
-typed by hand: when a remix source rides the draft (auto-added by the remix
-handoff, MST-042) the form previews it read-only — source + author short refs
-plus the keep-it-remixable license note — and publish stamps the machine
-`remix` + `p` tags via the shared `RemixRules` seam. Its preview/caption row
+typed by hand: the Bitz rail's "Remix" opens the meme editor with the source
+attached (M4b handoff — the source media downloads into the session, its
+`meme` layout clones with fresh ids, lineage rides the draft) and, when the
+note has no loadable media, falls back to the note composer seeded with the
+attribution tags. A remix source riding the draft previews read-only —
+source + author short refs plus the keep-it-remixable license note (the
+chips default to CC-BY, the web studio's remix default) — and publish
+stamps the machine `remix` (+ ≤3 relay hints merged from the source tag and
+the write relays) + `meme` + `p` + `license` + `attribution` ("remix of
+<label>", ≤140) tags via the shared `RemixRules`/`memeRemixTagsFor` seams,
+with the imeta carrying web-parity `duration` (ms precision) and `bitrate`.
+Its preview/caption row
 and tag entry use the compact, flat
 prototype treatment; caption input enforces the displayed 300-character limit.
 Recently used hashtags are reused in one tap: a shared bounded ledger

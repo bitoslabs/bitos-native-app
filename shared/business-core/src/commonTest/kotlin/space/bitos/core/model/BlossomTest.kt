@@ -90,10 +90,12 @@ class BlossomTest {
                     "imeta",
                     "url https://cdn.example/v.mp4",
                     "m video/mp4",
-                    "x $hash",
                     "size 999999",
                     "dim 1080x1920",
-                    "duration 4",
+                    "x $hash",
+                    // Web parity: 3-decimal seconds + rounded bits/second.
+                    "duration 4.200",
+                    "bitrate 1904760",
                 ),
             ),
             note.tags,
@@ -110,7 +112,7 @@ class BlossomTest {
                 listOf("t", "lightning"),
                 listOf("t", "node"),
                 listOf("alt", "Timelapse of a channel opening"),
-                listOf("imeta", "url https://cdn.example/v.mp4", "m video/mp4", "x $hash", "size 999999", "dim 1080x1920", "duration 4"),
+                listOf("imeta", "url https://cdn.example/v.mp4", "m video/mp4", "size 999999", "dim 1080x1920", "x $hash", "duration 4.200", "bitrate 1904760"),
                 listOf("content-warning", "Flashing imagery"),
             ),
             detailed.tags,
@@ -156,9 +158,9 @@ class BlossomTest {
                     "imeta",
                     "url https://cdn.example/meme.png",
                     "m image/png",
-                    "x $hash",
                     "size 424242",
                     "dim 608x1080",
+                    "x $hash",
                 ),
             ),
             note.tags,
@@ -182,9 +184,50 @@ class BlossomTest {
     }
 
     @Test
+    fun clientTagRidesOptInAfterHashtagsBeforeLineage() {
+        // Web postBitz prefix order with branding opted in (PrivacyPrefs
+        // includeClientTag): t-tags → client → remix lineage → alt → imeta.
+        val media = UploadedMedia(
+            url = "https://cdn.example/meme.png",
+            sha256Hex = hash,
+            mimeType = "image/png",
+            sizeBytes = 1_000,
+            width = 1080,
+            height = 1080,
+        )
+        val withClient = composer.composeMemePictureNote(
+            author, "#bitz gm", "", null, media,
+            extraTags = listOf(listOf("remix", "ab".repeat(32))),
+            includeClientTag = true,
+        )!!
+        assertEquals(
+            listOf("t", "bitz"),
+            withClient.tags[0],
+        )
+        assertEquals(listOf("client", "BitOS"), withClient.tags[1])
+        assertEquals(listOf("remix", "ab".repeat(32)), withClient.tags[2])
+        assertEquals("alt", withClient.tags[3].first())
+        assertEquals("imeta", withClient.tags[4].first())
+        // Opt-out (the default) keeps the wire byte-identical to before.
+        val withoutClient = composer.composeMemePictureNote(
+            author, "#bitz gm", "", null, media,
+            extraTags = listOf(listOf("remix", "ab".repeat(32))),
+        )!!
+        assertTrue(withoutClient.tags.none { it.first() == "client" })
+        // The legacy kind-22 media lane carries the same opt-in.
+        val mediaNote = composer.composeMediaNote(
+            author, "gm", UploadedMedia(
+                url = "https://cdn.example/v.mp4", sha256Hex = hash,
+                mimeType = "video/mp4", sizeBytes = 1_000,
+            ), includeClientTag = true,
+        )!!
+        assertEquals(listOf("client", "BitOS"), mediaNote.tags.first())
+    }
+
+    @Test
     fun composesVideoMemeWithOrientationKinds() {
         // MST-034: portrait → kind 22, landscape → kind 21; imeta carries
-        // duration seconds; tag order matches the picture path.
+        // 3-decimal duration seconds + bitrate; web field order.
         val portrait = UploadedMedia(
             url = "https://cdn.example/m.mp4",
             sha256Hex = hash,
@@ -199,7 +242,9 @@ class BlossomTest {
         )!!
         assertEquals(NostrKinds.SHORT_VIDEO, note.kind)
         val imeta = note.tags.last { it.first() == "imeta" }
-        assertTrue(imeta.any { it == "duration 4" }, imeta.toString())
+        assertTrue(imeta.any { it == "duration 4.200" }, imeta.toString())
+        // 2_000_000 bytes × 8 / 4.2 s, rounded — the web bitrate formula.
+        assertTrue(imeta.any { it == "bitrate 3809524" }, imeta.toString())
 
         // MST-032: the separately-uploaded cover rides as imeta `thumb`.
         val withCover = composer.composeMemeVideoNote(

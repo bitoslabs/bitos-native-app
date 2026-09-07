@@ -85,6 +85,10 @@ class BusinessCoreBridge {
         /** APP-007 remix source (id + author pubkey); null = original work. */
         val remixOfEventId: String? = null,
         val remixOfPubkey: String? = null,
+        /** APP-007 relay hints from the remix tag (≤ RemixRules.MAX_RELAY_HINTS). */
+        val remixRelays: List<String> = emptyList(),
+        /** MST-042 raw `meme` layout payload; null = the note carries none. */
+        val memeTag: String? = null,
         /** APP-007 `license` tag (remix advisory gate); null = permissive. */
         val license: String? = null,
         /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
@@ -500,6 +504,8 @@ class BusinessCoreBridge {
             pollOptions = note.poll?.options?.map { it.label } ?: emptyList(),
             remixOfEventId = note.remixOfEventId,
             remixOfPubkey = note.remixOfPubkey,
+            remixRelays = note.remixRelays,
+            memeTag = note.memeTag,
             license = note.license,
             zapsDisabled = note.zapsDisabled,
             fallbackUrls = note.video?.fallbackUrls ?: emptyList(),
@@ -2010,6 +2016,7 @@ class BusinessCoreBridge {
         nowSeconds: Long,
         thumbUrl: String? = null,
         extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(
@@ -2020,7 +2027,7 @@ class BusinessCoreBridge {
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
         val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
-        return composer.composeMemeVideoNote(authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra)
+        return composer.composeMemeVideoNote(authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra, includeClientTag = includeClientTag)
             ?.idHex
     }
 
@@ -2042,6 +2049,7 @@ class BusinessCoreBridge {
         signatureHex: String,
         thumbUrl: String? = null,
         extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(
@@ -2054,8 +2062,44 @@ class BusinessCoreBridge {
         val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
         val unsigned = composer.composeMemeVideoNote(
             authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra,
+            includeClientTag = includeClientTag,
         ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
+     * MST-042 remix relay hints (web `remixReel` parity): the source event's
+     * own remix-tag relays first, then the composer's write relays, deduped
+     * and capped at 3, as a JSON string array.
+     */
+    fun remixRelayHintsJson(sourceRelaysJson: String, writeRelaysJson: String): String {
+        fun decode(json: String): List<String> = try {
+            Json.parseToJsonElement(json).jsonArray
+                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val merged = space.bitos.core.feed.RemixRules.relayHints(
+            decode(sourceRelaysJson), decode(writeRelaysJson),
+        )
+        return kotlinx.serialization.json.buildJsonArray {
+            merged.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+        }.toString()
+    }
+
+    /**
+     * M4b remix editor seed: decode the source note's compact `meme` tag and
+     * clone its overlays/cues/look onto the project with FRESH ids (web
+     * `applyRemixPayload` parity). Returns the re-encoded project wire, or
+     * "" when the project wire is corrupt. A missing/undecodable payload
+     * returns the project unchanged — the remix still rides remix/p tags.
+     */
+    fun memeApplyRemix(projectJson: String, memeTag: String?): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+            ?: return ""
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeRemix.applyTo(project, memeTag),
+        )
     }
 
     /**
@@ -3856,6 +3900,7 @@ class BusinessCoreBridge {
         nowSeconds: Long,
         altText: String = "",
         contentWarningReason: String? = null,
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs)
@@ -3863,7 +3908,7 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
-        return composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason)?.idHex
+        return composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason, includeClientTag)?.idHex
     }
 
     /** The ["EVENT", {...}] frame for the signed kind-22 media note, or null. */
@@ -3881,6 +3926,7 @@ class BusinessCoreBridge {
         signatureHex: String,
         altText: String = "",
         contentWarningReason: String? = null,
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs)
@@ -3888,7 +3934,7 @@ class BusinessCoreBridge {
             return null
         }
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
-        val unsigned = composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason) ?: return null
+        val unsigned = composer.composeMediaNote(authorPubkey, caption, media, altText, contentWarningReason, includeClientTag) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
 
@@ -3906,6 +3952,7 @@ class BusinessCoreBridge {
         height: Long,
         nowSeconds: Long,
         extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
@@ -3916,6 +3963,7 @@ class BusinessCoreBridge {
         val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
         return composer.composeMemePictureNote(
             authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+            includeClientTag = includeClientTag,
         )
             ?.idHex
     }
@@ -3935,6 +3983,7 @@ class BusinessCoreBridge {
         createdAtSeconds: Long,
         signatureHex: String,
         extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
     ): String? {
         val media = try {
             space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
@@ -3945,6 +3994,7 @@ class BusinessCoreBridge {
         val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
         val unsigned = composer.composeMemePictureNote(
             authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+            includeClientTag = includeClientTag,
         ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }

@@ -224,14 +224,34 @@ data class UploadedMedia(
         }
     }
 
-    /** NIP-92 imeta field list for this descriptor. */
+    /**
+     * NIP-92 imeta field list for this descriptor (web `buildKind22` parity:
+     * url, m, size, dim, thumb, x, duration, bitrate). Duration keeps its
+     * millisecond precision as `s.mmm` (web `toFixed(3)`); bitrate is the
+     * rounded bits/second of the uploaded bytes over that duration, emitted
+     * only for clips longer than [MIN_BITRATE_DURATION_MS] (web gates at
+     * 0.2 s so a poster-frame still never divides by ~0).
+     */
     fun imetaFields(): List<String> = buildList {
         add("url $url")
         add("m $mimeType")
-        add("x $sha256Hex")
         add("size $sizeBytes")
         if (width != null && height != null) add("dim ${width}x${height}")
-        if (durationMs != null) add("duration ${durationMs / 1000}")
         thumbUrl?.let { add("thumb $it") }
+        add("x $sha256Hex")
+        durationMs?.let { ms ->
+            add("duration ${formatDurationSeconds(ms)}")
+            if (ms > MIN_BITRATE_DURATION_MS) {
+                add("bitrate ${(sizeBytes * 8_000L + ms / 2) / ms}")
+            }
+        }
+    }
+
+    private fun formatDurationSeconds(ms: Long): String =
+        "${ms / 1000}.${(ms % 1000).toString().padStart(3, '0')}"
+
+    private companion object {
+        /** Web parity: no bitrate under 0.2 s of media. */
+        const val MIN_BITRATE_DURATION_MS = 200L
     }
 }
