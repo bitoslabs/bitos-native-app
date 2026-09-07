@@ -436,10 +436,13 @@ fixed, what's next.
   shows its own progress). The camera's "Use" take and "Import from
   library instead" route into the SAME editor pipeline. Errors are named
   and non-destructive (dialog/alert with the reason AND the fix, hub
-  untouched): unreadable pick, > 256 MB source (Android
-  `MemeVideoExport.MAX_SOURCE_BYTES` parity, pinned by unit test
-  `ImportedVideoRulesTest`; iOS `StudioImportRules` mirror); a brief
-  "Preparing your video…" progress state covers the byte read. Android:
+  untouched): unreadable pick, > 256 MB source — the cap now lives in
+  SHARED `MemeVideoCutRules.MAX_SOURCE_BYTES` (common-tested pin in
+  `MemeVideoCutTest`), Android's `MemeVideoExport.MAX_SOURCE_BYTES`
+  delegates to it and iOS `StudioImportRules` reads it through the
+  framework (`MemeVideoCutRules.shared`) — no local literals, the two
+  apps cannot drift (Android gate pinned by `ImportedVideoRulesTest`);
+  a brief "Preparing your video…" progress state covers the byte read. Android:
   `CreateScreen` picker + `ImportedVideoRules`, editor seed-failure notice
   reworded source-neutral ("A source clip could not be read"), dead
   `MediaPublishViewModel.mediaCaptured` removed, editor's

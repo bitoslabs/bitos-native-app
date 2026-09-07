@@ -57,4 +57,13 @@ class MemeVideoCutTest {
         assertEquals("34.5 s", MemeVideoCutRules.durationLabel(34_500))
         assertEquals("5 s", MemeVideoCutRules.durationLabel(5_000))
     }
+
+    @Test
+    fun sourceByteCapIsTheCrossPlatformImportBound() {
+        // The studio import-media gate (Create hub, both platforms) and
+        // Android's timeline source cap read THIS constant — pin it so a
+        // bump is a deliberate, common-tested decision, not drift.
+        assertEquals(256L * 1024 * 1024, MemeVideoCutRules.MAX_SOURCE_BYTES)
+        assertEquals("256 MB", "${MemeVideoCutRules.MAX_SOURCE_BYTES / (1024 * 1024)} MB")
+    }
 }

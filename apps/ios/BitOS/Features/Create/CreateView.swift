@@ -436,10 +436,11 @@ struct CreateView: View {
 /// Studio import-media gate (Android `ImportedVideoRules` parity): a
 /// picked library video seeds the meme editor — the ONE publish path
 /// from this hub. Rejections name the reason AND the fix; the hub state
-/// is never touched by a rejected pick.
+/// is never touched by a rejected pick. The byte cap is the SHARED
+/// cross-platform constant (`MemeVideoCutRules.MAX_SOURCE_BYTES`, common-
+/// tested) — never a local literal, so the two apps cannot drift.
 private enum StudioImportRules {
-    /// Android `MemeVideoExport.MAX_SOURCE_BYTES` parity (256 MB).
-    static let maxBytes = 256 * 1_024 * 1_024
+    static let maxBytes = Int(MemeVideoCutRules.shared.MAX_SOURCE_BYTES)
 
     /// nil = seed the editor; else the named rejection for the alert.
     static func rejection(_ byteCount: Int?) -> String? {

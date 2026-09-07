@@ -30,9 +30,11 @@ object MemeVideoExport {
      * Importing is local editing work, not a Blossom upload. Keep a bounded
      * (but substantially larger) source allowance so a creator can trim and
      * re-encode a camera-original clip before the final 64 MiB upload policy
-     * is applied.
+     * is applied. Delegates to the shared cross-platform cap
+     * (`MemeVideoCutRules.MAX_SOURCE_BYTES`) — the Create hub's import
+     * gate reads the same bound on iOS.
      */
-    const val MAX_SOURCE_BYTES = 256L * 1024 * 1024
+    const val MAX_SOURCE_BYTES = space.bitos.core.studio.MemeVideoCutRules.MAX_SOURCE_BYTES
 
     data class Probe(
         val width: Int,

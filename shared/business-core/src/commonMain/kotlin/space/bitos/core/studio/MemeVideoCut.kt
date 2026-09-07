@@ -19,6 +19,12 @@ object MemeVideoCutRules {
     /** Plan's clip cap (MST-030). */
     const val MAX_CLIP_MS = 60_000L
 
+    /** Studio source-size bound (256 MB): the single cross-platform cap
+     *  for picked/imported video sources — the Create hub's import-media
+     *  gate (both platforms) and Android's timeline source budget read
+     *  it. Common-tested so a bump is deliberate, never drift. */
+    const val MAX_SOURCE_BYTES = 256L * 1024 * 1024
+
     /** Never cut below this — a meme needs a beat to land. */
     const val MIN_KEEP_MS = 5_000L
 
