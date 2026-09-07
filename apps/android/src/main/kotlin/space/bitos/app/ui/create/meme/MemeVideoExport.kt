@@ -7,12 +7,15 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.Transformer
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.max
 import space.bitos.core.studio.MemeExportRules
+import space.bitos.core.studio.MemeExportPresets
 import space.bitos.core.studio.MemeProject
 
 /**
@@ -50,6 +53,17 @@ object MemeVideoExport {
 
     class ExportFailure(message: String) : Exception(message)
 
+    /**
+     * Export result (MST-036): the artifact bytes plus the ACTUAL output
+     * dims — publish imeta must carry these, never the probe dims (the
+     * preset canvas can differ from the source).
+     */
+    data class Exported(
+        val bytes: ByteArray,
+        val width: Int,
+        val height: Int,
+    )
+
     /** One M5 timeline clip handed to [exportClips]. */
     data class ClipInput(
         val bytes: ByteArray,
@@ -81,8 +95,17 @@ object MemeVideoExport {
         project: MemeProject,
         sfxPcm16: ByteArray? = null,
         imageAssets: Map<String, Uri> = emptyMap(),
-    ): ByteArray {
+        preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+    ): Exported {
         require(clips.isNotEmpty()) { "no clips" }
+        // One uniform output canvas for the whole timeline (a sequence muxes
+        // into a single track): the shared target of the LARGEST clip, then
+        // every item scales to it — smaller sources upscale, larger ones
+        // downscale, uniformity wins for mixed-resolution timelines.
+        val largestClip = clips.maxBy { it.probe.uprightWidth.toLong() * it.probe.uprightHeight }
+        val plan = MemeExportPresets.encoderPlan(
+            preset, largestClip.probe.uprightWidth, largestClip.probe.uprightHeight,
+        )
         val imageFor: ((String) -> Bitmap?) = imageAssets.takeIf { it.isNotEmpty() }?.let { assets ->
             { id -> assets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) } }
         } ?: { null }
@@ -92,8 +115,16 @@ object MemeVideoExport {
             val editedItems = clips.map { clip ->
                 val rate = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)
                 val probe = clip.probe
-                val frameWidth = max(2, probe.uprightWidth - (probe.uprightWidth % 2))
-                val frameHeight = max(2, probe.uprightHeight - (probe.uprightHeight % 2))
+                // Paint plans live on the UNIFORM timeline canvas (post-scale,
+                // pre-encode) so text rasterizes at its final size.
+                val frameWidth = plan.width
+                val frameHeight = plan.height
+                // Per-item normalization onto that canvas (down- or upscale —
+                // mixed-resolution timelines must land on one track size).
+                val itemFrame = MemeExportPresets.evenedFrame(probe.uprightWidth, probe.uprightHeight)
+                val itemScaleX = plan.width.toFloat() / itemFrame.first
+                val itemScaleY = plan.height.toFloat() / itemFrame.second
+                val itemScaleNeeded = abs(itemScaleX - 1f) > 0.001f || abs(itemScaleY - 1f) > 0.001f
                 val input = File(context.cacheDir, "meme-clip-in-${clip.offsetMs}-${System.nanoTime()}.mp4")
                 files += input
                 input.writeBytes(clip.bytes)
@@ -125,6 +156,11 @@ object MemeVideoExport {
                     .build()
                 val builder = EditedMediaItem.Builder(mediaItem)
                     .setEffects(Effects(if (clip.volume > 0f && clip.volume != 1f) listOf(MemeVideoAudio.gain(clip.volume)) else emptyList(), buildList {
+                        // Preset scale FIRST (MST-036): the canvas, grade and
+                        // overlay all work at the final output size.
+                        if (itemScaleNeeded) {
+                            add(ScaleAndRotateTransformation.Builder().setScale(itemScaleX, itemScaleY).build())
+                        }
                         // Color grade per clip: the clip's own look, else the
                         // project grade — the manual adjust composes over
                         // either into the shared WYSIWYG matrix.
@@ -174,9 +210,13 @@ object MemeVideoExport {
             } else {
                 androidx.media3.transformer.Composition.Builder(videoSequence).build()
             }
-            MemeVideoRender.render(context, composition, output.absolutePath, 120_000L * clips.size.coerceAtMost(4))
+            MemeVideoRender.render(
+                context, composition, output.absolutePath,
+                120_000L * clips.size.coerceAtMost(4),
+                plan.videoBitrateBps, plan.audioBitrateBps,
+            )
             if (output.length() == 0L) throw ExportFailure("Video export produced an empty file")
-            return output.readBytes()
+            return Exported(output.readBytes(), plan.width, plan.height)
         } finally {
             files.forEach { runCatching { it.delete() } }
         }
@@ -192,19 +232,38 @@ object MemeVideoExport {
         resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(descriptor.fileDescriptor)
-                val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-                    ?.toIntOrNull() ?: return null
-                val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                    ?.toIntOrNull() ?: return null
-                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    ?.toLongOrNull() ?: 0L
-                val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-                    ?.toIntOrNull() ?: 0
-                Probe(rawW, rawH, duration, rotation)
+                probeRetriever(retriever)
             }
         }
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * Probes a LOCAL slot file by direct path — the draft-resume path.
+     * Plain files (unlike content:// picker sources) probe reliably by
+     * path, including right after a cold start where resolver-FD probing
+     * has proven flaky (dropped-resume bug).
+     */
+    fun probeFile(file: File): Probe? = try {
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(file.absolutePath)
+            probeRetriever(retriever)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun probeRetriever(retriever: MediaMetadataRetriever): Probe? {
+        val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            ?.toIntOrNull() ?: return null
+        val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            ?.toIntOrNull() ?: return null
+        val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull() ?: 0L
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            ?.toIntOrNull() ?: 0
+        return Probe(rawW, rawH, duration, rotation)
     }
 
     /**
@@ -247,9 +306,13 @@ object MemeVideoExport {
         project: MemeProject,
         sfxPcm16: ByteArray? = null,
         imageAssets: Map<String, Uri> = emptyMap(),
-    ): ByteArray {
-        val frameWidth = max(2, probe.uprightWidth - (probe.uprightWidth % 2))
-        val frameHeight = max(2, probe.uprightHeight - (probe.uprightHeight % 2))
+        preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+    ): Exported {
+        val plan = MemeExportPresets.encoderPlan(preset, probe.uprightWidth, probe.uprightHeight)
+        // Paint plans live on the output canvas (post-scale) — text burns
+        // at its final raster size.
+        val frameWidth = plan.width
+        val frameHeight = plan.height
 
         // The project trim window is the export contract (MST-030
         // revision): over-long clips are CUT here, not rejected.
@@ -298,7 +361,18 @@ object MemeVideoExport {
                 )
                 .build()
             val editedBuilder = EditedMediaItem.Builder(mediaItem)
-                .setEffects(Effects(emptyList(), listOf(effect)))
+                .setEffects(
+                    Effects(
+                        emptyList(),
+                        buildList {
+                            // Preset scale FIRST (MST-036).
+                            if (plan.scaleNeeded) {
+                                add(ScaleAndRotateTransformation.Builder().setScale(plan.scaleX, plan.scaleY).build())
+                            }
+                            add(effect)
+                        },
+                    ),
+                )
             if (rate != 1f) {
                 // V2 suite Speed chip: whole-clip rate (audio + video — the
                 // Sonic processor resamples both; pitch shifts, V1 accepted).
@@ -331,9 +405,12 @@ object MemeVideoExport {
                 androidx.media3.transformer.EditedMediaItemSequence.Builder(edited).build(),
             ).build()
             try {
-                MemeVideoRender.render(context, composition, output.absolutePath, 120_000L)
+                MemeVideoRender.render(
+                    context, composition, output.absolutePath, 120_000L,
+                    plan.videoBitrateBps, plan.audioBitrateBps,
+                )
                 if (output.length() == 0L) throw ExportFailure("Video export produced an empty file")
-                return output.readBytes()
+                return Exported(output.readBytes(), plan.width, plan.height)
             } finally {
                 sfxFile?.delete()
             }

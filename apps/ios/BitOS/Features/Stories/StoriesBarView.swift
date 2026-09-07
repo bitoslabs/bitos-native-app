@@ -292,6 +292,10 @@ struct StoryViewerView: View {
     @State private var imageFailed = false
     @State private var revealed = false
     @State private var measuredVideoSeconds: Double?
+    // Video playback state: buffering spinner + failed fallback (a dead
+    // source shows the poster/caption instead of a silent black slide).
+    @State private var videoFailed = false
+    @State private var videoBuffering = false
     // Engagement UI state (web parity): reply/DM modes, activity sheet,
     // delete confirm, double-tap heart burst.
     @State private var replyMode = "reply"
@@ -349,6 +353,8 @@ struct StoryViewerView: View {
         .task(id: "\(slide?.id ?? "")#\(imageIndex)") {
             guard let slide else { return }
             imageFailed = false
+            videoFailed = false
+            videoBuffering = false
             onSeen(slide.id)
             while progress < 1.0 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
@@ -362,6 +368,8 @@ struct StoryViewerView: View {
             imageIndex = 0
             revealed = false
             measuredVideoSeconds = nil
+            videoFailed = false
+            videoBuffering = false
         }
     }
 
@@ -484,7 +492,7 @@ struct StoryViewerView: View {
 
     @ViewBuilder
     private var slideBackground: some View {
-        if isVideo, let videoUrl = slide?.videoUrl.flatMap(URL.init(string:)) {
+        if isVideo, !videoFailed, let videoUrl = slide?.videoUrl.flatMap(URL.init(string:)) {
             ZStack {
                 if let poster = slide?.videoPoster.flatMap(URL.init(string:)) {
                     AsyncImage(url: poster) { phase in
@@ -497,8 +505,15 @@ struct StoryViewerView: View {
                     url: videoUrl,
                     paused: paused || hidden,
                     onEnded: { advance() },
-                    onDurationMeasured: { measuredVideoSeconds = $0 }
+                    onDurationMeasured: { measuredVideoSeconds = $0 },
+                    onBuffering: { videoBuffering = $0 },
+                    onError: { videoFailed = true }
                 )
+                if videoBuffering {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(width: 44, height: 44)
+                }
             }
         } else if images.indices.contains(imageIndex),
                   let url = URL(string: images[imageIndex]), !imageFailed {
@@ -543,7 +558,11 @@ struct StoryViewerView: View {
         let text = slide?.content ?? ""
         ZStack {
             LinearGradient(colors: gradientColors, startPoint: .top, endPoint: .bottom)
-            Text(text.isEmpty && imageFailed ? "Image unavailable" : text)
+            Text(
+                text.isEmpty
+                    ? (videoFailed ? "Video unavailable" : (imageFailed ? "Image unavailable" : ""))
+                    : text
+            )
                 .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)

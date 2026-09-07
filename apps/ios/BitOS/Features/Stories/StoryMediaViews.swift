@@ -45,12 +45,15 @@ struct StoryGifView: View {
 }
 
 /// Controls-free, muted, aspect-fill video surface for story slides.
-/// Reports the measured duration (progress-timer cap) and playback end.
+/// Reports the measured duration (progress-timer cap), buffering state,
+/// playback end and source errors.
 struct StoryVideoLayer: UIViewRepresentable {
     let url: URL
     let paused: Bool
     let onEnded: () -> Void
     let onDurationMeasured: (Double) -> Void
+    var onBuffering: (Bool) -> Void = { _ in }
+    var onError: () -> Void = {}
 
     final class PlayerHostView: UIView {
         var player: AVPlayer? {
@@ -68,7 +71,11 @@ struct StoryVideoLayer: UIViewRepresentable {
         let player = AVPlayer(playerItem: item)
         player.isMuted = true
         view.player = player
-        context.coordinator.attach(player: player, item: item, view: view, onEnded: onEnded, onDuration: onDurationMeasured)
+        context.coordinator.attach(
+            player: player, item: item,
+            onEnded: onEnded, onDuration: onDurationMeasured,
+            onBuffering: onBuffering, onError: onError
+        )
         player.play()
         return view
     }
@@ -88,14 +95,26 @@ struct StoryVideoLayer: UIViewRepresentable {
     final class Coordinator: @unchecked Sendable {
         private var endObserver: NSObjectProtocol?
         private var statusObserver: NSKeyValueObservation?
+        private var timeControlObserver: NSKeyValueObservation?
         private var player: AVPlayer?
         private var onEnded: (() -> Void)?
         private var onDuration: ((Double) -> Void)?
+        private var onBuffering: ((Bool) -> Void)?
+        private var onError: (() -> Void)?
 
-        func attach(player: AVPlayer, item: AVPlayerItem, view: PlayerHostView, onEnded: @escaping () -> Void, onDuration: @escaping (Double) -> Void) {
+        func attach(
+            player: AVPlayer,
+            item: AVPlayerItem,
+            onEnded: @escaping () -> Void,
+            onDuration: @escaping (Double) -> Void,
+            onBuffering: @escaping (Bool) -> Void,
+            onError: @escaping () -> Void
+        ) {
             self.player = player
             self.onEnded = onEnded
             self.onDuration = onDuration
+            self.onBuffering = onBuffering
+            self.onError = onError
             endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
@@ -104,28 +123,44 @@ struct StoryVideoLayer: UIViewRepresentable {
                 self?.onEnded?()
             }
             statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-                guard item.status == .readyToPlay else { return }
-                let seconds = item.duration.seconds
-                if seconds.isFinite, seconds > 0 {
-                    DispatchQueue.main.async { self?.onDuration?(seconds) }
+                switch item.status {
+                case .readyToPlay:
+                    let seconds = item.duration.seconds
+                    if seconds.isFinite, seconds > 0 {
+                        DispatchQueue.main.async { self?.onDuration?(seconds) }
+                    }
+                case .failed:
+                    DispatchQueue.main.async { self?.onBuffering?(false); self?.onError?() }
+                default:
+                    break
                 }
+            }
+            // Buffering = waiting for media while meant to be playing.
+            timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+                let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                DispatchQueue.main.async { self?.onBuffering?(waiting) }
             }
         }
 
         func detach() {
             if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
             statusObserver?.invalidate()
+            timeControlObserver?.invalidate()
             endObserver = nil
             statusObserver = nil
+            timeControlObserver = nil
             player?.pause()
             player = nil
             onEnded = nil
             onDuration = nil
+            onBuffering = nil
+            onError = nil
         }
 
         deinit {
             if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
             statusObserver?.invalidate()
+            timeControlObserver?.invalidate()
         }
     }
 }

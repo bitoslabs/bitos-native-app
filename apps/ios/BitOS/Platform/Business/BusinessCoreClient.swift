@@ -241,6 +241,26 @@ protocol BusinessCoreClient: Sendable {
     /// APP-019 export draw plan (MST-016): target-px paint commands for the
     /// Swift rasterizer; "" when the project wire is corrupt.
     func memeExportPlan(_ projectJson: String, sourceWidth: Int, sourceHeight: Int) -> String
+    /// MST-036 encoder plan (shared preset table — no Swift mirror):
+    /// `{"bitrate","audioBitrate","width","height","scaleX","scaleY"}`;
+    /// "" on unknown tier ids. AUTO = "P1080"/"HIGH".
+    func memeEncoderPlan(_ resolution: String, quality: String, sourceWidth: Int, sourceHeight: Int) -> String
+    /// MST-036 pre-export estimate + publish gate for the picker:
+    /// `{"bytes","label","publishFits"}` for a preset × trimmed duration;
+    /// "" on unknown tier ids.
+    func memeExportEstimate(_ resolution: String, quality: String, durationMs: Int64) -> String
+    /// MST post-details meme PoW (NIP-13): mine one bounded window over the
+    /// EXACT meme template (media uploaded — the imeta is final); "nonce:id"
+    /// or nil. `nowSeconds` IS the mining timestamp (publish must reuse it).
+    func mineMemeVideoPow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String?
+    /// Event id for the pre-mined kind-22/21 note (byte-match contract).
+    func powMemeVideoEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String?
+    /// Relay frame for the pre-mined kind-22/21 note.
+    func powMemeVideoPublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String?
+    /// Kind-20 picture twin of the meme PoW trio.
+    func mineMemePicturePow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String?
+    func powMemePictureEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, extraTagsJson: String, includeClientTag: Bool) -> String?
+    func powMemePicturePublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, extraTagsJson: String, includeClientTag: Bool) -> String?
     /// M2 GIF planning (shared rules): plan steps JSON for per-frame holds.
     func memeGifPlan(_ delaysMsJson: String, pinnedSec: Double) -> String
     /// M2 GIF ladder canvas `"width|height"` for a step; "" past the cap.
@@ -826,6 +846,91 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         )
     }
 
+    func memeEncoderPlan(_ resolution: String, quality: String, sourceWidth: Int, sourceHeight: Int) -> String {
+        bridge.memeEncoderPlan(
+            resolution: resolution,
+            quality: quality,
+            sourceWidth: Int32(sourceWidth),
+            sourceHeight: Int32(sourceHeight)
+        )
+    }
+
+    func memeExportEstimate(_ resolution: String, quality: String, durationMs: Int64) -> String {
+        bridge.memeExportEstimate(resolution: resolution, quality: quality, durationMs: durationMs)
+    }
+
+    func mineMemeVideoPow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
+        bridge.mineMemeVideoPow(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason, portrait: portrait,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            durationMs: durationMs, nowSeconds: nowSeconds, thumbUrl: thumbUrl,
+            extraTagsJson: extraTagsJson, includeClientTag: includeClientTag,
+            targetDifficulty: targetDifficulty, startNonce: startNonce, maxAttempts: maxAttempts
+        )
+    }
+
+    func powMemeVideoEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        bridge.powMemeVideoEventId(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason, portrait: portrait,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            durationMs: durationMs, nowSeconds: nowSeconds, nonce: nonce,
+            targetDifficulty: targetDifficulty, thumbUrl: thumbUrl,
+            extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+        )
+    }
+
+    func powMemeVideoPublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        bridge.powMemeVideoPublishMessage(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason, portrait: portrait,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            durationMs: durationMs, createdAtSeconds: createdAtSeconds,
+            nonce: nonce, targetDifficulty: targetDifficulty,
+            signatureHex: signatureHex, thumbUrl: thumbUrl,
+            extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+        )
+    }
+
+    func mineMemePicturePow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
+        bridge.mineMemePicturePow(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            nowSeconds: nowSeconds, extraTagsJson: extraTagsJson,
+            includeClientTag: includeClientTag,
+            targetDifficulty: targetDifficulty, startNonce: startNonce, maxAttempts: maxAttempts
+        )
+    }
+
+    func powMemePictureEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        bridge.powMemePictureEventId(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            nowSeconds: nowSeconds, nonce: nonce, targetDifficulty: targetDifficulty,
+            extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+        )
+    }
+
+    func powMemePicturePublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        bridge.powMemePicturePublishMessage(
+            authorPubkey: authorPubkey, caption: caption, altText: altText,
+            contentWarningReason: contentWarningReason,
+            url: url, sha256Hex: sha256Hex, mimeType: mimeType,
+            sizeBytes: sizeBytes, width: width, height: height,
+            createdAtSeconds: createdAtSeconds, nonce: nonce,
+            targetDifficulty: targetDifficulty, signatureHex: signatureHex,
+            extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+        )
+    }
+
     func memeGifPlan(_ delaysMsJson: String, pinnedSec: Double) -> String {
         bridge.memeGifPlan(delaysMsJson: delaysMsJson, pinnedSec: pinnedSec)
     }
@@ -1132,6 +1237,30 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeExportPlan(_ projectJson: String, sourceWidth: Int, sourceHeight: Int) -> String {
         FrameworkBusinessCoreClient().memeExportPlan(projectJson, sourceWidth: sourceWidth, sourceHeight: sourceHeight)
+    }
+    func memeEncoderPlan(_ resolution: String, quality: String, sourceWidth: Int, sourceHeight: Int) -> String {
+        FrameworkBusinessCoreClient().memeEncoderPlan(resolution, quality: quality, sourceWidth: sourceWidth, sourceHeight: sourceHeight)
+    }
+    func memeExportEstimate(_ resolution: String, quality: String, durationMs: Int64) -> String {
+        FrameworkBusinessCoreClient().memeExportEstimate(resolution, quality: quality, durationMs: durationMs)
+    }
+    func mineMemeVideoPow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
+        FrameworkBusinessCoreClient().mineMemeVideoPow(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, portrait: portrait, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, durationMs: durationMs, nowSeconds: nowSeconds, thumbUrl: thumbUrl, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag, targetDifficulty: targetDifficulty, startNonce: startNonce, maxAttempts: maxAttempts)
+    }
+    func powMemeVideoEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        FrameworkBusinessCoreClient().powMemeVideoEventId(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, portrait: portrait, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, durationMs: durationMs, nowSeconds: nowSeconds, nonce: nonce, targetDifficulty: targetDifficulty, thumbUrl: thumbUrl, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag)
+    }
+    func powMemeVideoPublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, portrait: Bool, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, durationMs: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, thumbUrl: String?, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        FrameworkBusinessCoreClient().powMemeVideoPublishMessage(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, portrait: portrait, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, durationMs: durationMs, createdAtSeconds: createdAtSeconds, nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signatureHex, thumbUrl: thumbUrl, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag)
+    }
+    func mineMemePicturePow(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, extraTagsJson: String, includeClientTag: Bool, targetDifficulty: Int32, startNonce: Int64, maxAttempts: Int64) -> String? {
+        FrameworkBusinessCoreClient().mineMemePicturePow(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, nowSeconds: nowSeconds, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag, targetDifficulty: targetDifficulty, startNonce: startNonce, maxAttempts: maxAttempts)
+    }
+    func powMemePictureEventId(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, nowSeconds: Int64, nonce: Int64, targetDifficulty: Int32, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        FrameworkBusinessCoreClient().powMemePictureEventId(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, nowSeconds: nowSeconds, nonce: nonce, targetDifficulty: targetDifficulty, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag)
+    }
+    func powMemePicturePublishMessage(_ authorPubkey: String, caption: String, altText: String, contentWarningReason: String?, url: String, sha256Hex: String, mimeType: String, sizeBytes: Int64, width: Int64, height: Int64, createdAtSeconds: Int64, nonce: Int64, targetDifficulty: Int32, signatureHex: String, extraTagsJson: String, includeClientTag: Bool) -> String? {
+        FrameworkBusinessCoreClient().powMemePicturePublishMessage(authorPubkey, caption: caption, altText: altText, contentWarningReason: contentWarningReason, url: url, sha256Hex: sha256Hex, mimeType: mimeType, sizeBytes: sizeBytes, width: width, height: height, createdAtSeconds: createdAtSeconds, nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signatureHex, extraTagsJson: extraTagsJson, includeClientTag: includeClientTag)
     }
     func memeGifPlan(_ delaysMsJson: String, pinnedSec: Double) -> String {
         FrameworkBusinessCoreClient().memeGifPlan(delaysMsJson, pinnedSec: pinnedSec)

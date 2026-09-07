@@ -114,6 +114,37 @@ final class BusinessCoreClientTests: XCTestCase {
         XCTAssertEqual("", client.memeExportPlan("junk", sourceWidth: 10, sourceHeight: 10))
     }
 
+    /// MST-036 export-quality seams: the shared preset table + canvas math
+    /// + estimate/gate serve iOS verbatim — identical numbers to Android
+    /// (mirrors the common `memeEncoderPlanAndEstimateSeams…` battery).
+    func testMemeEncoderPlanAndEstimateSeams() {
+        let client = FrameworkBusinessCoreClient()
+        // AUTO on a 9:16 portrait source: long edge caps at 1080 → 608×1080
+        // at 6 Mbps + 128 k audio (the shared web-parity canvas math).
+        let plan = client.memeEncoderPlan("P1080", quality: "HIGH", sourceWidth: 1080, sourceHeight: 1920)
+        XCTAssertTrue(plan.contains(#""bitrate":6000000"#), plan)
+        XCTAssertTrue(plan.contains(#""audioBitrate":128000"#), plan)
+        XCTAssertTrue(plan.contains(#""width":608"#), plan)
+        XCTAssertTrue(plan.contains(#""height":1080"#), plan)
+        XCTAssertEqual(plan, client.memeEncoderPlan("p1080", quality: "high", sourceWidth: 1080, sourceHeight: 1920))
+        // Estimate + gate: 90 s at AUTO ≈ 71 MB → blocked; 720p/Medium fits.
+        let blocked = client.memeExportEstimate("P1080", quality: "HIGH", durationMs: 90_000)
+        XCTAssertTrue(blocked.contains(#""publishFits":false"#), blocked)
+        XCTAssertTrue(blocked.contains(#""bytes":71008200"#), blocked)
+        let fits = client.memeExportEstimate("P720", quality: "MEDIUM", durationMs: 90_000)
+        XCTAssertTrue(fits.contains(#""publishFits":true"#), fits)
+        XCTAssertTrue(fits.contains(#""label":"≈ 29.0 MB""#), fits)
+        // Unknown tiers normalize to "" — never throws.
+        XCTAssertEqual("", client.memeEncoderPlan("P2160", quality: "HIGH", sourceWidth: 1080, sourceHeight: 1920))
+        XCTAssertEqual("", client.memeExportEstimate("P720", quality: "ULTRA", durationMs: 90_000))
+        // The exporter's preset parse consumes the same seam.
+        let probe = MemeVideoExportIos.Probe(width: 1080, height: 1920, durationMs: 60_000, rotationDeg: 0)
+        let parsed = MemeVideoExportIos.encoderPlan(.auto, probe: probe, client: client)
+        XCTAssertEqual(6_000_000, parsed?.videoBitrate)
+        XCTAssertEqual(608, parsed?.width)
+        XCTAssertEqual(1080, parsed?.height)
+    }
+
     /// The Swift editor store applies commands through the same seams and
     /// keeps history bounded: a coalesced style burst and a gesture each
     /// collapse to ONE undo step.

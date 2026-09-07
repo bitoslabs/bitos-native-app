@@ -1,12 +1,14 @@
 package space.bitos.app.data.publish
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import space.bitos.app.data.relay.RelayPool
 import space.bitos.core.identity.IdentitySigner
@@ -30,6 +32,12 @@ data class PublishUiState(
 )
 
 enum class PublishResult { PUBLISHED, REJECTED, TIMEOUT, SIGNING_REFUSED, INVALID }
+
+/** Meme PoW mining-window bounds (PowCard parity): chunked so the loop
+ *  stays cancellable between windows, hard-capped so a runaway target
+ *  can never spin forever. */
+private const val MEME_POW_CHUNK_ATTEMPTS = 20_000L
+private const val MEME_POW_HARD_ATTEMPT_CAP = 5_000_000L
 
 /** Real meme-publish checkpoints (drives the publish machine stepper):
  * BUILT → SIGNED → RELAYED; the String payload is the canonical event id. */
@@ -143,8 +151,8 @@ class NotePublisher(
 
     /**
      * APP-006 story publish (web `stories.publish` parity): kind-30315 with
-     * per-image NIP-92 imeta, background gradient for text-only slides and
-     * a content-warning tag for sensitive media.
+     * per-image NIP-92 imeta, an optional video imeta, background gradient
+     * for text-only slides and a content-warning tag for sensitive media.
      */
     fun publishStory(
         text: String,
@@ -154,6 +162,10 @@ class NotePublisher(
         sensitive: Boolean,
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long? = null,
+        videoPoster: String? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
@@ -165,6 +177,7 @@ class NotePublisher(
             val dTag = space.bitos.core.model.Stories.storyDTag(nowSeconds, (1..Int.MAX_VALUE).random())
             val story = composer.composeStory(
                 signer.publicKeyHex(), text, imageUrls, background, altText, sensitive, dTag,
+                videoUrl, videoMime, videoDurationMs, videoPoster,
             ) ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
@@ -190,6 +203,10 @@ class NotePublisher(
         createdAtSeconds: Long,
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long? = null,
+        videoPoster: String? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
@@ -199,7 +216,7 @@ class NotePublisher(
             }
             val story = composer.composeStoryWithPow(
                 signer.publicKeyHex(), text, imageUrls, background, altText, sensitive, dTag,
-                nonce, targetDifficulty, createdAtSeconds,
+                nonce, targetDifficulty, createdAtSeconds, videoUrl, videoMime, videoDurationMs, videoPoster,
             ) ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
@@ -533,6 +550,7 @@ class NotePublisher(
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
+        powBits: Int = 0,
         onStage: ((MemeNoteStage, String) -> Unit)? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -541,16 +559,80 @@ class NotePublisher(
                 mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
                 return@launch
             }
-            val note = composer.composeMemeVideoNote(
-                signer.publicKeyHex(), caption, altText, contentWarningReason, portrait, media, extraTags,
-                includeClientTag = includeClientTag(),
-            ) ?: run {
+            val note = if (powBits > 0) {
+                composeMemeVideoWithMinedPow(
+                    signer.publicKeyHex(), caption, altText, contentWarningReason,
+                    portrait, media, extraTags, powBits,
+                )
+            } else {
+                composer.composeMemeVideoNote(
+                    signer.publicKeyHex(), caption, altText, contentWarningReason, portrait, media, extraTags,
+                    includeClientTag = includeClientTag(),
+                )
+            } ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
             }
             onStage?.invoke(MemeNoteStage.BUILT, note.idHex)
             publishUnsigned(note, signer, writeRelays, onStage)
         }
+    }
+
+    /**
+     * Post-upload meme PoW (MST post-details, `composeStoryWithPow`
+     * contract): mine the EXACT kind-22/21 template (media is uploaded —
+     * the imeta is final) in bounded cancellable chunks on Dispatchers
+     * .Default, then compose with the nonce so the published id
+     * byte-matches the miner's serialization. null = invalid template or
+     * an exhausted window (surface "try fewer bits", never mine forever).
+     */
+    private suspend fun composeMemeVideoWithMinedPow(
+        pubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>>,
+        powBits: Int,
+    ): space.bitos.core.publish.UnsignedNote? {
+        val minedAt = System.currentTimeMillis() / 1000
+        val powComposer = NoteComposer(clock = { minedAt })
+        val base = powComposer.composeMemeVideoNote(
+            pubkey, caption, altText, contentWarningReason, portrait, media, extraTags,
+            includeClientTag = includeClientTag(),
+        ) ?: return null
+        val mined = mineMemePowWindow(base, powBits) ?: run {
+            mutableState.value = PublishUiState(result = PublishResult.TIMEOUT)
+            return null
+        }
+        return powComposer.composeMemeVideoNoteWithPow(
+            pubkey, caption, altText, contentWarningReason, portrait, media, extraTags,
+            includeClientTag = includeClientTag(),
+            nonce = mined.nonce, targetDifficulty = powBits, createdAtSeconds = minedAt,
+        )
+    }
+
+    /** Chunked mining driver (PowCard bounds): ≤5M attempts total. */
+    private suspend fun mineMemePowWindow(
+        base: space.bitos.core.publish.UnsignedNote,
+        targetDifficulty: Int,
+    ): space.bitos.core.nostr.Pow.MinedAttempt? {
+        var startNonce = 0L
+        var attempted = 0L
+        while (attempted < MEME_POW_HARD_ATTEMPT_CAP) {
+            val mined = withContext(Dispatchers.Default) {
+                space.bitos.core.nostr.Pow.mineChunk(
+                    space.bitos.core.nostr.Sha256EventHasher,
+                    base.pubkeyHex, base.createdAtSeconds, base.kind, base.tags, base.content,
+                    targetDifficulty, startNonce, MEME_POW_CHUNK_ATTEMPTS,
+                )
+            }
+            if (mined != null) return mined
+            startNonce += MEME_POW_CHUNK_ATTEMPTS
+            attempted += MEME_POW_CHUNK_ATTEMPTS
+        }
+        return null
     }
 
     /**
@@ -567,6 +649,7 @@ class NotePublisher(
         signerProvider: suspend () -> IdentitySigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
+        powBits: Int = 0,
         onStage: ((MemeNoteStage, String) -> Unit)? = null,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -575,16 +658,49 @@ class NotePublisher(
                 mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
                 return@launch
             }
-            val note = composer.composeMemePictureNote(
-                signer.publicKeyHex(), caption, altText, contentWarningReason, media, extraTags,
-                includeClientTag = includeClientTag(),
-            ) ?: run {
+            val note = if (powBits > 0) {
+                composeMemePictureWithMinedPow(
+                    signer.publicKeyHex(), caption, altText, contentWarningReason, media, extraTags, powBits,
+                )
+            } else {
+                composer.composeMemePictureNote(
+                    signer.publicKeyHex(), caption, altText, contentWarningReason, media, extraTags,
+                    includeClientTag = includeClientTag(),
+                )
+            } ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.INVALID)
                 return@launch
             }
             onStage?.invoke(MemeNoteStage.BUILT, note.idHex)
             publishUnsigned(note, signer, writeRelays, onStage)
         }
+    }
+
+    /** Kind-20 twin of [composeMemeVideoWithMinedPow]. */
+    private suspend fun composeMemePictureWithMinedPow(
+        pubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>>,
+        powBits: Int,
+    ): space.bitos.core.publish.UnsignedNote? {
+        val minedAt = System.currentTimeMillis() / 1000
+        val powComposer = NoteComposer(clock = { minedAt })
+        val base = powComposer.composeMemePictureNote(
+            pubkey, caption, altText, contentWarningReason, media, extraTags,
+            includeClientTag = includeClientTag(),
+        ) ?: return null
+        val mined = mineMemePowWindow(base, powBits) ?: run {
+            mutableState.value = PublishUiState(result = PublishResult.TIMEOUT)
+            return null
+        }
+        return powComposer.composeMemePictureNoteWithPow(
+            pubkey, caption, altText, contentWarningReason, media, extraTags,
+            includeClientTag = includeClientTag(),
+            nonce = mined.nonce, targetDifficulty = powBits, createdAtSeconds = minedAt,
+        )
     }
 
     /** Kind-0 profile metadata publish through the receipt machine. */

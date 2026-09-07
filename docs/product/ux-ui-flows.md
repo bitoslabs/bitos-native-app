@@ -300,10 +300,19 @@ Home -> poster/first frame -> autoplay visible Bitz
         caption, six gradient backgrounds
         for text-only slides (published as the `background` CSS token),
         ≤6 gallery images each hash-verified-uploaded via Blossom BEFORE
-        anything references it, GIF picks (already-public URLs join the
+        anything references it, ONE video per slide (video-mime NIP-92
+        imeta with the measured `duration` and a generated poster frame
+        as `thumb` — the instant rail/viewer preview while the video
+        streams; the video replaces the photo
+        carousel — web parity — so the photo/GIF entries wait while a
+        video is attached), GIF picks (already-public URLs join the
         same imeta carousel, no upload) and emoji inserts into the
-        caption via the note-composer action row (photo · GIF · emoji ·
-        PoW), optional NIP-13 PoW mined over the EXACT kind-30315
+        caption via the note-composer action row (photo · video · GIF ·
+        emoji · PoW); the viewers show a buffering spinner over the
+        poster and fall back to "Video unavailable" on a dead source,
+        and Android tunes its player for fast starts (~1 s playback
+        buffer, explicit MIME — Blossom hash URLs carry no extension),
+        optional NIP-13 PoW mined over the EXACT kind-30315
         template (the session fixes the `d` tag and its `created_at`;
         expiration derives from that timestamp; the nonce tag is appended
         last, byte-matching the miner; any edit voids the nonce and
@@ -372,7 +381,11 @@ UI anatomy:
   originals retain their complete frame, with black letterbox space instead of crop;
 - top mode switch with clear selected state;
 - right action rail with labels available to assistive technology;
-- bottom author, caption, tags, sound and progress;
+- bottom author, caption, sound and progress. Hashtags render ONCE, inline
+  in the caption body (NIP-27 rich tokens, accent + tappable) — no separate
+  tag row under the body. `FeedNote.hashtags` is parsed from the caption text
+  itself, so a tag row re-listed every tag verbatim on the Bitz player, the
+  feed video card and the note detail (Android and iOS alike);
 - visible full-viewport blurred content-warning gate before playback; media and
   audio begin only after the reader explicitly reveals it; the decision sits in
   a centered glass panel with a clear “Show video” action;

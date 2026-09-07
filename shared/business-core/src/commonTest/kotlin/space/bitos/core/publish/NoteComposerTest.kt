@@ -171,4 +171,67 @@ class NoteComposerTest {
         assertNull(composer.composeCommentWithPow(pubkey, "  ", 1, 8, 1_700_000_000, tags))
         assertNull(composer.composeCommentWithPow("NOPE", "x", 1, 8, 1_700_000_000, tags))
     }
+
+    private fun testMedia(): space.bitos.core.model.UploadedMedia =
+        space.bitos.core.model.UploadedMedia(
+            "https://cdn.example/m.mp4", "a".repeat(64), "video/mp4",
+            1_048_576, 608, 1080, 30_000, null,
+        )
+
+    @Test
+    fun powMemeVideoNoteReproducesTheMinedIdWithNonceLast() {
+        // The meme PoW publish contract (mirror of the story path):
+        // mineChunk hashes the exact kind-22 template; composing with the
+        // mined nonce at the mining timestamp must reproduce that id.
+        val minedAt = 1_710_000_000L
+        val base = NoteComposer(clock = { minedAt }).composeMemeVideoNote(
+            pubkey, "gm #nostr", "", null, portrait = true, testMedia(),
+        )!!
+        val target = 10
+        val mined = space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex, base.createdAtSeconds, base.kind, base.tags, base.content,
+            target, 0, 500_000,
+        )!!
+        val published = NoteComposer(clock = { 1_709_999_000 }).composeMemeVideoNoteWithPow(
+            pubkey, "gm #nostr", "", null, portrait = true, testMedia(),
+            nonce = mined.nonce, targetDifficulty = target, createdAtSeconds = minedAt,
+        )!!
+        assertEquals(mined.idHex, published.idHex)
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(published.idHex) >= target)
+        // The nonce tag is APPENDED last, carrying its target (NIP-13).
+        assertEquals(listOf("nonce", mined.nonce.toString(), target.toString()), published.tags.last())
+        assertEquals(minedAt, published.createdAtSeconds)
+        // Non-pow composition stays clock-driven and nonce-free.
+        val plain = composer.composeMemeVideoNote(
+            pubkey, "gm #nostr", "", null, portrait = true, testMedia(),
+        )!!
+        assertTrue(plain.tags.none { it.firstOrNull() == "nonce" })
+        assertEquals(1_710_000_000, plain.createdAtSeconds)
+    }
+
+    @Test
+    fun powMemePictureNoteReproducesTheMinedIdWithNonceLast() {
+        val minedAt = 1_710_000_000L
+        val media = space.bitos.core.model.UploadedMedia(
+            "https://cdn.example/p.png", "b".repeat(64), "image/png",
+            2048, 608, 1080,
+        )
+        val base = NoteComposer(clock = { minedAt }).composeMemePictureNote(
+            pubkey, "pic #art", "", null, media,
+        )!!
+        val target = 8
+        val mined = space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex, base.createdAtSeconds, base.kind, base.tags, base.content,
+            target, 0, 500_000,
+        )!!
+        val published = NoteComposer(clock = { 1_709_999_000 }).composeMemePictureNoteWithPow(
+            pubkey, "pic #art", "", null, media,
+            nonce = mined.nonce, targetDifficulty = target, createdAtSeconds = minedAt,
+        )!!
+        assertEquals(mined.idHex, published.idHex)
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(published.idHex) >= target)
+        assertEquals(listOf("nonce", mined.nonce.toString(), target.toString()), published.tags.last())
+    }
 }

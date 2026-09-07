@@ -1249,9 +1249,16 @@ class BusinessCoreBridge {
         sensitive: Boolean,
         dTag: String,
         nowSeconds: Long,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long = 0,
+        videoPoster: String? = null,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
-        return composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)?.idHex
+        return composer.composeStory(
+            pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+            videoUrl, videoMime, videoDurationMs.takeIf { it > 0 }, videoPoster,
+        )?.idHex
     }
 
     /** The ["EVENT", {...}] frame for the signed kind-30315 story, or null. */
@@ -1265,9 +1272,16 @@ class BusinessCoreBridge {
         dTag: String,
         createdAtSeconds: Long,
         signatureHex: String,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long = 0,
+        videoPoster: String? = null,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
-        val unsigned = composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)
+        val unsigned = composer.composeStory(
+            pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+            videoUrl, videoMime, videoDurationMs.takeIf { it > 0 }, videoPoster,
+        )
             ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
@@ -1287,9 +1301,16 @@ class BusinessCoreBridge {
         targetDifficulty: Int,
         startNonce: Long,
         maxAttempts: Long,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long = 0,
+        videoPoster: String? = null,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
-        val base = composer.composeStory(pubkeyHex, text, imageUrls, background, altText, sensitive, dTag)
+        val base = composer.composeStory(
+            pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
+            videoUrl, videoMime, videoDurationMs.takeIf { it > 0 }, videoPoster,
+        )
             ?: return null
         return space.bitos.core.nostr.Pow.mineChunk(
             Sha256EventHasher,
@@ -1316,11 +1337,16 @@ class BusinessCoreBridge {
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long = 0,
+        videoPoster: String? = null,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         return composer.composeStoryWithPow(
             pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
             nonce, targetDifficulty, createdAtSeconds,
+            videoUrl, videoMime, videoDurationMs.takeIf { it > 0 }, videoPoster,
         )?.idHex
     }
 
@@ -1337,11 +1363,16 @@ class BusinessCoreBridge {
         targetDifficulty: Int,
         createdAtSeconds: Long,
         signatureHex: String,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long = 0,
+        videoPoster: String? = null,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeStoryWithPow(
             pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
             nonce, targetDifficulty, createdAtSeconds,
+            videoUrl, videoMime, videoDurationMs.takeIf { it > 0 }, videoPoster,
         ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }
@@ -2068,6 +2099,138 @@ class BusinessCoreBridge {
     }
 
     /**
+     * MST post-details PoW (meme kinds): mine one bounded window over the
+     * EXACT kind-22/21 template — same `nonce:idHex` contract as
+     * [mineTextNotePowWithTags]. [nowSeconds] IS the mining timestamp:
+     * the publish path must reuse it byte-for-byte.
+     */
+    fun mineMemeVideoPow(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        durationMs: Long,
+        nowSeconds: Long,
+        thumbUrl: String? = null,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+        targetDifficulty: Int,
+        startNonce: Long,
+        maxAttempts: Long,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(
+                url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs, thumbUrl,
+            )
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        val base = composer.composeMemeVideoNote(
+            authorPubkey, caption, altText, contentWarningReason, portrait, media, extraTags = extra,
+            includeClientTag = includeClientTag,
+        ) ?: return null
+        return space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex,
+            base.createdAtSeconds,
+            base.kind,
+            base.tags,
+            base.content,
+            targetDifficulty,
+            startNonce,
+            maxAttempts,
+        )?.let { "${it.nonce}:${it.idHex}" }
+    }
+
+    /** Kind-22/21 event id for a pre-mined meme PoW note ([mineMemeVideoPow]
+     *  session: nonce/target/nowSeconds must be the mining values). */
+    fun powMemeVideoEventId(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        durationMs: Long,
+        nowSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        thumbUrl: String? = null,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(
+                url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs, thumbUrl,
+            )
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        return composer.composeMemeVideoNoteWithPow(
+            authorPubkey, caption, altText, contentWarningReason, portrait, media,
+            extraTags = extra, includeClientTag = includeClientTag,
+            nonce = nonce, targetDifficulty = targetDifficulty, createdAtSeconds = nowSeconds,
+        )?.idHex
+    }
+
+    /** Relay frame for the pre-mined kind-22/21 note (byte-match contract
+     *  with [mineMemeVideoPow] — the id the signature covers is the mined
+     *  id). */
+    fun powMemeVideoPublishMessage(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        durationMs: Long,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        signatureHex: String,
+        thumbUrl: String? = null,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(
+                url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt(), durationMs, thumbUrl,
+            )
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        val unsigned = composer.composeMemeVideoNoteWithPow(
+            authorPubkey, caption, altText, contentWarningReason, portrait, media,
+            extraTags = extra, includeClientTag = includeClientTag,
+            nonce = nonce, targetDifficulty = targetDifficulty, createdAtSeconds = createdAtSeconds,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
      * MST-042 remix relay hints (web `remixReel` parity): the source event's
      * own remix-tag relays first, then the composer's write relays, deduped
      * and capped at 3, as a JSON string array.
@@ -2223,6 +2386,54 @@ class BusinessCoreBridge {
     fun memeExportPlan(projectJson: String, sourceWidth: Int, sourceHeight: Int): String {
         val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
         return space.bitos.core.studio.MemeExportRules.exportEnvelope(project, sourceWidth, sourceHeight)
+    }
+
+    /**
+     * MST-036 export-quality seams: tier ids are the shared enum names,
+     * case-insensitive (`"P1080"/"P720"/"P480"`, `"HIGH"/"MEDIUM"/"LOW"`);
+     * unknown ids normalize to "" — never throws.
+     */
+    private fun memePresetFor(resolution: String, quality: String): space.bitos.core.studio.MemeExportPresets.Preset? {
+        val res = space.bitos.core.studio.MemeExportPresets.Resolution.entries
+            .firstOrNull { it.name.equals(resolution, ignoreCase = true) } ?: return null
+        val qual = space.bitos.core.studio.MemeExportPresets.Quality.entries
+            .firstOrNull { it.name.equals(quality, ignoreCase = true) } ?: return null
+        return space.bitos.core.studio.MemeExportPresets.Preset(res, qual)
+    }
+
+    /**
+     * MST-036 encoder plan for the native exporters (Android Media3 /
+     * iOS AVFoundation — identical numbers): the shared bitrate targets,
+     * output canvas and frame→target scale as
+     * `{"bitrate":…,"audioBitrate":…,"width":…,"height":…,
+     * "scaleX":…,"scaleY":…}`; "" on unknown tier ids.
+     */
+    fun memeEncoderPlan(resolution: String, quality: String, sourceWidth: Int, sourceHeight: Int): String {
+        val preset = memePresetFor(resolution, quality) ?: return ""
+        val plan = space.bitos.core.studio.MemeExportPresets.encoderPlan(preset, sourceWidth, sourceHeight)
+        return buildJsonObject {
+            put("bitrate", plan.videoBitrateBps)
+            put("audioBitrate", plan.audioBitrateBps)
+            put("width", plan.width)
+            put("height", plan.height)
+            put("scaleX", plan.scaleX)
+            put("scaleY", plan.scaleY)
+        }.toString()
+    }
+
+    /**
+     * MST-036 pre-export estimate + publish gate for the picker UI:
+     * `{"bytes":…,"label":"≈ … MB","publishFits":bool}` from the
+     * shared estimate math (trimmed [durationMs]); "" on unknown tiers.
+     */
+    fun memeExportEstimate(resolution: String, quality: String, durationMs: Long): String {
+        val preset = memePresetFor(resolution, quality) ?: return ""
+        val bytes = space.bitos.core.studio.MemeExportPresets.estimateBytes(preset, durationMs)
+        return buildJsonObject {
+            put("bytes", bytes)
+            put("label", space.bitos.core.studio.MemeExportPresets.sizeLabel(bytes))
+            put("publishFits", space.bitos.core.studio.MemeExportPresets.publishFits(preset, durationMs))
+        }.toString()
     }
 
     /** Sticker packs (web `stickers.ts` port) as
@@ -2807,7 +3018,7 @@ class BusinessCoreBridge {
             targetDifficulty,
             startNonce,
             maxAttempts,
-        )?.let { "${'$'}{it.nonce}:${'$'}{it.idHex}" }
+        )?.let { "${it.nonce}:${it.idHex}" }
     }
 
     fun powTextNoteWithTagsEventId(
@@ -2944,7 +3155,7 @@ class BusinessCoreBridge {
             targetDifficulty,
             startNonce,
             maxAttempts,
-        )?.let { "${'$'}{it.nonce}:${'$'}{it.idHex}" }
+        )?.let { "${it.nonce}:${it.idHex}" }
     }
 
     /** Canonical id of the pow note (verification parity for callers). */
@@ -4017,6 +4228,119 @@ class BusinessCoreBridge {
         val unsigned = composer.composeMemePictureNote(
             authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
             includeClientTag = includeClientTag,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /**
+     * MST post-details PoW (kind-20 picture meme): mine one bounded window
+     * over the exact template — `nonce:idHex` contract as
+     * [mineMemeVideoPow]; [nowSeconds] IS the mining timestamp.
+     */
+    fun mineMemePicturePow(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        nowSeconds: Long,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+        targetDifficulty: Int,
+        startNonce: Long,
+        maxAttempts: Long,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        val base = composer.composeMemePictureNote(
+            authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+            includeClientTag = includeClientTag,
+        ) ?: return null
+        return space.bitos.core.nostr.Pow.mineChunk(
+            Sha256EventHasher,
+            base.pubkeyHex,
+            base.createdAtSeconds,
+            base.kind,
+            base.tags,
+            base.content,
+            targetDifficulty,
+            startNonce,
+            maxAttempts,
+        )?.let { "${it.nonce}:${it.idHex}" }
+    }
+
+    /** Kind-20 event id for a pre-mined picture PoW note. */
+    fun powMemePictureEventId(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        nowSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        return composer.composeMemePictureNoteWithPow(
+            authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+            includeClientTag = includeClientTag,
+            nonce = nonce, targetDifficulty = targetDifficulty, createdAtSeconds = nowSeconds,
+        )?.idHex
+    }
+
+    /** Relay frame for the pre-mined kind-20 note (byte-match contract). */
+    fun powMemePicturePublishMessage(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        url: String,
+        sha256Hex: String,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Long,
+        height: Long,
+        createdAtSeconds: Long,
+        nonce: Long,
+        targetDifficulty: Int,
+        signatureHex: String,
+        extraTagsJson: String = "",
+        includeClientTag: Boolean = false,
+    ): String? {
+        val media = try {
+            space.bitos.core.model.UploadedMedia(url, sha256Hex, mimeType, sizeBytes, width?.toInt(), height?.toInt())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val extra = space.bitos.core.store.TagsCodec.decode(extraTagsJson) ?: emptyList()
+        val unsigned = composer.composeMemePictureNoteWithPow(
+            authorPubkey, caption, altText, contentWarningReason, media, extraTags = extra,
+            includeClientTag = includeClientTag,
+            nonce = nonce, targetDifficulty = targetDifficulty, createdAtSeconds = createdAtSeconds,
         ) ?: return null
         return composer.publishMessage(unsigned, signatureHex)
     }

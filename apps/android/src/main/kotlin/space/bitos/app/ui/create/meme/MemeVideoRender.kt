@@ -27,16 +27,39 @@ import kotlin.coroutines.resumeWithException
  * Studio output is a new public artifact, never a container copy of the picked
  * clip. The muxer deliberately drops source metadata (location, device and
  * creation fields) rather than relying on an exporter default that may change.
+ *
+ * Encoder targets (MST-036) come from the shared `MemeExportPresets` table —
+ * never encoder defaults, so the pre-export MB estimate stays honest.
  */
 internal object MemeVideoRender {
-    suspend fun render(context: Context, composition: Composition, path: String, timeoutMs: Long) {
+    suspend fun render(
+        context: Context,
+        composition: Composition,
+        path: String,
+        timeoutMs: Long,
+        videoBitrateBps: Int,
+        audioBitrateBps: Int,
+    ) {
         withContext(Dispatchers.Main) {
             var transformer: Transformer? = null
             try {
                 withTimeout(timeoutMs) {
                     suspendCancellableCoroutine<Unit> { continuation ->
+                        val encoderFactory = androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
+                            .setRequestedVideoEncoderSettings(
+                                androidx.media3.transformer.VideoEncoderSettings.Builder()
+                                    .setBitrate(videoBitrateBps)
+                                    .build(),
+                            )
+                            .setRequestedAudioEncoderSettings(
+                                androidx.media3.transformer.AudioEncoderSettings.Builder()
+                                    .setBitrate(audioBitrateBps)
+                                    .build(),
+                            )
+                            .build()
                         transformer = Transformer.Builder(context)
                             .setMuxerFactory(PrivacySafeMuxerFactory())
+                            .setEncoderFactory(encoderFactory)
                             .addListener(object : Transformer.Listener {
                                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                                     if (continuation.isActive) continuation.resume(Unit)

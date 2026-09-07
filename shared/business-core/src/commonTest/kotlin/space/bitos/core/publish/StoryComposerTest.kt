@@ -153,4 +153,87 @@ class StoryComposerTest {
         assertEquals(mined.idHex, published.idHex)
         assertTrue(space.bitos.core.nostr.Pow.difficulty(published.idHex) >= target)
     }
+
+    @Test
+    fun videoStoryPublishesVideoImetaAndParsesBackThroughTheViewer() {
+        val note = clock.composeStory(
+            author, "watch this", emptyList(), null, null, false, dTag,
+            videoUrl = "https://cdn.example/clip.mp4",
+            videoMime = "video/mp4",
+            videoDurationMs = 12_500,
+            videoPoster = "https://cdn.example/clip.jpg",
+        )!!
+        // Video imeta: url + m + thumb + duration (integer-seconds form,
+        // never locale-formatted).
+        assertEquals(
+            listOf(
+                "url https://cdn.example/clip.mp4", "m video/mp4",
+                "thumb https://cdn.example/clip.jpg", "duration 12.5s",
+            ),
+            tag(note, "imeta").single().drop(1),
+        )
+        // The URL mirrors into the content for link-only clients…
+        assertEquals("watch this\nhttps://cdn.example/clip.mp4", note.content)
+        // …and parses back as the slide's video with poster + duration.
+        val event = space.bitos.core.model.NostrEvent(
+            id = space.bitos.core.model.EventId.parse("11".repeat(32))!!,
+            pubkey = space.bitos.core.model.Pubkey.parse(author)!!,
+            createdAt = now,
+            kind = note.kind,
+            tags = note.tags,
+            content = note.content,
+            signature = null,
+            receivedFromRelay = null,
+        )
+        val slide = Stories.parseSlide(event, now)!!
+        assertEquals("https://cdn.example/clip.mp4", slide.videoUrl)
+        assertEquals("https://cdn.example/clip.jpg", slide.videoPoster)
+        assertEquals(12_500L, slide.videoDurationMs)
+        assertTrue(slide.imageUrls.isEmpty())
+    }
+
+    @Test
+    fun videoAndImagesCoexistWithoutPollutingTheCarousel() {
+        val note = clock.composeStory(
+            author, "clip + stills",
+            listOf("https://cdn.example/a.png"),
+            null, "cover", true, dTag,
+            videoUrl = "https://cdn.example/clip.mov",
+            videoMime = "video/quicktime",
+        )!!
+        // Image imeta keeps alt; the video imeta rides after with its mime;
+        // extractImageUrls skips the video imeta on parse.
+        assertEquals(
+            listOf("url https://cdn.example/a.png", "alt cover"),
+            tag(note, "imeta")[0].drop(1),
+        )
+        assertEquals(
+            listOf("url https://cdn.example/clip.mov", "m video/quicktime"),
+            tag(note, "imeta")[1].drop(1),
+        )
+        // Sensitive covers video slides too.
+        assertEquals(1, tag(note, "content-warning").size)
+    }
+
+    @Test
+    fun videoStoryBoundsHostileInputAndDefaultsTheMime() {
+        // Non-https and oversized URLs drop; a missing/invalid mime falls
+        // back to video/mp4; an unknown duration omits the segment; a
+        // non-https poster drops its thumb segment.
+        val note = clock.composeStory(
+            author, "", emptyList(), null, null, false, dTag,
+            videoUrl = "http://insecure.example/clip.mp4",
+        )
+        assertNull(note)
+        val fallback = clock.composeStory(
+            author, "", emptyList(), null, null, false, dTag,
+            videoUrl = "https://cdn.example/clip",
+            videoMime = "text/html",
+            videoPoster = "http://insecure.example/clip.jpg",
+        )!!
+        assertEquals(
+            listOf("url https://cdn.example/clip", "m video/mp4"),
+            tag(fallback, "imeta").single().drop(1),
+        )
+    }
 }

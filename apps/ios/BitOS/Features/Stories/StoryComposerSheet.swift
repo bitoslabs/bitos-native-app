@@ -1,3 +1,4 @@
+import AVFoundation
 import BusinessCore
 import PhotosUI
 import SwiftUI
@@ -13,18 +14,21 @@ struct StoryPowCommit: Equatable {
 
 /**
  * APP-006 story composer (web `StoryComposer` parity): 9:16 preview
- * (gradient text slide or image carousel with caption scrim), ≤280-char
- * caption, six IG-style gradient backgrounds, ≤6 photo-picker images
- * uploaded via Blossom BEFORE anything references them, GIF picks
- * (already-public URLs ride the same imeta carousel), emoji inserts,
- * optional NIP-13 PoW mined over the exact kind-30315 template, alt
- * text + sensitive flag, and a kind-30315 publish through the receipt
- * machine. Stories double as a 24h status note when no image is attached.
+ * (gradient text slide, image carousel with caption scrim, or a video
+ * slide with duration chip), ≤280-char caption, six IG-style gradient
+ * backgrounds, ≤6 photo-picker images uploaded via Blossom BEFORE
+ * anything references them, one video per slide (measured duration
+ * rides the NIP-92 imeta `duration`; video replaces the carousel — web
+ * parity), GIF picks (already-public URLs ride the same imeta
+ * carousel), emoji inserts, optional NIP-13 PoW mined over the exact
+ * kind-30315 template, alt text + sensitive flag, and a kind-30315
+ * publish through the receipt machine. Stories double as a 24h status
+ * note with no media attached.
  */
 @MainActor
 struct StoryComposerSheet: View {
     /// Publishes the composed story (kind-30315 through the receipt machine).
-    let onPublish: (_ text: String, _ imageUrls: [String], _ background: String?, _ altText: String, _ sensitive: Bool, _ pow: StoryPowCommit?) -> Void
+    let onPublish: (_ text: String, _ imageUrls: [String], _ background: String?, _ altText: String, _ sensitive: Bool, _ videoUrl: String?, _ videoMime: String, _ videoDurationMs: Int64?, _ videoPoster: String?, _ pow: StoryPowCommit?) -> Void
     let onClose: () -> Void
 
     @Environment(IdentityStore.self) private var identity
@@ -44,6 +48,15 @@ struct StoryComposerSheet: View {
     @State private var showPowPanel = false
     @State private var powTarget = 0
     @State private var powOutcome: PowOutcome?
+    // One video per slide (web parity: the first video imeta replaces the
+    // carousel in the viewer) — picking either clears the other.
+    @State private var videoUrl: String?
+    @State private var videoMime = "video/mp4"
+    @State private var videoDurationMs: Int64?
+    // Poster frame (NIP-92 imeta `thumb`): instant rail/viewer preview
+    // while the video streams; a failed extraction just omits it.
+    @State private var videoPoster: String?
+    @State private var videoPickerItems: [PhotosPickerItem] = []
     /// Fixed for the whole session: the dTag is part of the PoW mining
     /// template, so it cannot be regenerated at publish time. Same wire
     /// format as `NotePublisher.publishStory` (`Stories.storyDTag`).
@@ -65,12 +78,14 @@ struct StoryComposerSheet: View {
         [Color(hex: 0x10B981), Color(hex: 0x06B6D4)],
     ]
 
+    private var hasVideo: Bool { videoUrl != nil }
+
     private var canPost: Bool {
-        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty) && !uploading
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || hasVideo) && !uploading
     }
 
     private var backgroundCss: String? {
-        guard images.isEmpty else { return nil }
+        guard images.isEmpty && !hasVideo else { return nil }
         let pair = Self.backgrounds[bgIndex]
         return "linear-gradient(135deg, \(hex(pair[0])), \(hex(pair[1])))"
     }
@@ -105,7 +120,7 @@ struct StoryComposerSheet: View {
                             .allowsHitTesting(false)
                     }
 
-                    if images.isEmpty {
+                    if images.isEmpty && !hasVideo {
                         // Gradient swatches (text-only slides).
                         HStack(spacing: BitOSTheme.Spacing.sm) {
                             ForEach(Self.backgrounds.indices, id: \.self) { index in
@@ -127,9 +142,13 @@ struct StoryComposerSheet: View {
                             .font(.system(size: 11))
                             .foregroundStyle(BitOSTheme.textSecondary)
                     } else {
-                        imageStrip
+                        if hasVideo {
+                            videoTile
+                        } else {
+                            imageStrip
+                        }
                         BitosField(
-                            "Describe the images for screen readers (alt text)…",
+                            "Describe the media for screen readers (alt text)…",
                             text: $altText,
                             size: .small
                         )
@@ -161,13 +180,18 @@ struct StoryComposerSheet: View {
                     }
 
                     // Quick actions (note-composer toolbar parity): photo ·
-                    // GIF · emoji · PoW. GIFs arrive as already-public URLs.
+                    // video · GIF · emoji · PoW. A video replaces the photo
+                    // carousel (web parity), so the photo/GIF entries wait
+                    // while one is attached.
                     HStack(spacing: 2) {
-                        actionButton(AppIcons.photo, "Add image", enabled: images.count < Self.maxImages && !uploading,
+                        actionButton(AppIcons.photo, "Add image", enabled: images.count < Self.maxImages && !uploading && !hasVideo,
                                      active: !images.isEmpty, badge: images.isEmpty ? nil : "\(images.count)") {
                             pickerPrompt = true
                         }
-                        actionButton(AppIcons.gifFilm, "Add GIF", enabled: images.count < Self.maxImages) {
+                        actionButton(AppIcons.video, "Add video", enabled: !uploading, active: hasVideo) {
+                            videoPickerPrompt = true
+                        }
+                        actionButton(AppIcons.gifFilm, "Add GIF", enabled: images.count < Self.maxImages && !hasVideo) {
                             gifSheet = true
                         }
                         actionButton(AppIcons.emoji, "Insert emoji") {
@@ -231,12 +255,28 @@ struct StoryComposerSheet: View {
                 pickerItems = []
                 return
             }
+            // Images and the video are mutually exclusive slides.
+            videoUrl = nil
+            videoDurationMs = nil
+            videoPoster = nil
             uploadPicked(Array(items.prefix(room)))
+        }
+        .onChange(of: videoPickerItems) { _, items in
+            guard let item = items.first else {
+                videoPickerItems = []
+                return
+            }
+            videoPickerItems = []
+            Task { await uploadVideo(item) }
         }
         .sheet(isPresented: $gifSheet) {
             GifPickerSheet(
                 onPick: { gif in
                     if images.count < Self.maxImages {
+                        // Images and the video are mutually exclusive slides.
+                        videoUrl = nil
+                        videoDurationMs = nil
+                        videoPoster = nil
                         images.append(gif.url)
                         previewIndex = images.count - 1
                     }
@@ -256,11 +296,78 @@ struct StoryComposerSheet: View {
             maxSelectionCount: max(0, Self.maxImages - images.count),
             matching: .images
         )
+        .photosPicker(
+            isPresented: $videoPickerPrompt,
+            selection: $videoPickerItems,
+            maxSelectionCount: 1,
+            matching: .videos
+        )
     }
 
     private static let maxImages = 6
 
     @State private var pickerPrompt = false
+    @State private var videoPickerPrompt = false
+
+    /// One bounded video upload (PUB-002: uploaded BEFORE anything
+    /// references it); the measured duration rides the NIP-92 imeta.
+    @MainActor
+    private func uploadVideo(_ item: PhotosPickerItem) async {
+        uploading = true
+        failure = nil
+        defer { uploading = false }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  await identity.account != nil else {
+                throw BlossomUploader.UploadFailure(message: "Posting needs an identity.")
+            }
+            let mime = item.supportedContentTypes.first?.preferredMIMEType ?? "video/mp4"
+            // Duration + poster frame off the main actor: temp file →
+            // AVURLAsset → AVAssetImageGenerator (web `thumb` parity).
+            let bytes = data
+            let measured: (ms: Int64?, poster: Data?) = await Task.detached(priority: .userInitiated) { () -> (Int64?, Data?) in
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bitos-story-\(UUID().uuidString).mov")
+                defer { try? FileManager.default.removeItem(at: url) }
+                do {
+                    try bytes.write(to: url)
+                    let asset = AVURLAsset(url: url)
+                    let duration = try await asset.load(.duration)
+                    let ms: Int64? = duration.seconds > 0 ? Int64((duration.seconds * 1000).rounded()) : nil
+                    let generator = AVAssetImageGenerator(asset: asset)
+                    generator.appliesPreferredTrackTransform = true
+                    generator.maximumSize = CGSize(width: 720, height: 1280)
+                    var poster: Data?
+                    if let cg = try? generator.copyCGImage(at: CMTime(seconds: 1, preferredTimescale: 600), actualTime: nil) {
+                        poster = UIImage(cgImage: cg).jpegData(compressionQuality: 0.8)
+                    }
+                    return (ms, poster)
+                } catch {
+                    return (nil, nil)
+                }
+            }.value
+            let uploaded = try await uploader.upload(
+                bytes: data,
+                mimeType: mime.hasPrefix("video/") ? mime : "video/mp4",
+                identity: identity,
+                serverUrl: blossomServer
+            )
+            // Best-effort poster upload — it never blocks the story itself.
+            var poster: String?
+            if let jpg = measured.poster {
+                poster = (try? await uploader.upload(
+                    bytes: jpg, mimeType: "image/jpeg", identity: identity, serverUrl: blossomServer
+                ))?.url
+            }
+            images.removeAll()
+            videoMime = mime.hasPrefix("video/") ? mime : "video/mp4"
+            videoDurationMs = measured.ms
+            videoPoster = poster
+            videoUrl = uploaded.url
+        } catch {
+            failure = (error as? BlossomUploader.UploadFailure)?.message ?? error.localizedDescription
+        }
+    }
 
     /// Quick-action icon (note-composer `toolbarButton` parity).
     private func actionButton(_ symbol: String, _ label: String, enabled: Bool = true, active: Bool = false, badge: String? = nil, action: @escaping () -> Void) -> some View {
@@ -318,6 +425,49 @@ struct StoryComposerSheet: View {
         }
     }
 
+    /// Video tile (replaces the carousel — web parity): play glyph,
+    /// measured duration, removable.
+    private var videoTile: some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                        .fill(Color(red: 0.06, green: 0.08, blue: 0.11))
+                    AppIcons.image(for: AppIcons.play)
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 64, height: 64)
+                .overlay(alignment: .bottom) {
+                    if let videoDurationMs {
+                        Text(Self.formatDuration(videoDurationMs))
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding(.bottom, 4)
+                    }
+                }
+                Button {
+                    videoUrl = nil
+                    videoDurationMs = nil
+                    videoPoster = nil
+                } label: {
+                    Image(systemName: AppIcons.close)
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(BitOSTheme.surface))
+                }
+                .offset(x: 7, y: -7)
+                .accessibilityLabel("Remove video")
+            }
+            Text("Video plays instead of a photo carousel")
+                .font(.system(size: 11))
+                .foregroundStyle(BitOSTheme.textSecondary)
+        }
+    }
+
     /// Web Composer parity: the PoW panel rides inline under the actions.
     /// `.id` keys the card to the mining template — a mined nonce is valid
     /// for exactly one (content, target, tags) story, so any edit resets
@@ -336,18 +486,49 @@ struct StoryComposerSheet: View {
                     targetDifficulty: Int32(powTarget),
                     createdAt: createdAt,
                     startNonce: startNonce,
-                    attempts: attempts
+                    attempts: attempts,
+                    videoUrl: videoUrl,
+                    videoMime: videoMime,
+                    videoDurationMs: videoDurationMs ?? 0,
+                    videoPoster: videoPoster
                 )
             },
             onMined: { outcome in powOutcome = outcome }
         )
-        .id("\(powTarget)|\(text)|\(images)|\(bgIndex)|\(altText)|\(sensitive)|\(storyDTag)")
+        .id("\(powTarget)|\(text)|\(images)|\(bgIndex)|\(altText)|\(sensitive)|\(storyDTag)|\(videoUrl ?? "")|\(videoDurationMs ?? 0)")
     }
 
-    /// The 9:16 preview: gradient text slide or image + caption scrim.
+    /// The 9:16 preview: gradient text slide, video slide (play glyph +
+    /// duration chip — no decode; the viewer plays the real stream), or
+    /// image + caption scrim.
     private var preview: some View {
         ZStack {
-            if images.isEmpty {
+            if hasVideo {
+                Color.black
+                if let videoPoster, let poster = URL(string: videoPoster) {
+                    AsyncImage(url: poster) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        }
+                    }
+                }
+                Image(systemName: AppIcons.play)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(.black.opacity(0.6)))
+                    .accessibilityLabel("Video story")
+                if let videoDurationMs {
+                    Text(Self.formatDuration(videoDurationMs))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 8)
+                }
+            } else if images.isEmpty {
                 LinearGradient(
                     colors: Self.backgrounds[bgIndex],
                     startPoint: .topLeading, endPoint: .bottomTrailing
@@ -498,9 +679,19 @@ struct StoryComposerSheet: View {
             backgroundCss,
             altText.trimmingCharacters(in: .whitespacesAndNewlines),
             sensitive,
+            videoUrl,
+            videoMime,
+            videoDurationMs,
+            videoPoster,
             commit
         )
         onClose()
+    }
+
+    /// `m:ss` for the video duration chips.
+    private static func formatDuration(_ ms: Int64) -> String {
+        let totalSeconds = max(0, Int(ms / 1000))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 }
 

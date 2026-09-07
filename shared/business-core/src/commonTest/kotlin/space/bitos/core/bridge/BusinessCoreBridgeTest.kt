@@ -596,6 +596,86 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun memeEncoderPlanAndEstimateSeamsServeMST036Presets() {
+        // Encoder plan: AUTO tiers on a 9:16 portrait source — long edge
+        // caps at 1080 → 608×1080 at 6 Mbps + 128 k audio (shared math).
+        val plan = bridge.memeEncoderPlan("P1080", "HIGH", 1080, 1920)
+        assertTrue(plan.contains("\"bitrate\":6000000"), plan)
+        assertTrue(plan.contains("\"audioBitrate\":128000"), plan)
+        assertTrue(plan.contains("\"width\":608"), plan)
+        assertTrue(plan.contains("\"height\":1080"), plan)
+        // Case-insensitive tiers.
+        assertEquals(plan, bridge.memeEncoderPlan("p1080", "high", 1080, 1920))
+        // Estimate + gate: 90 s at AUTO ~ 71 MB → blocked; 720p/Medium fits.
+        val blocked = bridge.memeExportEstimate("P1080", "HIGH", 90_000)
+        assertTrue(blocked.contains("\"publishFits\":false"), blocked)
+        assertTrue(blocked.contains("\"bytes\":71008200"), blocked)
+        val fits = bridge.memeExportEstimate("P720", "MEDIUM", 90_000)
+        assertTrue(fits.contains("\"publishFits\":true"), fits)
+        assertTrue(fits.contains("\"label\":\"≈ 29.0 MB\""), fits)
+        // Unknown tiers normalize to "" — never throws.
+        assertEquals("", bridge.memeEncoderPlan("P2160", "HIGH", 1080, 1920))
+        assertEquals("", bridge.memeExportEstimate("P720", "ULTRA", 90_000))
+    }
+
+    @Test
+    fun memePowSeamsMineAndReproduceTheMinedId() {
+        val author = "2d75af108a802f5bd59f74208f2290ddf60354c5ba1696cb933e6bafc5f63001"
+        val minedAt = 1_710_000_000L
+        // Video (kind 22): mine one window, then the pow compose seam must
+        // reproduce the mined id — the byte-match publish contract.
+        val raw = bridge.mineMemeVideoPow(
+            author, "gm #nostr", "", null, portrait = true,
+            "https://cdn.example/m.mp4", "a".repeat(64), "video/mp4",
+            1_048_576, 608, 1080, 30_000, minedAt,
+            targetDifficulty = 8, startNonce = 0, maxAttempts = 500_000,
+        )
+        assertNotNull(raw)
+        val (nonce, id) = raw!!.split(":")
+        assertEquals(
+            id,
+            bridge.powMemeVideoEventId(
+                author, "gm #nostr", "", null, true,
+                "https://cdn.example/m.mp4", "a".repeat(64), "video/mp4",
+                1_048_576, 608, 1080, 30_000, minedAt, nonce.toLong(), 8,
+            ),
+        )
+        assertTrue(space.bitos.core.nostr.Pow.difficulty(id) >= 8)
+        // Picture (kind 20) twin.
+        val rawPicture = bridge.mineMemePicturePow(
+            author, "pic", "", null,
+            "https://cdn.example/p.png", "b".repeat(64), "image/png",
+            2048, 608, 1080, minedAt,
+            targetDifficulty = 8, startNonce = 0, maxAttempts = 500_000,
+        )
+        assertNotNull(rawPicture)
+        val (noncePicture, idPicture) = rawPicture!!.split(":")
+        assertEquals(
+            idPicture,
+            bridge.powMemePictureEventId(
+                author, "pic", "", null,
+                "https://cdn.example/p.png", "b".repeat(64), "image/png",
+                2048, 608, 1080, minedAt, noncePicture.toLong(), 8,
+            ),
+        )
+        // Junk pubkey → no template, no mining (never throws).
+        assertNull(
+            bridge.mineMemeVideoPow(
+                "NOPE", "gm", "", null, true,
+                "https://cdn.example/m.mp4", "a".repeat(64), "video/mp4",
+                1_048_576, 608, 1080, 30_000, minedAt,
+                targetDifficulty = 8, startNonce = 0, maxAttempts = 1_000,
+            ),
+        )
+        // Regression (paste bug fixed with MST post-details PoW): the
+        // text/comment pow seams once emitted literal `${it.nonce}` junk —
+        // pin that every "nonce:id" payload stays parseable.
+        val textRaw = bridge.mineTextNotePowWithTags("gm", author, minedAt, 8, 0, 500_000, "[]")
+        assertNotNull(textRaw)
+        textRaw!!.split(":").first().toLongOrNull().also { assertTrue(it != null, textRaw) }
+    }
+
+    @Test
     fun memeFxTransformAndCueTrackSeamsFeedTimedExports() {
         var project = """{"v":1,"mode":"video","assets":[],"overlays":[]}"""
         project = bridge.memeApplyCommand(

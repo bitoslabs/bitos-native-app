@@ -126,6 +126,7 @@ import space.bitos.app.ui.components.BitosSlider
 import space.bitos.core.studio.MemeFontSlot
 import space.bitos.core.studio.MemeMode
 import space.bitos.core.studio.MemeExportRules
+import space.bitos.core.studio.MemeExportPresets
 import space.bitos.core.studio.MemeOverlay
 import space.bitos.core.studio.MemeOverlayKind
 import space.bitos.core.studio.MemeProject
@@ -219,6 +220,14 @@ fun MemeEditorScreen(
     var exportStatus by remember { mutableStateOf<String?>(null) }
     /** Full-screen export experience (render progress → result → Done). */
     var showExport by remember { mutableStateOf(false) }
+    /** MST-036 session-only export preset: Auto default = the automatic
+     *  policy (cut ladder owns the 64 MB cap); a manual pick gates on the
+     *  publish ESTIMATE instead — never silently degraded. */
+    var exportPreset by remember { mutableStateOf(MemeExportPresets.AUTO) }
+    var exportPresetManual by remember { mutableStateOf(false) }
+    /** MST post-details draft: session-scoped so back-for-cover keeps the
+     *  caption, tags, warnings, license, zaps and PoW pick. */
+    var postDraft by remember { mutableStateOf(PostDetailsDraft()) }
     val state = remember(resume) {
         MemeEditorState().apply {
             resume?.let { saved -> restore(saved.document.project) }
@@ -441,6 +450,45 @@ fun MemeEditorScreen(
     // clips' asset rows and the timeline would be unrecoverable).
     var resumeDroppedClips by remember { mutableIntStateOf(0) }
 
+    /**
+     * Restores draft video clips from a slot; returns how many dropped.
+     * Slot files are PLAIN files — probed by direct path (resolver-FD
+     * probing was flaky right after a cold start, dropping the whole
+     * timeline until a reopen). Skips clips already restored (by id) so
+     * the in-session retry heals only the gaps.
+     */
+    fun restoreVideoClipsFrom(saved: MemeProjectStore.SavedSlot): Int {
+        var dropped = 0
+        saved.document.project.clips.forEach { wireClip ->
+            if (videoClips.any { it.id == wireClip.id }) return@forEach
+            val file = saved.assetFiles[wireClip.id]
+            if (file == null) { dropped++; return@forEach }
+            val bytes = runCatching { file.readBytes() }.getOrNull()
+            if (bytes == null) { dropped++; return@forEach }
+            val probe = MemeVideoExport.probeFile(file)
+            if (probe == null) { dropped++; return@forEach }
+            val start = wireClip.startMs.coerceIn(0, probe.durationMs)
+            val end = wireClip.endMs.coerceAtMost(probe.durationMs)
+            // A probe that disagrees with the wire enough to collapse the
+            // window would render a zero-length segment — dropped, not added.
+            if (end <= start) { dropped++; return@forEach }
+            val restored = SessionClip(
+                wireClip.id, bytes, probe,
+                start,
+                end,
+                wireClip.volume,
+                wireClip.lookId,
+                wireClip.speed,
+            )
+            videoClips += restored
+            archiveClip(restored)
+        }
+        if (videoClips.isNotEmpty()) {
+            selectedClipIndex = selectedClipIndex.coerceIn(0, videoClips.lastIndex)
+        }
+        return dropped
+    }
+
     val assets = remember(resume) {
         mutableStateListOf<EditorAsset>().apply {
             resume?.let { saved ->
@@ -459,40 +507,12 @@ fun MemeEditorScreen(
                     // the IMAGE-layer tray below still re-seeds because
                     // the `assets` list itself is rebuilt by this block.
                     if (videoClips.isEmpty()) {
-                        var dropped = 0
-                        saved.document.project.clips.forEach { wireClip ->
-                            val file = saved.assetFiles[wireClip.id]
-                            if (file == null) { dropped++; return@forEach }
-                            val bytes = runCatching { file.readBytes() }.getOrNull()
-                            if (bytes == null) { dropped++; return@forEach }
-                            val probe = MemeVideoExport.probe(
-                                context.contentResolver,
-                                android.net.Uri.fromFile(file),
-                            )
-                            if (probe == null) { dropped++; return@forEach }
-                            val start = wireClip.startMs.coerceIn(0, probe.durationMs)
-                            val end = wireClip.endMs.coerceAtMost(probe.durationMs)
-                            // A probe that disagrees with the wire enough to
-                            // collapse the window would render a zero-length
-                            // segment — count it dropped, don't add it.
-                            if (end <= start) { dropped++; return@forEach }
-                            val restored = SessionClip(
-                                wireClip.id, bytes, probe,
-                                start,
-                                end,
-                                wireClip.volume,
-                                wireClip.lookId,
-                                wireClip.speed,
-                            )
-                            videoClips += restored
-                            archiveClip(restored)
-                        }
+                        val dropped = restoreVideoClipsFrom(saved)
                         if (dropped > 0) {
                             resumeDroppedClips = dropped
                             exportStatus = "$dropped timeline clip(s) could not be restored — " +
-                                "the last saved draft is kept; reopen it to retry"
+                                "the last saved draft is kept; retrying…"
                         }
-                        selectedClipIndex = 0
                     }
                     // IMAGE layers resume with the slot (their assets ride
                     // the same assetFiles map the image mode uses).
@@ -534,6 +554,26 @@ fun MemeEditorScreen(
     }
     val slotId = remember(resume) {
         resume?.document?.slotId ?: "s-" + java.util.UUID.randomUUID().toString().take(13)
+    }
+
+    // Dropped-resume retry (UX bug: "resume opens without the video until
+    // reopened"): a transient cold-start probe failure used to demand a
+    // full reopen. One delayed in-session pass heals the gaps; the banner
+    // only survives when clips are genuinely unreadable.
+    LaunchedEffect(resumeDroppedClips) {
+        if (resumeDroppedClips <= 0) return@LaunchedEffect
+        val saved = resume ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        val stillDropped = restoreVideoClipsFrom(saved)
+        if (stillDropped != resumeDroppedClips) {
+            resumeDroppedClips = stillDropped
+            exportStatus = if (stillDropped == 0) {
+                null
+            } else {
+                "$stillDropped timeline clip(s) could not be restored — " +
+                    "the last saved draft is kept; reopen it to retry"
+            }
+        }
     }
     // Clip-import progress (camera handoff / picker insert): "1/3" style
     // loading state so the studio never looks dead while sources probe.
@@ -1062,19 +1102,22 @@ fun MemeEditorScreen(
             exportStatus = null
             val exportJob = exportJobs.begin("mp4")
             scope.launch {
+                var savedBytes = 0
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
                         val exported = MemeVideoExport.exportClips(
                             context, exportClips, exportProject,
                             sfxMixTimeline(exportProject, timelineMs),
                             imageAssets = exportImages,
+                            preset = exportPreset,
                         )
-                        check(exportJobs.artifactReady(exportJob, exported)) {
+                        savedBytes = exported.bytes.size
+                        check(exportJobs.artifactReady(exportJob, exported.bytes)) {
                             "Could not persist the render"
                         }
                         exportJobs.update(exportJob, phase = "saving")
                         MemeRaster.saveVideoFile(
-                            context, exported, "bitos-meme-${System.currentTimeMillis()}",
+                            context, exported.bytes, "bitos-meme-${System.currentTimeMillis()}",
                         )
                     }
                 }
@@ -1086,7 +1129,16 @@ fun MemeEditorScreen(
                 }
                     .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
                 exportOutcome = result.fold(
-                    onSuccess = { ExportOutcome.Success("Saved to Movies ✓") },
+                    onSuccess = {
+                        // MST-036: the actual MB rides the result (estimate
+                        // vs. actual accountability).
+                        val sizeNote = if (savedBytes > 0) {
+                            " · ${String.format(java.util.Locale.US, "%.1f MB", savedBytes / 1_000_000.0)}"
+                        } else {
+                            ""
+                        }
+                        ExportOutcome.Success("Saved to Movies ✓$sizeNote")
+                    },
                     onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
                 )
                 exportStatus = when (val outcome = exportOutcome) {
@@ -1820,6 +1872,16 @@ fun MemeEditorScreen(
                     renderedSizeBytes = lastExportSizeBytes,
                     exporting = exporting,
                     failure = (exportOutcome as? ExportOutcome.Failure)?.message,
+                    preset = exportPreset,
+                    presetManual = exportPresetManual,
+                    onPresetAuto = {
+                        exportPreset = MemeExportPresets.AUTO
+                        exportPresetManual = false
+                    },
+                    onPresetPick = { resolution, quality ->
+                        exportPreset = MemeExportPresets.Preset(resolution, quality)
+                        exportPresetManual = true
+                    },
                     onExport = {
                         showExportSheet = false
                         saveToDevice()
@@ -2286,7 +2348,19 @@ fun MemeEditorScreen(
             coverUploading = coverUploading,
             publishState = memePublishState,
             remixSeed = remixSeed,
-            onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor, remixRelays, remixLabel ->
+            preset = exportPreset,
+            presetManual = exportPresetManual,
+            onPresetAuto = {
+                exportPreset = MemeExportPresets.AUTO
+                exportPresetManual = false
+            },
+            onPresetPick = { resolution, quality ->
+                exportPreset = MemeExportPresets.Preset(resolution, quality)
+                exportPresetManual = true
+            },
+            draft = postDraft,
+            onDraftChange = { postDraft = it },
+            onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor, remixRelays, remixLabel, powBits ->
                 val project = state.project
                 // Video/GIF modes have no `activeAsset` (their media lives in
                 // session bytes) — the mode itself gates readiness here.
@@ -2294,6 +2368,17 @@ fun MemeEditorScreen(
                     (project.mode == MemeMode.VIDEO && hasVideo) ||
                     (project.mode == MemeMode.GIF && gifFrames.isNotEmpty())
                 if (!mediaReady) return@MemePostFlowScreen
+                // MST-036: manual presets gate on the shared ESTIMATE —
+                // blocked with a re-pick ask, never silently degraded
+                // (the cut ladder only owns Auto).
+                if (project.mode == MemeMode.VIDEO && hasVideo && exportPresetManual &&
+                    !MemeExportPresets.publishFits(exportPreset, timelineDurationMs)
+                ) {
+                    exportStatus = MemeExportPresets.sizeLabel(
+                        MemeExportPresets.estimateBytes(exportPreset, timelineDurationMs),
+                    ) + " — over the 64 MB cap. Pick a lower quality in Export."
+                    return@MemePostFlowScreen
+                }
                 mediaPublishViewModel.markMemeRenderStarted()
                 scope.launch {
                     val rendered = withContext(Dispatchers.IO) {
@@ -2302,20 +2387,34 @@ fun MemeEditorScreen(
                             // orientation with duration+dim imeta. Over-size
                             // exports are CUT (duration ladder), not failed —
                             // M5: the ladder trims the LAST clip's window.
-                            val probe = videoClips.first().probe
-                            suspend fun exportNow(): ByteArray = MemeVideoExport.exportClips(
+                            suspend fun exportNow(): MemeVideoExport.Exported = MemeVideoExport.exportClips(
                                 context, videoClips.toList().toClipInputs(videoRate), state.project,
                                 sfxMixTimeline(state.project, timelineDurationMs),
                                 imageAssets = imageAssetUris,
+                                preset = exportPreset,
                             )
                             var exported = exportNow()
                             var durationMs = timelineDurationMs
-                            var cuts = 0
-                            while (exported.size > space.bitos.core.model.Blossom.MAX_FILE_BYTES &&
-                                cuts < space.bitos.core.studio.MemeVideoCutRules.MAX_CUT_ATTEMPTS
-                            ) {
+                            if (exportPresetManual) {
+                                // Manual means manual: no cut ladder. A rare
+                                // ABR overshoot past the gated estimate is
+                                // surfaced (actual MB) and the publish
+                                // machine blocks at the 64 MB check.
+                                if (exported.bytes.size > space.bitos.core.model.Blossom.MAX_FILE_BYTES) {
+                                    exportStatus = "Actual render " +
+                                        String.format(
+                                            java.util.Locale.US,
+                                            "%.1f MB",
+                                            exported.bytes.size / 1_000_000.0,
+                                        ) + " — over the 64 MB cap. Pick a lower quality in Export."
+                                }
+                            } else {
+                                var cuts = 0
+                                while (exported.bytes.size > space.bitos.core.model.Blossom.MAX_FILE_BYTES &&
+                                    cuts < space.bitos.core.studio.MemeVideoCutRules.MAX_CUT_ATTEMPTS
+                                ) {
                                 val cut = space.bitos.core.studio.MemeVideoCutRules.nextCutForSize(
-                                    durationMs, exported.size.toLong(),
+                                    durationMs, exported.bytes.size.toLong(),
                                     space.bitos.core.model.Blossom.MAX_FILE_BYTES,
                                 ) ?: break
                                 // Shrink the tail clip's window to fit the
@@ -2339,8 +2438,11 @@ fun MemeEditorScreen(
                                 durationMs = timelineDurationMs
                                 cuts += 1
                                 exported = exportNow()
+                                }
                             }
-                            Triple(exported, probe.uprightWidth, probe.uprightHeight) to "video/mp4"
+                            // Actual export dims (preset canvas, not probe) —
+                            // imeta must match the published media (MST-036).
+                            Triple(exported.bytes, exported.width, exported.height) to "video/mp4"
                         } else if (project.mode == MemeMode.GIF && gifFrames.isNotEmpty()) {
                             // MST-023: GIF memes publish as kind-20 with
                             // imeta `m image/gif` (the same verify-before-sign
@@ -2399,6 +2501,7 @@ fun MemeEditorScreen(
                             contentWarningReason = cwReason,
                             thumbUrl = coverThumbUrl,
                             remixTagsJson = mergedTags,
+                            powBits = powBits,
                         )
                     } else {
                         mediaPublishViewModel.publishMemePicture(
@@ -2410,6 +2513,7 @@ fun MemeEditorScreen(
                             contentWarningReason = cwReason,
                             mimeType = rendered.second,
                             remixTagsJson = mergedTags,
+                            powBits = powBits,
                         )
                     }
                 }
@@ -3082,6 +3186,10 @@ private fun ExportSettingsContent(
     renderedSizeBytes: Int?,
     exporting: Boolean,
     failure: String?,
+    preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+    presetManual: Boolean = false,
+    onPresetAuto: () -> Unit = {},
+    onPresetPick: (MemeExportPresets.Resolution, MemeExportPresets.Quality) -> Unit = { _, _ -> },
     onExport: () -> Unit,
 ) {
     fun sizeText(bytes: Int): String = String.format(java.util.Locale.US, "%.1f MB", bytes / 1_000_000.0)
@@ -3092,7 +3200,7 @@ private fun ExportSettingsContent(
         else -> "—"
     }
     val adjustmentNote = when {
-        isVideo -> "Save exports the current timeline. Posting checks the 64 MB limit and may offer a shorter version."
+        isVideo -> "Auto trims over-size posts to fit the 64 MB cap; a manual quality pick must fit the estimate — posting tells you before rendering."
         isGif -> "Oversized GIFs automatically downscale — you'll see “Saved at a smaller size” if that happens."
         else -> "Full-quality PNG at the media's resolution."
     }
@@ -3122,6 +3230,15 @@ private fun ExportSettingsContent(
             style = MaterialTheme.typography.bodySmall,
             color = BitOSColors.textSecondary,
         )
+        if (isVideo && durationSeconds > 0) {
+            ExportPresetSection(
+                preset = preset,
+                manual = presetManual,
+                durationMs = durationSeconds * 1000L,
+                onAuto = onPresetAuto,
+                onPick = onPresetPick,
+            )
+        }
         failure?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = BitOSColors.error) }
         if (recoveredJobs.isNotEmpty()) {
             Text("Recovered exports", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
@@ -3179,6 +3296,79 @@ private fun ExportSettingsContent(
                 Spacer(Modifier.width(BitOSSpacing.xs))
             }
             Text(if (exporting) "Rendering…" else "Export", fontWeight = FontWeight.W600)
+        }
+    }
+}
+
+/**
+ * MST-036 quality/size picker (video only): Auto default = the automatic
+ * policy; a manual resolution × quality pick shows the live shared MB
+ * estimate. Session-only — resets with the editor. Manual picks over the
+ * gate block PUBLISH (Save is never capped).
+ */
+@Composable
+private fun ExportPresetSection(
+    preset: MemeExportPresets.Preset,
+    manual: Boolean,
+    durationMs: Long,
+    onAuto: () -> Unit,
+    onPick: (MemeExportPresets.Resolution, MemeExportPresets.Quality) -> Unit,
+) {
+    val estimateBytes = remember(preset, durationMs) { MemeExportPresets.estimateBytes(preset, durationMs) }
+    val fits = remember(preset, durationMs) { MemeExportPresets.publishFits(preset, durationMs) }
+    fun resolutionLabel(resolution: MemeExportPresets.Resolution) = when (resolution) {
+        MemeExportPresets.Resolution.P1080 -> "1080p"
+        MemeExportPresets.Resolution.P720 -> "720p"
+        MemeExportPresets.Resolution.P480 -> "480p"
+    }
+    fun qualityLabel(quality: MemeExportPresets.Quality) = when (quality) {
+        MemeExportPresets.Quality.HIGH -> "High"
+        MemeExportPresets.Quality.MEDIUM -> "Med"
+        MemeExportPresets.Quality.LOW -> "Low"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+        Text("Quality", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            FilterChip(
+                selected = !manual,
+                onClick = onAuto,
+                label = { Text("Auto") },
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            MemeExportPresets.Resolution.entries.forEach { resolution ->
+                FilterChip(
+                    selected = manual && preset.resolution == resolution,
+                    onClick = { onPick(resolution, preset.quality) },
+                    label = { Text(resolutionLabel(resolution)) },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            MemeExportPresets.Quality.entries.forEach { quality ->
+                FilterChip(
+                    selected = manual && preset.quality == quality,
+                    onClick = { onPick(preset.resolution, quality) },
+                    label = { Text(qualityLabel(quality)) },
+                )
+            }
+        }
+        Text(
+            MemeExportPresets.sizeLabel(estimateBytes) + when {
+                !manual && fits -> " · fits the 64 MB cap (Auto trims over-size posts)"
+                !manual -> " · over 64 MB (Auto trims over-size posts)"
+                fits -> " · fits the 64 MB publish cap"
+                else -> " · TOO LARGE to publish — pick lower"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (manual && !fits) BitOSColors.warning else BitOSColors.textSecondary,
+        )
+        if (!manual) {
+            Text(
+                "Auto keeps the automatic policy; picking a size keeps your choice — posting checks the estimate, saving never caps.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textSecondary,
+            )
         }
     }
 }
@@ -4020,12 +4210,28 @@ private val MemeFontSlot.label: String
         MemeFontSlot.MONO -> "Mono"
     }
 
+/** Post-details draft (MST session-scoped): hoisted to the editor so a
+ *  cover-edit round trip (back → stage "Set cover" → post details) never
+ *  loses the caption, tags, warnings or choices. */
+private data class PostDetailsDraft(
+    val caption: String = "",
+    val altText: String = "",
+    val tags: List<String> = emptyList(),
+    val cwOn: Boolean = false,
+    val cwReason: String = "Sensitive content",
+    val license: String = "CC0-1.0",
+    val allowZaps: Boolean = false,
+    /** MST post-details PoW pick (NIP-13 difficulty, 0 = off). */
+    val powBits: Int = 0,
+)
+
 /**
  * Publish flow (prototype `#/create-details` → `#/create-review`): the
  * editor's "Next · post details" opens step 1 (details), "Review preflight"
  * opens step 2 (the REAL checklist), Sign & publish runs the existing
- * render → hash-verified upload → sign machine. Splits/PoW/schedule stay
- * documented wave-4 work (meme-studio-plan MST-050s).
+ * render → hash-verified upload → sign machine. Splits/schedule stay
+ * documented wave-4 work (meme-studio-plan MST-050s); PoW ships from the
+ * post-details settings (mined post-upload, pre-sign).
  */
 @Composable
 private fun MemePostFlowScreen(
@@ -4042,6 +4248,14 @@ private fun MemePostFlowScreen(
     publishState: space.bitos.app.ui.feed.MemePublishUiState?,
     /** M4b remix lineage carried from the editor handoff, if any. */
     remixSeed: MemeRemixSeed? = null,
+    /** MST-036 quality preset (video): shown + changeable right here. */
+    preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
+    presetManual: Boolean = false,
+    onPresetAuto: () -> Unit = {},
+    onPresetPick: (MemeExportPresets.Resolution, MemeExportPresets.Quality) -> Unit = { _, _ -> },
+    /** Post-details draft hoisted from the editor (survives cover edits). */
+    draft: PostDetailsDraft = PostDetailsDraft(),
+    onDraftChange: (PostDetailsDraft) -> Unit = {},
     onPublish: (
         caption: String,
         altText: String,
@@ -4053,6 +4267,7 @@ private fun MemePostFlowScreen(
         remixAuthor: String,
         remixRelays: List<String>,
         remixLabel: String,
+        powBits: Int,
     ) -> Unit,
     onDismiss: () -> Unit,
     onPublished: () -> Unit,
@@ -4062,21 +4277,24 @@ private fun MemePostFlowScreen(
     onJobVerify: (Int) -> Boolean? = { null },
 ) {
     var step by remember { mutableStateOf(0) } // 0 = details, 1 = preflight, 2 = machine, 3 = queue
-    var caption by remember { mutableStateOf("") }
-    var altText by remember { mutableStateOf("") }
-    var tags by remember { mutableStateOf(listOf<String>()) }
+    // Draft lives in the editor session: back-for-cover never loses text.
+    val caption = draft.caption
+    val altText = draft.altText
+    val tags = draft.tags
+    val cwOn = draft.cwOn
+    val cwReason = draft.cwReason
+    val license = draft.license
+    val allowZaps = draft.allowZaps
+    val powBits = draft.powBits
+    fun update(transform: (PostDetailsDraft) -> PostDetailsDraft) = onDraftChange(transform(draft))
     var tagInput by remember { mutableStateOf("") }
-    var cwOn by remember { mutableStateOf(false) }
-    var cwReason by remember { mutableStateOf("Sensitive content") }
-    var license by remember { mutableStateOf("CC0-1.0") }
-    var allowZaps by remember { mutableStateOf(false) }
     var remixOf by remember(remixSeed) { mutableStateOf(remixSeed?.eventId ?: "") }
     var remixAuthor by remember(remixSeed) { mutableStateOf(remixSeed?.pubkey ?: "") }
     val remixRelays = remember(remixSeed) { remixSeed?.relays ?: emptyList() }
     val remixLabel = remember(remixSeed) { remixSeed?.label ?: "" }
     // M4b: a bitz handoff picks the web studio's remix default license.
     LaunchedEffect(remixSeed) {
-        if (remixSeed != null && license == "CC0-1.0") license = "CC-BY-4.0"
+        if (remixSeed != null && license == "CC0-1.0") update { it.copy(license = "CC-BY-4.0") }
     }
     // Allow-remix and the license chips are one `license` tag seen two ways:
     // the switch restores the last remixable code after "Nostr only".
@@ -4092,7 +4310,7 @@ private fun MemePostFlowScreen(
 
     fun addTag(raw: String) {
         val tag = raw.trim().replace("#", "").lowercase()
-        if (tag.isNotEmpty() && tag !in tags && tags.size < 8) tags = tags + tag
+        if (tag.isNotEmpty() && tag !in tags && tags.size < 8) update { it.copy(tags = it.tags + tag) }
     }
 
     fun commitTag() {
@@ -4162,7 +4380,7 @@ private fun MemePostFlowScreen(
                     ) {
                         space.bitos.app.ui.components.BitosPlainTextField(
                             value = caption,
-                            onValueChange = { caption = it.take(300) },
+                            onValueChange = { value -> update { it.copy(caption = value.take(300)) } },
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = BitOSColors.textPrimary),
                             singleLine = false,
                             minLines = 3,
@@ -4199,7 +4417,7 @@ private fun MemePostFlowScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             tags.take(4).forEach { tag ->
                                 AssistChip(
-                                    onClick = { tags = tags - tag },
+                                    onClick = { update { d -> d.copy(tags = d.tags - tag) } },
                                     label = { Text("#$tag", style = MaterialTheme.typography.labelSmall) },
                                 )
                             }
@@ -4257,6 +4475,17 @@ private fun MemePostFlowScreen(
                             }
                         }
                         HorizontalDivider(color = BitOSColors.border)
+                        // MST-036: quality/size + live MB estimate right on
+                        // the post screen — fix an over-cap pick without a
+                        // round trip back to the editor.
+                        ExportPresetSection(
+                            preset = preset,
+                            manual = presetManual,
+                            durationMs = timelineSeconds * 1000L,
+                            onAuto = onPresetAuto,
+                            onPick = onPresetPick,
+                        )
+                        HorizontalDivider(color = BitOSColors.border)
                     }
                     Row(
                         Modifier
@@ -4284,7 +4513,7 @@ private fun MemePostFlowScreen(
                             subtitle = "viewers can zap this post — off hides the zap action (advisory tag)",
                             modifier = Modifier.weight(1f),
                         )
-                        Switch(checked = allowZaps, onCheckedChange = { allowZaps = it })
+                        Switch(checked = allowZaps, onCheckedChange = { value -> update { it.copy(allowZaps = value) } })
                     }
                     HorizontalDivider(color = BitOSColors.border)
                     Row(
@@ -4303,10 +4532,11 @@ private fun MemePostFlowScreen(
                             checked = license != "bitz/all-reserved",
                             onCheckedChange = { allow ->
                                 if (allow) {
-                                    license = lastRemixableLicense
+                                    val restored = lastRemixableLicense
+                                    update { it.copy(license = restored) }
                                 } else {
                                     if (license != "bitz/all-reserved") lastRemixableLicense = license
-                                    license = "bitz/all-reserved"
+                                    update { it.copy(license = "bitz/all-reserved") }
                                 }
                             },
                         )
@@ -4322,7 +4552,31 @@ private fun MemePostFlowScreen(
                             subtitle = "gate the post behind a visible warning",
                             modifier = Modifier.weight(1f),
                         )
-                        Switch(checked = cwOn, onCheckedChange = { cwOn = it })
+                        Switch(checked = cwOn, onCheckedChange = { value -> update { it.copy(cwOn = value) } })
+                    }
+                    HorizontalDivider(color = BitOSColors.border)
+                    // MST post-details PoW (NIP-13): the RANK UI reuses the
+                    // shared PowCard pieces — PowDifficultySelector (slider +
+                    // hash bars) + PowBadge. The difficulty is mined AFTER
+                    // the media upload (the imeta must be final) and BEFORE
+                    // anything is signed — the publish machine owns it.
+                    Column(Modifier.padding(vertical = BitOSSpacing.sm)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            DetailSettingsRow(
+                                icon = AppIcons.Zap,
+                                iconTint = BitOSColors.zap,
+                                title = "Proof of work",
+                                subtitle = "anti-spam difficulty (NIP-13) — mined after upload, before signing",
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (powBits > 0) {
+                                space.bitos.app.ui.components.PowBadge(difficulty = powBits)
+                            }
+                        }
+                        space.bitos.app.ui.components.PowDifficultySelector(
+                            target = powBits,
+                            onTargetChange = { bits -> update { it.copy(powBits = bits.coerceIn(0, 30)) } },
+                        )
                     }
                     if (remixOf.isNotEmpty()) {
                         HorizontalDivider(color = BitOSColors.border)
@@ -4360,7 +4614,7 @@ private fun MemePostFlowScreen(
                     HorizontalDivider(color = BitOSColors.border)
                     space.bitos.app.ui.components.BitosTextField(
                         value = altText,
-                        onValueChange = { altText = it },
+                        onValueChange = { value -> update { it.copy(altText = value) } },
                         placeholder = "Alt text (defaults to the caption)",
                         singleLine = true,
                         compact = true,
@@ -4380,7 +4634,7 @@ private fun MemePostFlowScreen(
                         ).forEach { (value, label) ->
                             FilterChip(
                                 selected = license == value,
-                                onClick = { license = value },
+                                onClick = { update { it.copy(license = value) } },
                                 label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                             )
                         }
@@ -4543,6 +4797,7 @@ private fun MemePostFlowScreen(
                                     remixAuthor,
                                     remixRelays,
                                     remixLabel,
+                                    powBits,
                                 )
                                 step = 2
                             },
@@ -4581,6 +4836,7 @@ private fun MemePostFlowScreen(
                             remixAuthor,
                             remixRelays,
                             remixLabel,
+                            powBits,
                         )
                     },
                     onLater = onDismiss,

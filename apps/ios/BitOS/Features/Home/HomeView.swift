@@ -664,7 +664,7 @@ struct HomeView: View {
             .appMenuHost($menu)
             .sheet(isPresented: $showStoryComposer) {
                 StoryComposerSheet(
-                    onPublish: { text, imageUrls, background, altText, sensitive, pow in
+                    onPublish: { text, imageUrls, background, altText, sensitive, videoUrl, videoMime, videoDurationMs, videoPoster, pow in
                         Task {
                             if let pow {
                                 await environment.notePublisher.publishStoryWithPow(
@@ -676,7 +676,11 @@ struct HomeView: View {
                                     dTag: pow.dTag,
                                     nonce: pow.nonce,
                                     targetDifficulty: Int32(pow.targetDifficulty),
-                                    createdAt: pow.createdAt
+                                    createdAt: pow.createdAt,
+                                    videoUrl: videoUrl,
+                                    videoMime: videoMime,
+                                    videoDurationMs: videoDurationMs ?? 0,
+                                    videoPoster: videoPoster
                                 )
                             } else {
                                 await environment.notePublisher.publishStory(
@@ -684,7 +688,11 @@ struct HomeView: View {
                                     imageUrls: imageUrls,
                                     background: background,
                                     altText: altText,
-                                    sensitive: sensitive
+                                    sensitive: sensitive,
+                                    videoUrl: videoUrl,
+                                    videoMime: videoMime,
+                                    videoDurationMs: videoDurationMs ?? 0,
+                                    videoPoster: videoPoster
                                 )
                             }
                         }
@@ -1248,11 +1256,7 @@ private struct VideoNotePage: View {
                 .font(.subheadline)
                 .foregroundStyle(.white)
                 .lineLimit(3)
-            if !note.hashtags.isEmpty {
-                Text(note.hashtags.prefix(4).map { "#\($0)" }.joined(separator: " "))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(BitOSTheme.accent)
-            }
+            // Hashtags render once, inline in the caption body — no second tag row.
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, BitOSTheme.Spacing.base)

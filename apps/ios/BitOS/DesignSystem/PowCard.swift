@@ -48,6 +48,46 @@ struct PowBadge: View {
 }
 
 /// Difficulty selector + mining driver card (composer toolbar section).
+/// Difficulty rank selector (PowCard's slider + segmented hash bars) for
+/// flows where MINING HAPPENS ELSEWHERE — e.g. the meme post-details row,
+/// which mines after the media upload (the imeta must be final before the
+/// template exists).
+struct PowDifficultySelector: View {
+    @Binding var target: Int
+    var enabled = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Slider(
+                value: Binding(
+                    get: { Double(target) },
+                    set: { target = Int($0) }
+                ),
+                in: 0...Double(PowCard.maxDifficulty),
+                step: 1
+            )
+            .disabled(!enabled)
+            .accessibilityLabel("Proof of work difficulty")
+            .accessibilityValue("\(target) bits")
+            hashViz
+        }
+    }
+
+    /// Segmented hash visualization of the selected difficulty.
+    private var hashViz: some View {
+        let segments = 15
+        let filled = target * segments / PowCard.maxDifficulty
+        return HStack(spacing: 2) {
+            ForEach(0..<segments, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(index < filled ? BitOSTheme.accent.opacity(0.35 + 0.65 * Double(index) / Double(segments)) : BitOSTheme.divider)
+                    .frame(height: 10)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
 struct PowCard: View {
     @Binding var target: Int
     /// One bounded mining window: (createdAt, startNonce, attempts) → hit or nil.
@@ -71,8 +111,7 @@ struct PowCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             header
-            slider
-            hashViz
+            PowDifficultySelector(target: $target, enabled: !isMining)
             statusRow
         }
         .padding(BitOSTheme.Spacing.base)
@@ -97,34 +136,6 @@ struct PowCard: View {
                 Text("\(target) bits")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(BitOSTheme.textSecondary)
-            }
-        }
-    }
-
-    private var slider: some View {
-        Slider(
-            value: Binding(
-                get: { Double(target) },
-                set: { target = Int($0) }
-            ),
-            in: 0...Double(Self.maxDifficulty),
-            step: 1
-        )
-        .disabled(isMining)
-        .accessibilityLabel("Proof of work difficulty")
-        .accessibilityValue("\(target) bits")
-    }
-
-    /// Segmented hash visualization of the selected difficulty.
-    private var hashViz: some View {
-        let segments = 15
-        let filled = target * segments / Self.maxDifficulty
-        return HStack(spacing: 2) {
-            ForEach(0..<segments, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(index < filled ? BitOSTheme.accent.opacity(0.35 + 0.65 * Double(index) / Double(segments)) : BitOSTheme.divider)
-                    .frame(height: 10)
-                    .frame(maxWidth: .infinity)
             }
         }
     }

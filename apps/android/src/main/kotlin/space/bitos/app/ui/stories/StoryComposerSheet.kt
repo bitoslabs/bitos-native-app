@@ -85,13 +85,15 @@ data class StoryPowCommit(
 
 /**
  * APP-006 story composer (web `StoryComposer` parity): 9:16 preview
- * (gradient text slide or image carousel with caption scrim), ≤280-char
- * text, six IG-style gradient backgrounds, ≤6 gallery images uploaded via
- * Blossom BEFORE anything references them, GIF picks (already-public URLs
- * ride the same imeta carousel), emoji inserts, optional NIP-13 PoW mined
- * over the exact kind-30315 template, alt text + sensitive flag, and a
- * kind-30315 publish through the receipt machine. Stories double as a
- * 24h status note when no image is attached.
+ * (gradient text slide, image carousel with caption scrim, or a video
+ * slide with duration chip), ≤280-char text, six IG-style gradient
+ * backgrounds, ≤6 gallery images uploaded via Blossom BEFORE anything
+ * references them, one video per slide (measured duration rides the
+ * NIP-92 imeta `duration`; video replaces the carousel — web parity),
+ * GIF picks (already-public URLs ride the same imeta carousel), emoji
+ * inserts, optional NIP-13 PoW mined over the exact kind-30315 template,
+ * alt text + sensitive flag, and a kind-30315 publish through the receipt
+ * machine. Stories double as a 24h status note with no media attached.
  */
 @androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
@@ -103,6 +105,10 @@ fun StoryComposerSheet(
         background: String?,
         altText: String,
         sensitive: Boolean,
+        videoUrl: String?,
+        videoMime: String,
+        videoDurationMs: Long?,
+        videoPoster: String?,
         pow: StoryPowCommit?,
     ) -> Unit,
     onClose: () -> Unit,
@@ -125,6 +131,14 @@ fun StoryComposerSheet(
     var showPow by remember { mutableStateOf(false) }
     var powTarget by remember { mutableStateOf(0) }
     var powOutcome by remember { mutableStateOf<PowOutcome?>(null) }
+    // One video per slide (web parity: the first video imeta replaces the
+    // carousel in the viewer) — picking either clears the other.
+    var videoUrl by remember { mutableStateOf<String?>(null) }
+    var videoMime by remember { mutableStateOf("video/mp4") }
+    var videoDurationMs by remember { mutableStateOf<Long?>(null) }
+    // Poster frame (NIP-92 imeta `thumb`): instant rail/viewer preview
+    // while the video streams; a failed extraction just omits it.
+    var videoPoster by remember { mutableStateOf<String?>(null) }
 
     // Fixed for the whole session: the dTag is part of the PoW mining
     // template, so it cannot be regenerated at publish time.
@@ -132,7 +146,8 @@ fun StoryComposerSheet(
         Stories.storyDTag(System.currentTimeMillis() / 1000, (1..Int.MAX_VALUE).random())
     }
 
-    val canPost = (text.isNotBlank() || images.isNotEmpty()) && !uploading
+    val hasVideo = videoUrl != null
+    val canPost = (text.isNotBlank() || images.isNotEmpty() || hasVideo) && !uploading
     val full = images.size >= Stories.MAX_STORY_IMAGES
 
     // Web backgrounds — published as CSS tokens both clients parse.
@@ -145,9 +160,59 @@ fun StoryComposerSheet(
         listOf(Color(0xFF10B981), Color(0xFF06B6D4)),
     )
     fun backgroundCss(): String? {
-        if (images.isNotEmpty()) return null
+        if (images.isNotEmpty() || hasVideo) return null
         val pair = backgrounds[bgIndex]
         return "linear-gradient(135deg, ${pair[0].toRgbHex()}, ${pair[1].toRgbHex()})"
+    }
+
+    /** One bounded video upload (media duration + poster frame read
+     *  off-thread; the poster upload is best-effort — it never blocks the
+     *  story itself). */
+    suspend fun uploadVideo(uri: android.net.Uri) {
+        uploading = true
+        failure = null
+        try {
+            val signer = identityViewModel.createSigner()
+                ?: throw BlossomUploader.UploadFailure("Posting needs an identity (Profile tab).")
+            val mime = context.contentResolver.getType(uri) ?: "video/mp4"
+            var measuredMs: Long? = null
+            var posterBytes: ByteArray? = null
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val retriever = android.media.MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, uri)
+                        measuredMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                        // Poster frame near the 1 s mark (web `thumb` parity).
+                        retriever.getFrameAtTime(1_000_000)?.let { frame ->
+                            val out = java.io.ByteArrayOutputStream()
+                            frame.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+                            frame.recycle()
+                            posterBytes = out.toByteArray().takeIf { it.isNotEmpty() }
+                        }
+                    } finally {
+                        retriever.release()
+                    }
+                }
+            }
+            val bytes = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } ?: throw BlossomUploader.UploadFailure("could not read the picked file")
+            // Upload BEFORE the URL is referenced anywhere (PUB-002).
+            val media = uploader.upload(bytes, mime, signer, DefaultBlossomServer.url)
+            val poster = posterBytes?.let { jpg ->
+                runCatching { uploader.upload(jpg, "image/jpeg", signer, DefaultBlossomServer.url).url }.getOrNull()
+            }
+            images.clear()
+            videoMime = mime
+            videoDurationMs = measuredMs
+            videoPoster = poster
+            videoUrl = media.url
+        } catch (error: Exception) {
+            failure = error.message ?: "Upload failed."
+        } finally {
+            uploading = false
+        }
     }
 
     val galleryPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -172,6 +237,10 @@ fun StoryComposerSheet(
                         DefaultBlossomServer.url,
                     )
                     if (images.size < Stories.MAX_STORY_IMAGES) {
+                        // Images and the video are mutually exclusive slides.
+                        videoUrl = null
+                        videoDurationMs = null
+                        videoPoster = null
                         images += media.url
                         previewIndex = images.lastIndex
                     }
@@ -182,6 +251,12 @@ fun StoryComposerSheet(
                 }
             }
         }
+    }
+
+    val videoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri?.let { picked -> scope.launch { uploadVideo(picked) } }
     }
 
     Surface(color = BitOSColors.background) {
@@ -213,7 +288,7 @@ fun StoryComposerSheet(
                     .aspectRatio(9f / 16f)
                     .clip(RoundedCornerShape(BitOSRadius.lg))
                     .then(
-                        if (images.isNotEmpty()) Modifier.background(Color.Black)
+                        if (images.isNotEmpty() || hasVideo) Modifier.background(Color.Black)
                         else Modifier.background(Brush.linearGradient(backgrounds[bgIndex]))
                     ),
             ) {
@@ -228,7 +303,45 @@ fun StoryComposerSheet(
                         .background(Color(0x80000000), RoundedCornerShape(BitOSRadius.pill))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
-                if (images.isNotEmpty()) {
+                if (hasVideo) {
+                    // No decode in the preview: poster frame + play glyph +
+                    // duration chip — the viewer plays the real stream.
+                    videoPoster?.let { poster ->
+                        AsyncImage(
+                            model = poster,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier
+                                .size(52.dp)
+                                .background(Color(0x99000000), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                space.bitos.app.ui.theme.AppIcons.Play,
+                                contentDescription = "Video story",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        }
+                    }
+                    videoDurationMs?.let { ms ->
+                        Text(
+                            formatDuration(ms),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W700),
+                            color = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp)
+                                .background(Color(0x8C000000), RoundedCornerShape(BitOSRadius.pill))
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                } else if (images.isNotEmpty()) {
                     AsyncImage(
                         model = images[previewIndex.coerceIn(0, images.lastIndex)],
                         contentDescription = "Story preview",
@@ -288,7 +401,7 @@ fun StoryComposerSheet(
             )
 
             // Gradient swatches (text-only slides).
-            if (images.isEmpty()) {
+            if (images.isEmpty() && !hasVideo) {
                 Row(
                     Modifier
                         .align(Alignment.CenterHorizontally)
@@ -316,6 +429,63 @@ fun StoryComposerSheet(
                     color = BitOSColors.textSecondary,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
+            }
+
+            // Video tile (replaces the carousel — web parity): play glyph,
+            // measured duration, removable.
+            if (hasVideo) {
+                Row(
+                    Modifier.padding(vertical = BitOSSpacing.md),
+                    horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box {
+                        Box(
+                            Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(BitOSRadius.md))
+                                .background(Color(0xFF10151C)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                space.bitos.app.ui.theme.AppIcons.Play,
+                                contentDescription = "Video story",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                        videoDurationMs?.let { ms ->
+                            Text(
+                                formatDuration(ms),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.W700),
+                                color = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 4.dp)
+                                    .background(Color(0x8C000000), RoundedCornerShape(BitOSRadius.pill))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                videoUrl = null
+                                videoDurationMs = null
+                                videoPoster = null
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(20.dp)
+                                .background(BitOSColors.surface, CircleShape),
+                        ) {
+                            Icon(space.bitos.app.ui.theme.AppIcons.Close, contentDescription = "Remove video", modifier = Modifier.size(12.dp))
+                        }
+                    }
+                    Text(
+                        "Video plays instead of a photo carousel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                }
             }
 
             // Image strip + add tile.
@@ -374,10 +544,14 @@ fun StoryComposerSheet(
                         }
                     }
                 }
+            }
+
+            // Alt text + sensitive gate any attached media.
+            if (images.isNotEmpty() || hasVideo) {
                 space.bitos.app.ui.components.BitosTextField(
                     value = altText,
                     onValueChange = { if (it.length <= 280) altText = it },
-                    placeholder = "Describe the images for screen readers (alt text)…",
+                    placeholder = "Describe the media for screen readers (alt text)…",
                     singleLine = false,
                     textStyle = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.fillMaxWidth(),
@@ -419,8 +593,9 @@ fun StoryComposerSheet(
                 }
             }
 
-            // Quick actions (note-composer toolbar parity): gallery · GIF ·
-            // emoji · PoW. GIFs arrive as already-public URLs — no upload.
+            // Quick actions (note-composer toolbar parity): gallery · video ·
+            // GIF · emoji · PoW. A video replaces the photo carousel (web
+            // parity), so the photo/GIF entries wait while one is attached.
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -428,10 +603,17 @@ fun StoryComposerSheet(
                 horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StoryActionIcon(SolarFeedIcon.Gallery, "Add image", enabled = !full && !uploading, active = images.isNotEmpty()) {
+                StoryActionIcon(SolarFeedIcon.Gallery, "Add image", enabled = !full && !uploading && !hasVideo, active = images.isNotEmpty()) {
                     galleryPicker.launch("image/*")
                 }
-                StoryActionIcon(SolarFeedIcon.Film, "Add GIF", enabled = !full) { showGif = true }
+                StoryActionIcon(SolarFeedIcon.VideoCamera, "Add video", enabled = !uploading, active = hasVideo) {
+                    videoPicker.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.VideoOnly,
+                        ),
+                    )
+                }
+                StoryActionIcon(SolarFeedIcon.Film, "Add GIF", enabled = !full && !hasVideo) { showGif = true }
                 StoryActionIcon(SolarFeedIcon.Emoji, "Insert emoji") { showEmoji = true }
                 StoryActionIcon(
                     SolarFeedIcon.ShieldCheck, "Proof of Work",
@@ -444,9 +626,11 @@ fun StoryComposerSheet(
             // is appended by the miner; any edit invalidates the session).
             if (showPow) {
                 val pubkeyHex = identity.account?.pubkeyHex ?: ""
-                val templateKey = remember(text, images, bgIndex, altText, sensitive, storyDTag) {
-                    listOf(text, images.joinToString("|"), bgIndex.toString(), altText, sensitive.toString(), storyDTag)
-                        .joinToString("§")
+                val templateKey = remember(text, images, bgIndex, altText, sensitive, storyDTag, videoUrl, videoMime, videoDurationMs, videoPoster) {
+                    listOf(
+                        text, images.joinToString("|"), bgIndex.toString(), altText, sensitive.toString(), storyDTag,
+                        videoUrl.orEmpty(), videoMime, videoDurationMs?.toString().orEmpty(), videoPoster.orEmpty(),
+                    ).joinToString("§")
                 }
                 PowCard(
                     target = powTarget,
@@ -456,6 +640,7 @@ fun StoryComposerSheet(
                     template = { createdAt ->
                         NoteComposer(clock = { createdAt }).composeStory(
                             pubkeyHex, text, images.toList(), backgroundCss(), altText, sensitive, storyDTag,
+                            videoUrl, videoMime, videoDurationMs, videoPoster,
                         )
                     },
                     templateKey = templateKey,
@@ -477,6 +662,10 @@ fun StoryComposerSheet(
                         backgroundCss(),
                         altText.trim(),
                         sensitive,
+                        videoUrl,
+                        videoMime,
+                        videoDurationMs,
+                        videoPoster,
                         powOutcome?.let { StoryPowCommit(storyDTag, it.nonce, it.targetDifficulty, it.createdAtSeconds) },
                     )
                     onClose()
@@ -589,3 +778,9 @@ private fun StoryActionIcon(
 
 /** `#RRGGBB` for the background CSS token (both clients parse hex pairs). */
 private fun Color.toRgbHex(): String = "%06X".format(toArgb() and 0xFFFFFF)
+
+/** `m:ss` for the video duration chips. */
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    return "${totalSeconds / 60}:${"%02d".format(totalSeconds % 60)}"
+}

@@ -451,19 +451,21 @@ fun FeedScreen(
             androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showStoryComposer = false }) {
                 space.bitos.app.ui.stories.StoryComposerSheet(
                     identityViewModel = identityViewModel,
-                    onPublish = { text, imageUrls, background, altText, sensitive, pow ->
+                    onPublish = { text, imageUrls, background, altText, sensitive, videoUrl, videoMime, videoDurationMs, videoPoster, pow ->
                         if (pow != null) {
                             notePublisher.publishStoryWithPow(
                                 text, imageUrls, background, altText, sensitive,
                                 pow.dTag, pow.nonce, pow.targetDifficulty, pow.createdAtSeconds,
                                 { identityViewModel.createSigner() },
                                 space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                                videoUrl, videoMime, videoDurationMs, videoPoster,
                             )
                         } else {
                             notePublisher.publishStory(
                                 text, imageUrls, background, altText, sensitive,
                                 { identityViewModel.createSigner() },
                                 space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                                videoUrl, videoMime, videoDurationMs, videoPoster,
                             )
                         }
                     },
@@ -966,14 +968,7 @@ private fun CaptionOverlay(
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
-        if (note.hashtags.isNotEmpty()) {
-            Spacer(Modifier.height(BitOSSpacing.xs))
-            Text(
-                note.hashtags.take(4).joinToString(" ") { "#$it" },
-                style = MaterialTheme.typography.labelMedium,
-                color = BitOSColors.accent,
-            )
-        }
+        // Hashtags render once, inline in the caption body — no second tag row.
     }
 }
 
@@ -1278,14 +1273,7 @@ private fun TextNotePage(
                 style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 26.sp),
                 color = BitOSColors.textPrimary,
             )
-            if (note.hashtags.isNotEmpty()) {
-                Spacer(Modifier.height(BitOSSpacing.sm))
-                Text(
-                    note.hashtags.take(6).joinToString(" ") { "#$it" },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BitOSColors.accent,
-                )
-            }
+            // Hashtags render once, inline in the note body — no second tag row.
         }
         Row(
             modifier = Modifier

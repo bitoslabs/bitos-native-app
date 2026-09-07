@@ -19,6 +19,56 @@ enum MemeVideoExportIos {
         var errorDescription: String? { message }
     }
 
+    /// MST-036 export preset — tier ids are the shared enum names; the
+    /// `memeEncoderPlan` seam is the single source (no Swift table
+    /// mirror). AUTO = pre-MST-036 behavior (1080p / 6 Mbps / highest tier).
+    struct ExportPreset: Sendable, Equatable {
+        let resolution: String
+        let quality: String
+        static let auto = ExportPreset(resolution: "P1080", quality: "HIGH")
+    }
+
+    /// Export result: the artifact bytes plus the ACTUAL output dims —
+    /// publish imeta must carry these, never the probe dims (the preset
+    /// canvas can differ from the source).
+    struct Exported {
+        let data: Data
+        let width: Int
+        let height: Int
+    }
+
+    /// Parsed `memeEncoderPlan` seam output (the scale factors are not
+    /// needed on iOS — the layer transform + render size already scale
+    /// any source onto the plan canvas).
+    struct ExportEncoderPlan {
+        let videoBitrate: Int
+        let audioBitrate: Int
+        let width: Int
+        let height: Int
+    }
+
+    /** The shared encoder plan for a preset + probe via the bridge seam. */
+    static func encoderPlan(
+        _ preset: ExportPreset,
+        probe: Probe,
+        client: any BusinessCoreClient
+    ) -> ExportEncoderPlan? {
+        let json = client.memeEncoderPlan(
+            preset.resolution, quality: preset.quality,
+            sourceWidth: probe.uprightWidth, sourceHeight: probe.uprightHeight
+        )
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let bitrate = (root["bitrate"] as? NSNumber)?.intValue,
+              let audioBitrate = (root["audioBitrate"] as? NSNumber)?.intValue,
+              let width = (root["width"] as? NSNumber)?.intValue,
+              let height = (root["height"] as? NSNumber)?.intValue,
+              width >= 2, height >= 2, bitrate > 0 else { return nil }
+        return ExportEncoderPlan(
+            videoBitrate: bitrate, audioBitrate: audioBitrate, width: width, height: height
+        )
+    }
+
     struct Probe {
         let width: Int
         let height: Int
@@ -284,10 +334,16 @@ enum MemeVideoExportIos {
         probe: Probe,
         projectJson: String,
         client: any BusinessCoreClient,
-        images: [String: UIImage] = [:]
-    ) async throws -> Data {
-        let width = max(2, probe.uprightWidth - probe.uprightWidth % 2)
-        let height = max(2, probe.uprightHeight - probe.uprightHeight % 2)
+        images: [String: UIImage] = [:],
+        preset: ExportPreset = .auto
+    ) async throws -> Exported {
+        // MST-036: the shared encoder plan drives the output canvas (the
+        // overlay envelope + layer transform + render size all live on it).
+        guard let plan = encoderPlan(preset, probe: probe, client: client) else {
+            throw ExportError(message: "Unknown export preset")
+        }
+        let width = plan.width
+        let height = plan.height
 
         // Overlay burn-in (MST-044 close-out): static overlays keep the
         // single flattened layer; ANY window/fx switches to the
@@ -515,11 +571,201 @@ enum MemeVideoExportIos {
             try? FileManager.default.removeItem(at: outputURL)
             if let sfxWavURL { try? FileManager.default.removeItem(at: sfxWavURL) }
         }
-        guard export.status == .completed,
-              let data = try? Data(contentsOf: outputURL) else {
+        guard export.status == .completed else {
             throw ExportError(message: export.error?.localizedDescription ?? "Video export failed")
         }
-        return data
+        // MST-036 bitrate pin: AVAssetExportSession presets expose no
+        // bitrate control, so the burn pass writes a highest-quality
+        // intermediate and a generic reader→writer pass re-encodes it at
+        // the shared targets — the pre-export MB estimate stays honest.
+        let pinnedURL = try await transcode(source: outputURL, plan: plan)
+        defer { try? FileManager.default.removeItem(at: pinnedURL) }
+        guard let data = try? Data(contentsOf: pinnedURL), !data.isEmpty else {
+            throw ExportError(message: "Video export produced an empty file")
+        }
+        return Exported(data: data, width: plan.width, height: plan.height)
+    }
+
+    /**
+     * Generic bitrate-pinning transcode (MST-036): reader→writer at the
+     * shared preset targets. The source is the already-burned upright
+     * intermediate at the plan canvas, so this is a straight re-encode —
+     * no composition, no rotation, no metadata (public artifact).
+     */
+    private static func transcode(source: URL, plan: ExportEncoderPlan) async throws -> URL {
+        let asset = AVURLAsset(url: source)
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            throw ExportError(message: "The clip has no video track")
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let readerVideo = AVAssetReaderTrackOutput(
+            track: videoTrack,
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String:
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            ]
+        )
+        readerVideo.alwaysCopiesSampleData = false
+        reader.add(readerVideo)
+        let audioTrack = asset.tracks(withMediaType: .audio).first
+        var readerAudio: AVAssetReaderTrackOutput?
+        if let audioTrack {
+            let output = AVAssetReaderTrackOutput(
+                track: audioTrack,
+                outputSettings: [AVFormatIDKey as String: kAudioFormatLinearPCM]
+            )
+            output.alwaysCopiesSampleData = false
+            reader.add(output)
+            readerAudio = output
+        }
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meme-video-pin-\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: outputURL)
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let writerVideo = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: plan.width,
+                AVVideoHeightKey: plan.height,
+                AVVideoCompressionPropertiesKey: [
+                    AVVideoAverageBitRateKey: plan.videoBitrate,
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                    AVVideoExpectedSourceFrameRateKey: 30,
+                ],
+            ]
+        )
+        writerVideo.expectsMediaDataInRealTime = false
+        writer.add(writerVideo)
+        var writerAudio: AVAssetWriterInput?
+        if let audioTrack {
+            var audioSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVEncoderBitRateKey: plan.audioBitrate,
+            ]
+            if let anyDescription = audioTrack.formatDescriptions.first,
+               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(
+                   (anyDescription as CFTypeRef) as! CMAudioFormatDescription
+               ) {
+                audioSettings[AVSampleRateKey] = asbd.pointee.mSampleRate
+                audioSettings[AVNumberOfChannelsKey] = Int(asbd.pointee.mChannelsPerFrame)
+            }
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            input.expectsMediaDataInRealTime = false
+            writer.add(input)
+            writerAudio = input
+        }
+        guard reader.startReading() else {
+            throw ExportError(message: reader.error?.localizedDescription ?? "Transcode could not start")
+        }
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            TranscodePump(
+                reader: reader,
+                writer: writer,
+                videoInput: writerVideo,
+                videoOutput: readerVideo,
+                audioInput: writerAudio,
+                audioOutput: readerAudio,
+                continuation: continuation
+            ).start()
+        }
+        return outputURL
+    }
+
+    /**
+     * Reader→writer pump for the bitrate-pinning transcode: all mutable
+     * state is confined to one serial queue (the pull callbacks' queue);
+     * `@unchecked Sendable` documents that confinement to Swift 6. Exactly
+     * one continuation resume ever happens (guarded by `failed`).
+     */
+    private final class TranscodePump: @unchecked Sendable {
+        private let reader: AVAssetReader
+        private let writer: AVAssetWriter
+        private let videoInput: AVAssetWriterInput
+        private let videoOutput: AVAssetReaderTrackOutput
+        private let audioInput: AVAssetWriterInput?
+        private let audioOutput: AVAssetReaderTrackOutput?
+        private let continuation: CheckedContinuation<Void, Error>
+        private let queue = DispatchQueue(label: "bitos.meme.transcode")
+        // Queue-confined (touched only from pull callbacks on `queue`).
+        private var failed = false
+        private var videoFinished = false
+        private var audioFinished: Bool
+
+        init(
+            reader: AVAssetReader,
+            writer: AVAssetWriter,
+            videoInput: AVAssetWriterInput,
+            videoOutput: AVAssetReaderTrackOutput,
+            audioInput: AVAssetWriterInput?,
+            audioOutput: AVAssetReaderTrackOutput?,
+            continuation: CheckedContinuation<Void, Error>
+        ) {
+            self.reader = reader
+            self.writer = writer
+            self.videoInput = videoInput
+            self.videoOutput = videoOutput
+            self.audioInput = audioInput
+            self.audioOutput = audioOutput
+            self.continuation = continuation
+            self.audioFinished = audioInput == nil
+        }
+
+        func start() {
+            videoInput.requestMediaDataWhenReady(on: queue) { self.pumpVideo() }
+            if let audioInput, let audioOutput {
+                audioInput.requestMediaDataWhenReady(on: queue) { self.pumpAudio() }
+            }
+        }
+
+        private func pumpVideo() { pump(videoInput, from: videoOutput, isVideo: true) }
+        private func pumpAudio() { pump(audioInput!, from: audioOutput!, isVideo: false) }
+
+        private func pump(_ input: AVAssetWriterInput, from output: AVAssetReaderTrackOutput, isVideo: Bool) {
+            while input.isReadyForMoreMediaData {
+                if let sample = output.copyNextSampleBuffer() {
+                    if !input.append(sample) {
+                        fail(writer.error?.localizedDescription ?? "Transcode failed")
+                        return
+                    }
+                } else {
+                    if reader.status == .failed {
+                        fail(reader.error?.localizedDescription ?? "Transcode failed")
+                        return
+                    }
+                    input.markAsFinished()
+                    if isVideo { videoFinished = true } else { audioFinished = true }
+                    maybeFinish()
+                    return
+                }
+            }
+        }
+
+        private func fail(_ message: String) {
+            guard !failed else { return }
+            failed = true
+            reader.cancelReading()
+            writer.cancelWriting()
+            continuation.resume(throwing: ExportError(message: message))
+        }
+
+        private func maybeFinish() {
+            guard !failed, videoFinished, audioFinished else { return }
+            writer.finishWriting {
+                if self.writer.status == .completed {
+                    self.continuation.resume()
+                } else {
+                    self.continuation.resume(
+                        throwing: ExportError(
+                            message: self.writer.error?.localizedDescription ?? "Transcode failed"
+                        )
+                    )
+                }
+            }
+        }
     }
 
     /**

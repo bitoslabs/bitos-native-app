@@ -172,6 +172,7 @@ class MediaPublishViewModel(
         contentWarningReason: String?,
         thumbUrl: String? = null,
         remixTagsJson: String = "",
+        powBits: Int = 0,
     ) {
         if (memePublishBusy()) return
         if (bytes.isEmpty() || bytes.size > Blossom.MAX_FILE_BYTES) {
@@ -180,6 +181,11 @@ class MediaPublishViewModel(
             )
             return
         }
+        // A finished attempt leaves `result` set on the SHARED publisher —
+        // its guard would silently drop the next publish and the machine
+        // would sit on the old state forever ("done, cannot submit").
+        // Reset it, exactly like the iOS flow's beginPublish does.
+        publisher.dismiss()
         val jobId = mutableMemeState.value.jobId.takeIf { it > 0 } ?: freshJobId()
         mutableMemeState.value = MemePublishUiState(
             phase = MemePublishPhase.UPLOADING,
@@ -226,6 +232,7 @@ class MediaPublishViewModel(
                     media = sized, signerProvider = { signer },
                     writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
                     extraTags = parseTags(remixTagsJson),
+                    powBits = powBits,
                     onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, jobId) },
                 )
                 mutableMemeState.value = mutableMemeState.value.copy(phase = MemePublishPhase.DONE)
@@ -319,6 +326,7 @@ class MediaPublishViewModel(
         contentWarningReason: String?,
         mimeType: String = "image/png",
         remixTagsJson: String = "",
+        powBits: Int = 0,
         onResult: ((Boolean, String?) -> Unit)? = null,
     ) {
         if (memePublishBusy()) return
@@ -328,6 +336,11 @@ class MediaPublishViewModel(
             )
             return
         }
+        // A finished attempt leaves `result` set on the SHARED publisher —
+        // its guard would silently drop the next publish and the machine
+        // would sit on the old state forever ("done, cannot submit").
+        // Reset it, exactly like the iOS flow's beginPublish does.
+        publisher.dismiss()
         val jobId = mutableMemeState.value.jobId.takeIf { it > 0 } ?: freshJobId()
         mutableMemeState.value = MemePublishUiState(
             phase = MemePublishPhase.UPLOADING,
@@ -371,6 +384,7 @@ class MediaPublishViewModel(
                     caption, altText, contentWarningReason, sized, { signer },
                     space.bitos.app.data.feed.DefaultRelays.writeUrls,
                     extraTags = parseTags(remixTagsJson),
+                    powBits = powBits,
                     onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, jobId) },
                 )
                 mutableMemeState.value = mutableMemeState.value.copy(phase = MemePublishPhase.DONE)

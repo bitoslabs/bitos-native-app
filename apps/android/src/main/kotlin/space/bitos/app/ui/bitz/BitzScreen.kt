@@ -1876,14 +1876,8 @@ private fun BitzCaption(
             onOpenExternalLink = onOpenExternalLink,
             modifier = Modifier.fillMaxWidth(),
         )
-        if (note.hashtags.isNotEmpty()) {
-            Spacer(Modifier.height(BitOSSpacing.xs))
-            Text(
-                note.hashtags.take(4).joinToString(" ") { "#$it" },
-                style = MaterialTheme.typography.labelMedium,
-                color = BitOSColors.accent,
-            )
-        }
+        // Hashtags render once, inline in the rich body above (NIP-27 tokens,
+        // accent + tappable) — a second tag row re-listed them verbatim.
     }
 }
 

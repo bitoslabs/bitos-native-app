@@ -97,8 +97,9 @@ class NoteComposer(
     /**
      * APP-006 story publish (web `stories.publish` parity): kind-30315 with a
      * unique `d`, 24 h expiration, one NIP-92 imeta per image (alt on the
-     * first only), the `background` gradient for text-only slides and a
-     * content-warning tag for sensitive media. Image URLs mirror into the
+     * first only), an optional video imeta (`url` + `m video/…` + `thumb`
+     * + `duration`), the `background` gradient for text-only slides and a
+     * content-warning tag for sensitive media. Media URLs mirror into the
      * content for link-only clients.
      */
     fun composeStory(
@@ -109,9 +110,13 @@ class NoteComposer(
         altText: String?,
         sensitive: Boolean,
         dTag: String,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long? = null,
+        videoPoster: String? = null,
     ): UnsignedNote? = storyEvent(
         pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
-        clock.nowSeconds(), emptyList(),
+        clock.nowSeconds(), emptyList(), videoUrl, videoMime, videoDurationMs, videoPoster,
     )
 
     /**
@@ -133,9 +138,14 @@ class NoteComposer(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long? = null,
+        videoPoster: String? = null,
     ): UnsignedNote? = storyEvent(
         pubkeyHex, text, imageUrls, background, altText, sensitive, dTag,
         createdAtSeconds, listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)),
+        videoUrl, videoMime, videoDurationMs, videoPoster,
     )
 
     /** The kind-30315 template both story paths share (tags, content, id). */
@@ -149,6 +159,10 @@ class NoteComposer(
         dTag: String,
         createdAtSeconds: Long,
         extraTags: List<List<String>>,
+        videoUrl: String? = null,
+        videoMime: String? = null,
+        videoDurationMs: Long? = null,
+        videoPoster: String? = null,
     ): UnsignedNote? {
         if (createdAtSeconds <= 0) return null
         if (!pubkeyHex.matches(Regex("^[0-9a-f]{64}$"))) return null
@@ -157,7 +171,10 @@ class NoteComposer(
             .filter { it.startsWith("https://") }
             .distinct()
             .take(space.bitos.core.model.Stories.MAX_STORY_IMAGES)
-        if (boundedText.isEmpty() && boundedImages.isEmpty()) return null
+        // One video per slide (web `stories` parity: the first video imeta
+        // is the slide's video; the viewer plays it instead of a carousel).
+        val boundedVideo = videoUrl?.trim()?.takeIf { it.startsWith("https://") && it.length <= 1024 }
+        if (boundedText.isEmpty() && boundedImages.isEmpty() && boundedVideo == null) return null
         if (dTag.isBlank() || dTag.length > 128) return null
         val tags = mutableListOf(
             listOf("d", dTag),
@@ -167,10 +184,10 @@ class NoteComposer(
         space.bitos.core.publish.ComposerRules.deriveTags(boundedText)
             .filter { it.firstOrNull() == "t" }
             .forEach { tags.add(it) }
-        if (boundedImages.isEmpty() && !background.isNullOrBlank() && background.length <= 256) {
+        if (boundedImages.isEmpty() && boundedVideo == null && !background.isNullOrBlank() && background.length <= 256) {
             tags.add(listOf("background", background.trim()))
         }
-        if (sensitive && boundedImages.isNotEmpty()) {
+        if (sensitive && (boundedImages.isNotEmpty() || boundedVideo != null)) {
             tags.add(listOf("content-warning", "Sensitive media"))
         }
         val boundedAlt = altText?.trim()?.take(280)
@@ -179,8 +196,30 @@ class NoteComposer(
             if (index == 0 && !boundedAlt.isNullOrBlank()) imeta.add("alt $boundedAlt")
             tags.add(listOf("imeta") + imeta)
         }
+        if (boundedVideo != null) {
+            val mime = videoMime?.trim()
+                ?.takeIf { it.startsWith("video/") && it.length <= 64 }
+                ?: "video/mp4"
+            val imeta = mutableListOf("url $boundedVideo", "m $mime")
+            // `thumb` (NIP-92): poster frame — the instant rail/viewer
+            // preview while the video streams.
+            videoPoster?.trim()
+                ?.takeIf { it.startsWith("https://") && it.length <= 1024 }
+                ?.let { imeta.add("thumb $it") }
+            // `duration <seconds>s` (NIP-92): the viewer's auto-advance cap.
+            // Integer math — never locale-formatted.
+            val tenths = ((videoDurationMs ?: 0L).coerceAtLeast(0L)) / 100
+            if (tenths > 0) {
+                val whole = tenths / 10
+                val fraction = tenths % 10
+                imeta.add(if (fraction == 0L) "duration ${whole}s" else "duration $whole.${fraction}s")
+            }
+            tags.add(listOf("imeta") + imeta)
+        }
         tags.addAll(extraTags)
-        val content = (listOf(boundedText) + boundedImages).filter { it.isNotBlank() }.joinToString("\n")
+        val content = (listOf(boundedText) + boundedImages + listOfNotNull(boundedVideo))
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
         val id = NostrEventCodec.computeId(hasher, pubkeyHex, createdAtSeconds, space.bitos.core.model.Stories.STORY_KIND, tags, content)
         return UnsignedNote(id, pubkeyHex, createdAtSeconds, space.bitos.core.model.Stories.STORY_KIND, tags, content)
     }
@@ -472,6 +511,48 @@ class NoteComposer(
         media: space.bitos.core.model.UploadedMedia,
         extraTags: List<List<String>> = emptyList(),
         includeClientTag: Boolean = false,
+    ): UnsignedNote? = memeVideoEvent(
+        authorPubkey, caption, altText, contentWarningReason, portrait, media,
+        extraTags, includeClientTag, clock.nowSeconds(),
+    )
+
+    /**
+     * Video meme with a pre-mined NIP-13 nonce tag (MST post-details PoW
+     * path, `composeStoryWithPow` contract): the mined template hashed is
+     * exactly [memeVideoEvent] at [createdAtSeconds] — the nonce tag is
+     * appended LAST so the published event byte-matches the miner's
+     * serialization.
+     */
+    fun composeMemeVideoNoteWithPow(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>> = emptyList(),
+        includeClientTag: Boolean = false,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+    ): UnsignedNote? = memeVideoEvent(
+        authorPubkey, caption, altText, contentWarningReason, portrait, media,
+        extraTags, includeClientTag, createdAtSeconds,
+        powTags = listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)),
+    )
+
+    /** The kind-22/21 template both video meme paths share. */
+    private fun memeVideoEvent(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        portrait: Boolean,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>>,
+        includeClientTag: Boolean,
+        createdAtSeconds: Long,
+        powTags: List<List<String>> = emptyList(),
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val kind = if (portrait) NostrKinds.SHORT_VIDEO else NostrKinds.NORMAL_VIDEO
@@ -488,7 +569,12 @@ class NoteComposer(
         contentWarningReason?.takeIf { it.isNotBlank() }?.let { reason ->
             tags += listOf("content-warning", reason.trim().take(120))
         }
-        return compose(authorPubkey, kind, tags, trimmedCaption)
+        // PoW: the nonce tag rides LAST — the miner hashed exactly this
+        // byte layout (see [space.bitos.core.nostr.Pow.mineChunk]).
+        tags += powTags
+        if (createdAtSeconds <= 0) return null
+        val id = NostrEventCodec.computeId(hasher, authorPubkey, createdAtSeconds, kind, tags, trimmedCaption)
+        return UnsignedNote(id, authorPubkey, createdAtSeconds, kind, tags, trimmedCaption)
     }
 
     /**
@@ -509,6 +595,43 @@ class NoteComposer(
         media: space.bitos.core.model.UploadedMedia,
         extraTags: List<List<String>> = emptyList(),
         includeClientTag: Boolean = false,
+    ): UnsignedNote? = memePictureEvent(
+        authorPubkey, caption, altText, contentWarningReason, media,
+        extraTags, includeClientTag, clock.nowSeconds(),
+    )
+
+    /**
+     * Picture meme with a pre-mined NIP-13 nonce tag (same contract as
+     * [composeMemeVideoNoteWithPow]).
+     */
+    fun composeMemePictureNoteWithPow(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>> = emptyList(),
+        includeClientTag: Boolean = false,
+        nonce: Long,
+        targetDifficulty: Int,
+        createdAtSeconds: Long,
+    ): UnsignedNote? = memePictureEvent(
+        authorPubkey, caption, altText, contentWarningReason, media,
+        extraTags, includeClientTag, createdAtSeconds,
+        powTags = listOf(space.bitos.core.nostr.Pow.nonceTag(nonce, targetDifficulty)),
+    )
+
+    /** The kind-20 template both picture meme paths share. */
+    private fun memePictureEvent(
+        authorPubkey: String,
+        caption: String,
+        altText: String,
+        contentWarningReason: String?,
+        media: space.bitos.core.model.UploadedMedia,
+        extraTags: List<List<String>>,
+        includeClientTag: Boolean,
+        createdAtSeconds: Long,
+        powTags: List<List<String>> = emptyList(),
     ): UnsignedNote? {
         if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
         val trimmedCaption = caption.trim().take(space.bitos.core.studio.MemeWire.MAX_CAPTION)
@@ -524,7 +647,11 @@ class NoteComposer(
         contentWarningReason?.takeIf { it.isNotBlank() }?.let { reason ->
             tags += listOf("content-warning", reason.trim().take(120))
         }
-        return compose(authorPubkey, NostrKinds.PICTURE, tags, trimmedCaption)
+        // PoW: the nonce tag rides LAST — byte-match with the miner.
+        tags += powTags
+        if (createdAtSeconds <= 0) return null
+        val id = NostrEventCodec.computeId(hasher, authorPubkey, createdAtSeconds, NostrKinds.PICTURE, tags, trimmedCaption)
+        return UnsignedNote(id, authorPubkey, createdAtSeconds, NostrKinds.PICTURE, tags, trimmedCaption)
     }
 
     /** Builds the unsigned kind-0 profile metadata event from bounded fields. */

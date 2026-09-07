@@ -95,6 +95,53 @@ fun PowBadge(difficulty: Int, modifier: Modifier = Modifier) {
     }
 }
 
+/** Difficulty rank selector (PowCard's slider + segmented hash bars)
+ *  for flows where MINING HAPPENS ELSEWHERE — e.g. the meme
+ *  post-details row, which mines after the media upload (the imeta must
+ *  be final before the template exists). */
+@Composable
+fun PowDifficultySelector(
+    target: Int,
+    onTargetChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Slider(
+            value = target.toFloat(),
+            onValueChange = { onTargetChange(it.toInt()) },
+            valueRange = 0f..MAX_DIFFICULTY.toFloat(),
+            steps = MAX_DIFFICULTY - 1,
+            enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = "Proof of work difficulty $target bits" },
+        )
+        // Segmented hash visualization of the selected difficulty.
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            val segments = 15
+            val filled = target * segments / MAX_DIFFICULTY
+            repeat(segments) { index ->
+                val fraction = index.toFloat() / segments
+                androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .weight(1f)
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(
+                            if (index < filled) BitOSColors.primary.copy(alpha = 0.35f + 0.65f * fraction)
+                            else BitOSColors.divider,
+                        ),
+                )
+            }
+        }
+    }
+}
+
 /** Difficulty selector + mining driver card (composer toolbar section). */
 @Composable
 fun PowCard(
@@ -214,36 +261,11 @@ fun PowCard(
             }
         }
 
-        Slider(
-            value = target.toFloat(),
-            onValueChange = { onTargetChange(it.toInt()) },
-            valueRange = 0f..MAX_DIFFICULTY.toFloat(),
-            steps = MAX_DIFFICULTY - 1,
+        PowDifficultySelector(
+            target = target,
+            onTargetChange = onTargetChange,
             enabled = !mining,
-            modifier = Modifier.semantics { contentDescription = "Proof of work difficulty $target bits" },
         )
-
-        // Segmented hash visualization of the selected difficulty.
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            val segments = 15
-            val filled = target * segments / MAX_DIFFICULTY
-            repeat(segments) { index ->
-                val fraction = index.toFloat() / segments
-                androidx.compose.foundation.layout.Box(
-                    Modifier
-                        .weight(1f)
-                        .height(10.dp)
-                        .clip(RoundedCornerShape(1.dp))
-                        .background(
-                            if (index < filled) BitOSColors.primary.copy(alpha = 0.35f + 0.65f * fraction)
-                            else BitOSColors.divider,
-                        ),
-                )
-            }
-        }
 
         when {
             outcome != null -> Row(

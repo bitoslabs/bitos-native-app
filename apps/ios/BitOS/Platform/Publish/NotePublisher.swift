@@ -345,14 +345,18 @@ final class NotePublisher {
     }
 
     /// APP-006 story publish (web `stories.publish` parity): kind-30315 with
-    /// per-image NIP-92 imeta, background gradient for text-only slides and
-    /// a content-warning tag for sensitive media.
+    /// per-image NIP-92 imeta, an optional video imeta, background gradient
+    /// for text-only slides and a content-warning tag for sensitive media.
     func publishStory(
         text: String,
         imageUrls: [String],
         background: String?,
         altText: String,
-        sensitive: Bool
+        sensitive: Bool,
+        videoUrl: String? = nil,
+        videoMime: String? = nil,
+        videoDurationMs: Int64 = 0,
+        videoPoster: String? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
         busy = true
@@ -366,13 +370,15 @@ final class NotePublisher {
         guard let eventId = bridge.composeStoryEventId(
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
-                  dTag: dTag, nowSeconds: now
+                  dTag: dTag, nowSeconds: now,
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.storyPublishMessage(
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
-                  dTag: dTag, createdAtSeconds: now, signatureHex: signature
+                  dTag: dTag, createdAtSeconds: now, signatureHex: signature,
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ) else {
             result = .invalid
             return
@@ -394,7 +400,11 @@ final class NotePublisher {
         targetDifficulty: Int32,
         createdAt: Int64,
         startNonce: Int64,
-        attempts: Int64
+        attempts: Int64,
+        videoUrl: String? = nil,
+        videoMime: String? = nil,
+        videoDurationMs: Int64 = 0,
+        videoPoster: String? = nil
     ) async -> (nonce: Int64, idHex: String)? {
         guard let account = identity.account else { return nil }
         let bridge = self.bridge
@@ -404,7 +414,8 @@ final class NotePublisher {
                 background: background, altText: altText, sensitive: sensitive,
                 dTag: dTag, createdAtSeconds: createdAt,
                 targetDifficulty: targetDifficulty,
-                startNonce: startNonce, maxAttempts: attempts
+                startNonce: startNonce, maxAttempts: attempts,
+                videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
             )
         }.value
         guard let raw, let separator = raw.firstIndex(of: ":") else { return nil }
@@ -425,7 +436,11 @@ final class NotePublisher {
         dTag: String,
         nonce: Int64,
         targetDifficulty: Int32,
-        createdAt: Int64
+        createdAt: Int64,
+        videoUrl: String? = nil,
+        videoMime: String? = nil,
+        videoDurationMs: Int64 = 0,
+        videoPoster: String? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
         busy = true
@@ -438,14 +453,16 @@ final class NotePublisher {
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
                   dTag: dTag, nonce: nonce, targetDifficulty: targetDifficulty,
-                  createdAtSeconds: createdAt
+                  createdAtSeconds: createdAt,
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ),
               let signature = await identity.signLocally(eventId),
               let frame = bridge.powStoryPublishMessage(
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
                   dTag: dTag, nonce: nonce, targetDifficulty: targetDifficulty,
-                  createdAtSeconds: createdAt, signatureHex: signature
+                  createdAtSeconds: createdAt, signatureHex: signature,
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ) else {
             result = .invalid
             return
@@ -719,6 +736,42 @@ final class NotePublisher {
     /// order (t-tags, alt, imeta, CW) → sign → receipt machine. The media
     /// MUST come from a hash-verified Blossom upload (same contract as the
     /// kind-22 path).
+    /// Kind-20 twin of `mineMemeVideoPow` (same bounded-window contract).
+    private func mineMemePicturePow(
+        authorPubkey: String, caption: String, altText: String,
+        contentWarningReason: String?, url: String, hash: String,
+        size: Int, width: Int, height: Int,
+        extraTagsJson: String, target: Int32
+    ) async -> (nonce: Int64, idHex: String, createdAt: Int64)? {
+        let minedAt = Int64(Date.now.timeIntervalSince1970)
+        let chunk: Int64 = 20_000
+        let cap: Int64 = 5_000_000
+        var startNonce: Int64 = 0
+        var attempted: Int64 = 0
+        let bridge = self.bridge
+        let includeClient = includeClientTag
+        while attempted < cap {
+            let raw = await Task.detached(priority: .userInitiated) {
+                bridge.mineMemePicturePow(
+                    authorPubkey: authorPubkey, caption: caption, altText: altText,
+                    contentWarningReason: contentWarningReason,
+                    url: url, sha256Hex: hash, mimeType: "image/png",
+                    sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                    nowSeconds: minedAt, extraTagsJson: extraTagsJson,
+                    includeClientTag: includeClient,
+                    targetDifficulty: target, startNonce: startNonce, maxAttempts: chunk
+                )
+            }.value
+            if let raw, let separator = raw.firstIndex(of: ":"),
+               let nonce = Int64(raw[raw.startIndex..<separator]) {
+                return (nonce, String(raw[raw.index(after: separator)...]), minedAt)
+            }
+            startNonce += chunk
+            attempted += chunk
+        }
+        return nil
+    }
+
     func publishMemePictureNote(
         caption: String,
         altText: String,
@@ -726,6 +779,7 @@ final class NotePublisher {
         url: String, hash: String, size: Int,
         width: Int, height: Int,
         remixTagsJson: String = "",
+        powBits: Int32 = 0,
         onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
@@ -736,26 +790,54 @@ final class NotePublisher {
             return
         }
         let now = Int64(Date.now.timeIntervalSince1970)
-        guard let eventId = bridge.composeMemePictureEventId(
-                  authorPubkey: account.pubkeyHex, caption: caption,
-                  altText: altText, contentWarningReason: contentWarningReason,
-                  url: url, sha256Hex: hash, mimeType: "image/png",
-                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
-                  nowSeconds: now, extraTagsJson: remixTagsJson,
-                  includeClientTag: includeClientTag
-              ),
-              let signature = await identity.signLocally(eventId),
-              let frame = bridge.memePicturePublishMessage(
-                  authorPubkey: account.pubkeyHex, caption: caption,
-                  altText: altText, contentWarningReason: contentWarningReason,
-                  url: url, sha256Hex: hash, mimeType: "image/png",
-                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
-                  createdAtSeconds: now, signatureHex: signature,
-                  extraTagsJson: remixTagsJson,
-                  includeClientTag: includeClientTag
-              ) else {
-            result = .invalid
-            return
+        var eventId: String
+        var frame: String
+        if powBits > 0 {
+            guard let pow = await mineMemePicturePow(
+                      authorPubkey: account.pubkeyHex, caption: caption, altText: altText,
+                      contentWarningReason: contentWarningReason, url: url, hash: hash,
+                      size: size, width: width, height: height,
+                      extraTagsJson: remixTagsJson, target: powBits
+                  ),
+                  let signature = await identity.signLocally(pow.idHex),
+                  let message = bridge.powMemePicturePublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      url: url, sha256Hex: hash, mimeType: "image/png",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      createdAtSeconds: pow.createdAt, nonce: pow.nonce,
+                      targetDifficulty: powBits, signatureHex: signature,
+                      extraTagsJson: remixTagsJson, includeClientTag: includeClientTag
+                  ) else {
+                result = .invalid
+                return
+            }
+            eventId = pow.idHex
+            frame = message
+        } else {
+            guard let plainId = bridge.composeMemePictureEventId(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      url: url, sha256Hex: hash, mimeType: "image/png",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      nowSeconds: now, extraTagsJson: remixTagsJson,
+                      includeClientTag: includeClientTag
+                  ),
+                  let signature = await identity.signLocally(plainId),
+                  let message = bridge.memePicturePublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      url: url, sha256Hex: hash, mimeType: "image/png",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      createdAtSeconds: now, signatureHex: signature,
+                      extraTagsJson: remixTagsJson,
+                      includeClientTag: includeClientTag
+                  ) else {
+                result = .invalid
+                return
+            }
+            eventId = plainId
+            frame = message
         }
         onStage?(.built(eventId))
         onStage?(.signed(eventId))
@@ -773,6 +855,7 @@ final class NotePublisher {
         width: Int, height: Int, durationMs: Int64,
         thumbUrl: String? = nil,
         extraTagsJson: String = "",
+        powBits: Int32 = 0,
         onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
     ) async {
         guard result == nil, inFlightId == nil, !busy else { return }
@@ -784,36 +867,110 @@ final class NotePublisher {
         }
         let portrait = height >= width
         let now = Int64(Date.now.timeIntervalSince1970)
-        guard let eventId = bridge.composeMemeVideoEventId(
-                  authorPubkey: account.pubkeyHex, caption: caption,
-                  altText: altText, contentWarningReason: contentWarningReason,
-                  portrait: portrait,
-                  url: url, sha256Hex: hash, mimeType: "video/mp4",
-                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
-                  durationMs: durationMs, nowSeconds: now,
-                  thumbUrl: thumbUrl,
-                  extraTagsJson: extraTagsJson,
-                  includeClientTag: includeClientTag
-              ),
-              let signature = await identity.signLocally(eventId),
-              let frame = bridge.memeVideoPublishMessage(
-                  authorPubkey: account.pubkeyHex, caption: caption,
-                  altText: altText, contentWarningReason: contentWarningReason,
-                  portrait: portrait,
-                  url: url, sha256Hex: hash, mimeType: "video/mp4",
-                  sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
-                  durationMs: durationMs, createdAtSeconds: now, signatureHex: signature,
-                  thumbUrl: thumbUrl,
-                  extraTagsJson: extraTagsJson,
-                  includeClientTag: includeClientTag
-              ) else {
-            result = .invalid
-            return
+        var eventId: String
+        var frame: String
+        if powBits > 0 {
+            // Post-upload PoW (MST post-details): mine the exact kind-22/21
+            // template, sign the MINED id, byte-match the publish frame.
+            guard let pow = await mineMemeVideoPow(
+                      authorPubkey: account.pubkeyHex, caption: caption, altText: altText,
+                      contentWarningReason: contentWarningReason, portrait: portrait,
+                      url: url, hash: hash, size: size, width: width, height: height,
+                      durationMs: durationMs, thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson, target: powBits
+                  ),
+                  let signature = await identity.signLocally(pow.idHex),
+                  let message = bridge.powMemeVideoPublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption, altText: altText,
+                      contentWarningReason: contentWarningReason, portrait: portrait,
+                      url: url, sha256Hex: hash, mimeType: "video/mp4",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      durationMs: durationMs, createdAtSeconds: pow.createdAt,
+                      nonce: pow.nonce, targetDifficulty: powBits,
+                      signatureHex: signature, thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+                  ) else {
+                // Window exhausted (or invalid template) — never mine
+                // forever; surface "try fewer bits".
+                result = .invalid
+                return
+            }
+            eventId = pow.idHex
+            frame = message
+        } else {
+            guard let plainId = bridge.composeMemeVideoEventId(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      portrait: portrait,
+                      url: url, sha256Hex: hash, mimeType: "video/mp4",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      durationMs: durationMs, nowSeconds: now,
+                      thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson,
+                      includeClientTag: includeClientTag
+                  ),
+                  let signature = await identity.signLocally(plainId),
+                  let message = bridge.memeVideoPublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      portrait: portrait,
+                      url: url, sha256Hex: hash, mimeType: "video/mp4",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      durationMs: durationMs, createdAtSeconds: now, signatureHex: signature,
+                      thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson,
+                      includeClientTag: includeClientTag
+                  ) else {
+                result = .invalid
+                return
+            }
+            eventId = plainId
+            frame = message
         }
         onStage?(.built(eventId))
         onStage?(.signed(eventId))
         await send(eventId: eventId, frame: frame)
         onStage?(.relayed(eventId))
+    }
+
+    /// Bounded chunked mining over the exact kind-22/21 template (PowCard
+    /// bounds: 20k per window, 5M hard cap), off the main actor. nil = the
+    /// window was exhausted. The mined template pins one timestamp — the
+    /// publish path must reuse it byte-for-byte.
+    private func mineMemeVideoPow(
+        authorPubkey: String, caption: String, altText: String,
+        contentWarningReason: String?, portrait: Bool,
+        url: String, hash: String, size: Int,
+        width: Int, height: Int, durationMs: Int64,
+        thumbUrl: String?, extraTagsJson: String, target: Int32
+    ) async -> (nonce: Int64, idHex: String, createdAt: Int64)? {
+        let minedAt = Int64(Date.now.timeIntervalSince1970)
+        let chunk: Int64 = 20_000
+        let cap: Int64 = 5_000_000
+        var startNonce: Int64 = 0
+        var attempted: Int64 = 0
+        let bridge = self.bridge
+        let includeClient = includeClientTag
+        while attempted < cap {
+            let raw = await Task.detached(priority: .userInitiated) {
+                bridge.mineMemeVideoPow(
+                    authorPubkey: authorPubkey, caption: caption, altText: altText,
+                    contentWarningReason: contentWarningReason, portrait: portrait,
+                    url: url, sha256Hex: hash, mimeType: "video/mp4",
+                    sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                    durationMs: durationMs, nowSeconds: minedAt, thumbUrl: thumbUrl,
+                    extraTagsJson: extraTagsJson, includeClientTag: includeClient,
+                    targetDifficulty: target, startNonce: startNonce, maxAttempts: chunk
+                )
+            }.value
+            if let raw, let separator = raw.firstIndex(of: ":"),
+               let nonce = Int64(raw[raw.startIndex..<separator]) {
+                return (nonce, String(raw[raw.index(after: separator)...]), minedAt)
+            }
+            startNonce += chunk
+            attempted += chunk
+        }
+        return nil
     }
 
     /// Kind-0 profile metadata publish through the receipt machine.

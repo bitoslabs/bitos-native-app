@@ -425,6 +425,10 @@ fun StoryViewer(
     val interaction = interactionFor(slide.id)
 
     var imageFailed by remember(slide.id) { mutableStateOf(false) }
+    // Video playback state: buffering spinner + failed fallback (a dead
+    // source shows the poster/caption instead of a silent black slide).
+    var videoFailed by remember(slide.id) { mutableStateOf(false) }
+    var videoBuffering by remember(slide.id) { mutableStateOf(false) }
     val images = slide.imageUrls
     // StorySlide is supplied by BusinessCore. Snapshot the nullable public
     // property once so Kotlin does not need to smart-cast across the module
@@ -508,7 +512,7 @@ fun StoryViewer(
             }
             Box(canvas) {
                 // Slide backdrop + caption.
-                if (isVideo) {
+                if (isVideo && !videoFailed) {
                     // `isVideo` is derived from this same immutable snapshot.
                     val url = requireNotNull(videoUrl)
                     Box(Modifier.fillMaxSize()) {
@@ -526,7 +530,18 @@ fun StoryViewer(
                             modifier = Modifier.fillMaxSize(),
                             onEnded = { advance() },
                             onDurationMeasured = { measuredVideoMs = it },
+                            onBuffering = { videoBuffering = it },
+                            onError = { videoFailed = true },
                         )
+                        if (videoBuffering) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(30.dp),
+                                )
+                            }
+                        }
                     }
                 } else if (images.isNotEmpty() && images.indices.contains(imageIndex) && !imageFailed) {
                     Box(Modifier.fillMaxSize()) {
@@ -554,8 +569,15 @@ fun StoryViewer(
                         contentAlignment = Alignment.Center,
                     ) {
                         // Text-only slide; a broken image keeps its caption
-                        // legible (web "Image unavailable" fallback).
-                        val text = slide.content.ifBlank { if (imageFailed) "Image unavailable" else "" }
+                        // legible (web "Image unavailable" fallback) and a
+                        // dead video source falls back the same way.
+                        val text = slide.content.ifBlank {
+                            when {
+                                videoFailed -> "Video unavailable"
+                                imageFailed -> "Image unavailable"
+                                else -> ""
+                            }
+                        }
                         if (text.isNotEmpty()) {
                             Text(
                                 text,
@@ -1166,7 +1188,8 @@ private fun CaptionScrim(text: String, modifier: Modifier = Modifier) {
 }
 
 /** Controls-free, muted, aspect-fill video surface for story slides
- *  (web `<video>` parity). Reports measured duration + playback end. */
+ *  (web `<video>` parity). Reports measured duration, buffering state,
+ *  playback end and source errors. */
 @Composable
 private fun StoryVideoSurface(
     url: String,
@@ -1174,26 +1197,58 @@ private fun StoryVideoSurface(
     modifier: Modifier = Modifier,
     onEnded: () -> Unit,
     onDurationMeasured: (Long) -> Unit,
+    onBuffering: (Boolean) -> Unit = {},
+    onError: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val player = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
-            volume = 0f
-            playWhenReady = true
-            prepare()
-        }
+        ExoPlayer.Builder(context)
+            // Story slides are short clips: start playback on ~1 s of
+            // buffered media instead of the default playback cushion.
+            .setLoadControl(
+                androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        50_000, 50_000,
+                        1_000, // bufferForPlaybackMs
+                        2_000, // bufferForPlaybackAfterRebufferMs
+                    )
+                    .build(),
+            )
+            .build()
+            .apply {
+                // Blossom hash URLs carry no extension — say the type
+                // instead of leaving it to inference.
+                setMediaItem(
+                    MediaItem.Builder()
+                        .setUri(url)
+                        .setMimeType("video/mp4")
+                        .build(),
+                )
+                volume = 0f
+                playWhenReady = true
+                prepare()
+            }
     }
     DisposableEffect(url) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) onEnded()
-                if (playbackState == Player.STATE_READY) {
-                    val duration = player.duration
-                    if (duration != C.TIME_UNSET && duration > 0) {
-                        onDurationMeasured(duration)
+                when (playbackState) {
+                    Player.STATE_ENDED -> onEnded()
+                    Player.STATE_BUFFERING -> onBuffering(true)
+                    Player.STATE_READY -> {
+                        onBuffering(false)
+                        val duration = player.duration
+                        if (duration != C.TIME_UNSET && duration > 0) {
+                            onDurationMeasured(duration)
+                        }
                     }
+                    Player.STATE_IDLE -> onBuffering(false)
                 }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                onBuffering(false)
+                onError()
             }
         }
         player.addListener(listener)
@@ -1211,6 +1266,9 @@ private fun StoryVideoSurface(
                 this.player = player
             }
         },
+        // The player instance is rebuilt when the url changes (next slide);
+        // the view must re-attach or the new player renders nowhere.
+        update = { view -> view.player = player },
         modifier = modifier,
     )
 }

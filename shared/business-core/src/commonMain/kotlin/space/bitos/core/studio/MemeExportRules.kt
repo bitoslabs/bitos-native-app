@@ -40,14 +40,20 @@ object MemeExportRules {
      * Output canvas for a source (web `targetSize` port): never upscales,
      * rounds, then forces even dimensions (≥ 2) for hardware encoders.
      * Degenerate sources fall back to the 1080×1920 portrait default.
+     * [longEdgeCap] lowers the cap for manual export presets
+     * ([MemeExportPresets]); the default is the MST-016 web parity cap.
      */
-    fun outputSize(sourceWidth: Int, sourceHeight: Int): Pair<Int, Int> {
-        if (sourceWidth <= 0 || sourceHeight <= 0) return LONG_EDGE to 1920
+    fun outputSize(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        longEdgeCap: Int = LONG_EDGE,
+    ): Pair<Int, Int> {
+        if (sourceWidth <= 0 || sourceHeight <= 0) return longEdgeCap to (longEdgeCap * 16 / 9)
         var width = sourceWidth
         var height = sourceHeight
         val longest = max(width, height)
-        if (longest > LONG_EDGE) {
-            val scale = LONG_EDGE.toFloat() / longest
+        if (longest > longEdgeCap) {
+            val scale = longEdgeCap.toFloat() / longest
             width = (width * scale).roundToInt()
             height = (height * scale).roundToInt()
         }

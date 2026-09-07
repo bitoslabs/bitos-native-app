@@ -1692,11 +1692,8 @@ private struct BitzVideoPage: View {
                 hiddenMediaUrls: Set(note.mediaUrls),
                 onOpenLink: { onOpenExternalLink($0) }
             )
-            if !note.hashtags.isEmpty {
-                Text(note.hashtags.prefix(4).map { "#\($0)" }.joined(separator: " "))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(BitOSTheme.accent)
-            }
+            // Hashtags render once, inline in the rich body above (NIP-27
+            // tokens, accent + tappable) — a second tag row re-listed them.
         }
         // Clean chrome (user decision 2026-08-29): no black scrim behind
         // the caption — the text stands on the media directly.

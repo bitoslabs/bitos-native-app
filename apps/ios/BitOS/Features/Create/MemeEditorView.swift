@@ -89,6 +89,44 @@ final class MemeEditorStore {
     private(set) var exportState: MemeExportState = .idle
     /// Exact bytes of the most recently rendered export, never a source-file estimate.
     private(set) var lastExportSizeBytes: Int?
+    /// MST-036 session-only export preset: Auto default = the automatic
+    /// policy (cut ladder owns the 64 MB cap); a manual pick gates on the
+    /// publish ESTIMATE instead — never silently degraded. Resets with
+    /// the editor session (never persisted).
+    private(set) var exportPreset: MemeVideoExportIos.ExportPreset = .auto
+    private(set) var exportPresetManual = false
+    /// MST post-details draft: session-scoped so a cover-edit round trip
+    /// (back → stage "Set cover" → post details) never loses the caption,
+    /// tags, warnings, license, zaps or PoW pick — the post sheet's own
+    /// @State dies with the sheet.
+    var postDraft = MemePostDraft()
+
+    /** Back to the automatic export policy (Auto chip). */
+    func pickAutoExportPreset() {
+        exportPreset = .auto
+        exportPresetManual = false
+    }
+
+    /** Manual resolution × quality pick (picker chips — fixed tier ids). */
+    func pickExportPreset(resolution: String, quality: String) {
+        exportPreset = MemeVideoExportIos.ExportPreset(resolution: resolution, quality: quality)
+        exportPresetManual = true
+    }
+
+    /** Live MB estimate + publish gate for the picker (video only), via
+     *  the shared seam — the same numbers Android shows. nil = no video. */
+    func exportEstimate() -> (bytes: Int64, label: String, fits: Bool)? {
+        guard isVideoMode, timelineDurationMs > 0 else { return nil }
+        let json = client.memeExportEstimate(
+            exportPreset.resolution, quality: exportPreset.quality, durationMs: timelineDurationMs
+        )
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let bytes = (root["bytes"] as? NSNumber)?.int64Value,
+              let label = root["label"] as? String,
+              let fits = (root["publishFits"] as? NSNumber)?.boolValue else { return nil }
+        return (bytes, label, fits)
+    }
 
     struct MemeStickerPack: Identifiable, Equatable {
         let id: String
@@ -1304,17 +1342,18 @@ final class MemeEditorStore {
             Task {
                 do {
                     let source = try await exportSource()
-                    let data = try await MemeVideoExportIos.export(
+                    let exported = try await MemeVideoExportIos.export(
                         clipURL: source.url, probe: source.probe,
                         projectJson: source.wire, client: client,
-                        images: images
+                        images: images,
+                        preset: exportPreset
                     )
-                    guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
+                    guard exportJobs.artifactReady(exportJob, bytes: exported.data, nowMs: nowMs()) else {
                         throw MemeRaster.ExportError(message: "Could not persist the render")
                     }
-                    lastExportSizeBytes = data.count
+                    lastExportSizeBytes = exported.data.count
                     exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
-                    try await MemeRaster.saveVideoToPhotos(data)
+                    try await MemeRaster.saveVideoToPhotos(exported.data)
                     exportJobs.finish(exportJob)
                     exportState = .saved
                 } catch {
@@ -1474,6 +1513,7 @@ final class MemeEditorStore {
         remixLabel: String = "",
         license: String = "",
         extraTags: [[String]] = [],
+        powBits: Int32 = 0,
         identity: IdentityStore,
         publisher: NotePublisher,
         bridge: BusinessCoreBridge
@@ -1481,6 +1521,14 @@ final class MemeEditorStore {
         guard publishState != .uploading, publishState != .publishing else { return }
         guard isVideoMode || isGifMode || activeAsset != nil else {
             publishFailure = "Pick an image first"
+            return
+        }
+        // MST-036: manual presets gate on the shared ESTIMATE — blocked
+        // with a re-pick ask, never silently degraded (the cut ladder only
+        // owns Auto).
+        if isVideoMode, !clips.isEmpty, exportPresetManual,
+           let estimate = exportEstimate(), !estimate.fits {
+            setNotice("\(estimate.label) — over the 64 MB cap. Pick a lower quality in Export.")
             return
         }
         publishState = .uploading
@@ -1507,15 +1555,29 @@ final class MemeEditorStore {
                     var exported = try await MemeVideoExportIos.export(
                         clipURL: source.url, probe: source.probe,
                         projectJson: source.wire, client: client,
-                        images: layerImages
+                        images: layerImages,
+                        preset: exportPreset
                     )
                     let maxBytes = 64 * 1024 * 1024
                     var durationMs = source.probe.durationMs
-                    var attempts = 0
-                    while exported.count > maxBytes && attempts < 3 {
+                    if exportPresetManual {
+                        // Manual means manual: no cut ladder. A rare ABR
+                        // overshoot past the gated estimate surfaces with
+                        // the ACTUAL MB and aborts before anything signs.
+                        if exported.data.count > maxBytes {
+                            publishState = .idle
+                            publishFailure = String(
+                                format: "Actual %.1f MB — over the 64 MB cap. Pick a lower quality in Export.",
+                                Double(exported.data.count) / 1_000_000
+                            )
+                            return
+                        }
+                    } else {
+                        var attempts = 0
+                        while exported.data.count > maxBytes && attempts < 3 {
                         guard let cutData = client.memeVideoCutForSize(
                             currentMs: durationMs,
-                            sizeBytes: Int64(exported.count),
+                            sizeBytes: Int64(exported.data.count),
                             maxBytes: Int64(maxBytes)
                         ).data(using: .utf8),
                             let cutRoot = try? JSONSerialization.jsonObject(with: cutData) as? [String: Any],
@@ -1529,12 +1591,16 @@ final class MemeEditorStore {
                         exported = try await MemeVideoExportIos.export(
                             clipURL: source.url, probe: source.probe,
                             projectJson: source.wire, client: client,
-                            images: self.layerImages
+                            images: self.layerImages,
+                            preset: exportPreset
                         )
+                        }
                     }
-                    bytes = exported
-                    width = source.probe.uprightWidth
-                    height = source.probe.uprightHeight
+                    bytes = exported.data
+                    // Actual export dims (preset canvas, not probe) — imeta
+                    // must match the published media (MST-036).
+                    width = exported.width
+                    height = exported.height
                     // Composed/probed duration is already OUTPUT time for
                     // multi-clip; single-clip divides by the wire rate.
                     videoDurationMs = clips.count > 1 ? durationMs : Int64((Double(durationMs) / Double(speed)).rounded())
@@ -3904,7 +3970,79 @@ private struct TextSheet: View {
     }
 }
 
-private struct ChipButton: View {
+/**
+ * MST-036 quality/size picker (video only): Auto default = the automatic
+ * policy; a manual resolution × quality pick shows the live shared MB
+ * estimate (the same seam numbers Android shows). Session-only — resets
+ * with the editor. Manual picks over the gate block PUBLISH (Save is
+ * never capped).
+ */
+struct ExportPresetPicker: View {
+    let store: MemeEditorStore
+
+    private static let resolutions = [
+        ("P1080", "1080p"),
+        ("P720", "720p"),
+        ("P480", "480p"),
+    ]
+    private static let qualities = [
+        ("HIGH", "High"),
+        ("MEDIUM", "Med"),
+        ("LOW", "Low"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+            Text("Quality").font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ChipButton(label: "Auto", active: !store.exportPresetManual) {
+                    store.pickAutoExportPreset()
+                }
+            }
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(Self.resolutions, id: \.0) { id, label in
+                    ChipButton(
+                        label: label,
+                        active: store.exportPresetManual && store.exportPreset.resolution == id
+                    ) {
+                        store.pickExportPreset(resolution: id, quality: store.exportPreset.quality)
+                    }
+                }
+            }
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(Self.qualities, id: \.0) { id, label in
+                    ChipButton(
+                        label: label,
+                        active: store.exportPresetManual && store.exportPreset.quality == id
+                    ) {
+                        store.pickExportPreset(resolution: store.exportPreset.resolution, quality: id)
+                    }
+                }
+            }
+            if let estimate = store.exportEstimate() {
+                Text(estimate.label + suffix(for: estimate.fits))
+                    .font(.caption2)
+                    .foregroundStyle(
+                        store.exportPresetManual && !estimate.fits ? BitOSTheme.warning : BitOSTheme.textSecondary
+                    )
+            }
+            if !store.exportPresetManual {
+                Text("Auto keeps the automatic policy; picking a size keeps your choice — posting checks the estimate, saving never caps.")
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+        }
+    }
+
+    private func suffix(for fits: Bool) -> String {
+        if store.exportPresetManual {
+            return fits ? " · fits the 64 MB publish cap" : " · TOO LARGE to publish — pick lower"
+        }
+        return fits ? " · fits the 64 MB cap (Auto trims over-size posts)" : " · over 64 MB (Auto trims over-size posts)"
+    }
+}
+
+struct ChipButton: View {
     let label: String
     let active: Bool
     let action: () -> Void
@@ -3967,7 +4105,7 @@ struct ExportSettingsSheet: View {
             let seconds = Int(store.timelineDurationMs) / 1000
             return (
                 "MP4 · \(probe.map { "\($0.uprightWidth)×\($0.uprightHeight)" } ?? "source size") · \(seconds) s",
-                "Over-size exports are automatically trimmed to fit the 64 MB cap — the adjusted result is shown before you post."
+                "Auto trims over-size posts to fit the 64 MB cap; a manual quality pick must fit the estimate — posting tells you before rendering."
             )
         }
         if store.isGifMode, store.gifFramesCount > 0 {
@@ -4010,6 +4148,9 @@ struct ExportSettingsSheet: View {
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if store.isVideoMode, !store.clips.isEmpty {
+                ExportPresetPicker(store: store)
+            }
             if case .failed(let message) = store.exportState {
                 Text(message).font(.caption).foregroundStyle(BitOSTheme.error)
             }

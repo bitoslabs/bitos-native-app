@@ -9,13 +9,12 @@ import BusinessCore
 struct MemePostFlowView: View {
     @Environment(\.dismiss) private var dismissFlow
     @Environment(AppEnvironment.self) private var environment
-    let store: MemeEditorStore
+    @Bindable var store: MemeEditorStore
     let identity: IdentityStore
     let publisher: NotePublisher
     /** M4b remix lineage carried from the editor handoff, if any. */
     let remixSeed: MemeRemixSeed?
     let onPublished: () -> Void
-    @State private var draft: MemePostDraft
     @State private var path: [FlowStep] = []
 
     init(
@@ -30,14 +29,13 @@ struct MemePostFlowView: View {
         self.publisher = publisher
         self.remixSeed = remixSeed
         self.onPublished = onPublished
-        _draft = State(initialValue: MemePostDraft(remix: remixSeed))
     }
 
     enum FlowStep: Hashable { case preflight, publishing, queue }
 
     var body: some View {
         NavigationStack(path: $path) {
-            MemePostDetailsView(draft: $draft, store: store, onEditCover: { dismissFlow() }) {
+            MemePostDetailsView(draft: $store.postDraft, store: store, onEditCover: { dismissFlow() }) {
                 path.append(.preflight)
             }
             .navigationDestination(for: FlowStep.self) { step in
@@ -46,7 +44,7 @@ struct MemePostFlowView: View {
                     MemePreflightView(
                         store: store,
                         identity: identity,
-                        draft: draft,
+                        draft: store.postDraft,
                         richTokens: { content in
                             ((environment.businessCore as? FrameworkBusinessCoreClient)?
                                 .bridgeForFollowing() ?? BusinessCoreBridge())
@@ -83,6 +81,14 @@ struct MemePostFlowView: View {
         }
         .preferredColorScheme(nil)
         .navigationBarBackButtonHidden(!path.isEmpty)
+        // MST draft persistence: the draft lives in the editor session
+        // (store), so a cover-edit round trip never loses the caption.
+        // Seed a bitz remix lineage once, on first entry.
+        .task {
+            if store.postDraft.remixOf.isEmpty, let remixSeed {
+                store.postDraft = MemePostDraft(remix: remixSeed)
+            }
+        }
     }
 
     /// Runs the REAL pipeline (render → hash-verified upload → sign →
@@ -91,6 +97,7 @@ struct MemePostFlowView: View {
         publisher.dismiss()
         let bridge = (environment.businessCore as? FrameworkBusinessCoreClient)?
             .bridgeForFollowing() ?? BusinessCoreBridge()
+        let draft = store.postDraft
         RecentHashtagsStore.shared.record(
             used: Array(draft.captionHashtags) + draft.tags
         )
@@ -104,6 +111,7 @@ struct MemePostFlowView: View {
             remixLabel: draft.remixLabel,
             license: draft.license.rawValue,
             extraTags: draft.extraTags,
+            powBits: Int32(draft.powBits),
             identity: identity,
             publisher: publisher,
             bridge: bridge
@@ -132,6 +140,9 @@ struct MemePostDraft {
     var remixRelays: [String] = []
     /// Source author label — feeds the `attribution` credit on publish.
     var remixLabel = ""
+    /// MST post-details PoW pick (NIP-13 difficulty, 0 = off) — mined
+    /// after the media upload, before anything is signed.
+    var powBits = 0
 
     /// M4b: a bitz handoff prefills the lineage and picks the web studio's
     /// remix default license (CC-BY-4.0) instead of CC0.
@@ -382,6 +393,11 @@ private struct MemePostDetailsView: View {
                 }
                 .padding(.vertical, BitOSTheme.Spacing.xs)
                 Divider().padding(.leading, 48)
+                // MST-036: quality/size + live MB estimate right on the
+                // post screen — fix an over-cap pick without a round trip.
+                ExportPresetPicker(store: store)
+                    .padding(.vertical, BitOSTheme.Spacing.xs)
+                Divider().padding(.leading, 48)
             }
             DetailRow(icon: "globe", title: "Who can watch",
                 subtitle: "Published publicly on Nostr", trailing: .value("Everyone"))
@@ -409,6 +425,26 @@ private struct MemePostDetailsView: View {
                 )
             }
             .padding(.vertical, 2)
+            Divider().padding(.leading, 48)
+            // MST post-details PoW (NIP-13): the RANK UI reuses the shared
+            // PowCard pieces — PowDifficultySelector (slider + hash bars) +
+            // PowBadge. Mined AFTER the media upload (the imeta must be
+            // final) and BEFORE anything is signed.
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                HStack {
+                    DetailRow(
+                        icon: "bolt.fill",
+                        tint: BitOSTheme.warning,
+                        title: "Proof of work",
+                        subtitle: "anti-spam difficulty (NIP-13) — mined after upload, before signing"
+                    )
+                    if draft.powBits > 0 {
+                        PowBadge(difficulty: draft.powBits)
+                    }
+                }
+                PowDifficultySelector(target: $draft.powBits)
+            }
+            .padding(.vertical, 6)
             if !draft.remixOf.isEmpty {
                 Divider().padding(.leading, 48)
                 remixLineagePreview
