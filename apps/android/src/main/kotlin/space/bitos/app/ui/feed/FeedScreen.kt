@@ -298,6 +298,7 @@ fun FeedScreen(
                 onOpenDiscover = onOpenDiscover,
                 onOpenHub = onOpenHub,
                 onOpenCreate = onOpenCreate,
+                onImportMedia = { showImportMedia = true },
             )
             // Float within the feed area, below (not over) the tabs. This
             // keeps the control visible while preserving tab hit targets.
@@ -738,7 +739,9 @@ fun FeedScreen(
         }
     }
 
-    // APP-019 quick entry: gallery import → hash-verified upload → kind-22.
+    // APP-019 quick entry: gallery import → hash-verified upload → kind-22
+    // (feed-level fast path; opened from the app-bar photo icon — iOS
+    // HomeView parity. The studio Create hub routes imports into the editor.)
     if (showImportMedia) {
         androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showImportMedia = false }) {
             ImportMediaContent(
@@ -1549,6 +1552,10 @@ private fun FeedHeader(
     onOpenDiscover: () -> Unit,
     onOpenHub: () -> Unit,
     onOpenCreate: () -> Unit = {},
+    /** Quick gallery import → kind-22 publish sheet — iOS Home app-bar
+     *  photo-icon parity (the studio Create hub routes into the editor
+     *  instead; the feed keeps the no-editing fast path). */
+    onImportMedia: () -> Unit = {},
 ) {
     var filterExpanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Column {
@@ -1593,8 +1600,13 @@ private fun FeedHeader(
             IconButton(onClick = onOpenCreate) {
                 Icon(AppIcons.Camera, contentDescription = "Create video", tint = BitOSColors.textSecondary)
             }
-            // Solar widget-linear opens the account hub; media import stays
-            // in Create so the header remains focused on feed navigation.
+            // iOS app-bar parity: quick import → publish without editing
+            // (HomeView “Import and publish a video”). The header stays
+            // feed-focused: the studio editor path stays in the Create hub.
+            IconButton(onClick = onImportMedia) {
+                Icon(AppIcons.Photo, contentDescription = "Import and publish a video", tint = BitOSColors.textSecondary)
+            }
+            // Solar widget-linear opens the account hub.
             IconButton(onClick = onOpenHub) {
                 Icon(
                     painter = androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_widget_linear),

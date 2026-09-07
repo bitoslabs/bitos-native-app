@@ -423,6 +423,20 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-07 — Android feed quick-import parity (follow-up to the studio
+  import unification; closes the 2026-08-29 "unreachable `showImportMedia`
+  sheet" note the other way round): Android's Home app-bar gained the
+  photo icon ("Import and publish a video", `AppIcons.Photo`) right of
+  the camera icon — iOS HomeView app-bar parity — wired to the existing
+  feed-level `ImportMediaContent` quick-publish sheet (gallery pick →
+  caption/alt/CW → hash-verified kind-22; no editing, by design).
+  The sheet was dead code since the header rework (flag declared +
+  rendered but never set true). Division of labor now explicit and
+  cross-platform: the FEED keeps the no-editing fast path; the STUDIO
+  Create hub routes every import into the meme editor pipeline. iOS
+  unchanged (HomeView already had the icon; Bitz rail has none on
+  either platform). Verified: Android compile + unit suite green.
+
 - 2026-09-07 — Studio hub import unification (CAP/EDT; ux-ui-flows §6
   alignment): **the Create hub now has exactly ONE publish path — the meme
   editor.** The standalone "New video" bottom sheet (raw gallery video →
