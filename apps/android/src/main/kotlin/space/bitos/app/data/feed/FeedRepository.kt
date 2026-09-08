@@ -195,6 +195,13 @@ class FeedRepository(
     /** APP-015: saved-note bodies for ids outside the live feed window. */
     private val bookmarkedNoteMap = LinkedHashMap<String, FeedNote>()
     private val bookmarkCandidates = mutableListOf<NostrEvent>()
+    /**
+     * Relay ingestion and the head-batch flush run on separate Default
+     * coroutines. Keep the mutable engagement projections behind one lock so
+     * a UI publication never iterates a map while a verified receipt updates
+     * it. Published state receives copies only.
+     */
+    private val engagementLock = Any()
     private val zapCounts = mutableMapOf<String, Int>()
     private val zapRequestIdsBuffer = LinkedHashMap<String, LinkedHashSet<String>>()
     private val talliesBuffer = LinkedHashMap<String, space.bitos.core.feed.NoteTally>()
@@ -327,7 +334,9 @@ class FeedRepository(
                                 val account = accountPubkey
                                 if (account != null && event.pubkey.value == account) {
                                     event.eTaggedIds().firstOrNull()?.let { target ->
-                                        myReactionEventIds[target] = event.id.value
+                                        synchronized(engagementLock) {
+                                            myReactionEventIds[target] = event.id.value
+                                        }
                                     }
                                 }
                             }
@@ -736,14 +745,16 @@ class FeedRepository(
         }
         // APP-014: retain the embedded 9734 request id so the zap sheet can
         // match ITS receipt exactly (not just any zap to the same note).
-        space.bitos.core.model.ZapReceipt.embeddedRequestId(event)?.let { requestId ->
-            zapRequestIdsBuffer.getOrPut(target) { LinkedHashSet() }.add(requestId)
-            if (zapRequestIdsBuffer.size > ZAP_TARGETS_MAX) zapRequestIdsBuffer.remove(zapRequestIdsBuffer.keys.first())
+        synchronized(engagementLock) {
+            space.bitos.core.model.ZapReceipt.embeddedRequestId(event)?.let { requestId ->
+                zapRequestIdsBuffer.getOrPut(target) { LinkedHashSet() }.add(requestId)
+                if (zapRequestIdsBuffer.size > ZAP_TARGETS_MAX) zapRequestIdsBuffer.remove(zapRequestIdsBuffer.keys.first())
+            }
+            // Verified receipts count once per unique event id (fan-in dedupe by
+            // aggregator-style keys is overkill for a bounded count window).
+            zapCounts[target] = (zapCounts[target] ?: 0) + 1
+            if (zapCounts.size > ZAP_TARGETS_MAX) zapCounts.remove(zapCounts.keys.first())
         }
-        // Verified receipts count once per unique event id (fan-in dedupe by
-        // aggregator-style keys is overkill for a bounded count window).
-        zapCounts[target] = (zapCounts[target] ?: 0) + 1
-        if (zapCounts.size > ZAP_TARGETS_MAX) zapCounts.remove(zapCounts.keys.first())
         requestPublish()
     }
 
@@ -786,17 +797,21 @@ class FeedRepository(
      * nothing we're tracking.
      */
     private fun tallyTargetFor(eTaggedIds: List<String>): String? {
-        for (id in eTaggedIds) {
-            if (id in tallyTargets) return id
-            // Replies of an open thread: the comment window knows them.
-            if (commentThreads.values.any { window -> id in window }) return id
+        synchronized(engagementLock) {
+            for (id in eTaggedIds) {
+                if (id in tallyTargets) return id
+                // Replies of an open thread: the comment window knows them.
+                if (commentThreads.values.any { window -> id in window }) return id
+            }
         }
         return null
     }
 
     private fun mergeTally(target: String, kind: Int, amountMillisats: Long?) {
-        talliesBuffer[target] = space.bitos.core.feed.NoteTallies.merge(talliesBuffer[target], kind, amountMillisats)
-        space.bitos.core.feed.NoteTallies.evict(tallyTargets, target)
+        synchronized(engagementLock) {
+            talliesBuffer[target] = space.bitos.core.feed.NoteTallies.merge(talliesBuffer[target], kind, amountMillisats)
+            space.bitos.core.feed.NoteTallies.evict(tallyTargets, target)
+        }
         // Coalesced like every other arrival path: kind-7/6 frames are the
         // highest-volume live traffic, and an uncoalesced full projection
         // per reaction stalled bursts (audit R3 residue).
@@ -805,7 +820,9 @@ class FeedRepository(
 
     /** Loads the reply thread for one note (NIP-01 tagged #e filter). */
     fun loadComments(targetEventId: String) {
-        space.bitos.core.feed.NoteTallies.evict(tallyTargets, targetEventId)
+        synchronized(engagementLock) {
+            space.bitos.core.feed.NoteTallies.evict(tallyTargets, targetEventId)
+        }
         if (commentThreads.containsKey(targetEventId)) {
             publishFromIntent()
             return
@@ -845,7 +862,7 @@ class FeedRepository(
         bookmarkCandidates.clear()
         bookmarked.clear()
         blockCandidates.clear()
-        myReactionEventIds.clear()
+        synchronized(engagementLock) { myReactionEventIds.clear() }
         blockedPubkeys = emptySet()
         followingSubscribed = false
         // Shared `AccountBootstrap`: a new account episode re-arms the head
@@ -1717,6 +1734,23 @@ class FeedRepository(
         synchronized(profileLock) { profileFallbackJobs += fallback }
     }
 
+    private data class EngagementSnapshot(
+        val zapCounts: Map<String, Int>,
+        val zapRequestIds: Map<String, Set<String>>,
+        val tallies: Map<String, space.bitos.core.feed.NoteTally>,
+        val myReactionEventIds: Map<String, String>,
+    )
+
+    /** Returns copies while holding [engagementLock]; never leak live maps to UI. */
+    private fun engagementSnapshot(): EngagementSnapshot = synchronized(engagementLock) {
+        EngagementSnapshot(
+            zapCounts = zapCounts.toMap(),
+            zapRequestIds = zapRequestIdsBuffer.mapValues { (_, requestIds) -> requestIds.toSet() },
+            tallies = talliesBuffer.toMap(),
+            myReactionEventIds = myReactionEventIds.toMap(),
+        )
+    }
+
     private fun publishState() = space.bitos.app.diagnostics.PerfTrace.section(
         space.bitos.app.diagnostics.PerfTrace.FEED_PUBLISH,
     ) {
@@ -1727,6 +1761,7 @@ class FeedRepository(
         val liked = likedIds
         val protocolNotesVisible = showProtocolNotes()
         val forYouWindow = aggregator.snapshot()
+        val engagement = engagementSnapshot()
         val rankedForYou = algorithm?.let { snapshot ->
             FeedRanking.rank(
                 notes = forYouWindow,
@@ -1735,7 +1770,7 @@ class FeedRepository(
                 ctx = RankingContext(
                     nowSeconds = System.currentTimeMillis() / 1_000,
                     following = followingAuthors,
-                    zapCounts = zapCounts.toMap(),
+                    zapCounts = engagement.zapCounts,
                     replyCounts = commentThreads.mapValues { it.value.size },
                     dismissedNoteIds = dismissedNoteIds,
                     mutedAuthors = demotedAuthors,
@@ -1790,10 +1825,10 @@ class FeedRepository(
                 val byId = aggregator.snapshot().associateBy { it.id }
                 bookmarked.toList().asReversed().mapNotNull { id -> bookmarkedNoteMap[id] ?: byId[id] }
             },
-            zapCounts = zapCounts.toMap(),
-            zapRequestIds = zapRequestIdsBuffer.mapValues { it.value.toSet() },
-            tallies = talliesBuffer.toMap(),
-            myReactionEventIds = myReactionEventIds.toMap(),
+            zapCounts = engagement.zapCounts,
+            zapRequestIds = engagement.zapRequestIds,
+            tallies = engagement.tallies,
+            myReactionEventIds = engagement.myReactionEventIds,
             pollTallies = pollVoters.mapValues { (_, voters) ->
                 pollVotes.tally(voters, ownPubkey)
             },
