@@ -25,6 +25,11 @@ class MemeVideoCutTest {
 
     @Test
     fun longClipsAreCutToTheFirstMinuteWithTheMessage() {
+        assertEquals(
+            MemeVideoCutRules.MAX_CLIP_MS,
+            MemeVideoCutRules.MAX_TIMELINE_MS,
+            "a multi-clip meme has one shared one-minute output budget",
+        )
         val cut = MemeVideoCutRules.cutForDuration(184_000)
         assertTrue(cut.cut)
         assertEquals(0, cut.startMs)

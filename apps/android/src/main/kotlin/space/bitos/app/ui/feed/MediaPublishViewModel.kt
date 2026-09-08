@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import space.bitos.app.data.media.BlossomUploader
 import space.bitos.app.data.media.DefaultBlossomServer
+import space.bitos.app.data.media.MemeVideoUploader
 import space.bitos.app.data.publish.NotePublisher
 import space.bitos.core.model.Blossom
 
@@ -29,6 +30,7 @@ class MediaPublishViewModel(
 ) : AndroidViewModel(application) {
 
     private val uploader = BlossomUploader()
+    private val videoUploader = MemeVideoUploader(blossom = uploader)
     private val jobLedger = MemePublishJobStore(application)
 
     private val mutableMemeState = MutableStateFlow(MemePublishUiState())
@@ -123,7 +125,17 @@ class MediaPublishViewModel(
                 val signer = identity.createSigner()
                     ?: throw BlossomUploader.UploadFailure("Importing needs an identity (Profile tab).")
                 val media = withContext(Dispatchers.IO) {
-                    uploader.upload(bytes, job.mime, signer, DefaultBlossomServer.url) { stage ->
+                    if (job.mode == "video") videoUploader.upload(bytes, job.mime, signer, DefaultBlossomServer.url) { stage ->
+                        val mapped = when (stage) {
+                            MemeVideoUploader.UploadStage.HASHING -> MemePublishStage.HASH
+                            MemeVideoUploader.UploadStage.UPLOADING_BITOS,
+                            MemeVideoUploader.UploadStage.UPLOADING_BLOSSOM -> MemePublishStage.UPLOAD
+                            MemeVideoUploader.UploadStage.VERIFYING_BITOS,
+                            MemeVideoUploader.UploadStage.VERIFYING_BLOSSOM -> MemePublishStage.VERIFY
+                        }
+                        mutableMemeState.value = mutableMemeState.value.copy(stage = mapped)
+                        jobLedger.update(job.id, stage = mapped.ordinal)
+                    } else uploader.upload(bytes, job.mime, signer, DefaultBlossomServer.url) { stage ->
                         val mapped = when (stage) {
                             BlossomUploader.UploadStage.HASHING -> MemePublishStage.HASH
                             BlossomUploader.UploadStage.UPLOADING -> MemePublishStage.UPLOAD
@@ -190,9 +202,9 @@ class MediaPublishViewModel(
         powBits: Int = 0,
     ) {
         if (memePublishBusy()) return
-        if (bytes.isEmpty() || bytes.size > Blossom.MAX_FILE_BYTES) {
+        if (bytes.isEmpty() || bytes.size.toLong() > space.bitos.core.studio.MemeUploadRouting.BITOS_API_MAX_BYTES) {
             mutableMemeState.value = MemePublishUiState(
-                failure = "Rendered meme exceeds the ${Blossom.MAX_FILE_BYTES / (1024 * 1024)}MB limit.",
+                failure = "Rendered meme exceeds the ${space.bitos.core.studio.MemeUploadRouting.BITOS_API_MAX_BYTES / (1024 * 1024)}MB BitOS limit.",
             )
             return
         }
@@ -219,11 +231,13 @@ class MediaPublishViewModel(
                 val signer = identity.createSigner()
                     ?: throw BlossomUploader.UploadFailure("Importing needs an identity (Profile tab).")
                 val media = withContext(Dispatchers.IO) {
-                    uploader.upload(bytes, "video/mp4", signer, DefaultBlossomServer.url) { stage ->
+                    videoUploader.upload(bytes, "video/mp4", signer, DefaultBlossomServer.url) { stage ->
                         val mapped = when (stage) {
-                            BlossomUploader.UploadStage.HASHING -> MemePublishStage.HASH
-                            BlossomUploader.UploadStage.UPLOADING -> MemePublishStage.UPLOAD
-                            BlossomUploader.UploadStage.VERIFYING -> MemePublishStage.VERIFY
+                            MemeVideoUploader.UploadStage.HASHING -> MemePublishStage.HASH
+                            MemeVideoUploader.UploadStage.UPLOADING_BITOS,
+                            MemeVideoUploader.UploadStage.UPLOADING_BLOSSOM -> MemePublishStage.UPLOAD
+                            MemeVideoUploader.UploadStage.VERIFYING_BITOS,
+                            MemeVideoUploader.UploadStage.VERIFYING_BLOSSOM -> MemePublishStage.VERIFY
                         }
                         mutableMemeState.value = mutableMemeState.value.copy(stage = mapped)
                         jobLedger.update(ledgerId, stage = mapped.ordinal)

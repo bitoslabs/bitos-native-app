@@ -6,6 +6,9 @@
 2. Ask for identity, signer, camera, microphone or wallet only at the action that needs it.
 3. Creation is local and reversible until the user signs.
 4. Progress names the real stage: rendering, uploading, awaiting signer or relay publishing.
+   A small Bitz video names its BitOS upload and Blossom replica; a large
+   video names the single BitOS upload. Signing remains unavailable until the
+   required destination(s) have hash-verified.
 5. Failure never destroys a usable draft/output.
 6. Protocol power is visible but not jargon-heavy; advanced relay/Blossom details live one level deeper.
 7. Every gesture has a visible/accessibility alternative.

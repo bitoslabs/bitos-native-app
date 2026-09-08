@@ -8,7 +8,9 @@ package space.bitos.core.studio
  * cut identically.
  *
  *  • [cutForDuration]: the pick-time cap — anything past
- *    [MAX_CLIP_MS] plays back as the first [MAX_CLIP_MS].
+ *    [MAX_CLIP_MS] plays back as the first [MAX_CLIP_MS]. A finished
+ *    timeline shares that same 60-second budget; native editors use
+ *    [MAX_TIMELINE_MS] to reserve time as clips are added or adjusted.
  *  • [nextCutForSize]: the export ladder — when a rendered meme exceeds
  *    the upload bound, the duration shrinks by the size ratio (bitrate ≈
  *    duration for one transcode), never below [MIN_KEEP_MS], retried at
@@ -18,6 +20,9 @@ object MemeVideoCutRules {
 
     /** Plan's clip cap (MST-030). */
     const val MAX_CLIP_MS = 60_000L
+
+    /** One publishable meme is at most one minute, across every clip. */
+    const val MAX_TIMELINE_MS = MAX_CLIP_MS
 
     /** Studio source-size bound (256 MB): the single cross-platform cap
      *  for picked/imported video sources — the Create hub's import-media

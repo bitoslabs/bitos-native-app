@@ -99,7 +99,7 @@ insert** (becomes a timeline clip, not an overlay).
 **F1 — Clip timeline model.** A VIDEO project owns an ordered clip list
 (`clips[]`), each clip = `{id, assetRef, inMs, outMs, speed, lookId,
 volume, muted}`. Caps: `MAX_CLIPS = 8`, per-clip window ≥ 200 ms, total
-timeline ≤ 120 s, source set ≤ `MAX_SOURCE_BYTES` summed. Split = one
+timeline ≤ 60 s, source set ≤ `MAX_SOURCE_BYTES` summed. Split = one
 clip becoming two windows over the same source. Reorder/duplicate/delete
 are list ops.
 

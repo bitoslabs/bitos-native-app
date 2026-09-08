@@ -286,6 +286,14 @@ fun MemeEditorScreen(
         videoClips.subList(0, index.coerceIn(0, videoClips.size)).sumOf { clipOutputMs(it) }
 
     val timelineDurationMs: Long = videoClips.sumOf { clipOutputMs(it) }
+    val timelineRemainingMs: Long =
+        (space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS - timelineDurationMs)
+            .coerceAtLeast(0L)
+
+    fun timelineDurationWith(index: Int, replacement: SessionClip): Long =
+        videoClips.sumOf { clip ->
+            clipOutputMs(if (clip.id == videoClips.getOrNull(index)?.id) replacement else clip)
+        }
 
     /** Maps a timeline position to (clip, media-time) — cover capture,
      * overlay windows and the burn-in all speak timeline time. */
@@ -339,8 +347,20 @@ fun MemeEditorScreen(
             exportStatus = "This clip would push the timeline over the 256 MB source cap"
             return
         }
-        val cut = space.bitos.core.studio.MemeVideoCutRules.cutForDuration(probe.durationMs)
-        if (cut.cut) exportStatus = cut.message
+        if (timelineRemainingMs * videoRate < 200L) {
+            exportStatus = "Timeline is full — trim a clip to keep this meme within 60 s"
+            return
+        }
+        // The remaining budget is output time while source windows are in
+        // media time, so account for the clip's initial playback rate.
+        val allowedSourceMs = (timelineRemainingMs * videoRate).toLong()
+        val cut = space.bitos.core.studio.MemeVideoCutRules.cutForDuration(
+            probe.durationMs,
+            minOf(space.bitos.core.studio.MemeVideoCutRules.MAX_CLIP_MS, allowedSourceMs),
+        )
+        if (cut.cut) {
+            exportStatus = "Added to the remaining ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(timelineRemainingMs)} — ${cut.message}"
+        }
         val id = "v${maxClipCounter() + 1}"
         if (undoable) state.beginClipsEdit()
         state.addAssets(listOf(id), kind = MemeMode.VIDEO)
@@ -1898,6 +1918,7 @@ fun MemeEditorScreen(
                         selectedClipIndex = selectedClipIndex,
                         positionMs = videoPositionMs,
                         totalMs = timelineDurationMs,
+                        remainingMs = timelineRemainingMs,
                         onSelectClip = { selectedClipIndex = it },
                         onSplit = ::splitAtPlayhead,
                         onDelete = {
@@ -2484,8 +2505,13 @@ fun MemeEditorScreen(
                 onApply = { start, end ->
                     val index = videoClips.indexOf(clip)
                     if (index >= 0) {
+                        val updated = clip.copy(startMs = start, endMs = end)
+                        if (timelineDurationWith(index, updated) > space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS) {
+                            exportStatus = "Trim would exceed the 60 s timeline limit"
+                            return@TrimSheetContent
+                        }
                         state.beginClipsEdit()
-                        videoClips[index] = clip.copy(startMs = start, endMs = end)
+                        videoClips[index] = updated
                         syncWireClips()
                     }
                     showTrim = false
@@ -2569,8 +2595,14 @@ fun MemeEditorScreen(
                     ?: videoProbe?.durationMs ?: state.project.trimEndMs,
                 onPick = {
                     if (selected != null) {
+                        val updated = selected.copy(speed = it)
+                        if (timelineDurationWith(selectedClipIndex, updated) > space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS) {
+                            exportStatus = "This speed would exceed the 60 s timeline limit"
+                            showSpeed = false
+                            return@SpeedSheetContent
+                        }
                         state.beginClipsEdit()
-                        videoClips[selectedClipIndex] = selected.copy(speed = it)
+                        videoClips[selectedClipIndex] = updated
                         syncWireClips()
                         exportStatus = "Speed applies to vdo ${selectedClipIndex + 1}"
                     }
@@ -3204,6 +3236,7 @@ private fun TimelineStrip(
     selectedClipIndex: Int,
     positionMs: Long,
     totalMs: Long,
+    remainingMs: Long,
     onSelectClip: (Int) -> Unit,
     onSplit: () -> Unit,
     onDelete: () -> Unit,
@@ -3253,7 +3286,7 @@ private fun TimelineStrip(
             TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
         }
         Text(
-            "Timeline · clip ${selectedClipIndex + 1} of ${clips.size}",
+            "Timeline · clip ${selectedClipIndex + 1} of ${clips.size} · ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(remainingMs)} left",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )

@@ -226,6 +226,11 @@ final class MemeEditorStore {
 
     /** Sets the playback rate (clamped 0.5–2× by the shared rule). */
     func setSpeed(_ rate: Float) {
+        let nextRate = rate.isNaN || rate <= 0 ? 1 : min(2, max(0.5, rate))
+        guard timelineDuration(at: nextRate) <= MemeVideoCutRules.shared.MAX_CLIP_MS else {
+            setNotice("This speed would exceed the 60 s timeline limit")
+            return
+        }
         apply(commandJson: Self.encode(["op": "speed", "rate": rate]))
     }
 
@@ -838,6 +843,17 @@ final class MemeEditorStore {
 
     /// Whole-timeline output duration (ms).
     var timelineDurationMs: Int64 { clips.reduce(0) { $0 + clipOutputMs($1) } }
+    var timelineRemainingMs: Int64 {
+        max(0, MemeVideoCutRules.shared.MAX_CLIP_MS - timelineDurationMs)
+    }
+
+    private func timelineDuration(at rate: Float, replacing index: Int? = nil, with replacement: EditorClip? = nil) -> Int64 {
+        let safeRate = max(0.01, rate)
+        return clips.enumerated().reduce(0) { total, entry in
+            let clip = entry.offset == index ? (replacement ?? entry.element) : entry.element
+            return total + Int64((Double(max(0, clip.endMs - clip.startMs)) / Double(safeRate)).rounded())
+        }
+    }
 
     /// Maps a timeline position → (clip, source media ms).
     func timelineToMedia(_ timelineMs: Int64) -> (clip: EditorClip, mediaMs: Int64)? {
@@ -926,11 +942,23 @@ final class MemeEditorStore {
             setNotice("Could not read this video")
             return false
         }
+        // The remaining budget is output time while this source window is
+        // measured in media time. A clip cannot be shorter than 200 ms.
+        let allowedSourceMs = Int64((Double(timelineRemainingMs) * Double(rate)).rounded())
+        guard allowedSourceMs >= 200 else {
+            setNotice("Timeline is full — trim a clip to keep this meme within 60 s")
+            return false
+        }
         let cutJson = client.memeVideoCutFor(durationMs: probe.durationMs)
         let cut = Self.parseCut(cutJson)
         let start = cut?.cut == true ? cut!.startMs : 0
-        let end = cut?.cut == true ? cut!.endMs : probe.durationMs
-        if cut?.cut == true { setNotice(cut!.message) }
+        let importedEnd = cut?.cut == true ? cut!.endMs : probe.durationMs
+        let end = min(importedEnd, allowedSourceMs)
+        if end < importedEnd {
+            setNotice("Added to the remaining \(Self.timelineLabel(timelineRemainingMs)) — trimmed to fit")
+        } else if cut?.cut == true {
+            setNotice(cut!.message)
+        }
         if undoable { pushHistory(projectJson) }
         let clip = EditorClip(
             id: "v\(maxClipCounter() + 1)", data: data, url: url, probe: probe,
@@ -972,9 +1000,15 @@ final class MemeEditorStore {
 
     func setClipWindow(index: Int, startMs: Int64, endMs: Int64) {
         guard clips.indices.contains(index) else { return }
+        var updated = clips[index]
+        updated.startMs = startMs
+        updated.endMs = max(startMs + 200, endMs)
+        guard timelineDuration(at: rate, replacing: index, with: updated) <= MemeVideoCutRules.shared.MAX_CLIP_MS else {
+            setNotice("Trim would exceed the 60 s timeline limit")
+            return
+        }
         pushHistory(projectJson)
-        clips[index].startMs = startMs
-        clips[index].endMs = max(startMs + 200, endMs)
+        clips[index] = updated
         videoRevision += 1
         syncWireClips()
     }
@@ -993,6 +1027,12 @@ final class MemeEditorStore {
         clips[index].lookId = lookId
         videoRevision += 1
         syncWireClips()
+    }
+
+    static func timelineLabel(_ milliseconds: Int64) -> String {
+        let seconds = milliseconds / 1_000
+        let tenths = (milliseconds % 1_000) / 100
+        return tenths == 0 ? "\(seconds) s" : "\(seconds).\(tenths) s"
     }
 
     /// Splits the clip under the timeline playhead into two clips over the
@@ -1671,7 +1711,7 @@ final class MemeEditorStore {
                         preset: exportPreset,
                         gifReels: gifReels
                     )
-                    let maxBytes = 64 * 1024 * 1024
+                    let maxBytes = BitosMediaUploader.maxBitOSUploadBytes
                     var durationMs = source.probe.durationMs
                     if exportPresetManual {
                         // Manual means manual: no cut ladder. A rare ABR
@@ -1680,7 +1720,7 @@ final class MemeEditorStore {
                         if exported.data.count > maxBytes {
                             publishState = .idle
                             publishFailure = String(
-                                format: "Actual %.1f MB — over the 64 MB cap. Pick a lower quality in Export.",
+                                format: "Actual %.1f MB — over the 100 MB BitOS cap. Pick a lower quality in Export.",
                                 Double(exported.data.count) / 1_000_000
                             )
                             return
@@ -1778,8 +1818,20 @@ final class MemeEditorStore {
                     nowMs: Int64(Date.now.timeIntervalSince1970 * 1000)
                 )
                 let ledgerId = ledgerJobId ?? 0
-                // 2. Hash-verified Blossom upload (nothing signs before this).
-                let uploaded = try await BlossomUploader(bridge: bridge).upload(
+                // 2. Hash-verified BitOS upload; small videos also require
+                // a verified Blossom replica before anything signs.
+                let uploaded = try await (isVideoMode
+                    ? MemeVideoUploader(bridge: bridge).upload(
+                        bytes: bytes, mimeType: mime, identity: identity,
+                        onStage: { stage in
+                            switch stage {
+                            case .hashing: self.publishStep = .hash
+                            case .uploading: self.publishStep = .upload
+                            case .verifying: self.publishStep = .verify
+                            }
+                        }
+                    )
+                    : BlossomUploader(bridge: bridge).upload(
                     bytes: bytes, mimeType: mime, identity: identity,
                     serverUrl: "https://blossom.primal.net",
                     onStage: { stage in
@@ -1795,7 +1847,7 @@ final class MemeEditorStore {
                             self.jobStore.update(ledgerId, stage: 3, nowMs: self.nowMs())
                         }
                     }
-                )
+                ))
                 // 3. Kind-20 through the receipt machine. Post-details
                 // extras (explicit t-tags + license) ride every mode; a
                 // remix's lineage (remix/meme/p/license/attribution, web
@@ -1911,7 +1963,18 @@ final class MemeEditorStore {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let uploaded = try await BlossomUploader(bridge: bridge).upload(
+                let uploaded = try await (job.mode == "video"
+                    ? MemeVideoUploader(bridge: bridge).upload(
+                        bytes: bytes, mimeType: job.mime, identity: identity,
+                        onStage: { stage in
+                            switch stage {
+                            case .hashing: self.publishStep = .hash
+                            case .uploading: self.publishStep = .upload
+                            case .verifying: self.publishStep = .verify
+                            }
+                        }
+                    )
+                    : BlossomUploader(bridge: bridge).upload(
                     bytes: bytes, mimeType: job.mime, identity: identity,
                     serverUrl: "https://blossom.primal.net",
                     onStage: { stage in
@@ -1927,7 +1990,7 @@ final class MemeEditorStore {
                             self.jobStore.update(job.id, stage: 3, nowMs: self.nowMs())
                         }
                     }
-                )
+                ))
                 publishState = .publishing
                 self.publishStep = .build
                 self.jobStore.update(job.id, stage: 4, mediaUrl: uploaded.url, sha256: uploaded.hash, nowMs: self.nowMs())
@@ -3280,7 +3343,7 @@ struct MemeEditorView: View {
             HStack {
                 Text(monoClock(0))
                 Spacer()
-                Text("\(monoClock(positionMs)) / \(monoClock(totalMs))")
+                Text("\(monoClock(positionMs)) / \(monoClock(totalMs)) · \(MemeEditorStore.timelineLabel(store.timelineRemainingMs)) left")
                     .foregroundStyle(BitOSTheme.accent)
                 Spacer()
                 Text(monoClock(totalMs))
