@@ -2025,6 +2025,65 @@ class BusinessCoreBridge {
         return kotlin.io.encoding.Base64.Default.encode(space.bitos.core.studio.SfxSynth.wav(pcm))
     }
 
+    /**
+     * "Use this sound" Wave B: the FULL audio bed — synth cues AND the
+     * placed soundtrack (session PCM as base64 LE float32 at
+     * [soundRate], placed by the wire row's offset/volume through
+     * `MemeSoundMix`) — as one WAV, base64. iOS mixes it as the second
+     * audio track exactly like the SFX-only seam; "" when the project
+     * has neither (callers then skip the track entirely).
+     */
+    fun memeAudioBedWavBase64(
+        projectJson: String,
+        durationMs: Long,
+        rate: Float = 1f,
+        soundPcmBase64: String = "",
+        soundRate: Int = 0,
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val outputCues = space.bitos.core.studio.SfxSynth.cuesInOutputTimeline(project.sfxCues, rate)
+        val cueBed = if (space.bitos.core.studio.SfxSynth.hasAudibleCues(outputCues, durationMs)) {
+            space.bitos.core.studio.SfxSynth.renderCueTrack(outputCues, durationMs)
+        } else {
+            null
+        }
+        val soundBed = project.soundtrack?.let { sound ->
+            decodeFloatPcm(soundPcmBase64)?.let { pcm ->
+                space.bitos.core.studio.MemeSoundMix.bedTrack(
+                    pcm, soundRate, durationMs, sound.offsetMs, sound.volume,
+                ).takeIf { it.isNotEmpty() }
+            }
+        }
+        val bed = when {
+            cueBed != null && soundBed != null -> space.bitos.core.studio.MemeSoundMix.mix(cueBed, soundBed)
+            cueBed != null -> cueBed
+            soundBed != null -> soundBed
+            else -> return ""
+        }
+        return kotlin.io.encoding.Base64.Default.encode(
+            space.bitos.core.studio.SfxSynth.wav(space.bitos.core.studio.SfxSynth.pcm16Le(bed)),
+        )
+    }
+
+    /** Base64 LE float32 PCM → FloatArray; null on junk (never throws). */
+    private fun decodeFloatPcm(base64: String): FloatArray? {
+        if (base64.isBlank()) return null
+        val bytes = runCatching {
+            kotlin.io.encoding.Base64.Default.decode(base64)
+        }.getOrNull() ?: return null
+        if (bytes.size % 4 != 0 || bytes.isEmpty()) return null
+        val out = FloatArray(bytes.size / 4)
+        for (i in out.indices) {
+            val offset = i * 4
+            val bits = (bytes[offset].toInt() and 0xFF) or
+                ((bytes[offset + 1].toInt() and 0xFF) shl 8) or
+                ((bytes[offset + 2].toInt() and 0xFF) shl 16) or
+                ((bytes[offset + 3].toInt() and 0xFF) shl 24)
+            out[i] = Float.fromBits(bits)
+        }
+        return out
+    }
+
     // ── APP-019 meme wire document (plan MST-019): the `com.bitos.bitz.meme`
     // v1 interop wire. Foreign schema ids/versions → ""; parse never throws.
 

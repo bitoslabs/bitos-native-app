@@ -227,6 +227,14 @@ protocol BusinessCoreClient: Sendable {
     /// `durationMs` is the OUTPUT duration; a rate ≠ 1 maps cue times
     /// into that timeline first.
     func memeSfxTrackWavBase64(_ projectJson: String, durationMs: Int64, rate: Float) -> String
+    /// "Use this sound" Wave B: the FULL audio bed — cues AND the placed
+    /// soundtrack (session PCM, base64 LE float32 at `soundRate`, placed
+    /// by the wire row through `MemeSoundMix`) — as one base64 WAV; ""
+    /// when the project has neither.
+    func memeAudioBedWavBase64(
+        _ projectJson: String, durationMs: Int64, rate: Float,
+        soundPcmBase64: String, soundRate: Int32
+    ) -> String
     /// Sticker packs `[{"id","label","stickers":[…]}]` (web port).
     func memeStickerPacks() -> String
 
@@ -329,6 +337,10 @@ protocol BusinessCoreClient: Sendable {
     /// M4b remix editor seed: clone the source `meme` layout onto the
     /// project with fresh ids; "" when the project wire is corrupt.
     func memeApplyRemix(projectJson: String, memeTag: String?) -> String
+    /// "Use this sound" (MST-050): sound/p/attribution tags (TagsCodec
+    /// JSON) from the project wire's soundtrack row; "" when absent,
+    /// un-uploaded or corrupt — nothing stamps before the upload verifies.
+    func memeSoundTagsFor(projectJson: String) -> String
     /// APP-007 remix relay hints: source-tag relays + write relays, ≤3.
     func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String]
     /// Built-in template pack `[{"id","label","emoji"}]` (MST-040 rail).
@@ -706,6 +718,19 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeSfxTrackWavBase64(projectJson: projectJson, durationMs: durationMs, rate: rate)
     }
 
+    func memeAudioBedWavBase64(
+        _ projectJson: String, durationMs: Int64, rate: Float,
+        soundPcmBase64: String, soundRate: Int32
+    ) -> String {
+        bridge.memeAudioBedWavBase64(
+            projectJson: projectJson,
+            durationMs: durationMs,
+            rate: rate,
+            soundPcmBase64: soundPcmBase64,
+            soundRate: soundRate
+        )
+    }
+
     func memeStickerPacks() -> String {
         bridge.memeStickerPacks()
     }
@@ -801,6 +826,10 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     /// project with fresh ids (web `applyRemixPayload` parity).
     func memeApplyRemix(projectJson: String, memeTag: String?) -> String {
         bridge.memeApplyRemix(projectJson: projectJson, memeTag: memeTag)
+    }
+
+    func memeSoundTagsFor(projectJson: String) -> String {
+        bridge.memeSoundTagsFor(projectJson: projectJson)
     }
 
     /// APP-007 remix relay hints: source-tag relays + write relays, deduped,
@@ -1162,6 +1191,15 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeSfxTrackWavBase64(_ projectJson: String, durationMs: Int64, rate: Float) -> String {
         FrameworkBusinessCoreClient().memeSfxTrackWavBase64(projectJson, durationMs: durationMs, rate: rate)
     }
+    func memeAudioBedWavBase64(
+        _ projectJson: String, durationMs: Int64, rate: Float,
+        soundPcmBase64: String, soundRate: Int32
+    ) -> String {
+        FrameworkBusinessCoreClient().memeAudioBedWavBase64(
+            projectJson, durationMs: durationMs, rate: rate,
+            soundPcmBase64: soundPcmBase64, soundRate: soundRate
+        )
+    }
     func memeStickerPacks() -> String { FrameworkBusinessCoreClient().memeStickerPacks() }
     func massBatchNew(_ name: String, nowMs: Int64) -> String {
         FrameworkBusinessCoreClient().massBatchNew(name, nowMs: nowMs)
@@ -1225,6 +1263,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeApplyRemix(projectJson: String, memeTag: String?) -> String {
         FrameworkBusinessCoreClient().memeApplyRemix(projectJson: projectJson, memeTag: memeTag)
+    }
+    func memeSoundTagsFor(projectJson: String) -> String {
+        FrameworkBusinessCoreClient().memeSoundTagsFor(projectJson: projectJson)
     }
     func remixRelayHints(sourceRelays: [String], writeRelays: [String]) -> [String] {
         FrameworkBusinessCoreClient().remixRelayHints(sourceRelays: sourceRelays, writeRelays: writeRelays)

@@ -891,6 +891,57 @@ class BusinessCoreBridgeTest {
     }
 
     @Test
+    fun memeAudioBedSeamMixesCuesAndSoundtrackIntoOneWav() {
+        val sha = "a".repeat(64)
+        fun pcmB64(vararg values: Float): String {
+            val bytes = java.io.ByteArrayOutputStream()
+            values.forEach { value ->
+                val bits = value.toRawBits()
+                bytes.write(bits and 0xFF)
+                bytes.write((bits ushr 8) and 0xFF)
+                bytes.write((bits ushr 16) and 0xFF)
+                bytes.write((bits ushr 24) and 0xFF)
+            }
+            return java.util.Base64.getEncoder().encodeToString(bytes.toByteArray())
+        }
+        val sound = space.bitos.core.studio.MemeSoundtrack(
+            url = "",
+            sha256 = sha,
+            durationMs = 10_000,
+            volume = 1f,
+        )
+        val projectJson = space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeProject(
+                mode = space.bitos.core.studio.MemeMode.VIDEO,
+                soundtrack = sound,
+                sfxCues = listOf(
+                    space.bitos.core.studio.MemeSfxCue(id = "c1", sfx = "coin", atMs = 100, gain = 1f),
+                ),
+            ),
+        )
+        // 1 s of loud PCM placed at 500 ms → cue + soundtrack both ride.
+        val bed = bridge.memeAudioBedWavBase64(
+            projectJson,
+            durationMs = 2_000,
+            soundPcmBase64 = pcmB64(*FloatArray(44_100) { 1f }),
+            soundRate = 44_100,
+        )
+        assertTrue(bed.isNotEmpty())
+        val wav = java.util.Base64.getDecoder().decode(bed)
+        assertTrue(wav.size > 44, "a real WAV header + body")
+        assertEquals("RIFF", String(wav, 0, 4, Charsets.US_ASCII))
+        // Neither alone: soundtrack PCM junk → cue-only bed still builds.
+        val cuesOnly = bridge.memeAudioBedWavBase64(projectJson, 2_000, soundPcmBase64 = "zz", soundRate = 0)
+        assertTrue(cuesOnly.isNotEmpty())
+        // Nothing at all → "".
+        val empty = space.bitos.core.studio.MemeProjectContract.encode(
+            space.bitos.core.studio.MemeProject(mode = space.bitos.core.studio.MemeMode.VIDEO),
+        )
+        assertEquals("", bridge.memeAudioBedWavBase64(empty, 2_000))
+        assertEquals("", bridge.memeAudioBedWavBase64("junk", 2_000))
+    }
+
+    @Test
     fun remixRelayHintsSeamMergesSourceAndWriteRelays() {
         val merged = bridge.remixRelayHintsJson(
             sourceRelaysJson = """["wss://src.one","wss://src.two"]""",

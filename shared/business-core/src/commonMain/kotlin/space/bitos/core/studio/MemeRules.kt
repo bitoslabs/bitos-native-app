@@ -55,6 +55,11 @@ sealed interface MemeCommand {
     data class AddSfxCue(val cue: MemeSfxCue) : MemeCommand
     data class RemoveSfxCue(val id: String) : MemeCommand
 
+    /** "Use this sound" (MST-050): set/replace the soundtrack — null (or a
+     *  row that fails [MemeSoundRules.normalize], e.g. junk duration/hash)
+     *  REMOVES it, so the wire never carries an unusable row. */
+    data class SetSoundtrack(val soundtrack: MemeSoundtrack?) : MemeCommand
+
     /** Pen strokes (V2 Draw chip); the project-wide budget caps adds. */
     data class AddStroke(val stroke: MemeStroke) : MemeCommand
     data class RemoveStroke(val id: String) : MemeCommand
@@ -217,6 +222,10 @@ object MemeRules {
 
         is MemeCommand.RemoveSfxCue ->
             project.copy(sfxCues = project.sfxCues.filterNot { it.id == command.id })
+
+        is MemeCommand.SetSoundtrack -> project.copy(
+            soundtrack = MemeSoundRules.normalize(command.soundtrack),
+        )
 
 
         is MemeCommand.SetTrim -> {

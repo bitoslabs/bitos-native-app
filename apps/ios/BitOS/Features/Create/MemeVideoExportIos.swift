@@ -375,6 +375,7 @@ enum MemeVideoExportIos {
         images: [String: UIImage] = [:],
         preset: ExportPreset = .auto,
         gifReels: [String: GifLayerReel] = [:],
+        soundtrackPcm: [Float]? = nil,
         onProgress: ((Double) -> Void)? = nil
     ) async throws -> Exported {
         // MST-036: the shared encoder plan drives the output canvas (the
@@ -567,16 +568,33 @@ enum MemeVideoExportIos {
             postProcessingAsVideoLayer: videoLayer, in: parentLayer
         )
 
-        // SFX burn-in (MST-041 close-out): the shared cue mix rides as a
+        // SFX + soundtrack burn-in (MST-041/MST-050): the FULL audio bed
+        // — synth cues AND the placed soundtrack (session PCM at the bed
+        // rate, placed by the wire row through MemeSoundMix) — rides as a
         // second audio track; the explicit mix keeps both audible
-        // (Android mixes the same PCM through Media3 sequences).
+        // (Android mixes the same bed through Media3 sequences).
         var audioMix: AVMutableAudioMix?
         var sfxWavURL: URL?
-        let sfxB64 = client.memeSfxTrackWavBase64(
-            projectJson,
-            durationMs: Int64((outputDuration.seconds * 1000).rounded()),
-            rate: rate
-        )
+        let bedB64: String
+        if let soundtrackPcm, !soundtrackPcm.isEmpty {
+            let base64 = await Task.detached(priority: .userInitiated) {
+                MemeVideoSoundIos.pcmBase64(soundtrackPcm)
+            }.value
+            bedB64 = client.memeAudioBedWavBase64(
+                projectJson,
+                durationMs: Int64((outputDuration.seconds * 1000).rounded()),
+                rate: rate,
+                soundPcmBase64: base64,
+                soundRate: MemeSoundMix.shared.BED_RATE
+            )
+        } else {
+            bedB64 = client.memeSfxTrackWavBase64(
+                projectJson,
+                durationMs: Int64((outputDuration.seconds * 1000).rounded()),
+                rate: rate
+            )
+        }
+        let sfxB64 = bedB64
         if !sfxB64.isEmpty,
            let wav = Data(base64Encoded: sfxB64) {
             let wavURL = FileManager.default.temporaryDirectory
@@ -1025,6 +1043,10 @@ struct VideoStageIos: View {
     var showScrub: Bool = true
     /// Player control surface for the suite dock (registered, not owned).
     var transport: VideoTransportIos? = nil
+    /// "Use this sound" (MST-050 Wave B): the borrowed track + its session
+    /// m4a — a second audio-only AVPlayer follows the stage clock.
+    var soundtrack: MemeEditorStore.SoundtrackRow? = nil
+    var soundtrackUrl: URL? = nil
 
     private var probe: MemeVideoExportIos.Probe? { clips.first?.probe }
     private var timelineSeconds: Double {
@@ -1094,6 +1116,7 @@ struct VideoStageIos: View {
     }
 
     @State private var player: AVPlayer?
+    @State private var soundPlayer: AVPlayer?
     @State private var positionSeconds: Double = 0
     @State private var durationSeconds: Double = 0.01
     @State private var playing = false
@@ -1215,6 +1238,7 @@ struct VideoStageIos: View {
             applyGrade(to: item)
             let avPlayer = AVPlayer(playerItem: item)
             player = avPlayer
+            soundPlayer = soundtrackUrl.map { AVPlayer(url: $0) }
             durationSeconds = max(0.01, timelineSeconds)
             avPlayer.play()
             transport?.apply { [weak avPlayer] in
@@ -1237,6 +1261,26 @@ struct VideoStageIos: View {
                         onPositionChange(positionSeconds)
                         playing = player.timeControlStatus == .playing
                     }
+                    // Soundtrack follows the same clock: inside its
+                    // placement window it plays from the in-point (re-seek
+                    // on drift), outside it pauses — scrub and seek stay
+                    // glued ("use this sound" Wave B).
+                    if let soundPlayer, let soundtrack {
+                        let intoMs = Int64(positionSeconds * 1000) - soundtrack.offsetMs
+                        if intoMs >= 0 && intoMs < soundtrack.durationMs {
+                            let target = Double(soundtrack.startMs + intoMs) / 1000
+                            if abs(soundPlayer.currentTime().seconds - target) > 0.12 {
+                                await soundPlayer.seek(
+                                    to: CMTime(seconds: target, preferredTimescale: 600),
+                                    toleranceBefore: .zero, toleranceAfter: .zero
+                                )
+                            }
+                            soundPlayer.volume = min(1, max(0, soundtrack.volume))
+                            if playing { soundPlayer.play() } else { soundPlayer.pause() }
+                        } else {
+                            soundPlayer.pause()
+                        }
+                    }
                     // Keep the ruler and timed overlays smooth while playing,
                     // but avoid a busy update loop for a paused editor.
                     try? await Task.sleep(nanoseconds: playing ? 33_000_000 : 100_000_000)
@@ -1257,6 +1301,7 @@ struct VideoStageIos: View {
         }
         .onDisappear {
             player?.pause()
+            soundPlayer?.pause()
             transport?.reset()
         }
     }

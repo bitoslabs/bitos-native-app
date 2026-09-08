@@ -546,7 +546,10 @@ class AppAvatar extends StatelessWidget {
 ```dart
 /// Standard action bar for feed items.
 ///
-/// Layout: [reply] [repost] [like] [zap] [bookmark] [share]
+/// Layout: [reply] [like] [zap] ····· [repost] [bookmark] [share]
+/// Left group = engage with the author, ascending cost (reply → like → zap);
+/// right-aligned group = amplification & utility (repost lands in your
+/// followers' feeds, so it sits apart from the personal-engagement cluster).
 ///
 /// Each action shows count (if > 0) and supports animation.
 class FeedActionBar extends StatelessWidget {

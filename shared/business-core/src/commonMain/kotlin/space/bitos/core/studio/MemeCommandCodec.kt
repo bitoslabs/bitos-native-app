@@ -102,6 +102,24 @@ object MemeCommandCodec {
                 put("id", command.id)
             }
 
+            is MemeCommand.SetSoundtrack -> {
+                val sound = MemeSoundRules.normalize(command.soundtrack)
+                if (sound == null) {
+                    put("op", "sound-del")
+                } else {
+                    put("op", "sound")
+                    if (sound.url.isNotBlank()) put("url", sound.url)
+                    put("sha256", sound.sha256)
+                    put("ms", sound.durationMs)
+                    if (sound.startMs > 0) put("start", sound.startMs)
+                    if (sound.volume != 1f) put("vol", sound.volume)
+                    if (sound.offsetMs > 0) put("offset", sound.offsetMs)
+                    sound.sourceNoteId?.let { put("src", it) }
+                    sound.sourceAuthorPubkey?.let { put("author", it) }
+                    if (sound.label.isNotBlank()) put("label", sound.label)
+                }
+            }
+
             is MemeCommand.AddStroke -> {
                 put("op", "stroke-add")
                 put("stroke", buildJsonObject {
@@ -209,6 +227,22 @@ object MemeCommandCodec {
 
                 "cue-del" -> obj["id"]?.jsonPrimitive?.content
                     ?.let(MemeCommand::RemoveSfxCue)
+
+                "sound" -> MemeCommand.SetSoundtrack(
+                    MemeSoundtrack(
+                        url = obj["url"]?.jsonPrimitive?.content ?: "",
+                        sha256 = obj["sha256"]?.jsonPrimitive?.content ?: "",
+                        durationMs = obj["ms"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                        startMs = obj["start"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                        volume = obj["vol"]?.jsonPrimitive?.content?.toFloatOrNull() ?: 1f,
+                        offsetMs = obj["offset"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                        sourceNoteId = obj["src"]?.jsonPrimitive?.content,
+                        sourceAuthorPubkey = obj["author"]?.jsonPrimitive?.content,
+                        label = obj["label"]?.jsonPrimitive?.content ?: "",
+                    ),
+                )
+
+                "sound-del" -> MemeCommand.SetSoundtrack(null)
 
                 "stroke-add" -> obj["stroke"]?.jsonObject?.let { stroke ->
                     val id = (stroke["id"] as? JsonPrimitive)?.content

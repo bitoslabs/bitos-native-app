@@ -5,13 +5,13 @@ import Foundation
 /// Falls back to the shared session when no progress is requested so
 /// existing call sites keep their exact behavior.
 enum ProgressUrlUpload {
-    static func data(for request: URLRequest, onProgress: ((Int, Int) -> Void)? = nil) async throws -> (Data, URLResponse) {
+    static func data(for request: URLRequest, onProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> (Data, URLResponse) {
         guard let onProgress else {
             return try await URLSession.shared.data(for: request)
         }
         final class ProgressDelegate: NSObject, URLSessionDataDelegate {
-            let report: (Int, Int) -> Void
-            init(report: @escaping (Int, Int) -> Void) { self.report = report }
+            let report: @Sendable (Int, Int) -> Void
+            init(report: @escaping @Sendable (Int, Int) -> Void) { self.report = report }
 
             func urlSession(
                 _ session: URLSession,

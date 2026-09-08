@@ -426,6 +426,30 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-08 (later) — **MST-050 Wave B on iOS — parity closed** (the
+  TikTok sound loop now runs on BOTH platforms; left UNCOMMITTED for
+  owner review). Shared (common-tested): `MemeCommand.SetSoundtrack` +
+  codec ops `sound`/`sound-del` (null/junk row = removal — the wire never
+  carries an unusable row) and bridge seam `memeAudioBedWavBase64`
+  (cues + placed soundtrack → one WAV, session PCM as base64 LE float32;
+  junk degrades to ""), + `memeSoundTagsFor` surfaced on the Swift
+  `BusinessCoreClient`. iOS: `MemeVideoSoundIos` (AVAssetExportSession
+  AppleM4A ≤ 60 s passthrough + AVAssetReader float PCM converted to the
+  bed rate in one pass); Sound tool rows (♪ pick / attached row with
+  mute + slider + Remove, named failures); a second audio-only AVPlayer
+  in `VideoStageIos` glued to the stage clock (seek-on-drift, pauses
+  outside the window); `MemeVideoExportIos.export` gained `soundtrackPcm`
+  and swaps to the full-bed seam (save + publish + cut-ladder retry all
+  pass it); the m4a rides the slot as asset `sound` and resume
+  rehydrates (undecodable → row stripped + notice); the post flow
+  uploads the m4a hash-verified BEFORE signing, verifies the sha against
+  the wire (mismatch = nothing signs) and merges sound/p/attribution
+  into the extras. Verified: full shared + Android suites green; Swift 6
+  strict-concurrency typecheck clean for every touched file (the ONLY
+  remaining errors are PRE-EXISTING in `ProgressUrlUpload.swift`, landed
+  broken by a concurrent session — not touched here). NEXT: Wave C (bitz
+  "Use this sound" + feed chip), then Wave D (trending rail).
+
 - 2026-09-08 — **MST-050 Wave B on ANDROID — "pick sound from a video"
   end-to-end** (Wave A contract → the editor loop; iOS pending, shared
   math ready). Shared (common-tested): `MemeSoundMix` — linear resample →

@@ -227,6 +227,143 @@ final class MemeEditorStore {
         }
     }
 
+    // MARK: - Soundtrack ("use this sound" Wave B — MST-050)
+
+    /// Wire projection of the project's soundtrack row (nil = none).
+    struct SoundtrackRow: Equatable {
+        var url: String
+        var sha256: String
+        var durationMs: Int64
+        var startMs: Int64
+        var offsetMs: Int64
+        var volume: Float
+        var label: String
+    }
+
+    private(set) var soundtrackRow: SoundtrackRow?
+    /// Session audio: the publishable m4a + its preview/export PCM bed
+    /// (decoded at the shared bed rate) + the session file for the stage
+    /// player. Never rides the project wire (the row does).
+    private(set) var soundtrackData: Data?
+    private(set) var soundtrackPcm: [Float]?
+    private(set) var soundtrackUrl: URL?
+    private(set) var extractingSound = false
+
+    /// Attaches a picked video's audio (extract → decode → wire row).
+    /// Named failures surface as a notice; the session never carries a
+    /// row it cannot hear.
+    func attachSoundtrack(pickedData: Data) {
+        guard isVideoMode else { return }
+        extractingSound = true
+        Task { @MainActor in
+            defer { extractingSound = false }
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("meme-sound-pick-\(UUID().uuidString).mp4")
+            do {
+                try pickedData.write(to: temp)
+            } catch {
+                setNotice("No readable audio track in that video")
+                return
+            }
+            defer { try? FileManager.default.removeItem(at: temp) }
+            guard let extracted = await MemeVideoSoundIos.extract(url: temp) else {
+                setNotice("No readable audio track in that video")
+                return
+            }
+            guard let pcm = MemeVideoSoundIos.decodePcm(data: extracted.m4aData) else {
+                setNotice("That sound could not be decoded on this device")
+                return
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("meme-sound-session-\(UUID().uuidString).m4a")
+            try? extracted.m4aData.write(to: url)
+            soundtrackData = extracted.m4aData
+            soundtrackPcm = pcm
+            soundtrackUrl = url
+            applySoundCommand(
+                sha256: extracted.sha256Hex,
+                durationMs: extracted.durationMs,
+                startMs: 0, volume: 1, offsetMs: 0,
+                url: "", label: "Original sound"
+            )
+            setNotice(nil)
+        }
+    }
+
+    /// Rehydrates the session audio from a slot's persisted sound file.
+    /// A sound the session cannot hear would export SILENT while the wire
+    /// promises it — strip the row and say so instead.
+    func restoreSoundtrack(data: Data) {
+        guard let pcm = MemeVideoSoundIos.decodePcm(data: data) else {
+            apply(commandJson: "{\"op\":\"sound-del\"}")
+            setNotice("The saved soundtrack could not be restored")
+            return
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meme-sound-session-\(UUID().uuidString).m4a")
+        try? data.write(to: url)
+        soundtrackData = data
+        soundtrackPcm = pcm
+        soundtrackUrl = url
+    }
+
+    func setSoundtrackVolume(_ volume: Float) {
+        guard let row = soundtrackRow else { return }
+        let clamped = volume.isNaN ? 1 : min(2, max(0, volume))
+        guard clamped != row.volume else { return }
+        applySoundCommand(
+            sha256: row.sha256,
+            durationMs: row.durationMs,
+            startMs: row.startMs,
+            volume: clamped,
+            offsetMs: row.offsetMs,
+            url: row.url,
+            label: row.label
+        )
+    }
+
+    func removeSoundtrack() {
+        apply(commandJson: "{\"op\":\"sound-del\"}")
+        soundtrackData = nil
+        soundtrackPcm = nil
+        if let url = soundtrackUrl {
+            try? FileManager.default.removeItem(at: url)
+        }
+        soundtrackUrl = nil
+    }
+
+    private func applySoundCommand(
+        sha256: String, durationMs: Int64, startMs: Int64,
+        volume: Float, offsetMs: Int64, url: String, label: String
+    ) {
+        var row: [String: Any] = ["op": "sound", "sha256": sha256, "ms": durationMs]
+        if !url.isEmpty { row["url"] = url }
+        if startMs > 0 { row["start"] = startMs }
+        if volume != 1 { row["vol"] = volume }
+        if offsetMs > 0 { row["offset"] = offsetMs }
+        if !label.isEmpty { row["label"] = label }
+        apply(commandJson: Self.encode(row))
+    }
+
+    private func refreshSoundtrackRow() {
+        guard let data = projectJson.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sound = root["sound"] as? [String: Any],
+              let sha = sound["sha256"] as? String else {
+            soundtrackRow = nil
+            return
+        }
+        soundtrackRow = SoundtrackRow(
+            url: (sound["url"] as? String) ?? "",
+            sha256: sha,
+            durationMs: (sound["ms"] as? NSNumber)?.int64Value ?? 0,
+            startMs: (sound["start"] as? NSNumber)?.int64Value ?? 0,
+            offsetMs: (sound["offset"] as? NSNumber)?.int64Value ?? 0,
+            volume: (sound["vol"] as? NSNumber)?.floatValue ?? 1,
+            label: (sound["label"] as? String) ?? ""
+        )
+    }
+
     // MARK: - Looks (MST-043: media-only grades; SetLook is undoable)
 
     /// Active grade id parsed from the wire (nil = none).
@@ -396,6 +533,7 @@ final class MemeEditorStore {
     private func refresh() {
         overlays = Self.parseOverlays(projectJson)
         refreshSfxCues()
+        refreshSoundtrackRow()
         refreshDrawStrokes()
         let nextLook = Self.lookId(ofProject: projectJson)
         if nextLook != lookId { lookId = nextLook; gradeCache.removeAll() }
@@ -1497,7 +1635,8 @@ final class MemeEditorStore {
                         projectJson: source.wire, client: client,
                         images: images,
                         preset: exportPreset,
-                        gifReels: gifReels
+                        gifReels: gifReels,
+                        soundtrackPcm: soundtrackPcm
                     )
                     guard exportJobs.artifactReady(exportJob, bytes: exported.data, nowMs: nowMs()) else {
                         throw MemeRaster.ExportError(message: "Could not persist the render")
@@ -1773,6 +1912,7 @@ final class MemeEditorStore {
                         images: layerImages,
                         preset: exportPreset,
                         gifReels: gifReels,
+                        soundtrackPcm: soundtrackPcm,
                         onProgress: renderSink
                     )
                     let maxBytes = BitosMediaUploader.maxBitOSUploadBytes
@@ -1811,6 +1951,7 @@ final class MemeEditorStore {
                             images: self.layerImages,
                             preset: exportPreset,
                             gifReels: self.gifReels,
+                            soundtrackPcm: self.soundtrackPcm,
                             onProgress: renderSink
                         )
                         }
@@ -1942,7 +2083,44 @@ final class MemeEditorStore {
                         lineageTags = array
                     }
                 }
-                let extrasJson = Self.encodeTags(lineageTags + effectiveExtras)
+                let extrasJson: String
+                do {
+                    // "Use this sound" (MST-050 Wave B): the m4a uploads
+                    // hash-verified BEFORE the note signs; sound/p/
+                    // attribution then stamp the real URL — never a
+                    // pre-upload stamp.
+                    var soundTags: [[String]] = []
+                    if let soundData = soundtrackData, let row = soundtrackRow, row.url.isEmpty {
+                        let audio = try await BlossomUploader(bridge: bridge).upload(
+                            bytes: soundData, mimeType: "audio/mp4", identity: identity,
+                            serverUrl: "https://blossom.primal.net"
+                        )
+                        guard audio.hash.caseInsensitiveCompare(row.sha256) == .orderedSame else {
+                            publishState = .idle
+                            publishFailure = "Soundtrack hash mismatch — nothing was signed"
+                            return
+                        }
+                        // Stamp against a COPY of the wire carrying the
+                        // verified URL (the session wire stays unuploaded).
+                        var stamped = project
+                        if let data = project.data(using: .utf8),
+                           var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            var sound = (root["sound"] as? [String: Any]) ?? [:]
+                            sound["url"] = audio.url
+                            root["sound"] = sound
+                            if let redata = try? JSONSerialization.data(withJSONObject: root),
+                               let rejson = String(data: redata, encoding: .utf8) {
+                                stamped = rejson
+                            }
+                        }
+                        let tagsJson = client.memeSoundTagsFor(projectJson: stamped)
+                        if let data = tagsJson.data(using: .utf8),
+                           let tags = try? JSONSerialization.jsonObject(with: data) as? [[String]] {
+                            soundTags = tags
+                        }
+                    }
+                    extrasJson = Self.encodeTags(lineageTags + soundTags + effectiveExtras)
+                }
                 // The merged extras ride the ledger so a queue retry
                 // republishes the SAME lineage, not just the draft tags.
                 jobStore.update(ledgerId, extraTagsJson: extrasJson, nowMs: nowMs())
@@ -2537,9 +2715,25 @@ struct MemeEditorView: View {
             selection: $videoPickItem,
             matching: .videos
         )
+        .photosPicker(
+            isPresented: $isPickingSound,
+            selection: $soundPickItem,
+            matching: .videos
+        )
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
+        }
+        .onChange(of: soundPickItem) { _, item in
+            guard let item else { return }
+            soundPickItem = nil
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self) else {
+                    store.setNotice("No readable audio track in that video")
+                    return
+                }
+                store.attachSoundtrack(pickedData: data)
+            }
         }
         .onChange(of: videoPickItem) { _, item in
             guard let item else { return }
@@ -2612,6 +2806,13 @@ struct MemeEditorView: View {
             }
             if !entries.isEmpty {
                 store.restoreClips(from: entries)
+            }
+            // "Use this sound": the slot's sound asset rehydrates the
+            // session audio (an undecodable one strips its wire row with
+            // a named notice — never a silent export).
+            if store.soundtrackRow != nil, let soundUrl = resumeSlot.assetFiles["sound"],
+               let soundData = try? Data(contentsOf: soundUrl) {
+                store.restoreSoundtrack(data: soundData)
             }
             // Every wire clip that did not come back marks the session
             // incomplete (file/probe failure) — visible to the user, and
@@ -2981,7 +3182,9 @@ struct MemeEditorView: View {
                         onPositionChange: { videoPositionSec = $0 },
                         layerImages: store.layerImages,
                         showScrub: !suiteMode,
-                        transport: videoTransport
+                        transport: videoTransport,
+                        soundtrack: store.soundtrackRow,
+                        soundtrackUrl: store.soundtrackUrl
                     )
                 } else if store.isGifMode, let frame = store.gifActiveFrame {
                     let aspect = frame.image.size.width / max(1, frame.image.size.height)
@@ -3201,6 +3404,9 @@ struct MemeEditorView: View {
     /// GIF-mode browser (the same shared sheet, GIFs tab).
     @State private var showGifBrowse = false
     @State private var isPickingVideo = false
+    /// "Use this sound" (MST-050 Wave B): video picker → audio extraction.
+    @State private var isPickingSound = false
+    @State private var soundPickItem: PhotosPickerItem?
 
     // ── Tray ────────────────────────────────────────────────────────────
 
@@ -3413,7 +3619,8 @@ struct MemeEditorView: View {
                 StickerPanelContent(store: store)
             case .sound:
                 SoundPanelContent(
-                    cueCount: store.sfxCues.count,
+                    store: store,
+                    onPickSound: { isPickingSound = true },
                     onOpenStudio: {
                         activePanel = nil
                         showSfx = true
@@ -3912,6 +4119,11 @@ struct MemeEditorView: View {
         // M5: every timeline clip source persists (v1…vN).
         for clip in store.clips {
             dataAssets.append((clip.id, clip.data, "asset-\(clip.id).mp4"))
+        }
+        // "Use this sound": the m4a rides the slot like a clip source
+        // (id `sound`; resume rehydrates the session audio from it).
+        if let sound = store.soundtrackData, store.soundtrackRow != nil {
+            dataAssets.append(("sound", sound, "asset-sound.m4a"))
         }
         let id = slotId
         // The awaited completion of the slot write IS the durable
@@ -4994,16 +5206,17 @@ private struct StickerPanelContent: View {
 /// Sound panel (prototype sound row): current synth cue summary + a jump
 /// into the full cue studio sheet.
 private struct SoundPanelContent: View {
-    let cueCount: Int
-    let onOpenStudio: () -> Void
+    @Bindable var store: MemeEditorStore
+    var onPickSound: () -> Void = {}
+    var onOpenStudio: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(cueCount == 0 ? "Original clip audio" : "\(cueCount) synth cue\(cueCount == 1 ? "" : "s")")
+                    Text(store.sfxCues.isEmpty ? "Original clip audio" : "\(store.sfxCues.count) synth cue\(store.sfxCues.count == 1 ? "" : "s")")
                         .font(.subheadline)
-                    Text(cueCount == 0
+                    Text(store.sfxCues.isEmpty
                          ? "Drop risers, zaps and coin SFX at the playhead"
                          : "Cues bake into the export mix")
                         .font(.caption)
@@ -5013,6 +5226,80 @@ private struct SoundPanelContent: View {
                 Button("Change", action: onOpenStudio)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BitOSTheme.accent)
+            }
+            // ── "Use this sound" (MST-050 Wave B): the borrowed track ──
+            if store.extractingSound {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    ProgressView()
+                    Text("Extracting the sound…")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            } else if let sound = store.soundtrackRow {
+                VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        Text("♪")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(sound.label.isEmpty ? "Original sound" : sound.label)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(String(
+                                format: "%.1fs · mixes into preview and export",
+                                Double(sound.durationMs) / 1000
+                            ))
+                            .font(.caption2)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button {
+                            store.removeSoundtrack()
+                        } label: {
+                            Text("Remove")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BitOSTheme.error)
+                        }
+                        .accessibilityLabel("Remove soundtrack")
+                    }
+                    HStack {
+                        Toggle(isOn: Binding(
+                            get: { sound.volume <= 0 },
+                            set: { store.setSoundtrackVolume($0 ? 0 : 1) }
+                        )) {
+                            Text("Mute").font(.caption)
+                        }
+                        .toggleStyle(.switch)
+                        Spacer()
+                        Text(sound.volume <= 0 ? "muted" : String(format: "%.2f×", sound.volume))
+                            .font(.caption2)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    if sound.volume > 0 {
+                        Slider(
+                            value: Binding(
+                                get: { Double(min(1, sound.volume)) },
+                                set: { store.setSoundtrackVolume(Float($0)) }
+                            ),
+                            in: 0...1
+                        )
+                    }
+                }
+                .padding(BitOSTheme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                        .fill(BitOSTheme.surface)
+                )
+            } else {
+                Button(action: onPickSound) {
+                    Text("♪ Pick sound from a video…")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                                .stroke(BitOSTheme.border, lineWidth: 1)
+                        )
+                }
+                .foregroundStyle(BitOSTheme.textPrimary)
             }
         }
     }

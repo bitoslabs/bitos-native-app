@@ -142,6 +142,32 @@ class MemeSoundRulesTest {
         assertNull(MemeSoundRules.sourceOf(emptyList()))
     }
 
+    // ── Command seam (iOS store applies wire commands) ───────────────
+
+    @Test
+    fun setSoundtrackCommandRoundTripsAndApplies() {
+        val command = MemeCommand.SetSoundtrack(soundtrack())
+        val json = MemeCommandCodec.encode(command)
+        val decoded = MemeCommandCodec.decode(json)!! as MemeCommand.SetSoundtrack
+        assertEquals(soundtrack(), decoded.soundtrack)
+        val project = MemeRules.apply(
+            MemeProject(mode = MemeMode.VIDEO),
+            decoded,
+        )
+        assertEquals(soundtrack(), project.soundtrack)
+        // sound-del removes; a junk row normalizes to the same removal.
+        val removed = MemeRules.apply(
+            project,
+            MemeCommandCodec.decode("{\"op\":\"sound-del\"}") as MemeCommand.SetSoundtrack,
+        )
+        assertNull(removed.soundtrack)
+        val junk = MemeRules.apply(
+            MemeProject(mode = MemeMode.VIDEO),
+            MemeCommand.SetSoundtrack(soundtrack().copy(durationMs = 0)),
+        )
+        assertNull(junk.soundtrack, "an unusable row never lands on the wire")
+    }
+
     // ── Interop fixture (repo rule: protocol changes ship fixtures) ───
 
     @Test

@@ -13,7 +13,7 @@ struct BitosMediaUploader: Sendable {
         bytes: Data,
         mimeType: String,
         filename: String = "meme.mp4",
-        onProgress: ((_ sent: Int, _ total: Int) -> Void)? = nil
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String) {
         guard !bytes.isEmpty, bytes.count <= Self.maxBitOSUploadBytes else {
             throw UploadFailure(message: "file out of bounds")
@@ -69,7 +69,7 @@ struct MemeVideoUploader: Sendable {
         mimeType: String,
         identity: IdentityStore,
         onStage: ((BlossomUploader.UploadStage) -> Void)? = nil,
-        onProgress: ((_ sent: Int, _ total: Int) -> Void)? = nil
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         // Dual-leg fraction: each leg's inner progress is REAL socket
         // bytes; the fixed 75/25 weights only stitch the two legs into one

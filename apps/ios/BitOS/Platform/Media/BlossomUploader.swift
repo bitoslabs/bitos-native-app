@@ -34,7 +34,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         serverUrl: String,
         nowSeconds: Int64 = Int64(Date.now.timeIntervalSince1970),
         onStage: ((UploadStage) -> Void)? = nil,
-        onProgress: ((_ sent: Int, _ total: Int) -> Void)? = nil
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         guard !bytes.isEmpty, bytes.count <= 64 * 1024 * 1024 else { throw UploadFailure(message: "file out of bounds") }
         onStage?(.hashing)
