@@ -7,6 +7,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -87,6 +93,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -94,6 +101,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -5474,21 +5482,106 @@ private fun PublishMachineSection(
             )
         }
 
-        // Progress bar (fraction of completed stages).
-        Box(
+        // At-a-glance ring: percent of COMPLETED stages (checkpoints only —
+        // the fraction never simulates) + a rotating sweep arc for liveness
+        // inside a stage, where checkpoints cannot move the fraction, and
+        // the step counter + current stage name beside it.
+        val stageCount = 8
+        val percent = (doneCount.toFloat() / stageCount * 100).toInt()
+        val ringFraction by animateFloatAsState(
+            targetValue = (doneCount / stageCount.toFloat()).coerceIn(0f, 1f),
+            animationSpec = tween(300),
+            label = "publishRingFraction",
+        )
+        val stepCaption = when {
+            succeeded -> "All $stageCount stages complete"
+            failed -> "Stalled at step ${currentIndex + 1} of $stageCount"
+            else -> "Step ${currentIndex + 1} of $stageCount"
+        }
+        val stepSubtitle = if (succeeded) "Event confirmed by relay receipt" else rows[currentIndex].first
+        Row(
             Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(50))
-                .background(BitOSColors.surface),
+                .clip(RoundedCornerShape(12.dp))
+                .background(BitOSColors.surface)
+                .border(1.dp, BitOSColors.border, RoundedCornerShape(12.dp))
+                .padding(BitOSSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
         ) {
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(doneCount / 8f)
-                    .clip(RoundedCornerShape(50))
-                    .background(if (failed) BitOSColors.error else BitOSColors.primary),
-            )
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(68.dp)) {
+                CircularProgressIndicator(
+                    progress = { ringFraction },
+                    modifier = Modifier.size(68.dp),
+                    color = when {
+                        failed -> BitOSColors.error
+                        succeeded -> BitOSColors.success
+                        else -> BitOSColors.primary
+                    },
+                    strokeWidth = 6.dp,
+                    trackColor = BitOSColors.border.copy(alpha = 0.35f),
+                )
+                if (busy) {
+                    // BitOSColors resolves through a @Composable getter —
+                    // capture it here, not inside the Canvas draw lambda.
+                    val sweepColor = BitOSColors.primary.copy(alpha = 0.85f)
+                    val sweepAngle by rememberInfiniteTransition(label = "publishSweep")
+                        .animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing)),
+                            label = "publishSweepAngle",
+                        )
+                    Canvas(Modifier.size(68.dp).rotate(sweepAngle)) {
+                        drawArc(
+                            color = sweepColor,
+                            startAngle = -90f,
+                            sweepAngle = 22f,
+                            useCenter = false,
+                            style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round),
+                        )
+                    }
+                }
+                when {
+                    succeeded -> Icon(
+                        AppIcons.CheckCircle,
+                        contentDescription = null,
+                        tint = BitOSColors.success,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    failed -> Icon(
+                        AppIcons.Close,
+                        contentDescription = null,
+                        tint = BitOSColors.error,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    else -> Text(
+                        "$percent%",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.W800,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = BitOSColors.textPrimary,
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stepCaption,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = when {
+                        failed -> BitOSColors.error
+                        succeeded -> BitOSColors.success
+                        else -> BitOSColors.primary
+                    },
+                )
+                Text(
+                    stepSubtitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.W600,
+                    color = BitOSColors.textPrimary,
+                )
+            }
         }
 
         Column(
@@ -5534,12 +5627,21 @@ private fun PublishMachineSection(
                                 tint = BitOSColors.error,
                                 modifier = Modifier.size(11.dp),
                             )
+                            // The in-flight stage gets a live spinner, not a
+                            // static number — a stage can legitimately run for
+                            // a long time (video encode, large upload) between
+                            // checkpoints.
+                            rowCurrent -> CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 1.5.dp,
+                                color = BitOSColors.primary,
+                            )
                             else -> Text(
                                 "${index + 1}",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                fontWeight = if (rowCurrent) FontWeight.W700 else FontWeight.W500,
-                                color = if (rowCurrent) BitOSColors.primary else BitOSColors.textTertiary,
+                                fontWeight = FontWeight.W700,
+                                color = BitOSColors.textTertiary,
                             )
                         }
                     }

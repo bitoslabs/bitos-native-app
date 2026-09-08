@@ -632,10 +632,17 @@ Checking project -> Rendering -> Securing media hash -> Uploading
 Native implementation (2026-09-05, prototype `#/publishing` + `#/queue`
 parity): after Preflight's "Sign & publish", a full publish-machine screen
 runs the 8 REAL stages as a stepper — render → hash → upload → verify →
-build → sign → relay → confirm — with a progress bar, per-attempt job chip
-and stage details reporting facts (accepted relay hosts). Transitions fire
-at actual pipeline checkpoints (uploader hashing/PUT/verify; note
-built/signed/relayed; receipt-machine terminal result) — never timers.
+build → sign → relay → confirm — with a circular progress ring, per-attempt
+job chip and stage details reporting facts (accepted relay hosts).
+Transitions fire at actual pipeline checkpoints (uploader hashing/PUT/
+verify; note built/signed/relayed; receipt-machine terminal result) —
+never timers. The ring is the at-a-glance liveness answer (2026-09-08):
+its percent counts COMPLETED stages only (checkpoints, never simulated), a
+rotating sweep arc plus a spinner on the current row keeps the screen
+visibly alive inside long single stages (video encode, large upload), and
+the caption names the position — `Step 3 of 8 · Upload to Blossom`,
+`Stalled at step 3 of 8` on failure, `All 8 stages complete` with a
+check on success.
 Failure marks the stalled stage with Retry/Later; success shows the event
 id + confirmed relay count. Publish attempts are DURABLE jobs: a bounded
 ledger persists inputs + stage at every checkpoint, and the Recovery queue

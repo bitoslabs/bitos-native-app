@@ -229,6 +229,9 @@ struct ComposerScreen: View {
 
     /// Recently used hashtags — one-tap reuse (shared `RecentHashtags`
     /// ledger recorded on publish). Already-typed tags drop out.
+    /// Chips use the design-system `AppChip` metrics (32 pt, chip-family
+    /// padding); the row keeps its intrinsic height when the surrounding
+    /// VStack flexes (keyboard, mention panel) so it never squashes.
     private var recentHashtagChips: some View {
         let recent = RecentHashtagsStore.shared.suggestions(
             exclude: RecentHashtagsStore.hashtagsIn(text)
@@ -236,26 +239,21 @@ struct ComposerScreen: View {
         return Group {
             if !recent.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
                         Text("Recent")
-                            .font(.caption2.weight(.semibold))
+                            .font(BitOSType.labelSmall.weight(.semibold))
                             .foregroundStyle(BitOSTheme.textTertiary)
+                            .padding(.trailing, BitOSTheme.Spacing.xs)
                         ForEach(recent, id: \.self) { tag in
-                            Button("#\(tag)") {
+                            AppChip(title: "#\(tag)", tint: BitOSTheme.accent) {
                                 let glue = text.isEmpty || text.hasSuffix(" ") ? "" : " "
                                 text += glue + "#\(tag) "
                             }
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(BitOSTheme.surfaceElevated))
-                            .overlay(Capsule().strokeBorder(BitOSTheme.border))
-                            .foregroundStyle(BitOSTheme.accent)
-                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, BitOSTheme.Spacing.xs)
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

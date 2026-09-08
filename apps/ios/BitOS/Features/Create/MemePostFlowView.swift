@@ -868,16 +868,19 @@ private struct MemePublishingView: View {
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
 
-                // Progress bar (fraction of completed stages).
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(BitOSTheme.surface)
-                        Capsule()
-                            .fill(failed ? BitOSTheme.error : BitOSTheme.accent)
-                            .frame(width: max(6, geo.size.width * doneCount / 8))
-                    }
-                }
-                .frame(height: 6)
+                // At-a-glance ring: percent of completed stages + the
+                // in-flight stage's sweep arc (liveness inside a stage,
+                // where checkpoints cannot move the fraction).
+                PublishProgressRing(
+                    fraction: doneCount / 8,
+                    percent: Int((doneCount / 8 * 100).rounded()),
+                    stepIndex: currentStep.rawValue,
+                    stepCount: MemeEditorStore.PublishMachineStep.allCases.count,
+                    stepLabel: rows[min(rows.count - 1, max(0, currentStep.rawValue))].0,
+                    running: running,
+                    failed: failed,
+                    succeeded: succeeded
+                )
 
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
@@ -998,6 +1001,116 @@ private struct MemePublishingView: View {
     }
 }
 
+/// Determinate ring showing the percent of COMPLETED machine stages
+/// (checkpoints only — the fraction never simulates), a rotating sweep
+/// arc for liveness while a stage is in flight, and the step counter +
+/// current stage name beside it. Success fills green with a check;
+/// failure freezes at the stalled fraction in error red.
+private struct PublishProgressRing: View {
+    let fraction: Double
+    let percent: Int
+    /// 0-based index of the current (or stalled) stage.
+    let stepIndex: Int
+    let stepCount: Int
+    let stepLabel: String
+    let running: Bool
+    let failed: Bool
+    let succeeded: Bool
+
+    private var caption: String {
+        if succeeded { return "All \(stepCount) stages complete" }
+        if failed { return "Stalled at step \(stepIndex + 1) of \(stepCount)" }
+        return "Step \(stepIndex + 1) of \(stepCount)"
+    }
+
+    private var subtitle: String {
+        if succeeded { return "Event confirmed by relay receipt" }
+        return stepLabel
+    }
+
+    var body: some View {
+        HStack(spacing: BitOSTheme.Spacing.md) {
+            ZStack {
+                Circle()
+                    .stroke(BitOSTheme.surface, lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: CGFloat(max(0, min(1, fraction))))
+                    .stroke(
+                        failed ? BitOSTheme.error : succeeded ? BitOSTheme.success : BitOSTheme.accent,
+                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.3), value: fraction)
+                // Sweep arc: runs ahead of the frozen fraction so long
+                // single stages (video encode, big upload) read as alive.
+                // Own view = own state, so a retry after a terminal state
+                // restarts the rotation instead of inheriting 360°.
+                if running {
+                    PublishSweepArc()
+                }
+                Group {
+                    if succeeded {
+                        AppIcons.image(for: AppIcons.checkCircle)
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(BitOSTheme.success)
+                    } else if failed {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(BitOSTheme.error)
+                    } else {
+                        Text("\(percent)%")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(BitOSTheme.textPrimary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .frame(width: 68, height: 68)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                succeeded ? "Publish complete" :
+                    failed ? "Publish stalled at \(stepLabel), \(percent) percent done" :
+                    "\(percent) percent done, current step \(stepLabel)"
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(failed ? BitOSTheme.error : succeeded ? BitOSTheme.success : BitOSTheme.accent)
+                Text(subtitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textPrimary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(BitOSTheme.Spacing.sm)
+        .background(BitOSTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
+    }
+}
+
+/// The rotating arc orbiting the ring while a stage is in flight. Its
+/// `@State` is scoped to its own appearance: a retry re-inserts the view
+/// and restarts the sweep from 0°.
+private struct PublishSweepArc: View {
+    @State private var angle = 0.0
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.94, to: 1)
+            .stroke(
+                BitOSTheme.accent.opacity(0.85),
+                style: StrokeStyle(lineWidth: 6, lineCap: .round)
+            )
+            .rotationEffect(.degrees(-90 + angle))
+            .onAppear {
+                withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
+    }
+}
+
 /// One stepper row: numbered dot (✓ done · ring current · ✗ failed) +
 /// label + mono detail.
 private struct MachineRowView: View {
@@ -1026,9 +1139,12 @@ private struct MachineRowView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(BitOSTheme.error)
                 case .current:
-                    Text("\(number)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(BitOSTheme.accent)
+                    // The in-flight stage gets a live spinner, not a static
+                    // number — a stage can legitimately run for a long time
+                    // (video encode, large upload) between checkpoints.
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(BitOSTheme.accent)
                 case .pending:
                     Text("\(number)")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))

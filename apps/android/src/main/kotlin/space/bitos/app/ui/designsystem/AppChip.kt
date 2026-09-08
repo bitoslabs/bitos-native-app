@@ -26,7 +26,8 @@ import space.bitos.app.ui.theme.bitOSColors
 /**
  * Filter/tag chip (mockup `chip` family): 32 dp tall, surface + border;
  * `active` inverts to text-on-primary; optional remove ✕ for editable
- * tag rows; optional brand tint for zap/amount chips.
+ * tag rows; optional brand tint for zap/amount chips; optional `tint`
+ * for semantic text colors (e.g. accent hashtags).
  */
 @Composable
 fun AppChip(
@@ -35,6 +36,7 @@ fun AppChip(
     active: Boolean = false,
     brand: Boolean = false,
     enabled: Boolean = true,
+    tint: Color? = null,
     onClick: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
 ) {
@@ -45,6 +47,7 @@ fun AppChip(
         else -> colors.surface
     }
     val content = when {
+        tint != null -> tint
         active -> colors.background
         brand -> colors.primaryDark
         else -> colors.textSecondary

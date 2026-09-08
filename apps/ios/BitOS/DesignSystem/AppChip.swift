@@ -10,6 +10,9 @@ struct AppChip: View {
     var active = false
     var brand = false
     var enabled = true
+    /// Text tint override for semantic chips (e.g. accent for hashtags);
+    /// nil keeps the role default.
+    var tint: Color? = nil
     var onClick: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
 
@@ -20,6 +23,7 @@ struct AppChip: View {
     }
 
     private var content: Color {
+        if let tint { return tint }
         if active { return BitOSTheme.background }
         if brand { return BitOSTheme.textLink }
         return BitOSTheme.textSecondary

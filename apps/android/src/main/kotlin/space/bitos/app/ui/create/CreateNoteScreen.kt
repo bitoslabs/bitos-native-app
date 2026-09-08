@@ -87,6 +87,7 @@ import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.components.PowCard
 import space.bitos.app.ui.components.PowOutcome
 import space.bitos.app.ui.components.PubkeyAvatar
+import space.bitos.app.ui.designsystem.AppChip
 import space.bitos.app.ui.feed.HomeViewModel
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
@@ -381,7 +382,9 @@ fun CreateNoteScreen(
                         .onFocusChanged { fieldFocused = it.isFocused },
                 )
                 // Recently used hashtags — one-tap reuse (shared
-                // `RecentHashtags` ledger recorded on publish).
+                // `RecentHashtags` ledger recorded on publish). Chips use
+                // the design-system `AppChip` metrics (32 dp, chip-family
+                // padding), matching the iOS composer row.
                 val recentTags = remember(field.text) {
                     space.bitos.app.data.publish.RecentHashtagsStore.get(context).suggestions(
                         exclude = space.bitos.core.publish.RecentHashtags.hashtagsIn(field.text).toSet(),
@@ -392,30 +395,27 @@ fun CreateNoteScreen(
                         Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Text(
+                            "Recent",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.W600,
+                            color = BitOSColors.textTertiary,
+                        )
                         recentTags.forEach { tag ->
-                            TextButton(
+                            AppChip(
+                                text = "#$tag",
+                                tint = BitOSColors.primary,
                                 onClick = {
                                     val glue = if (field.text.isEmpty() || field.text.endsWith(" ")) "" else " "
                                     field = TextFieldValue(
                                         field.text + glue + "#$tag ",
-                                        androidx.compose.ui.text.TextRange((field.text + glue + "#$tag ").length),
+                                        TextRange((field.text + glue + "#$tag ").length),
                                     )
                                 },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(BitOSColors.surfaceElevated)
-                                    .border(1.dp, BitOSColors.border, RoundedCornerShape(50)),
-                            ) {
-                                Text(
-                                    "#$tag",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.W600,
-                                    color = BitOSColors.primary,
-                                )
-                            }
+                            )
                         }
                     }
                 }
