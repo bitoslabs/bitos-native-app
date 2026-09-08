@@ -810,9 +810,19 @@ recovery banner.
 
 ### 3.21 APP-021 — Trending sounds (V1.x)
 
-- [ ] Ranked list of most-used meme SFX (aggregated shared sounds + usage)
-- [ ] Per row: play/pause preview + waveform · "Use in Studio" → soundSeed
-      handoff → editor
+- [x] Ranked list of most-used sounds — **bootstrap shipped 2026-09-08**
+      (MST-050 Wave D): counting `sound` tags on published memes over the
+      live feed window (shared `MemeSoundTrending.rank`: 3-day half-life,
+      url+sha dedup, deterministic order) — no marketplace needed; the
+      kind-30078 licensed library (MST-047) augments the same rail later
+- [x] Per row: play/pause preview + waveform — SHIPPED 2026-09-08
+      (both platforms): ▶ streams the ranked artifact in-place (one row
+      at a time); the first preview also fetches the waveform (bounded
+      download → decode → shared `MemeSoundWaveform.peaks` bar math,
+      common-tested) and renders the bars, accent-tinted while playing
+- [x] "Use in Studio" → soundSeed handoff → editor (re-attach by URL:
+      hash-verified download, no re-upload; publish stamps the existing
+      artifact's tags)
 
 ---
 

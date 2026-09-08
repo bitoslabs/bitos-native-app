@@ -68,6 +68,21 @@
 | 2a | After a successful publish, start a new draft and open Post details | New draft shows the normal idle preflight, not the prior attempt's `Done`; `Done` appears only after a relay acceptance |
 | 3 | Kill the app mid-render → relaunch | Draft intact; no partial artifacts published |
 
+## S6 — "Use this sound" loop (Android + iOS; run after any sound-path change)
+
+| # | Step | Expected |
+|---|---|---|
+| 1 | Editor (video mode) → Sound tool → "♪ Pick sound from a video…" → pick a library video | "Extracting the sound…" then the attached row (label · duration · volume · Remove) |
+| 2 | Play/scrub the timeline | The soundtrack is audible in preview, glued to the clock; Mute/slider/remove work live |
+| 3 | Export → save to device | The saved file plays with clip audio + soundtrack (+ cues) mixed |
+| 4 | Publish | Receipt stages render; the note carries `sound`/`p`/`attribution` tags (raw event view) with the uploaded m4a's URL + sha256 |
+| 5 | Close the editor mid-session → Continue creating → Resume | The soundtrack rehydrates (row + audible); an undecodable restore strips the row with a named notice — never a silent export |
+| 6 | Any video bitz → rail **Sound** | Editor opens in video mode with the sound attached and NO clip; provenance (source note + author) shows in the wire row |
+| 7 | Publish a borrowed-sound meme | Feed/Bitz card shows the ♪ chip; the sound/p/attribution credit the source |
+| 8 | More → Trending sounds | The published borrow ranks (uses count, 3-day half-life); ▶ streams the artifact (one row at a time) and the waveform bars appear after the first preview (accent-tinted while playing); empty state explains the loop when none |
+| 9 | Trending row → "Use in Studio" | Hash-verified re-attach: editor seeds with the sound, publish stamps the EXISTING URL (no re-upload; a hash mismatch loads nothing and says so) |
+| 10 | Corrupt cases: pick a video with no audio / undecodable file | Named failures ("No readable audio track…" / "could not be decoded…"), session usable |
+
 ## Run log
 
 | Date | Sections | Device / OS | Result | Notes |

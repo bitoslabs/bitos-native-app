@@ -1,12 +1,16 @@
 package space.bitos.app.ui.more
 
+import android.media.MediaPlayer
 import androidx.compose.foundation.background
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -14,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
@@ -44,6 +52,83 @@ fun TrendingSoundsScreen(
     onClose: () -> Unit,
     onUseSound: (MemeSoundTrending.Row) -> Unit,
 ) {
+    // ── Row preview (§3.21): stream the ranked artifact and play it —
+    // one row at a time; toggling another row stops the current one.
+    var playingUrl by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    /** Waveform peaks per URL (§3.21) — fetched lazily on first preview,
+     * session-scoped; a failed fetch simply renders no bars. */
+    val waveforms = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateMapOf<String, List<Float>>()
+    }
+    val previewScope = androidx.compose.runtime.rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val previewPlayer = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<MediaPlayer?>(null)
+    }
+    fun stopPreview() {
+        previewPlayer.value?.release()
+        previewPlayer.value = null
+        playingUrl = null
+    }
+    fun togglePreview(url: String) {
+        if (playingUrl == url) {
+            stopPreview()
+            return
+        }
+        stopPreview()
+        if (waveforms[url] == null) {
+            previewScope.launch {
+                val peaks = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val connection = java.net.URI(url).toURL().openConnection() as java.net.HttpURLConnection
+                        try {
+                            connection.connectTimeout = 15_000
+                            connection.readTimeout = 30_000
+                            check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                            connection.inputStream.use { input ->
+                                val out = java.io.ByteArrayOutputStream()
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    out.write(buffer, 0, read)
+                                    check(out.size() <= space.bitos.core.model.Blossom.MAX_FILE_BYTES) { "too large" }
+                                }
+                                out.toByteArray()
+                            }
+                        } finally {
+                            connection.disconnect()
+                        }
+                    }.getOrNull()
+                        ?.let { bytes -> space.bitos.app.ui.create.meme.MemeVideoSound.decodePcm(context, bytes) }
+                        ?.let { (pcm, _) ->
+                            space.bitos.core.studio.MemeSoundWaveform.peaks(pcm).toList()
+                        }
+                }
+                if (peaks != null && peaks.isNotEmpty()) waveforms[url] = peaks
+            }
+        }
+        val player = MediaPlayer()
+        previewPlayer.value = player
+        player.setOnCompletionListener { stopPreview() }
+        player.setOnErrorListener { _, _, _ ->
+            stopPreview()
+            true
+        }
+        runCatching {
+            player.setDataSource(url)
+            player.prepareAsync()
+            player.setOnPreparedListener {
+                playingUrl = url
+                it.start()
+            }
+        }.onFailure { stopPreview() }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { stopPreview() }
+    }
     val rows = androidx.compose.runtime.remember(notes) {
         val now = System.currentTimeMillis()
         val usages = notes.mapNotNull { note ->
@@ -128,6 +213,24 @@ fun TrendingSoundsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = BitOSColors.textSecondary,
                         )
+                        waveforms[row.url]?.let { peaks ->
+                            WaveformBars(
+                                peaks = peaks,
+                                active = playingUrl == row.url,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 2.dp),
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { togglePreview(row.url) },
+                    ) {
+                        Icon(
+                            if (playingUrl == row.url) AppIcons.Pause else AppIcons.Play,
+                            contentDescription = if (playingUrl == row.url) "Pause preview" else "Preview sound",
+                            tint = BitOSColors.textSecondary,
+                        )
                     }
                     TextButton(
                         onClick = { onUseSound(row) },
@@ -136,6 +239,34 @@ fun TrendingSoundsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/** §3.21 waveform bars: normalized peaks as a compact bar row (active
+ *  tint while this row is the one previewing). */
+@androidx.compose.runtime.Composable
+private fun WaveformBars(
+    peaks: List<Float>,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    // Theme reads must happen in the composable context, not the draw lambda.
+    val activeTint = BitOSColors.primary
+    val idleTint = BitOSColors.textTertiary
+    androidx.compose.foundation.Canvas(
+        modifier = modifier.height(18.dp),
+    ) {
+        if (peaks.isEmpty()) return@Canvas
+        val barWidth = size.width / peaks.size
+        val tint = if (active) activeTint else idleTint
+        peaks.forEachIndexed { index, peak ->
+            val barHeight = (size.height * peak.coerceIn(0f, 1f)).coerceAtLeast(1.5f)
+            drawRect(
+                color = tint.copy(alpha = 0.8f),
+                topLeft = androidx.compose.ui.geometry.Offset(index * barWidth + barWidth * 0.2f, (size.height - barHeight) / 2f),
+                size = androidx.compose.ui.geometry.Size(barWidth * 0.6f, barHeight),
+            )
         }
     }
 }

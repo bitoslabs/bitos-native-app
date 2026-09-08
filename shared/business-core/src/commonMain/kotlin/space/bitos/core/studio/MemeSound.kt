@@ -4,6 +4,38 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** Waveform peaks for the trending rail's rows ("use this sound"
+ *  §3.21): bucket the decoded PCM into `bars` max-abs peaks, normalized
+ *  0..1. Pure + common-tested; the natives only decode → feed → render. */
+object MemeSoundWaveform {
+
+    /** Default rail bar count (matches the prototype's compact rows). */
+    const val BARS = 28
+
+    /** Bounded/normalized peaks; empty on degenerate input. */
+    fun peaks(pcm: FloatArray, bars: Int = BARS): FloatArray {
+        if (pcm.isEmpty() || bars <= 0) return FloatArray(0)
+        val out = FloatArray(bars)
+        val bucket = pcm.size / bars
+        val remainder = pcm.size % bars
+        var index = 0
+        for (bar in 0 until bars) {
+            val count = bucket + if (bar < remainder) 1 else 0
+            var peak = 0f
+            for (i in 0 until count) {
+                val sample = pcm[index + i]
+                if (!sample.isNaN()) {
+                    val magnitude = abs(sample)
+                    if (magnitude > peak) peak = magnitude
+                }
+            }
+            out[bar] = min(1f, max(0f, peak))
+            index += count
+        }
+        return out
+    }
+}
+
 /**
  * Soundtrack PCM bed math ("use this sound" Wave B, plan
  * docs/product/use-this-sound-plan.md §5): a decoded soundtrack is

@@ -493,6 +493,22 @@ non-destructive
 and the fix, keep the hub untouched), and a brief "Preparing your
 video…" stage covers the byte read before the editor opens.
 
+**The sound loop (2026-09-08, MST-050 A–D shipped both platforms; plan
+`use-this-sound-plan.md`):** any video's audio can become a project's
+ONE soundtrack — picked in the editor's Sound tool ("♪ Pick sound from
+a video…"), borrowed from any video bitz (rail **Sound** action: the
+editor seeds sound-first, NO clip — TikTok's loop), or re-attached from
+the **Trending sounds** rail (More hub: counting `sound` tags over the
+feed window with a 3-day half-life — APP-021 bootstrap, no
+marketplace). Preview plays it glued to the timeline clock; export
+mixes clip audio + soundtrack + synth cues into one bed; drafts persist
+the m4a and rehydrate on resume (undecodable → row stripped with a
+named notice, never a silent export). Publishing uploads the m4a
+hash-verified BEFORE signing and stamps `sound` + `p` + `attribution`
+credit for the source author; re-attached artifacts stamp the existing
+URL without re-uploading. Published borrows render a ♪ chip on the
+card.
+
 Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-details`
 → `#/create-review` parity): the editor screen follows the prototype layout —
 "Editor" header with draft save and the "Next" publish entry inline with it

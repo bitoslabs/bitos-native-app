@@ -69,7 +69,7 @@ Wave legend per spec §8. W0 foundation is prior work.
 | APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), i18n strings (APP-024) |
 | APP-019 | Studio §3.19 | W4 | ✅ | ✅ | ✅ | **M1 COMPLETE (2026-09-02)**: image editor end-to-end both platforms — editing core (tray/gestures/text+sticker/coalesced undo), wire codec `com.bitos.bitz.meme` v1 (interop gate), 1080 raster export → Photos, kind-20 publish (CW/alt/imeta, verify-before-sign), autosave + ≤6 continuation slots; camera/trim/publish live (CAP/PUB); remain: GIF mode (M2), video mode (M3), V2 suite |
 | APP-020 | Static pages §3.20 | W1 | ✅ | ✅ | ✅ | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens |
-| APP-021 | Trending sounds §3.21 | W3 | ☐ | ☐ | ☐ | needs shared-sounds (kind 30078) |
+| APP-021 | Trending sounds §3.21 | W3 | ◐ | ◐ | ✅ | **bootstrap shipped 2026-09-08** (MST-050 Wave D): More → Trending sounds rail over the LIVE feed window — shared `MemeSoundTrending.rank` (3-day half-life, url+sha dedup, deterministic) fed by `sound` tags on published memes; "Use in Studio" re-attaches by URL through the Wave C editor path (hash-verified, no re-upload); row play/pause PREVIEW + WAVEFORM shipped 2026-09-08 (streams in-place, one row at a time; peaks via shared `MemeSoundWaveform.peaks`, common-tested). SHARED rules + tests ✅; the kind-30078 licensed library (MST-047) remains |
 | APP-022 | Component library §4 | W1 | ◐ | ◐ | n/a | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain |
 | APP-023 | Tokens & theming §2 | W1 | ✅ | ✅ | n/a | dark + light tokens live; theme (light/dark/system), accent palette, font scale and compact mode now APPLY app-wide from the shared settings contract (Android: `BitOSTheme(darkTheme, accentColorHex)` + dynamic `BitOSColors` palette + system-bar contrast sync; iOS: `SettingsStore` syncs `BitOSTheme.modeOverride`/`accentOverride` live and the shell/sheets drive `preferredColorScheme`); launch chain (system splash + boot splash) stays dark-branded (dark-only art); reduced-motion/high-contrast toggles remain (§2.6) |
 | APP-024 | i18n en/lo §7 | W1 | ☐ | ☐ | n/a | string tables + wiring |
@@ -425,6 +425,18 @@ V2 suite).
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-09-08 (docs close-out of the sound epic) — the trackers caught
+  up with the shipped MST-050 A–D work: APP-021's master row ☐→◐ (the
+  bootstrap rail + shared rank + re-attach shipped; row audio preview
+  and the kind-30078 library remain), spec §3.21 items marked honestly,
+  ux-ui-flows §6 gained the sound-loop paragraph (canonical flow doc
+  obligation), and the manual QA checklist gained **S6** — the 10-step
+  on-device pass for the whole borrow→edit→publish→chip→trending→
+  re-attach loop (feeds MUX-10's device validation). Synced while
+  here: the feed/Home app-bar quick import was since REMOVED by a
+  concurrent change (single publish path everywhere) and the checklist's
+  S3 already reflects it — verified.
 
 - 2026-09-08 (Wave D, iOS — **the "use this sound" epic is fully
   cross-platform**; left UNCOMMITTED for owner review) — MST-050 Wave D
