@@ -369,4 +369,37 @@ class MemeEditorStateTest {
         assertTrue(state.undo())
         assertEquals(listOf("v1", "v2"), state.project.clips.map { it.id })
     }
+
+    @Test
+    fun duplicateClonesStyleWithAFreshIdAndOneUndoStep() {
+        val state = MemeEditorState()
+        val id = state.addOverlay(MemeOverlayKind.TEXT, "same")!!
+        state.updateStyle(id, outline = 4, startMs = 500, endMs = 900)
+
+        val copyId = state.duplicateOverlay(id)!!
+        assertNotEquals(id, copyId)
+        val copy = state.project.overlays.last()
+        assertEquals(copyId, copy.id)
+        assertEquals("same", copy.text)
+        assertEquals(4, copy.outline, "style clones verbatim")
+        assertEquals(500L, copy.startMs, "visibility windows clone verbatim")
+        assertEquals(900L, copy.endMs)
+        assertEquals(state.project.overlays.first().x + 0.05f, copy.x, 1e-4f, "copy offsets diagonally")
+        assertEquals(copyId, state.selectedOverlayId, "selection moves to the copy")
+
+        // ONE undo removes the duplicate only — the source survives.
+        assertTrue(state.undo())
+        assertEquals(listOf(id), state.project.overlays.map { it.id })
+
+        // Repeated duplicates of the same overlay keep minting unique ids.
+        state.duplicateOverlay(id)
+        state.duplicateOverlay(id)
+        assertEquals(3, state.project.overlays.map { it.id }.toSet().size)
+
+        // At the shared cap the duplicate is refused, never drops an overlay.
+        while (state.canAddOverlay) state.addOverlay(MemeOverlayKind.STICKER, "")
+        val sizeAtCap = state.project.overlays.size
+        assertNull(state.duplicateOverlay(state.project.overlays.last().id))
+        assertEquals(sizeAtCap, state.project.overlays.size)
+    }
 }

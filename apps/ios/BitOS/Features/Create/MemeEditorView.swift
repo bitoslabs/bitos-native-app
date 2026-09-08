@@ -590,6 +590,38 @@ final class MemeEditorStore {
         if projectJson != before { pushHistory(before) }
     }
 
+    /// Selection-rail duplicate: clones the overlay verbatim from the raw
+    /// wire JSON (style, caps/bar, fx, visibility windows and the asset
+    /// binding all survive) with a fresh deterministic id and a small
+    /// diagonal offset so the copy lands visible beside the original — one
+    /// undo step, cap-checked, selection moves to the copy. Shared
+    /// `decodeOverlayJson` + `MemeRules.apply` clamp the offset again on
+    /// the Kotlin side, so hostile values can't ride the command.
+    func duplicateOverlay(_ id: String) {
+        guard canAddOverlay,
+              let data = projectJson.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let list = root["overlays"] as? [[String: Any]],
+              let index = list.firstIndex(where: { ($0["id"] as? String) == id })
+        else { return }
+        var copy = list[index]
+        var candidate = "\(id)-c"
+        var bump = 0
+        while list.contains(where: { ($0["id"] as? String) == candidate }) {
+            bump += 1
+            candidate = "\(id)-c\(bump)"
+        }
+        copy["id"] = candidate
+        copy["x"] = min(max(((copy["x"] as? Double) ?? 0.5) + 0.05, 0), 1)
+        copy["y"] = min(max(((copy["y"] as? Double) ?? 0.5) + 0.05, 0), 1)
+        let before = projectJson
+        apply(commandJson: Self.encode(["op": "add", "overlay": copy]))
+        if projectJson != before {
+            pushHistory(before)
+            selectedId = Self.parseOverlays(projectJson).last?.id
+        }
+    }
+
     /// Selects one overlay by id (Layers sheet); unknown ids deselect.
     func select(_ id: String) {
         selectedId = overlays.contains { $0.id == id } ? id : nil
@@ -670,6 +702,10 @@ final class MemeEditorStore {
 
     // MARK: - Gestures (drag / pinch / twist; tap = hit-test)
 
+    /// True while a direct-manipulation gesture is in flight — floating
+    /// chrome (the selection rail) recedes so the gesture owns the focus.
+    private(set) var gestureActive = false
+
     private var gestureBegan = false
     private var gestureMoved = false
 
@@ -677,6 +713,7 @@ final class MemeEditorStore {
         guard !gestureBegan else { return }
         gestureBegan = true
         gestureMoved = false
+        gestureActive = true
         gestureSnapshot = projectJson
     }
 
@@ -718,6 +755,7 @@ final class MemeEditorStore {
     func endGesture() {
         guard gestureBegan else { return }
         gestureBegan = false
+        gestureActive = false
         defer { gestureSnapshot = nil }
         if gestureMoved, let snapshot = gestureSnapshot, snapshot != projectJson {
             pushHistory(snapshot)
@@ -728,6 +766,7 @@ final class MemeEditorStore {
         guard gestureBegan else { return }
         gestureBegan = false
         gestureMoved = false
+        gestureActive = false
         if let snapshot = gestureSnapshot {
             projectJson = snapshot
             refresh()
@@ -1952,6 +1991,8 @@ struct MemeEditorView: View {
     @State private var stageSize: CGSize = .zero
     @State private var showDiscard = false
     @State private var editingOverlayId: String?
+    /** Precision sheet (selection rail ▸ Move): nudge/zoom/rotate cluster. */
+    @State private var showPrecision = false
     /** Inline tool panel (prototype `create-edit` panels open under the
      * quick-tool chips instead of covering the canvas with a sheet). */
     @State private var activePanel: EditorPanel?
@@ -2467,9 +2508,6 @@ struct MemeEditorView: View {
                 .padding(.bottom, BitOSTheme.Spacing.sm)
             }
             }
-            if store.selectedId != nil {
-                selectionControls
-            }
             perModeBar
             statusLine
         }
@@ -2482,6 +2520,9 @@ struct MemeEditorView: View {
             ExportSettingsSheet(store: store, onMakeVariations: onMakeVariations)
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPrecision) {
+            precisionControlsSheet
         }
     }
 
@@ -2966,21 +3007,32 @@ struct MemeEditorView: View {
 
     /** The canvas as a bounded card (prototype `ed-canvas`): fixed height,
      * rounded, meta chips pinned bottom-leading, gestures unchanged. */
+    /// Stage card: the media and the selection rail are LAYOUT siblings
+    /// (not an overlay) — the canvas smoothly gives up ~52 pt of gutter
+    /// while an element is selected and the media is never covered.
+    /// Overlay coordinates are normalized to the fitted stage, so the
+    /// inset never disturbs geometry, gestures or export.
     private func stageCard(height: CGFloat) -> some View {
-        stage
-            .frame(height: height)
-            .frame(maxWidth: .infinity)
-            .background(
-                store.canvasBackgroundHex.flatMap { MemeEditorStore.colorHex($0) }
-                    ?? BitOSTheme.surface
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                if drawMode { drawCaptureOverlay }
+        HStack(alignment: .center, spacing: 4) {
+            stage
+                .frame(height: height)
+                .frame(maxWidth: .infinity)
+            if store.selectedId != nil {
+                selectionRail
             }
-            .overlay(alignment: .bottomLeading) {
-                if !stageMetaChips.isEmpty { stageMetaChipRow }
-            }
+        }
+        .background(
+            store.canvasBackgroundHex.flatMap { MemeEditorStore.colorHex($0) }
+                ?? BitOSTheme.surface
+        )
+        .animation(.easeOut(duration: 0.18), value: store.selectedId != nil)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            if drawMode { drawCaptureOverlay }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if !stageMetaChips.isEmpty { stageMetaChipRow }
+        }
     }
 
     /** Quick tool chips (prototype: Meme · Text · Stickers · Sound ·
@@ -3207,64 +3259,141 @@ struct MemeEditorView: View {
         }
     }
 
-    /// Accessible manipulation for the selected overlay (MUX-03): explicit
-    /// nudge / resize / rotate / edit / delete controls — no precision
-    /// gestures required. Every action is one undoable command.
+    /// Selection action rail (MUX-03 refresh): per-ELEMENT actions live in
+    /// a narrow vertical pill beside the canvas (a layout sibling, never
+    /// an overlay) — per-PROJECT actions stay in the bottom bars. Primary
+    /// rail: edit (text) · duplicate · forward · backward · move ▸ (opens
+    /// the precision sheet) · delete. Recedes while a direct gesture owns
+    /// the focus. RTL mirrors via trailing/leading.
     @ViewBuilder
-    private var selectionControls: some View {
+    private var selectionRail: some View {
         if let overlay = store.overlays.first(where: { $0.id == store.selectedId }) {
-            HStack(spacing: BitOSTheme.Spacing.md) {
-                Button {
-                    store.updateStyle(overlay.id, fields: ["x": overlay.x - 0.05])
-                } label: { Image(systemName: "arrow.left") }
-                    .accessibilityLabel("Nudge left")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["x": overlay.x + 0.05])
-                } label: { Image(systemName: "arrow.right") }
-                    .accessibilityLabel("Nudge right")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["y": overlay.y - 0.05])
-                } label: { Image(systemName: "arrow.up") }
-                    .accessibilityLabel("Nudge up")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["y": overlay.y + 0.05])
-                } label: { Image(systemName: "arrow.down") }
-                    .accessibilityLabel("Nudge down")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 0.9])
-                } label: { Image(systemName: "minus.magnifyingglass") }
-                    .accessibilityLabel("Shrink")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 1.1])
-                } label: { Image(systemName: "plus.magnifyingglass") }
-                    .accessibilityLabel("Enlarge")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["rot": overlay.rot - 15])
-                } label: { Image(systemName: "arrow.counterclockwise") }
-                    .accessibilityLabel("Rotate left")
-                Button {
-                    store.updateStyle(overlay.id, fields: ["rot": overlay.rot + 15])
-                } label: { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("Rotate right")
+            VStack(spacing: 2) {
                 if !overlay.isSticker && overlay.assetId == nil {
-                    Button {
-                        editingOverlayId = overlay.id
-                    } label: { Image(systemName: "textformat") }
-                        .accessibilityLabel("Edit text")
+                    railButton("Edit text", "pencil") { editingOverlayId = overlay.id }
                 }
-                Button(role: .destructive) {
+                railButton("Duplicate overlay", "plus.square.on.square") {
+                    store.duplicateOverlay(overlay.id)
+                }
+                railButton("Bring forward", "arrow.up.square") {
+                    store.moveOverlay(overlay.id, delta: 1)
+                }
+                railButton("Send backward", "arrow.down.square") {
+                    store.moveOverlay(overlay.id, delta: -1)
+                }
+                railButton("Move, zoom and rotate", "move") {
+                    showPrecision = true
+                }
+                Divider()
+                    .frame(width: 24)
+                    .padding(.vertical, 2)
+                railButton("Delete overlay", "trash", destructive: true) {
                     store.removeOverlay(overlay.id)
-                } label: { Image(systemName: "trash") }
-                    .accessibilityLabel("Delete overlay")
+                }
             }
-            .font(.system(size: 14, weight: .semibold))
-            .buttonStyle(.borderless)
-            .foregroundStyle(BitOSTheme.textSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, BitOSTheme.Spacing.xs)
-            .overlay(alignment: .top) { Divider() }
-            .padding(.horizontal, BitOSTheme.Spacing.md)
+            .padding(.vertical, 4)
+            .frame(width: 52)
+            .background(
+                BitOSTheme.surfaceOverlay.opacity(0.94),
+                in: RoundedRectangle(cornerRadius: 22)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .strokeBorder(BitOSTheme.border, lineWidth: 1)
+            )
+            .opacity(store.gestureActive ? 0.35 : 1)
+            .animation(.easeOut(duration: 0.15), value: store.gestureActive)
         }
+    }
+
+    /// Precision sheet (MUX-03): the fine-adjustment cluster — nudge pad
+    /// + zoom + rotate — in the app's standard tool-sheet language, so
+    /// the canvas is never occluded or shrunk further for low-frequency
+    /// tuning. Every tap is one undoable command (bursts coalesce on the
+    /// shared side).
+    private var precisionControlsSheet: some View {
+        VStack(spacing: BitOSTheme.Spacing.sm) {
+            Text("Move, zoom and rotate")
+                .font(.headline)
+            if let overlay = store.overlays.first(where: { $0.id == store.selectedId }) {
+                // Nudge pad (D-pad cluster; the center is a position dot).
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 44, height: 44)
+                    railButton("Nudge up", "arrow.up") {
+                        store.updateStyle(overlay.id, fields: ["y": overlay.y - 0.05])
+                    }
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                HStack(spacing: 0) {
+                    railButton("Nudge left", "arrow.left") {
+                        store.updateStyle(overlay.id, fields: ["x": overlay.x - 0.05])
+                    }
+                    Circle()
+                        .fill(BitOSTheme.border)
+                        .frame(width: 6, height: 6)
+                        .frame(width: 44, height: 44)
+                    railButton("Nudge right", "arrow.right") {
+                        store.updateStyle(overlay.id, fields: ["x": overlay.x + 0.05])
+                    }
+                }
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 44, height: 44)
+                    railButton("Nudge down", "arrow.down") {
+                        store.updateStyle(overlay.id, fields: ["y": overlay.y + 0.05])
+                    }
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                Divider().frame(width: 180)
+                HStack(spacing: 0) {
+                    railButton("Shrink", "minus.magnifyingglass") {
+                        store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 0.9])
+                    }
+                    railButton("Enlarge", "plus.magnifyingglass") {
+                        store.updateStyle(overlay.id, fields: ["scale": overlay.scale * 1.1])
+                    }
+                }
+                HStack(spacing: 0) {
+                    railButton("Rotate left", "arrow.counterclockwise") {
+                        store.updateStyle(overlay.id, fields: ["rot": overlay.rot - 15])
+                    }
+                    railButton("Rotate right", "arrow.clockwise") {
+                        store.updateStyle(overlay.id, fields: ["rot": overlay.rot + 15])
+                    }
+                }
+            } else {
+                Text("Select a sticker or text on the canvas first")
+                    .font(.subheadline)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Button("Done") { showPrecision = false }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BitOSTheme.accent)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.sm)
+        .padding(.bottom, BitOSTheme.Spacing.lg)
+        .background(BitOSTheme.background)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// One rail action: 44 pt target, 14 pt glyph, a11y label, optional
+    /// destructive/selected tint.
+    private func railButton(
+        _ label: String,
+        _ symbol: String,
+        destructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(destructive ? BitOSTheme.error : BitOSTheme.textSecondary)
+        .accessibilityLabel(label)
     }
 
     /** Per-mode bottom toolbar (prototype `edBar`). Real features open;

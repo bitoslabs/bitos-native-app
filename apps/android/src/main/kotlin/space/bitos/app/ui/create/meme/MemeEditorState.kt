@@ -2,6 +2,7 @@ package space.bitos.app.ui.create.meme
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import space.bitos.core.studio.MemeAsset
 import space.bitos.core.studio.MemeCommand
@@ -208,6 +209,31 @@ class MemeEditorState(
         val target = (index + delta).coerceIn(0, project.overlays.lastIndex)
         if (target == index) return
         commit(MemeCommand.ReorderOverlay(id, target))
+    }
+
+    /**
+     * Selection-rail duplicate: clones the overlay verbatim (style, fx,
+     * visibility windows, asset binding) with a fresh deterministic id
+     * and a small diagonal offset so the copy lands visible beside the
+     * original — one undo step, cap-checked, selection moves to the copy.
+     */
+    fun duplicateOverlay(id: String): String? {
+        val source = project.overlays.firstOrNull { it.id == id } ?: return null
+        if (!canAddOverlay) return null
+        var candidate = "${source.id}-c"
+        var bump = 0
+        while (project.overlays.any { it.id == candidate }) {
+            bump += 1
+            candidate = "${source.id}-c$bump"
+        }
+        val copy = source.copy(
+            id = candidate,
+            x = MemeRules.clampCoordinate(source.x + 0.05f),
+            y = MemeRules.clampCoordinate(source.y + 0.05f),
+        )
+        commit(MemeCommand.AddOverlay(copy))
+        selectedOverlayId = copy.id
+        return candidate
     }
 
     /** Source-media color grade (MST-043) — one undoable command. */
@@ -419,7 +445,9 @@ class MemeEditorState(
 
     // ── Gesture stream (drag / pinch / twist on the selection) ──────────
 
-    private var gesture: GestureSnapshot? = null
+    // Observable so floating chrome (the selection rail) can recede
+    // while a direct-manipulation gesture is in flight.
+    private var gesture by mutableStateOf<GestureSnapshot?>(null)
 
     private data class GestureSnapshot(
         val id: String,

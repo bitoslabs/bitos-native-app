@@ -6,6 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -730,6 +735,8 @@ fun MemeEditorScreen(
     /** M5 per-clip audio (volume · mute) — replaces the old "Sound · soon". */
     var showVolume by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    /** Precision sheet (selection rail ▸ Move): nudge/zoom/rotate cluster. */
+    var showPrecision by remember { mutableStateOf(false) }
     var showCanvas by remember { mutableStateOf(false) }
     /** V2 Draw mode: pen strokes captured on the stage (all modes). */
     var drawMode by remember { mutableStateOf(false) }
@@ -1347,8 +1354,19 @@ fun MemeEditorScreen(
         val stageArea: @Composable (Modifier) -> Unit = { stageBoxModifier ->
         val stageWidth = stagePx.width.coerceAtLeast(1)
         val stageHeight = stagePx.height.coerceAtLeast(1)
-        Box(
+        // Stage card: the media box and the selection rail are LAYOUT
+        // siblings (not an overlay) — the canvas smoothly gives up ~52 dp
+        // of gutter while an element is selected and the media is never
+        // covered. Coordinates stay normalized to the fitted stage box,
+        // so overlays, gestures and export are untouched by the inset.
+        Row(
             modifier = stageBoxModifier,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
             contentAlignment = Alignment.Center,
         ) {
             val current = if (gifMode || videoMode) null else activeAsset
@@ -1559,6 +1577,41 @@ fun MemeEditorScreen(
                                 .clip(RoundedCornerShape(50))
                                 .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f))
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+            // Selection action rail — a LAYOUT sibling in the trailing
+            // gutter (animated width): per-ELEMENT actions live beside
+            // the element, per-PROJECT actions stay in the bottom bars,
+            // and toggling a selection never covers or shifts the media.
+            // Basic editor only (the suite dock keeps its own chrome).
+            // The rail recedes while a drag/pinch/twist is in flight so
+            // direct manipulation owns the visual focus; precision
+            // fine-tuning opens the standard tool sheet instead of
+            // stacking another panel over the canvas.
+            if (!suiteActive) {
+                AnimatedVisibility(
+                    visible = state.project.overlays.any { it.id == state.selectedOverlayId },
+                    enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
+                    exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut(),
+                ) {
+                    state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }?.let { selected ->
+                        SelectionControlsRail(
+                            isText = selected.kind != MemeOverlayKind.STICKER &&
+                                selected.kind != MemeOverlayKind.IMAGE,
+                            dimmed = state.gestureActive,
+                            onEdit = { editingOverlayId = selected.id },
+                            onDuplicate = {
+                                state.duplicateOverlay(selected.id) ?: run {
+                                    exportStatus = "Overlay limit reached (${MemeProjectContract.MAX_OVERLAYS})"
+                                }
+                            },
+                            onForward = { state.moveOverlay(selected.id, +1) },
+                            onBackward = { state.moveOverlay(selected.id, -1) },
+                            onPrecision = { showPrecision = true },
+                            onDelete = { state.removeOverlay(selected.id) },
                         )
                     }
                 }
@@ -1830,18 +1883,6 @@ fun MemeEditorScreen(
                 }
                 Spacer(Modifier.height(BitOSSpacing.sm))
             }
-            }
-            state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }?.let { selected ->
-                SelectionControlsRow(
-                    selectedId = selected.id,
-                    isText = selected.kind != space.bitos.core.studio.MemeOverlayKind.STICKER &&
-                        selected.kind != space.bitos.core.studio.MemeOverlayKind.IMAGE,
-                    onNudge = { dx, dy -> state.nudgeOverlay(selected.id, dx = dx, dy = dy) },
-                    onScale = { factor -> state.nudgeOverlay(selected.id, scaleFactor = factor) },
-                    onRotate = { degrees -> state.nudgeOverlay(selected.id, dRot = degrees) },
-                    onEdit = { editingOverlayId = selected.id },
-                    onDelete = { state.removeOverlay(selected.id) },
-                )
             }
             PerModeBar(
                 videoMode = videoMode,
@@ -2383,6 +2424,23 @@ fun MemeEditorScreen(
                 ratio = state.project.canvasRatio ?: space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
                 bg = state.project.canvasBg,
                 onPick = { ratio, bg -> state.setCanvas(ratio, bg) },
+            )
+        }
+    }
+
+    if (showPrecision) {
+        ModalBottomSheet(onDismissRequest = { showPrecision = false }) {
+            PrecisionSheetContent(
+                onNudge = { dx, dy ->
+                    state.selectedOverlayId?.let { state.nudgeOverlay(it, dx = dx, dy = dy) }
+                },
+                onScale = { factor ->
+                    state.selectedOverlayId?.let { state.nudgeOverlay(it, scaleFactor = factor) }
+                },
+                onRotate = { degrees ->
+                    state.selectedOverlayId?.let { state.nudgeOverlay(it, dRot = degrees) }
+                },
+                onClose = { showPrecision = false },
             )
         }
     }
@@ -3466,61 +3524,144 @@ private fun ExportPresetSection(
 
 /** Accessible manipulation for the selection (MUX-03): nudge / resize /
  *  rotate / edit / delete without precision gestures — 48dp targets. */
+/**
+ * Selection action rail (MUX-03 refresh): per-ELEMENT actions live in a
+ * narrow vertical pill beside the canvas (a layout sibling, never an
+ * overlay) — per-PROJECT actions stay in the bottom bars. Primary rail:
+ * edit (text) · duplicate · forward · backward · move ▸ (opens the
+ * precision sheet) · delete. [dimmed] recedes the rail while a direct
+ * gesture owns the focus. RTL mirrors via layout direction.
+ */
 @Composable
-private fun SelectionControlsRow(
-    selectedId: String,
+private fun SelectionControlsRail(
     isText: Boolean,
+    dimmed: Boolean,
+    onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    onForward: () -> Unit,
+    onBackward: () -> Unit,
+    onPrecision: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .alpha(if (dimmed) 0.35f else 1f)
+            .width(52.dp)
+            // Wraps on the shortest stages (GIF card, small screens)
+            // instead of clipping buttons under the card mask.
+            .verticalScroll(rememberScrollState())
+            .clip(RoundedCornerShape(22.dp))
+            .background(BitOSColors.surfaceOverlay.copy(alpha = 0.94f))
+            .border(1.dp, BitOSColors.border, RoundedCornerShape(22.dp))
+            .padding(vertical = BitOSSpacing.xs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (isText) {
+            RailButton("Edit text", AppIcons.Pen, onClick = onEdit)
+        }
+        RailButton("Duplicate overlay", AppIcons.Copy, onClick = onDuplicate)
+        RailButton("Bring forward", AppIcons.FlipToFront, onClick = onForward)
+        RailButton("Send backward", AppIcons.FlipToBack, onClick = onBackward)
+        RailButton("Move, zoom and rotate", AppIcons.Move, onClick = onPrecision)
+        HorizontalDivider(
+            modifier = Modifier
+                .width(28.dp)
+                .padding(vertical = BitOSSpacing.xs),
+            color = BitOSColors.border,
+        )
+        RailButton("Delete overlay", AppIcons.Delete, onClick = onDelete, destructive = true)
+    }
+}
+
+/**
+ * Precision sheet (MUX-03): the fine-adjustment cluster — nudge pad +
+ * zoom + rotate — in the app's standard tool-sheet language, so the
+ * canvas is never occluded or shrunk further for low-frequency tuning.
+ * Every tap is one undoable command (bursts coalesce in `MemeRules`).
+ */
+@Composable
+private fun PrecisionSheetContent(
     onNudge: (Float, Float) -> Unit,
     onScale: (Float) -> Unit,
     onRotate: (Float) -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onClose: () -> Unit,
 ) {
-    val borderColor = BitOSColors.border
-    Row(
-        Modifier
+    Column(
+        modifier = Modifier
             .fillMaxWidth()
-            .drawBehind {
-                drawLine(
-                    color = borderColor,
-                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
-                    end = androidx.compose.ui.geometry.Offset(size.width, 0f),
-                    strokeWidth = 1.dp.toPx(),
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Move, zoom and rotate",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.W600,
+        )
+        Spacer(Modifier.height(BitOSSpacing.base))
+        // Nudge pad (D-pad cluster; the center is a position dot).
+        Row {
+            Spacer(Modifier.size(44.dp))
+            RailButton("Nudge up", AppIcons.NudgeUp, onClick = { onNudge(0f, -0.05f) })
+            Spacer(Modifier.size(44.dp))
+        }
+        Row {
+            RailButton("Nudge left", AppIcons.NudgeLeft, onClick = { onNudge(-0.05f, 0f) })
+            Box(
+                modifier = Modifier.size(44.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(BitOSColors.border),
                 )
             }
-            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Icon = function (Solar alt-arrow / magnifier semantics): the old
-        // row mixed a back arrow, a download icon and a bare plus, which
-        // read as navigation/save/add instead of nudge/zoom.
-        SelectionControlButton("Nudge left", AppIcons.NudgeLeft, onClick = { onNudge(-0.05f, 0f) })
-        SelectionControlButton("Nudge right", AppIcons.NudgeRight, onClick = { onNudge(0.05f, 0f) })
-        SelectionControlButton("Nudge up", AppIcons.NudgeUp, onClick = { onNudge(0f, -0.05f) })
-        SelectionControlButton("Nudge down", AppIcons.NudgeDown, onClick = { onNudge(0f, 0.05f) })
-        SelectionControlButton("Shrink", AppIcons.ZoomOut, onClick = { onScale(0.9f) })
-        SelectionControlButton("Enlarge", AppIcons.ZoomIn, onClick = { onScale(1.1f) })
-        SelectionControlButton("Rotate left", AppIcons.Repost, onClick = { onRotate(-15f) })
-        SelectionControlButton("Rotate right", AppIcons.Refresh, onClick = { onRotate(15f) })
-        if (isText) {
-            SelectionControlButton("Edit text", AppIcons.TextGlyph, onClick = onEdit)
+            RailButton("Nudge right", AppIcons.NudgeRight, onClick = { onNudge(0.05f, 0f) })
         }
-        SelectionControlButton("Delete overlay", AppIcons.Delete, onClick = onDelete, destructive = true)
+        Row {
+            Spacer(Modifier.size(44.dp))
+            RailButton("Nudge down", AppIcons.NudgeDown, onClick = { onNudge(0f, 0.05f) })
+            Spacer(Modifier.size(44.dp))
+        }
+        HorizontalDivider(
+            modifier = Modifier
+                .width(180.dp)
+                .padding(vertical = BitOSSpacing.sm),
+            color = BitOSColors.border,
+        )
+        Row {
+            RailButton("Shrink", AppIcons.ZoomOut, onClick = { onScale(0.9f) })
+            RailButton("Enlarge", AppIcons.ZoomIn, onClick = { onScale(1.1f) })
+        }
+        Row {
+            RailButton("Rotate left", AppIcons.RotateLeft, onClick = { onRotate(-15f) })
+            RailButton("Rotate right", AppIcons.RotateRight, onClick = { onRotate(15f) })
+        }
+        Spacer(Modifier.height(BitOSSpacing.sm))
+        TextButton(onClick = onClose) {
+            Text("Done", fontWeight = FontWeight.W600)
+        }
     }
 }
 
 @Composable
-private fun SelectionControlButton(
+private fun RailButton(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit,
     destructive: Boolean = false,
+    selected: Boolean = false,
 ) {
+    val tint = when {
+        destructive -> BitOSColors.error
+        selected -> BitOSColors.primary
+        else -> BitOSColors.textSecondary
+    }
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClickLabel = label) { onClick() }
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
@@ -3528,8 +3669,8 @@ private fun SelectionControlButton(
         Icon(
             icon,
             contentDescription = null,
-            tint = if (destructive) BitOSColors.error else BitOSColors.textSecondary,
-            modifier = Modifier.size(16.dp),
+            tint = tint,
+            modifier = Modifier.size(18.dp),
         )
     }
 }

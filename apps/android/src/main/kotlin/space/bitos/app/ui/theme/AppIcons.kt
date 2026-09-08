@@ -30,6 +30,9 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExitToApp
+import androidx.compose.material.icons.rounded.FlipToBack
+import androidx.compose.material.icons.rounded.FlipToFront
+import androidx.compose.material.icons.rounded.OpenWith
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
@@ -60,6 +63,8 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RotateLeft
+import androidx.compose.material.icons.rounded.RotateRight
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Share
@@ -163,6 +168,14 @@ object AppIcons {
     val NudgeDown = Icons.Rounded.KeyboardArrowDown // Solar: altArrowDown
     val ZoomOut = Icons.Rounded.ZoomOut             // Solar: magniferZoomOut
     val ZoomIn = Icons.Rounded.ZoomIn               // Solar: magniferZoomIn
+    // Rotate pair reads as rotation, not repost/reload — the old row
+    // borrowed Repost (Repeat) and Refresh, which said "share again"
+    // and "reload" instead of turning the overlay.
+    val RotateLeft = Icons.Rounded.RotateLeft       // Solar: restart (counterclockwise)
+    val RotateRight = Icons.Rounded.RotateRight     // Solar: refreshCircle (clockwise)
+    val Move = Icons.Rounded.OpenWith               // selection rail: precision cluster toggle
+    val FlipToFront = Icons.Rounded.FlipToFront     // selection rail: bring forward (stack)
+    val FlipToBack = Icons.Rounded.FlipToBack       // selection rail: send backward (stack)
 
     // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
     val MusicNote = Icons.Rounded.MusicNote     // Solar: music (sound library)
