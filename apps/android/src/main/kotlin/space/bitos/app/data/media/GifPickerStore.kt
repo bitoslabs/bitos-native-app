@@ -19,7 +19,13 @@ class GifPickerStore(context: Context) {
     fun save(cache: CachedGifs) {
         runCatching {
             prefs.edit()
-                .putString(KEY_WIRE, GifPickerContract.cacheEncode(cache.recent, cache.trending, cache.savedAtMs))
+                .putString(
+                    KEY_WIRE,
+                    GifPickerContract.cacheEncode(
+                        cache.recent, cache.trending, cache.savedAtMs,
+                        cache.stickersTrending, cache.stickersSavedAtMs, cache.stickersKind,
+                    ),
+                )
                 .apply()
         }
     }

@@ -130,7 +130,9 @@ class GifPickerTest {
         assertEquals(trending, decoded.trending)
         assertEquals(1_000L, decoded.savedAtMs)
         assertNull(GifPickerContract.cacheDecode("{corrupt"))
-        assertNull(GifPickerContract.cacheDecode("{\"v\":2,\"recent\":[]}"))
+        // Unknown/future wire versions reject (v2 = the current stickers
+        // cache wire; a hypothetical v3 must not half-decode).
+        assertNull(GifPickerContract.cacheDecode("{\"v\":3,\"recent\":[]}"))
         assertNull(GifPickerContract.cacheDecode("x".repeat(GifPickerContract.MAX_WIRE_LENGTH + 1)))
         // Hostile oversized lists clamp instead of failing the decode.
         val hostileWire = GifPickerContract.cacheEncode(
@@ -160,5 +162,38 @@ class GifPickerTest {
         )
         assertEquals(choices, GifPickerContract.choicesFromJson(GifPickerContract.choicesToJson(choices)))
         assertTrue(GifPickerContract.choicesFromJson("[{\"url\":\"ftp://nope\"}]").isEmpty())
+    }
+
+    @Test
+    fun stickersKindHitsTheTransparentCutOutEndpointsAndCachesPerKind() {
+        // Web parity: stickers = Giphy's transparent cut-out endpoints.
+        assertEquals(
+            "https://api.giphy.com/v1/stickers/trending?api_key=KEY&limit=30&offset=0&rating=pg",
+            GifPickerContract.buildUrl("KEY", " ", 0, stickers = true),
+        )
+        assertEquals(
+            "https://api.giphy.com/v1/stickers/search?api_key=KEY&q=gm&limit=30&offset=30&rating=pg",
+            GifPickerContract.buildUrl("KEY", "gm", 30, stickers = true),
+        )
+        // v2 cache: per-kind trending pages + the remembered tab.
+        val gifs = listOf(GifChoice("g1", "https://a/g1.gif", "https://a/g1p.gif", 100, 100))
+        val stickers = listOf(GifChoice("s1", "https://a/s1.gif", "https://a/s1p.gif", 80, 80))
+        val encoded = GifPickerContract.cacheEncode(
+            gifs, gifs, savedAtMs = 1_000,
+            stickersTrending = stickers, stickersSavedAtMs = 2_000, stickersKind = true,
+        )
+        val decoded = GifPickerContract.cacheDecode(encoded)!!
+        assertEquals(gifs, decoded.trending)
+        assertEquals(stickers, decoded.stickersTrending)
+        assertEquals(2_000L, decoded.stickersSavedAtMs)
+        assertTrue(decoded.stickersKind)
+        // v1 wires (no stickers fields) still decode with GIF defaults.
+        val v1 = GifPickerContract.cacheEncode(gifs, gifs, 1_000)
+            .replace("\"v\":2", "\"v\":1")
+            .substringBefore(",\"stickersTrending\"") + "}"
+        val legacy = GifPickerContract.cacheDecode(v1)
+        assertEquals(gifs, legacy?.trending)
+        assertEquals(emptyList<GifChoice>(), legacy?.stickersTrending)
+        assertTrue(legacy?.stickersKind == false)
     }
 }

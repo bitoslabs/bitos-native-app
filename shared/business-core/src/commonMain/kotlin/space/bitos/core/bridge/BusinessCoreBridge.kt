@@ -942,12 +942,14 @@ class BusinessCoreBridge {
     // `{"id":…,"url":…,"preview":…,"w":…,"h":…}`.
     // ------------------------------------------------------------------
 
-    /** Giphy request URL (trending when the query is blank); offset pages. */
-    fun gifPickerUrl(query: String, offset: Int): String =
+    /** Giphy request URL (trending when the query is blank); offset pages.
+     *  [stickers] hits the transparent-cut-out endpoints (web parity). */
+    fun gifPickerUrl(query: String, offset: Int, stickers: Boolean = false): String =
         space.bitos.core.publish.GifPickerContract.buildUrl(
             space.bitos.core.publish.GifPickerContract.DEFAULT_API_KEY,
             query,
             offset,
+            stickers,
         )
 
     /** Giphy response parse → item array JSON (empty array when unparseable). */
@@ -975,11 +977,21 @@ class BusinessCoreBridge {
     }
 
     /** Versioned v1 cache wire from item arrays. */
-    fun gifCacheEncode(recentJson: String, trendingJson: String, savedAtMs: Long): String =
+    fun gifCacheEncode(
+        recentJson: String,
+        trendingJson: String,
+        savedAtMs: Long,
+        stickersTrendingJson: String = "[]",
+        stickersSavedAtMs: Long = 0,
+        stickersKind: Boolean = false,
+    ): String =
         space.bitos.core.publish.GifPickerContract.cacheEncode(
             recent = space.bitos.core.publish.GifPickerContract.choicesFromJson(recentJson),
             trending = space.bitos.core.publish.GifPickerContract.choicesFromJson(trendingJson),
             savedAtMs = savedAtMs,
+            stickersTrending = space.bitos.core.publish.GifPickerContract.choicesFromJson(stickersTrendingJson),
+            stickersSavedAtMs = stickersSavedAtMs,
+            stickersKind = stickersKind,
         )
 
     /** Cache decode → `{"recent":[…],"trending":[…],"savedAt":ms}` or null. */
@@ -989,6 +1001,10 @@ class BusinessCoreBridge {
             put("recent", Json.parseToJsonElement(choicesJson(cache.recent)))
             put("trending", Json.parseToJsonElement(choicesJson(cache.trending)))
             put("savedAt", cache.savedAtMs)
+            // v2 fields (absent-shape on a v1 wire decode → defaults).
+            put("stickersTrending", Json.parseToJsonElement(choicesJson(cache.stickersTrending)))
+            put("stickersSavedAt", cache.stickersSavedAtMs)
+            put("stickersKind", cache.stickersKind)
         }.toString()
     }
 

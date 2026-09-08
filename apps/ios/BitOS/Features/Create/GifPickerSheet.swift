@@ -46,6 +46,9 @@ struct GifChoiceItem: Identifiable, Equatable {
 struct GifPickerSheet: View {
     let onPick: (GifChoiceItem) -> Void
     let onDismiss: () -> Void
+    /// Open on the STICKERS tab (transparent cut-outs — what meme layers
+    /// want on top of the media; the composer default stays GIFs).
+    var defaultStickers: Bool = false
 
     private let bridge = BusinessCoreBridge()
     private let cacheKey = "bitos_gif_picker_v1"
@@ -54,6 +57,11 @@ struct GifPickerSheet: View {
     @State private var items: [GifChoiceItem] = []
     @State private var trendingSnapshot: [GifChoiceItem] = []
     @State private var trendingSavedAt: Double = 0
+    // Web parity: GIFs vs Stickers — Giphy's sticker endpoints return
+    // transparent cut-outs. Each kind keeps its own trending snapshot.
+    @State private var stickersTab = false
+    @State private var stickersSnapshot: [GifChoiceItem] = []
+    @State private var stickersSavedAt: Double = 0
     @State private var recent: [GifChoiceItem] = []
     @State private var recentTab = false
     @State private var loading = false
@@ -86,33 +94,92 @@ struct GifPickerSheet: View {
             recentTab = false
             await fetch(query, append: false)
         }
+        .onChange(of: stickersTab) { _, _ in
+            guard restored else { return }
+            recentTab = false
+            hasMore = true
+            nextOffset = 0
+            items = []
+            let snapshot = stickersTab ? stickersSnapshot : trendingSnapshot
+            if !snapshot.isEmpty {
+                items = snapshot
+                nextOffset = snapshot.count
+            } else {
+                Task { await fetch("", append: false) }
+            }
+        }
     }
 
     // MARK: - Pieces
 
+    /// ONE header row: the small search field + the inline GIFs/Stickers
+    /// segment (saves a full chrome row for the grid); the placeholder
+    /// follows the active kind.
     private var searchHeader: some View {
         HStack(spacing: BitOSTheme.Spacing.sm) {
-            AppIcons.image(for: AppIcons.search)
-                .font(.system(size: 14))
-                .foregroundStyle(BitOSTheme.textSecondary)
-            TextField("Search GIFs", text: $query)
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                AppIcons.image(for: AppIcons.search)
+                    .font(.system(size: 12))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                TextField(
+                    stickersTab ? "Search stickers…" : "Search GIFs",
+                    text: $query
+                )
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundStyle(BitOSTheme.textPrimary)
-            if loading {
-                ProgressView().tint(BitOSTheme.accent)
+                if loading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(BitOSTheme.accent)
+                }
             }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
+                    .fill(BitOSTheme.surfaceElevated.opacity(0.45))
+            )
+            kindSegment
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous)
-                .fill(BitOSTheme.surfaceElevated.opacity(0.45))
-        )
         .padding(.horizontal, BitOSTheme.Spacing.lg)
         .padding(.top, BitOSTheme.Spacing.md)
         .padding(.bottom, BitOSTheme.Spacing.sm)
+    }
+
+    /// Compact trailing GIFs/Stickers segment — the SAME height as the
+    /// search field (34 pt): the header reads as ONE control row.
+    private var kindSegment: some View {
+        HStack(spacing: 2) {
+            kindPill("GIFs", selected: !stickersTab) { stickersTab = false }
+            kindPill("Stickers", selected: stickersTab) { stickersTab = true }
+        }
+        .padding(3)
+        .frame(height: 34)
+        .background(
+            RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm, style: .continuous)
+                .fill(BitOSTheme.surfaceElevated.opacity(0.35))
+        )
+    }
+
+    /// Kind pill fills the segment height — the touch target is the pill.
+    private func kindPill(_ label: String, selected: Bool, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            Text(label)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, BitOSTheme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.xs, style: .continuous)
+                        .fill(selected ? BitOSTheme.accent.opacity(0.18) : .clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private var tabPills: some View {
@@ -129,20 +196,24 @@ struct GifPickerSheet: View {
         .padding(.bottom, BitOSTheme.Spacing.sm)
     }
 
+    /// Medium tab: 13 pt semibold, comfortable touch height, and the
+    /// app's accent chip language for the selected state (surface-on-
+    /// surface was near-invisible).
     private func tabPill(_ label: String, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             Text(label)
-                .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                .foregroundStyle(selected ? BitOSTheme.textPrimary : BitOSTheme.textSecondary)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? BitOSTheme.accent : BitOSTheme.textSecondary)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, BitOSTheme.Spacing.xs)
+                .padding(.vertical, BitOSTheme.Spacing.sm)
                 .background(
                     RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm, style: .continuous)
-                        .fill(selected ? BitOSTheme.surfaceElevated : .clear)
+                        .fill(selected ? BitOSTheme.accent.opacity(0.18) : .clear)
                 )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private var grid: some View {
@@ -228,16 +299,25 @@ struct GifPickerSheet: View {
            let envelope = bridge.gifCacheDecode(json: wire),
            let data = envelope.data(using: .utf8),
            let cache = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let savedAt = (cache["savedAt"] as? NSNumber)?.doubleValue ?? 0
-            if bridge.gifCacheFresh(savedAtMs: Int64(savedAt), nowMs: Int64(Date().timeIntervalSince1970 * 1000)) {
-                recent = itemsFrom(cache["recent"])
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            recent = itemsFrom(cache["recent"])
+            let gifsSavedAt = (cache["savedAt"] as? NSNumber)?.doubleValue ?? 0
+            if bridge.gifCacheFresh(savedAtMs: Int64(gifsSavedAt), nowMs: nowMs) {
                 let trending = itemsFrom(cache["trending"])
-                if !trending.isEmpty && items.isEmpty {
-                    items = trending
-                    trendingSnapshot = trending
-                    trendingSavedAt = savedAt
-                    nextOffset = trending.count
-                }
+                trendingSnapshot = trending
+                trendingSavedAt = gifsSavedAt
+            }
+            let stickersSavedAtValue = (cache["stickersSavedAt"] as? NSNumber)?.doubleValue ?? 0
+            if bridge.gifCacheFresh(savedAtMs: Int64(stickersSavedAtValue), nowMs: nowMs) {
+                stickersSnapshot = itemsFrom(cache["stickersTrending"])
+                stickersSavedAt = stickersSavedAtValue
+            }
+            // The remembered tab wins unless the caller asked for stickers.
+            stickersTab = defaultStickers || ((cache["stickersKind"] as? NSNumber)?.boolValue ?? false)
+            let seed = stickersTab ? stickersSnapshot : trendingSnapshot
+            if !seed.isEmpty && items.isEmpty {
+                items = seed
+                nextOffset = seed.count
             }
         }
         restored = true
@@ -254,7 +334,15 @@ struct GifPickerSheet: View {
     private func persist() {
         let recentJson = "[" + recent.map(\.itemJson).joined(separator: ",") + "]"
         let trendingJson = "[" + trendingSnapshot.map(\.itemJson).joined(separator: ",") + "]"
-        let wire = bridge.gifCacheEncode(recentJson: recentJson, trendingJson: trendingJson, savedAtMs: Int64(trendingSavedAt))
+        let stickersJson = "[" + stickersSnapshot.map(\.itemJson).joined(separator: ",") + "]"
+        let wire = bridge.gifCacheEncode(
+            recentJson: recentJson,
+            trendingJson: trendingJson,
+            savedAtMs: Int64(trendingSavedAt),
+            stickersTrendingJson: stickersJson,
+            stickersSavedAtMs: Int64(stickersSavedAt),
+            stickersKind: stickersTab
+        )
         UserDefaults.standard.set(wire, forKey: cacheKey)
     }
 
@@ -272,7 +360,7 @@ struct GifPickerSheet: View {
         }
         do {
             let offset = append ? nextOffset : 0
-            guard let url = URL(string: bridge.gifPickerUrl(query: pageQuery, offset: Int32(offset))) else {
+            guard let url = URL(string: bridge.gifPickerUrl(query: pageQuery, offset: Int32(offset), stickers: stickersTab)) else {
                 throw URLError(.badURL)
             }
             var request = URLRequest(url: url)
@@ -295,8 +383,13 @@ struct GifPickerSheet: View {
             nextOffset = intFrom(pageMap, "nextOffset")
             hasMore = pageMap["hasMore"] as? Bool ?? false
             if pageQuery.trimmingCharacters(in: .whitespaces).isEmpty {
-                trendingSnapshot = items
-                trendingSavedAt = Date().timeIntervalSince1970 * 1000
+                if stickersTab {
+                    stickersSnapshot = items
+                    stickersSavedAt = Date().timeIntervalSince1970 * 1000
+                } else {
+                    trendingSnapshot = items
+                    trendingSavedAt = Date().timeIntervalSince1970 * 1000
+                }
                 persist()
             }
             if items.isEmpty && !pageQuery.trimmingCharacters(in: .whitespaces).isEmpty {

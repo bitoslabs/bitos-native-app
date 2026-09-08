@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -77,6 +79,9 @@ import space.bitos.core.publish.GifPickerContract
 fun GifPickerSheet(
     onPick: (GifChoice) -> Unit,
     onDismiss: () -> Unit,
+    /** Open on the STICKERS tab (transparent cut-outs — what meme layers
+     *  want on top of the media; the composer default stays GIFs). */
+    defaultStickers: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -89,6 +94,11 @@ fun GifPickerSheet(
     var items by remember { mutableStateOf<List<GifChoice>>(emptyList()) }
     var trendingSnapshot by remember { mutableStateOf<List<GifChoice>>(emptyList()) }
     var trendingSavedAt by remember { mutableStateOf(0L) }
+    // Web parity: GIFs vs Stickers — Giphy's sticker endpoints return
+    // transparent cut-outs. Each kind keeps its own trending snapshot.
+    var stickersTab by remember { mutableStateOf(defaultStickers) }
+    var stickersSnapshot by remember { mutableStateOf<List<GifChoice>>(emptyList()) }
+    var stickersSavedAt by remember { mutableStateOf(0L) }
     var recent by remember { mutableStateOf<List<GifChoice>>(emptyList()) }
     var recentTab by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
@@ -101,7 +111,16 @@ fun GifPickerSheet(
     var generation by remember { mutableStateOf(0) }
 
     fun persist() {
-        store.save(CachedGifs(recent = recent, trending = trendingSnapshot, savedAtMs = trendingSavedAt))
+        store.save(
+            CachedGifs(
+                recent = recent,
+                trending = trendingSnapshot,
+                savedAtMs = trendingSavedAt,
+                stickersTrending = stickersSnapshot,
+                stickersSavedAtMs = stickersSavedAt,
+                stickersKind = stickersTab,
+            ),
+        )
     }
 
     fun fetch(pageQuery: String, append: Boolean) {
@@ -115,7 +134,12 @@ fun GifPickerSheet(
                 val body = withContext(Dispatchers.IO) {
                     client.newCall(
                         Request.Builder()
-                            .url(GifPickerContract.buildUrl(GifPickerContract.DEFAULT_API_KEY, pageQuery.trim(), offset))
+                            .url(
+                                GifPickerContract.buildUrl(
+                                    GifPickerContract.DEFAULT_API_KEY, pageQuery.trim(), offset,
+                                    stickers = stickersTab,
+                                ),
+                            )
                             .build(),
                     ).execute().use { response ->
                         if (!response.isSuccessful) throw IllegalStateException("Giphy ${response.code}")
@@ -129,8 +153,13 @@ fun GifPickerSheet(
                 nextOffset = page.nextOffset
                 hasMore = page.hasMore
                 if (pageQuery.isBlank()) {
-                    trendingSnapshot = items
-                    trendingSavedAt = System.currentTimeMillis()
+                    if (stickersTab) {
+                        stickersSnapshot = items
+                        stickersSavedAt = System.currentTimeMillis()
+                    } else {
+                        trendingSnapshot = items
+                        trendingSavedAt = System.currentTimeMillis()
+                    }
                     persist()
                 }
                 if (items.isEmpty() && pageQuery.isNotBlank()) {
@@ -158,17 +187,42 @@ fun GifPickerSheet(
     // first network page when the cache came up empty.
     LaunchedEffect(Unit) {
         val cache = store.load()
-        if (cache != null && GifPickerContract.isCacheFresh(cache.savedAtMs, System.currentTimeMillis())) {
+        if (cache != null) {
             recent = cache.recent
-            if (cache.trending.isNotEmpty() && items.isEmpty()) {
-                items = cache.trending
+            // The remembered tab wins unless the caller asked for stickers.
+            stickersTab = defaultStickers || cache.stickersKind
+            stickersSnapshot = cache.stickersTrending
+            stickersSavedAt = cache.stickersSavedAtMs
+            val gifsFresh = GifPickerContract.isCacheFresh(cache.savedAtMs, System.currentTimeMillis())
+            if (gifsFresh && cache.trending.isNotEmpty()) {
                 trendingSnapshot = cache.trending
                 trendingSavedAt = cache.savedAtMs
-                nextOffset = cache.trending.size
+            }
+            val stickersFresh = GifPickerContract.isCacheFresh(cache.stickersSavedAtMs, System.currentTimeMillis())
+            val cachedStickers = if (stickersFresh) cache.stickersTrending else emptyList()
+            val seed = if (stickersTab) cachedStickers else if (gifsFresh) cache.trending else emptyList()
+            if (seed.isNotEmpty() && items.isEmpty()) {
+                items = seed
+                nextOffset = seed.size
             }
         }
         restored = true
         if (items.isEmpty()) fetch("", append = false)
+    }
+    // Kind switch: reset to that kind's page (cached seed or refetch).
+    LaunchedEffect(stickersTab) {
+        if (!restored) return@LaunchedEffect
+        recentTab = false
+        hasMore = true
+        nextOffset = 0
+        items = emptyList()
+        val snapshot = if (stickersTab) stickersSnapshot else trendingSnapshot
+        if (snapshot.isNotEmpty()) {
+            items = snapshot
+            nextOffset = snapshot.size
+        } else {
+            fetch("", append = false)
+        }
     }
     // Search-as-you-type (legacy 350 ms debounce).
     LaunchedEffect(query) {
@@ -186,26 +240,57 @@ fun GifPickerSheet(
                 .fillMaxWidth()
                 .fillMaxHeight(0.75f),
         ) {
-            // Search header.
+            // Header: ONE row — small search field + the inline kind
+            // segment (GIFs vs Stickers). Saves a full chrome row for the
+            // grid; stickers = transparent cut-outs (web parity).
             Row(
                 Modifier.padding(horizontal = BitOSSpacing.lg),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
             ) {
                 Box(Modifier.weight(1f)) {
+                    // Small search field: compact 48 dp row + label-size
+                    // text; the placeholder follows the active kind.
                     space.bitos.app.ui.components.BitosTextField(
                         value = query,
                         onValueChange = { query = it },
-                        placeholder = "Search GIFs",
+                        placeholder = if (stickersTab) "Search stickers…" else "Search GIFs",
                         singleLine = true,
-                        leadingIcon = { Icon(AppIcons.Search, contentDescription = null, tint = BitOSColors.textSecondary) },
+                        compact = true,
+                        leadingIcon = {
+                            Icon(
+                                AppIcons.Search,
+                                contentDescription = null,
+                                tint = BitOSColors.textSecondary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                        textStyle = MaterialTheme.typography.labelLarge.copy(color = BitOSColors.textPrimary),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                }
+                Surface(
+                    shape = RoundedCornerShape(BitOSSpacing.sm),
+                    color = BitOSColors.surfaceElevated.copy(alpha = 0.35f),
+                    // Same height as the compact search field (48 dp) —
+                    // the header reads as ONE control row.
+                    modifier = Modifier.height(48.dp),
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxHeight()
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        KindPill("GIFs", selected = !stickersTab) { stickersTab = false }
+                        KindPill("Stickers", selected = stickersTab) { stickersTab = true }
+                    }
                 }
                 if (loading) {
                     CircularProgressIndicator(
                         strokeWidth = 2.dp,
                         color = BitOSColors.primary,
-                        modifier = Modifier.padding(start = BitOSSpacing.sm).size(16.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                 }
             }
@@ -292,17 +377,43 @@ private fun TabPill(label: String, selected: Boolean, modifier: Modifier = Modif
     Box(
         modifier
             .clip(RoundedCornerShape(BitOSSpacing.sm))
-            .background(if (selected) BitOSColors.surfaceElevated else androidx.compose.ui.graphics.Color.Transparent)
+            // The app's chip language: accent-tint fill + accent text when
+            // selected (surface-on-surface was near-invisible).
+            .background(if (selected) BitOSColors.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClickLabel = label) { onTap() }
-            .padding(vertical = BitOSSpacing.xs)
+            // Medium tab: comfortable touch height + labelMedium text.
+            .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.sm)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.W600 else FontWeight.W400,
-            color = if (selected) BitOSColors.textPrimary else BitOSColors.textSecondary,
+            color = if (selected) BitOSColors.primary else BitOSColors.textSecondary,
+        )
+    }
+}
+
+/** Compact inline kind pill (GIFs/Stickers) trailing the search field —
+ *  fills the 48 dp segment so the touch target is the whole pill. */
+@Composable
+private fun KindPill(label: String, selected: Boolean, onTap: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(BitOSSpacing.xs))
+            .background(if (selected) BitOSColors.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(onClickLabel = label) { onTap() }
+            .padding(horizontal = BitOSSpacing.sm)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.W600 else FontWeight.W400,
+            color = if (selected) BitOSColors.primary else BitOSColors.textSecondary,
         )
     }
 }

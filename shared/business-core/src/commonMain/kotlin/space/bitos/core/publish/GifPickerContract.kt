@@ -22,11 +22,17 @@ data class GifChoice(
     val height: Int,
 )
 
-/** Restored picker cache: recents, the last trending page and its stamp. */
+/** Restored picker cache: recents, the last trending page(s) and their
+ *  stamps. v2 adds the STICKERS trending page + the remembered tab kind
+ *  (web `GifStorage` parity); v1 wires decode with GIF-kind defaults. */
 data class CachedGifs(
     val recent: List<GifChoice>,
     val trending: List<GifChoice>,
     val savedAtMs: Long,
+    val stickersTrending: List<GifChoice> = emptyList(),
+    val stickersSavedAtMs: Long = 0L,
+    /** The tab the picker last showed (true = stickers). */
+    val stickersKind: Boolean = false,
 )
 
 /**
@@ -70,13 +76,16 @@ object GifPickerContract {
 
     // ── Requests ─────────────────────────────────────────────────────
 
-    /** Trending when the query is blank, search otherwise; offset pages. */
-    fun buildUrl(apiKey: String, query: String, offset: Int): String {
-        val kind = if (query.isBlank()) "trending" else "search"
+    /** Trending when the query is blank, search otherwise; offset pages.
+     *  [stickers] hits Giphy's sticker endpoints — transparent cut-outs,
+     *  exactly what meme layers want on top of the media (web parity). */
+    fun buildUrl(apiKey: String, query: String, offset: Int, stickers: Boolean = false): String {
+        val action = if (query.isBlank()) "trending" else "search"
+        val kind = if (stickers) "stickers" else "gifs"
         val q = encodeQueryComponent(query.trim())
-        val search = if (kind == "search") "&q=$q" else ""
+        val search = if (action == "search") "&q=$q" else ""
         val page = offset.coerceAtLeast(0)
-        return "https://api.giphy.com/v1/gifs/$kind?api_key=$apiKey$search&limit=$PAGE_SIZE&offset=$page&rating=$RATING"
+        return "https://api.giphy.com/v1/$kind/$action?api_key=$apiKey$search&limit=$PAGE_SIZE&offset=$page&rating=$RATING"
     }
 
     /** RFC 3986 percent-encoding for one query component. */
@@ -160,26 +169,52 @@ object GifPickerContract {
 
     // ── Cache wire (versioned, size-bounded) ─────────────────────────
 
-    fun cacheEncode(recent: List<GifChoice>, trending: List<GifChoice>, savedAtMs: Long): String = buildJsonObject {
-        put("v", 1)
+    fun cacheEncode(
+        recent: List<GifChoice>,
+        trending: List<GifChoice>,
+        savedAtMs: Long,
+        stickersTrending: List<GifChoice> = emptyList(),
+        stickersSavedAtMs: Long = 0L,
+        stickersKind: Boolean = false,
+    ): String = buildJsonObject {
+        put("v", 2)
         put("recent", itemsWire(recent.take(RECENT_LIMIT)))
         put("trending", buildJsonObject {
             put("savedAt", savedAtMs.coerceAtLeast(0))
             put("items", itemsWire(trending.take(MAX_CACHED_TRENDING)))
         })
+        // v2: the stickers trending page + the remembered tab kind.
+        put("stickersTrending", buildJsonObject {
+            put("savedAt", stickersSavedAtMs.coerceAtLeast(0))
+            put("items", itemsWire(stickersTrending.take(MAX_CACHED_TRENDING)))
+        })
+        put("stickersKind", stickersKind)
     }.toString()
 
-    /** Lenient decode: corrupt or oversized wire → null (an empty cache). */
+    /** Lenient decode: corrupt or oversized wire → null (an empty cache).
+     *  v1 (no stickers page) decodes with GIF-kind defaults. */
     fun cacheDecode(json: String): CachedGifs? {
         if (json.length > MAX_WIRE_LENGTH) return null
         return try {
             val root = lenientJson.parseToJsonElement(json).jsonObject
-            if ((root["v"] as? JsonPrimitive)?.content?.toIntOrNull() != 1) return null
+            val version = (root["v"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return null
+            if (version !in 1..2) return null
             val recent = choicesFrom(root["recent"]?.jsonArray, RECENT_LIMIT)
             val trendingNode = root["trending"]?.jsonObject
             val trending = choicesFrom(trendingNode?.get("items")?.jsonArray, MAX_CACHED_TRENDING)
             val savedAt = (trendingNode?.get("savedAt") as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
-            CachedGifs(recent = recent, trending = trending, savedAtMs = savedAt)
+            if (version == 1) {
+                return CachedGifs(recent = recent, trending = trending, savedAtMs = savedAt)
+            }
+            val stickersNode = root["stickersTrending"]?.jsonObject
+            CachedGifs(
+                recent = recent,
+                trending = trending,
+                savedAtMs = savedAt,
+                stickersTrending = choicesFrom(stickersNode?.get("items")?.jsonArray, MAX_CACHED_TRENDING),
+                stickersSavedAtMs = (stickersNode?.get("savedAt") as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+                stickersKind = (root["stickersKind"] as? JsonPrimitive)?.content == "true",
+            )
         } catch (_: Exception) {
             null
         }

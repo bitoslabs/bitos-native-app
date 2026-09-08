@@ -2260,6 +2260,7 @@ fun MemeEditorScreen(
         // pick downloads the full source (bounded) and inserts an
         // ANIMATED image layer through the MST-053 reel path.
         space.bitos.app.ui.create.GifPickerSheet(
+            defaultStickers = true,
             onPick = { choice ->
                 showGifPicker = false
                 scope.launch {

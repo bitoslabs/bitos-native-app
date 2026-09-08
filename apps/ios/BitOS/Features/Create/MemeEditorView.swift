@@ -2131,6 +2131,49 @@ struct MemeEditorView: View {
         }
     }
 
+    /// MST-054: the GIF-sticker picker content (reused composer sheet,
+    /// opened on Stickers); the pick downloads the full source (bounded
+    /// ≤24 MiB) and inserts an ANIMATED image layer (MST-053 reel path).
+    @ViewBuilder
+    private var gifStickerContent: some View {
+        GifPickerSheet(
+            onPick: { gif in
+                showGifStickerPicker = false
+                handleGifStickerPick(gif)
+            },
+            onDismiss: { showGifStickerPicker = false },
+            defaultStickers: true
+        )
+    }
+
+    /// Bounded download → asset-with-data → animated image layer. Broken
+    /// out of the sheet closure so expression type-checking stays cheap.
+    private func handleGifStickerPick(_ gif: GifChoiceItem) {
+        Task {
+            guard let url = URL(string: gif.url) else {
+                store.setNotice("Sticker download failed — try another")
+                return
+            }
+            do {
+                let (bytes, response) = try await URLSession.shared.data(from: url)
+                guard (response as? HTTPURLResponse)?.statusCode == 200,
+                      !bytes.isEmpty,
+                      bytes.count <= 24 * 1024 * 1024 else {
+                    store.setNotice("Sticker download failed — try another")
+                    return
+                }
+                guard let image = UIImage(data: bytes),
+                      let id = store.addAsset(image: image, data: bytes) else {
+                    store.setNotice("Sticker unreadable — try another")
+                    return
+                }
+                store.addImageOverlay(assetId: id)
+            } catch {
+                store.setNotice("Sticker download failed — try another")
+            }
+        }
+    }
+
     /// Sheets, pickers and the trim cover (the presentation layer).
     private var sheetLayer: some View {
         lifecycleLayer
@@ -2199,36 +2242,7 @@ struct MemeEditorView: View {
                 }
             )
         }
-        .sheet(isPresented: $showGifStickerPicker) {
-            // MST-054: the SAME GifPickerSheet the note/story composers
-            // use — recents, trending cache and search live there already.
-            // The pick downloads the full source (bounded ≤24 MiB) and
-            // inserts an ANIMATED image layer (MST-053 reel path).
-            GifPickerSheet(
-                onPick: { gif in
-                    showGifStickerPicker = false
-                    Task {
-                        do {
-                            guard let url = URL(string: gif.url),
-                                  let (bytes, response) = try? await URLSession.shared.data(from: url),
-                                  (response as? HTTPURLResponse)?.statusCode == 200,
-                                  !bytes.isEmpty,
-                                  bytes.count <= 24 * 1024 * 1024 else {
-                                store.setNotice("Sticker download failed — try another")
-                                return
-                            }
-                            guard let image = UIImage(data: bytes),
-                                  let id = store.addAsset(image: image, data: bytes) else {
-                                store.setNotice("Sticker unreadable — try another")
-                                return
-                            }
-                            store.addImageOverlay(assetId: id)
-                        }
-                    }
-                },
-                onDismiss: { showGifStickerPicker = false }
-            )
-        }
+        .sheet(isPresented: $showGifStickerPicker) { gifStickerContent }
         .photosPicker(
             isPresented: $isPicking,
             selection: $pickerItems,
