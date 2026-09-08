@@ -52,23 +52,30 @@ struct CameraScreen: View {
 
     private var activeTake: PendingTake? { takes.first { $0.id == previewId } }
 
+    /// Body content split out — the inline Group branch over the trim
+    /// preview exceeded the type-checker's expression budget.
+    @ViewBuilder
+    private var cameraContent: some View {
+        if let take = activeTake {
+            VideoPreviewScreen(
+                data: take.data,
+                mimeType: take.mime,
+                initialMirrored: take.mirrored,
+                onUse: { data, mime in onCaptured(data, mime) },
+                onRetake: {
+                    takes.removeAll { $0.id == take.id }
+                    previewId = nil
+                },
+                onBack: { previewId = nil }
+            )
+        } else {
+            cameraSurface
+        }
+    }
+
     var body: some View {
         Group {
-            if let take = activeTake {
-                VideoPreviewScreen(
-                    data: take.data,
-                    mimeType: take.mime,
-                    initialMirrored: take.mirrored,
-                    onUse: { data, mime in onCaptured(data, mime) },
-                    onRetake: {
-                        takes.removeAll { $0.id == take.id }
-                        previewId = nil
-                    },
-                    onBack: { previewId = nil }
-                )
-            } else {
-                cameraSurface
-            }
+            cameraContent
         }
         .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear { requestAccess() }

@@ -326,7 +326,16 @@ object MemeVideoExport {
      * creator-selected cover; uploaded separately and referenced as the
      * imeta `thumb`).
      */
-    fun captureCoverJpeg(clipBytes: ByteArray, positionMs: Long): ByteArray? = try {
+    fun captureCoverJpeg(
+        context: Context,
+        clipBytes: ByteArray,
+        positionMs: Long,
+        timelineMs: Long,
+        project: MemeProject,
+        imageAssets: Map<String, Uri> = emptyMap(),
+        gifReels: Map<String, GifLayerReel> = emptyMap(),
+        effectiveLookId: String? = project.lookId,
+    ): ByteArray? = try {
         val temp = java.io.File.createTempFile("meme-cover", ".mp4")
         try {
             temp.writeBytes(clipBytes)
@@ -336,8 +345,23 @@ object MemeVideoExport {
                     positionMs.coerceIn(0L, space.bitos.core.studio.MemeProjectContract.MAX_DURATION_MS) * 1000, // µs
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                 ) ?: return null
+                val staticImages = HashMap<String, Bitmap>()
+                val imageFor: (String) -> Bitmap? = { id ->
+                    gifReels[id]?.frameAt(timelineMs)
+                        ?: staticImages[id]
+                        ?: imageAssets[id]?.let { MemeRaster.decodeForExport(context.contentResolver, it) }
+                            ?.also { staticImages[id] = it }
+                }
+                val rendered = MemeRaster.renderVideoCoverFrame(
+                    source = frame,
+                    project = project.copy(lookId = effectiveLookId),
+                    timelineMs = timelineMs,
+                    imageFor = imageFor,
+                )
                 val stream = java.io.ByteArrayOutputStream()
-                frame.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, stream)
+                rendered.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, stream)
+                if (rendered !== frame) rendered.recycle()
+                frame.recycle()
                 stream.toByteArray()
             }
         } finally {

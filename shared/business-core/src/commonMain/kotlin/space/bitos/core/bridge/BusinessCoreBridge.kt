@@ -91,6 +91,12 @@ class BusinessCoreBridge {
         val remixRelays: List<String> = emptyList(),
         /** MST-042 raw `meme` layout payload; null = the note carries none. */
         val memeTag: String? = null,
+        /** "Use this sound" (MST-050): borrowed-sound URL (null = none);
+         *  the source event id + author ride the next two fields. */
+        val soundUrl: String? = null,
+        val soundSourceEventId: String? = null,
+        val soundAuthorPubkey: String? = null,
+        val soundSha256: String? = null,
         /** APP-007 `license` tag (remix advisory gate); null = permissive. */
         val license: String? = null,
         /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
@@ -508,6 +514,10 @@ class BusinessCoreBridge {
             remixOfPubkey = note.remixOfPubkey,
             remixRelays = note.remixRelays,
             memeTag = note.memeTag,
+            soundUrl = note.soundOf?.url,
+            soundSourceEventId = note.soundOf?.eventId,
+            soundAuthorPubkey = note.soundOf?.pubkey,
+            soundSha256 = note.soundOf?.sha256,
             license = note.license,
             zapsDisabled = note.zapsDisabled,
             fallbackUrls = note.video?.fallbackUrls ?: emptyList(),

@@ -81,7 +81,7 @@ object MemeSoundTrending {
             score[key] = (score[key] ?: 0.0) + decay(usage.createdAtMs, nowMs)
             uses[key] = (uses[key] ?: 0) + 1
             // First-seen provenance wins (stable across recomputes).
-            meta.putIfAbsent(key, usage)
+            if (!meta.containsKey(key)) meta[key] = usage
         }
         return score.entries
             .map { (key, value) ->

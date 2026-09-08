@@ -202,13 +202,20 @@ data class MemeRemixSeed(
 /** "Use this sound" handoff (Wave C): a bitz whose AUDIO becomes this
  *  project's soundtrack. Only the sound crosses — the creator adds
  *  their own clip (TikTok's sound-first loop); the source event id and
- *  author ride the wire as provenance (sound/p/attribution at publish). */
+ *  author ride the wire as provenance (sound/p/attribution at publish).
+ *  Wave D re-attach (`isAudioOnly`): the URL points at an ALREADY-UPLOADED
+ *  m4a (trending rail) — no extraction, hash-verified download, and the
+ *  publish stamps the existing URL without re-uploading. */
 data class MemeSoundSeed(
     val eventId: String,
     val authorPubkey: String,
     /** Author display name for the soundtrack label/credit. */
     val label: String,
     val mediaUrl: String,
+    /** True when [mediaUrl] is the audio artifact itself (trending rail). */
+    val isAudioOnly: Boolean = false,
+    /** Expected 64-hex hash for [isAudioOnly] downloads (integrity gate). */
+    val sha256: String? = null,
 )
 
 /**
@@ -452,6 +459,14 @@ fun MemeEditorScreen(
     /** Immediate local preview while the separately uploaded public cover is in flight. */
     var coverPreview by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var coverUploading by remember { mutableStateOf(false) }
+    var coverProjectAtCapture by remember { mutableStateOf<space.bitos.core.studio.MemeProject?>(null) }
+    LaunchedEffect(state.project) {
+        if (coverProjectAtCapture != null && coverProjectAtCapture != state.project) {
+            coverPreview = null
+            coverThumbUrl = null
+            coverProjectAtCapture = null
+        }
+    }
     val videoMode = state.project.mode == MemeMode.VIDEO
 
     /** Rebuilds the session clip list from the wire after undo/redo. Full
@@ -865,36 +880,77 @@ fun MemeEditorScreen(
                     connection.disconnect()
                 }
             }
-            val extracted = withContext(Dispatchers.IO) {
-                val temp = java.io.File.createTempFile("meme-sound-src", ".mp4")
-                try {
-                    temp.writeBytes(bytes)
-                    MemeVideoSound.extract(context, android.net.Uri.fromFile(temp))
-                } finally {
-                    runCatching { temp.delete() }
+            if (seed.isAudioOnly) {
+                // Wave D re-attach: the URL IS the artifact (trending rail) —
+                // hash-verify the download, skip extraction, and pre-fill
+                // the URL so publish stamps it WITHOUT re-uploading.
+                val expected = seed.sha256?.lowercase()
+                if (expected.isNullOrBlank() || expected.length != 64) {
+                    exportStatus = "That sound row is missing its content hash"
+                    return@LaunchedEffect
                 }
+                val digest = withContext(Dispatchers.IO) {
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                        .joinToString("") { "%02x".format(it) }
+                }
+                if (digest != expected) {
+                    exportStatus = "Soundtrack hash mismatch — nothing was loaded"
+                    return@LaunchedEffect
+                }
+                val decodedAudio = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, bytes) }
+                    ?: run {
+                        exportStatus = "That sound could not be decoded here"
+                        return@LaunchedEffect
+                    }
+                val rate = decodedAudio.second.coerceAtLeast(1)
+                val durationMs = decodedAudio.first.size.toLong() * 1_000L / rate
+                state.switchMode(MemeMode.VIDEO)
+                soundtrackM4a = bytes
+                soundtrackPcm = decodedAudio
+                state.setSoundtrack(
+                    space.bitos.core.studio.MemeSoundRules.normalize(
+                        space.bitos.core.studio.MemeSoundtrack(
+                            url = seed.mediaUrl,
+                            sha256 = expected,
+                            durationMs = durationMs,
+                            sourceNoteId = seed.eventId,
+                            sourceAuthorPubkey = seed.authorPubkey,
+                            label = seed.label.takeIf { it.isNotBlank() }?.let { "Original sound · $it" } ?: "Original sound",
+                        ),
+                    ),
+                )
+            } else {
+                val extracted = withContext(Dispatchers.IO) {
+                    val temp = java.io.File.createTempFile("meme-sound-src", ".mp4")
+                    try {
+                        temp.writeBytes(bytes)
+                        MemeVideoSound.extract(context, android.net.Uri.fromFile(temp))
+                    } finally {
+                        runCatching { temp.delete() }
+                    }
+                }
+                if (extracted == null) {
+                    exportStatus = "That bitz has no readable audio track"
+                    return@LaunchedEffect
+                }
+                val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+                if (decoded == null) {
+                    exportStatus = "That bitz's sound could not be decoded here"
+                    return@LaunchedEffect
+                }
+                state.switchMode(MemeMode.VIDEO)
+                soundtrackM4a = extracted.m4aBytes
+                soundtrackPcm = decoded
+                state.setSoundtrack(
+                    space.bitos.core.studio.MemeSoundtrack(
+                        sha256 = extracted.sha256Hex,
+                        durationMs = extracted.durationMs,
+                        sourceNoteId = seed.eventId,
+                        sourceAuthorPubkey = seed.authorPubkey,
+                        label = seed.label.takeIf { it.isNotBlank() }?.let { "Original sound · $it" } ?: "Original sound",
+                    ),
+                )
             }
-            if (extracted == null) {
-                exportStatus = "That bitz has no readable audio track"
-                return@LaunchedEffect
-            }
-            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
-            if (decoded == null) {
-                exportStatus = "That bitz's sound could not be decoded here"
-                return@LaunchedEffect
-            }
-            state.switchMode(MemeMode.VIDEO)
-            soundtrackM4a = extracted.m4aBytes
-            soundtrackPcm = decoded
-            state.setSoundtrack(
-                space.bitos.core.studio.MemeSoundtrack(
-                    sha256 = extracted.sha256Hex,
-                    durationMs = extracted.durationMs,
-                    sourceNoteId = seed.eventId,
-                    sourceAuthorPubkey = seed.authorPubkey,
-                    label = "Original sound · ${seed.label}",
-                ),
-            )
         } catch (error: IllegalStateException) {
             exportStatus = "Sound source could not be loaded (${error.message})"
         } finally {
@@ -1627,17 +1683,31 @@ fun MemeEditorScreen(
                     transport = videoTransport,
                     onSetCover = { timelineMs ->
                         val mapped = timelineToMedia(timelineMs) ?: return@VideoStage
+                        val projectAtCapture = state.project
                         scope.launch {
                             val jpeg = withContext(Dispatchers.IO) {
-                                MemeVideoExport.captureCoverJpeg(mapped.first.bytes, mapped.second)
+                                MemeVideoExport.captureCoverJpeg(
+                                    context = context,
+                                    clipBytes = mapped.first.bytes,
+                                    positionMs = mapped.second,
+                                    timelineMs = timelineMs,
+                                    project = projectAtCapture,
+                                    imageAssets = imageAssetUris,
+                                    gifReels = gifReels.toMap(),
+                                    effectiveLookId = mapped.first.lookId ?: projectAtCapture.lookId,
+                                )
                             }
                             if (jpeg == null) {
                                 exportStatus = "Cover capture failed"
+                            } else if (state.project != projectAtCapture) {
+                                return@launch
                             } else {
                                 coverPreview = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                coverProjectAtCapture = projectAtCapture
                                 coverUploading = true
                                 mediaPublishViewModel?.uploadMemeCover(jpeg) { url ->
                                     coverUploading = false
+                                    if (state.project != projectAtCapture) return@uploadMemeCover
                                     coverThumbUrl = url
                                     if (url == null) exportStatus = "Cover upload failed"
                                 }
@@ -2119,17 +2189,31 @@ fun MemeEditorScreen(
                         transport = videoTransport,
                         onSetCover = { timelineMs ->
                             val mapped = timelineToMedia(timelineMs) ?: return@TimelineStrip
+                            val projectAtCapture = state.project
                             scope.launch {
                                 val jpeg = withContext(Dispatchers.IO) {
-                                    MemeVideoExport.captureCoverJpeg(mapped.first.bytes, mapped.second)
+                                    MemeVideoExport.captureCoverJpeg(
+                                        context = context,
+                                        clipBytes = mapped.first.bytes,
+                                        positionMs = mapped.second,
+                                        timelineMs = timelineMs,
+                                        project = projectAtCapture,
+                                        imageAssets = imageAssetUris,
+                                        gifReels = gifReels.toMap(),
+                                        effectiveLookId = mapped.first.lookId ?: projectAtCapture.lookId,
+                                    )
                                 }
                                 if (jpeg == null) {
                                     exportStatus = "Cover capture failed"
+                                } else if (state.project != projectAtCapture) {
+                                    return@launch
                                 } else {
                                     coverPreview = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                    coverProjectAtCapture = projectAtCapture
                                     coverUploading = true
                                     mediaPublishViewModel?.uploadMemeCover(jpeg) { url ->
                                         coverUploading = false
+                                        if (state.project != projectAtCapture) return@uploadMemeCover
                                         coverThumbUrl = url
                                         if (url == null) exportStatus = "Cover upload failed"
                                     }

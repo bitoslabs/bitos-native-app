@@ -203,6 +203,9 @@ fun BitOSApp(
         var showStatic by remember { mutableStateOf<String?>(null) }
         // APP-015: the Saved (bookmarks) page opens from the More hub.
         var showBookmarks by remember { mutableStateOf(false) }
+        // "Use this sound" Wave D: the trending-sounds rail (APP-021
+        // bootstrap) over the live feed window.
+        var showTrendingSounds by remember { mutableStateOf(false) }
         // T4 capture entry: the Create hub (record Bitz / import media).
         var showCreateHub by remember { mutableStateOf(false) }
         // T16 deep links: author sheet target + lightning invoice viewer.
@@ -437,6 +440,26 @@ fun BitOSApp(
                         baseTags = composerSeedTags,
                         onClose = { showCreateNote = false; composerSeedTags = emptyList() },
                     )
+                } else if (showTrendingSounds) {
+                    // "Use this sound" Wave D: the ranked rail over the live
+                    // feed window; "Use in Studio" re-attaches by URL through
+                    // the Wave C editor path (hash-verified, no re-upload).
+                    val trendingContent by homeViewModel.feedContentState.collectAsStateWithLifecycle()
+                    space.bitos.app.ui.more.TrendingSoundsScreen(
+                        notes = trendingContent.notes,
+                        onClose = { showTrendingSounds = false },
+                        onUseSound = { row ->
+                            showTrendingSounds = false
+                            memeSoundSeed = space.bitos.app.ui.create.meme.MemeSoundSeed(
+                                eventId = row.sourceEventId ?: "",
+                                authorPubkey = "",
+                                label = "Trending",
+                                mediaUrl = row.url,
+                                isAudioOnly = true,
+                                sha256 = row.sha256,
+                            )
+                        },
+                    )
                 } else if (showBookmarks) {
                     space.bitos.app.ui.bookmarks.BookmarksScreen(
                         viewModel = homeViewModel,
@@ -497,6 +520,7 @@ fun BitOSApp(
                         onOpenStaticTerms = { showStatic = "terms" },
                         onOpenLightning = { showMore = false; hubSettingsSection = "lightning" },
                         onOpenSaved = { showMore = false; showBookmarks = true },
+                        onOpenSounds = { showMore = false; showTrendingSounds = true },
                         onOpenZaps = { showMore = false; showZaps = true },
                         onClose = { showMore = false },
                     )

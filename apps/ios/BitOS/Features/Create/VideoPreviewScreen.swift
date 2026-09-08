@@ -11,10 +11,10 @@ import SwiftUI
 struct VideoPreviewScreen: View {
     let data: Data
     let mimeType: String
-    let initialMirrored: Bool
+    var initialMirrored: Bool = false
     let onUse: (Data, String) -> Void
     let onRetake: () -> Void
-    let onBack: (() -> Void)?
+    var onBack: (() -> Void)? = nil
     @State private var player: AVPlayer?
     @State private var durationSeconds: Double = 0
     @State private var trimStart: Double = 0
@@ -214,24 +214,6 @@ struct VideoPreviewScreen: View {
         composition.frameDuration = CMTime(value: 1, timescale: 30)
         composition.instructions = [instruction]
         return composition
-    }
-}
-
-extension VideoPreviewScreen {
-    init(
-        data: Data,
-        mimeType: String,
-        initialMirrored: Bool = false,
-        onUse: @escaping (Data, String) -> Void,
-        onRetake: @escaping () -> Void,
-        onBack: (() -> Void)? = nil
-    ) {
-        self.data = data
-        self.mimeType = mimeType
-        self.initialMirrored = initialMirrored
-        self.onUse = onUse
-        self.onRetake = onRetake
-        self.onBack = onBack
     }
 }
 

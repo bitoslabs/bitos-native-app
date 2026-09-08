@@ -63,6 +63,14 @@ struct FeedNote: Sendable, Equatable, Identifiable {
     var remixRelays: [String] = []
     /** MST-042 raw `meme` layout payload; nil = the note carries none. */
     var memeTag: String? = nil
+    /** "Use this sound" (MST-050): the borrowed-sound source parsed from
+     *  the `sound` tag — nil = the note carries none. */
+    var soundUrl: String? = nil
+    var soundSourceEventId: String? = nil
+    var soundAuthorPubkey: String? = nil
+    var soundSha256: String? = nil
+    /// True when this note rides a borrowed sound (chip + rail actions).
+    var hasSound: Bool { soundUrl != nil }
     /** APP-007 `license` tag (remix advisory gate); nil = permissive. */
     var license: String? = nil
     /** Advisory `["bitz:zaps", "off"]` marker; cards hide the zap action. */
@@ -1029,6 +1037,10 @@ private final class SharedFeedWindow: FeedWindowing {
                 remixOfPubkey: note.remixOfPubkey,
                 remixRelays: note.remixRelays.map { $0 as String },
                 memeTag: note.memeTag,
+                soundUrl: note.soundUrl,
+                soundSourceEventId: note.soundSourceEventId,
+                soundAuthorPubkey: note.soundAuthorPubkey,
+                soundSha256: note.soundSha256,
                 license: note.license,
                 zapsDisabled: note.zapsDisabled
             )
@@ -1072,6 +1084,10 @@ private extension FeedNote {
             remixOfPubkey: remixOfPubkey,
             remixRelays: remixRelays,
             memeTag: memeTag,
+            soundUrl: soundUrl,
+            soundSourceEventId: soundSourceEventId,
+            soundAuthorPubkey: soundAuthorPubkey,
+            soundSha256: soundSha256,
             license: license,
             zapsDisabled: zapsDisabled,
             fallbackUrls: video?.fallbackUrls ?? [],

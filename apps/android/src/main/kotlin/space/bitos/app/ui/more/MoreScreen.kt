@@ -50,6 +50,7 @@ import space.bitos.app.identity.IdentityViewModel
 import space.bitos.app.ui.components.HexShape
 import space.bitos.app.ui.components.PubkeyAvatar
 import space.bitos.app.ui.feed.HomeViewModel
+import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 
 /**
@@ -75,6 +76,8 @@ fun MoreScreen(
     onOpenLightning: () -> Unit,
     /** APP-015: opens the Saved (bookmarks) page. */
     onOpenSaved: () -> Unit = {},
+    /** "Use this sound" Wave D: trending-sounds rail (APP-021 bootstrap). */
+    onOpenSounds: () -> Unit = {},
     /** APP-014: opens the zap wallet (sent ledger + received receipts). */
     onOpenZaps: () -> Unit = {},
     onClose: () -> Unit,
@@ -201,6 +204,7 @@ fun MoreScreen(
         GroupLabel("Explore")
         HubCard {
             MoreTile(icon = Icons.Outlined.Search, label = "Discover", caption = "Search Nostr", onClick = onOpenDiscover)
+            MoreTile(icon = AppIcons.MusicNote, label = "Trending sounds", caption = "Most-borrowed ♪ in your feed", onClick = onOpenSounds)
             MoreTile(icon = Icons.Outlined.Bolt, label = "Lightning & Zaps", caption = "Default zap amount", onClick = onOpenLightning)
         }
 

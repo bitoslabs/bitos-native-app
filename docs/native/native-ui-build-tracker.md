@@ -426,6 +426,56 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-08 (Wave D, iOS — **the "use this sound" epic is fully
+  cross-platform**; left UNCOMMITTED for owner review) — MST-050 Wave D
+  on iOS: More → **Trending sounds** tile + `TrendingSoundsView` ranked
+  over `feedStore.notes` by the shared `MemeSoundTrending.rank` (the
+  bridge note projection grew `soundSha256`; Swift mirror + both
+  mappers); "Use in Studio" builds an `isAudioOnly` `MemeSoundSeed` →
+  `seedSoundSession` hash-verifies the download (CryptoKit SHA-256 vs
+  the row's hash — mismatch loads nothing), decodes directly, and seeds
+  via the store's new `restoreReattachedSoundtrack` (URL pre-filled);
+  the post flow stamps an already-uploaded artifact's tags WITHOUT
+  re-uploading (mirrors the Android guard). Blank labels degrade to
+  "Original sound". Verified: XCFramework rebuilt; full-app Swift 6
+  strict-concurrency typecheck 0 errors; full shared + Android suites
+  green. All four waves (A–D) now shipped on both platforms.
+
+- 2026-09-08 (Wave D, Android; left UNCOMMITTED for owner review) —
+  **MST-050 Wave D on ANDROID — the full loop closes** (APP-021
+  bootstrap, zero marketplace): More → **Trending sounds** rail ranked
+  over the LIVE feed window by the shared `MemeSoundTrending.rank`
+  (3-day half-life, url+sha dedup, deterministic order); every borrow
+  counts (♪ chips' own `sound` tags feed the rank — `FeedNote.soundOf`
+  grew `sha256` for the dedup key, read-seam-tested). "Use in Studio"
+  re-attaches through the Wave C editor path with a new `isAudioOnly`
+  seed: hash-verified download of the ALREADY-UPLOADED m4a, no
+  extraction, pre-filled URL — and the publish path gained the matching
+  guard: a soundtrack whose URL is already set stamps its tags WITHOUT
+  re-uploading the artifact. Empty state explains the loop. iOS Wave D
+  (More tile + rail + the same re-attach seed) next, after the pending
+  Wave C iOS set commits. Verified: compile + full shared/Android
+  suites green.
+
+- 2026-09-08 (Wave C, iOS + parity fixes; left UNCOMMITTED for owner
+  review) — **MST-050 Wave C on iOS — parity closed** (the sound-first
+  loop runs on BOTH platforms). Shared: the bridge note projection grew
+  `soundUrl`/`soundSourceEventId`/`soundAuthorPubkey` (Kotlin defaults;
+  Swift mirror + both mappers); `MemeSoundTrending.rank` fixed for
+  Kotlin-common (`putIfAbsent` is JVM-only — containsKey guard). iOS:
+  Bitz rail **Sound** action (video notes, ♪ amber) → `MemeSoundSeed` →
+  full-screen editor handoff; `seedSoundSession` downloads bounded
+  (64 MiB, remix parity) → store `attachSoundtrack(data:source:author:
+  label:)` (provenance-aware refactor; the picker path delegates) →
+  VIDEO mode with the sound attached and no clip; ♪ chip in the
+  identity row. Drive-by compile fixes for the concurrent session's
+  committed-unverified camera work: CameraScreen body split (type-
+  checker budget) and VideoPreviewScreen's ambiguous init (defaults
+  moved onto stored properties; the colliding extension init deleted).
+  Verified: full shared + Android suites green; XCFramework rebuilt;
+  full-app Swift 6 strict-concurrency typecheck 0 errors. NEXT: Wave D
+  rail UI over the landed `MemeSoundTrending` rank.
+
 - 2026-09-08 (Wave C, Android; left UNCOMMITTED for owner review) —
   **MST-050 Wave C on ANDROID — "Use this sound" from any bitz**: the
   TikTok sound-first loop closes. Shared: `FeedNote.soundOf` (the

@@ -137,15 +137,74 @@ enum MemeVideoExportIos {
         )
     }
 
-    /** MST-032: captures the frame at `seconds` as JPEG bytes (the cover). */
-    static func captureCoverJpeg(clipURL: URL, seconds: Double) -> Data? {
+    /**
+     * Renders a public cover frame, rather than uploading a raw source frame.
+     * The frame uses the same grade, timed overlay plan, FX transform and
+     * drawing plan as video export, so the feed poster matches the post.
+     */
+    static func captureCoverJpeg(
+        clipURL: URL,
+        seconds: Double,
+        timelineMs: Int64,
+        projectJson: String,
+        effectiveLookId: String?,
+        client: any BusinessCoreClient,
+        images: [String: UIImage] = [:]
+    ) -> Data? {
         let asset = AVURLAsset(url: clipURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 1080, height: 1080)
         let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
         guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
-        return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.85)
+        let source = UIImage(cgImage: cgImage)
+        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        let media = MemeRaster.applyLook(
+            source,
+            matrixJson: client.memeAdjustMatrix(
+                effectiveLookId,
+                brightness: adjust.bri,
+                contrast: adjust.con,
+                saturation: adjust.sat
+            )
+        ) ?? source
+        guard let planData = client.memeExportPlan(
+            projectJson,
+            sourceWidth: Int(source.size.width),
+            sourceHeight: Int(source.size.height)
+        ).data(using: .utf8),
+        let plan = try? JSONSerialization.jsonObject(with: planData) as? [String: Any],
+        let width = (plan["width"] as? NSNumber)?.doubleValue,
+        let height = (plan["height"] as? NSNumber)?.doubleValue,
+        let rows = plan["items"] as? [[String: Any]] else { return nil }
+
+        let size = CGSize(width: width, height: height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let rendered = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            media.draw(in: CGRect(origin: .zero, size: size))
+            MemeRaster.paintStrokes(plan["strokes"] as? [[String: Any]] ?? [], in: context.cgContext)
+            for row in rows {
+                guard let id = row["id"] as? String else { continue }
+                let parts = client.memeFxTransformAt(projectJson, overlayId: id, atMs: timelineMs)
+                    .split(separator: "|").compactMap { CGFloat(Double($0) ?? .nan) }
+                guard parts.count == 5, parts[4] > 0 else { continue }
+                let x = CGFloat((row["x"] as? NSNumber)?.doubleValue ?? 0) + parts[2] * size.width
+                let y = CGFloat((row["y"] as? NSNumber)?.doubleValue ?? 0) + parts[3] * size.height
+                var paintRow = row
+                paintRow["x"] = x
+                paintRow["y"] = y
+                paintRow["rot"] = ((row["rot"] as? NSNumber)?.doubleValue ?? 0) + Double(parts[1]) * 180 / .pi
+                context.cgContext.saveGState()
+                context.cgContext.translateBy(x: x, y: y)
+                context.cgContext.scaleBy(x: parts[0], y: parts[0])
+                context.cgContext.translateBy(x: -x, y: -y)
+                context.cgContext.setAlpha(parts[4])
+                MemeRaster.paint(paintRow, in: context.cgContext, images: images)
+                context.cgContext.restoreGState()
+            }
+        }
+        return rendered.jpegData(compressionQuality: 0.85)
     }
 
     /// Writes session bytes to a temp file (AVFoundation needs a URL).

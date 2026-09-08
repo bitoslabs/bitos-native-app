@@ -181,7 +181,13 @@ object MemeSoundRules {
     }
 
     /** Parsed sound source of one note (`["sound", url, sha256, eventId?]`). */
-    data class Source(val eventId: String?, val pubkey: String?, val url: String)
+    data class Source(
+        val eventId: String?,
+        val pubkey: String?,
+        val url: String,
+        /** The borrowed audio's canonical hash (tag index 2; "" when absent). */
+        val sha256: String = "",
+    )
 
     /**
      * First borrowed-sound source declared in [tags], or null. The feed
@@ -191,9 +197,10 @@ object MemeSoundRules {
     fun sourceOf(tags: List<List<String>>): Source? {
         val sound = tags.firstOrNull { it.firstOrNull() == "sound" && it.size >= 3 } ?: return null
         val url = sound[1].take(MAX_URL_LENGTH).takeIf(String::isNotBlank) ?: return null
+        val sha256 = sound.getOrNull(2)?.take(MAX_SHA_LENGTH) ?: ""
         val eventId = sound.getOrNull(3)?.take(MAX_SOURCE_ID_LENGTH)?.takeIf(String::isNotBlank)
         val pubkey = tags.firstOrNull { it.firstOrNull() == "p" && it.size >= 2 }
             ?.get(1)?.take(MAX_AUTHOR_LENGTH)?.takeIf(String::isNotBlank)
-        return Source(eventId = eventId, pubkey = pubkey, url = url)
+        return Source(eventId = eventId, pubkey = pubkey, url = url, sha256 = sha256)
     }
 }

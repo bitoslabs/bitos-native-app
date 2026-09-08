@@ -487,13 +487,16 @@ slots (raw data asset `v1`) and resume re-probes. Wave M3c (2026-09-02): MST-032
 imeta `thumb` through every composer; the video bridge seams grew the
 param; `BlossomTest` covers thumb-rides + policy reject; fixture
 `kind-22-unsigned.json` carries a thumb. Android: `captureCoverJpeg`
-(MediaMetadataRetriever at the playhead, closest-sync, JPEG 85) →
+(source frame at the playhead, then the shared grade + timed paint/FX plan
+at the timeline position, JPEG 85) →
 `MediaPublishViewModel.uploadMemeCover` (separate hash-verified upload) →
 "Set cover / Cover ✓" chip in the video scrub row; publish passes the
 URL. iOS: `captureCoverJpeg` (AVAssetImageGenerator, upright transform,
-≤1080) → BlossomUploader image/jpeg → the same stage chip +
+then the same grade + timed paint/FX plan, ≤1080) → BlossomUploader image/jpeg → the same stage chip +
 `publishMemeVideoNote(thumbUrl:)`. Cover pick is session-only in V1
-(the project wire has no thumb field — re-pick after relaunch; noted).
+(the project wire has no thumb field — re-pick after relaunch; noted), and
+is invalidated when the project changes so a stale rendered frame cannot be
+published.
 MST-035 QA stays a MANUAL gate: long-clip bound, call interruption,
 backgrounding, low storage, thermal, process-kill mid-export (CAP-009
 reuse) — enumerated in the tracker; no simulator runtimes on the

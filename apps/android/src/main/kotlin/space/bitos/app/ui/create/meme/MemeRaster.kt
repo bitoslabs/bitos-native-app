@@ -184,6 +184,28 @@ object MemeRaster {
         return rgba
     }
 
+    /**
+     * Renders one public video frame for a cover image. This deliberately
+     * uses the same grade, stroke plan and time-aware overlay plan as the
+     * video exporter; a metadata-retriever frame alone is only source media.
+     */
+    fun renderVideoCoverFrame(
+        source: Bitmap,
+        project: MemeProject,
+        timelineMs: Long,
+        imageFor: ((String) -> Bitmap?)? = null,
+    ): Bitmap {
+        val (width, height) = MemeExportRules.outputSize(source.width, source.height)
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawBitmap(source, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
+        drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
+        MemeExportRules.paintPlanAt(project, width, height, timelineMs).forEach { timed ->
+            drawExportItem(canvas, timed.item, imageFor, timed.fx)
+        }
+        return out
+    }
+
     /** Video-overlay layer painting (same geometry as stills — WYSIWYG).
      *  [fx] is the frame's timed transform (windows + motion effects). */
     internal fun drawExportItem(

@@ -139,6 +139,7 @@ class MemeSoundRulesTest {
         val source = MemeSoundRules.sourceOf(MemeSoundRules.tagsFor(soundtrack()))!!
         assertEquals("source-event-id", source.eventId)
         assertEquals("author-pubkey", source.pubkey)
+        assertEquals(sha, source.sha256, "the audio hash rides the read seam (trending dedup)")
         assertNull(MemeSoundRules.sourceOf(emptyList()))
     }
 

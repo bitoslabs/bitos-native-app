@@ -166,6 +166,10 @@ struct BitzView: View {
     /** M4b remix: the editor handoff (media + layout + lineage). */
     @State private var memeRemixSeed: MemeRemixSeed?
     private let remixSlotStore = MemeProjectStore()
+    /** "Use this sound" (Wave C): the bitz's audio seeds the editor as a
+     *  soundtrack (provenance attached, no clip — creator adds their own). */
+    @State private var memeSoundSeed: MemeSoundSeed?
+    private let soundSlotStore = MemeProjectStore()
     @State private var shareText: String?
     /** Swipe-right on settled Bitz video → full-screen profile for that creator. */
     @State private var fullProfileTarget: String?
@@ -382,6 +386,20 @@ struct BitzView: View {
                 .preferredColorScheme(nil)
             }
         }
+        // "Use this sound" (Wave C): the bitz's AUDIO opens the meme editor
+        // as a soundtrack — same full-screen handoff as a remix.
+        .fullScreenCover(isPresented: Binding(
+            get: { memeSoundSeed != nil },
+            set: { if !$0 { memeSoundSeed = nil } }
+        )) {
+            if let memeSoundSeed {
+                MemeEditorView(
+                    slotStore: soundSlotStore,
+                    soundSeed: memeSoundSeed
+                )
+                .preferredColorScheme(nil)
+            }
+        }
         .fullScreenCover(isPresented: $showSearch) {
             BitzSearchOverlay(onOpenNote: openInPlayer, onDismiss: { showSearch = false })
                 .environment(environment)
@@ -534,6 +552,20 @@ struct BitzView: View {
                 showComposer = true
             }
         }
+    }
+
+    /// "Use this sound" (Wave C): the bitz's AUDIO becomes a studio
+    /// soundtrack — editor handoff with provenance, no media import.
+    private func handleUseSound(note: FeedNote) {
+        guard let mediaUrl = note.video?.url else { return }
+        let label = environment.feedStore.profiles[note.pubkey]?.bestDisplayName
+            ?? FeedFormat.shortPubkey(note.pubkey)
+        memeSoundSeed = MemeSoundSeed(
+            eventId: note.id,
+            authorPubkey: note.pubkey,
+            label: label,
+            mediaUrl: mediaUrl
+        )
     }
 
     /// Builds the editor handoff: source media URL, decoded-layout payload
@@ -737,6 +769,7 @@ struct BitzView: View {
                             zapTarget = note
                         },
                         onRemix: { handleRemix(note) },
+                        onUseSound: { handleUseSound(note: note) },
                         onChain: {
                             chainTarget = note
                             environment.feedStore.loadRemixChain(note: note)
@@ -1414,6 +1447,21 @@ private struct BitzTile: View {
                     .font(.system(size: 11))
                     .foregroundStyle(BitOSTheme.accent)
             }
+            // "Use this sound" (Wave C): a borrowed sound rides this note.
+            if note.hasSound {
+                HStack(spacing: 2) {
+                    AppIcons.image(for: AppIcons.musicNote)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(red: 0.961, green: 0.757, blue: 0.357))
+                    Text("Original sound")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.black.opacity(0.35)))
+            }
         }
         if let onOpenAuthor {
             Button(action: onOpenAuthor) { row }
@@ -1473,6 +1521,8 @@ private struct BitzVideoPage: View {
     let onFollow: () -> Void
     let onZap: () -> Void
     let onRemix: () -> Void
+    /// "Use this sound" (Wave C): borrow this note's audio into the studio.
+    var onUseSound: () -> Void = {}
     var onChain: () -> Void = {}
     let onAuthor: () -> Void
     let onMore: (CGPoint) -> Void
@@ -1707,6 +1757,10 @@ private struct BitzVideoPage: View {
             // User decision 2026-08-29: [like · comment · repost · zap ·
             // bookmark] after Remix/Chain; Share lives in the ⋯ sheet.
             railButton(AppIcons.sparkles, "Remix", tint: Color(red: 0.545, green: 0.361, blue: 0.965), action: onRemix)
+            // "Use this sound" (Wave C): only notes with a video track to borrow.
+            if note.video != nil {
+                railButton(AppIcons.musicNote, "Sound", tint: Color(red: 0.961, green: 0.757, blue: 0.357), action: onUseSound)
+            }
             // Chain: only when this note declares a remix source (web parity).
             if note.remixOfEventId != nil {
                 railButton(AppIcons.appsGrid, "Chain", tint: .white, action: onChain)

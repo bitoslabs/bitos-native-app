@@ -30,6 +30,11 @@ struct MoreView: View {
     @State private var showSaved = false
     /** APP-014: the zap wallet (sent ledger + received receipts). */
     @State private var showZaps = false
+    /** "Use this sound" Wave D: the trending-sounds rail (APP-021 bootstrap). */
+    @State private var showTrendingSounds = false
+    /** "Use in Studio" re-attach handoff (Wave C editor path, by URL). */
+    @State private var soundSeed: MemeSoundSeed?
+    private let soundSlotStore = MemeProjectStore()
 
     var body: some View {
         NavigationStack {
@@ -109,6 +114,9 @@ struct MoreView: View {
                     tile("Discover", caption: "Search Nostr", symbol: AppIcons.search) {
                         onOpenDiscover()
                     }
+                    tile("Trending sounds", caption: "Most-borrowed ♪ in your feed", symbol: AppIcons.musicNote) {
+                        showTrendingSounds = true
+                    }
                     tile("Lightning & Zaps", caption: "Default zap amount", symbol: AppIcons.zap) {
                         showSettingsSection = "lightning"
                     }
@@ -165,6 +173,40 @@ struct MoreView: View {
             .fullScreenCover(isPresented: $showSaved) {
                 BookmarksView()
                     .environment(environment)
+            }
+            // "Use this sound" Wave D: the trending rail over the live feed
+            // window; "Use in Studio" re-attaches by URL (hash-verified, no
+            // re-upload) through the Wave C editor handoff.
+            .fullScreenCover(isPresented: $showTrendingSounds) {
+                TrendingSoundsView(
+                    notes: environment.feedStore.notes,
+                    onClose: { showTrendingSounds = false },
+                    onUseSound: { row in
+                        showTrendingSounds = false
+                        soundSeed = MemeSoundSeed(
+                            eventId: row.sourceEventId ?? "",
+                            authorPubkey: "",
+                            label: "",
+                            mediaUrl: row.url,
+                            isAudioOnly: true,
+                            sha256: row.sha256
+                        )
+                    }
+                )
+                .environment(environment)
+                .preferredColorScheme(BitOSTheme.preferredScheme)
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { soundSeed != nil },
+                set: { if !$0 { soundSeed = nil } }
+            )) {
+                if let soundSeed {
+                    MemeEditorView(
+                        slotStore: soundSlotStore,
+                        soundSeed: soundSeed
+                    )
+                    .preferredColorScheme(nil)
+                }
             }
             // APP-014: the zap wallet is a full-screen cover over the hub
             // (same surface the You page presents).
