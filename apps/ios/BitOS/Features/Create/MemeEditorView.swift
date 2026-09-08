@@ -1130,6 +1130,12 @@ final class MemeEditorStore {
     /** Stage/export background; nil = the theme surface. */
     var canvasBackgroundHex: String? { canvasBg }
 
+    /// Blank design (image mode): a pinned canvas with no picks — the
+    /// "create from scratch" path (text/stickers over a colored canvas).
+    var isBlankDesign: Bool {
+        !isVideoMode && !isGifMode && assets.isEmpty && canvasRatio != nil
+    }
+
     /** `#rrggbb` → Color (stage/export fill); nil when malformed. */
     nonisolated static func colorHex(_ hex: String) -> Color? {
         guard hex.count == 7, hex.hasPrefix("#"),
@@ -1483,19 +1489,23 @@ final class MemeEditorStore {
             }
             return
         }
-        guard let asset = activeAsset else {
-            exportState = .failed("Pick an image first")
+        guard activeAsset != nil || isBlankDesign else {
+            exportState = .failed("Pick an image first — or start a blank canvas")
             return
         }
         exportState = .saving
         let project = projectJson
         let client = self.client
-        let source = asset.image
+        let source = activeAsset?.image
         let exportJob = exportJobs.begin(format: "png", nowMs: nowMs())
         Task {
             do {
                 let data = try await Task.detached(priority: .userInitiated) {
-                    try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
+                    if let source {
+                        try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
+                    } else {
+                        try MemeRaster.renderBlankPngData(projectJson: project, client: client).data
+                    }
                 }.value
                 guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
                     throw MemeRaster.ExportError(message: "Could not persist the render")
@@ -1614,7 +1624,7 @@ final class MemeEditorStore {
         bridge: BusinessCoreBridge
     ) {
         guard publishState != .uploading, publishState != .publishing else { return }
-        guard isVideoMode || isGifMode || activeAsset != nil else {
+        guard isVideoMode || isGifMode || activeAsset != nil || isBlankDesign else {
             publishFailure = "Pick an image first"
             return
         }
@@ -1722,25 +1732,30 @@ final class MemeEditorStore {
                     mime = "image/gif"
                 } else {
                     // 1. Render at export resolution (dims ride the event imeta).
-                    guard let source else {
-                        publishFailure = "Pick an image first"
-                        publishState = .idle
-                        return
+                    if let source {
+                        let png = try await Task.detached(priority: .userInitiated) {
+                            try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
+                        }.value
+                        let envelopeJson = client.memeExportPlan(
+                            project,
+                            sourceWidth: Int(source.size.width),
+                            sourceHeight: Int(source.size.height)
+                        )
+                        if let data = envelopeJson.data(using: .utf8),
+                           let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            width = (envelope["width"] as? NSNumber)?.intValue ?? 0
+                            height = (envelope["height"] as? NSNumber)?.intValue ?? 0
+                        }
+                        bytes = png
+                    } else {
+                        // Blank design: the pinned canvas IS the media.
+                        let blank = try await Task.detached(priority: .userInitiated) {
+                            try MemeRaster.renderBlankPngData(projectJson: project, client: client)
+                        }.value
+                        width = blank.width
+                        height = blank.height
+                        bytes = blank.data
                     }
-                    let png = try await Task.detached(priority: .userInitiated) {
-                        try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
-                    }.value
-                    let envelopeJson = client.memeExportPlan(
-                        project,
-                        sourceWidth: Int(source.size.width),
-                        sourceHeight: Int(source.size.height)
-                    )
-                    if let data = envelopeJson.data(using: .utf8),
-                       let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        width = (envelope["width"] as? NSNumber)?.intValue ?? 0
-                        height = (envelope["height"] as? NSNumber)?.intValue ?? 0
-                    }
-                    bytes = png
                     mime = "image/png"
                 }
                 // Ledger: persist the attempt + rendered bytes (durable job).
@@ -2187,6 +2202,72 @@ struct MemeEditorView: View {
         )
     }
 
+    /// GIF-mode browser (the SAME shared composer sheet, GIFs tab —
+    /// trending cache, recents, search): picks download bounded and
+    /// decode straight into the frame tray, like photo picks.
+    @ViewBuilder
+    private var gifBrowseContent: some View {
+        GifPickerSheet(
+            onPick: { gif in
+                showGifBrowse = false
+                handleGifBrowsePick(gif)
+            },
+            onDismiss: { showGifBrowse = false },
+            defaultStickers: false
+        )
+    }
+
+    /// Bounded download → decoded frames → tray append (capped at 60,
+    /// the same rule as photo picks); stills land as one 100 ms frame.
+    private func handleGifBrowsePick(_ gif: GifChoiceItem) {
+        Task {
+            guard let url = URL(string: gif.url) else {
+                store.setNotice("GIF download failed — try another")
+                return
+            }
+            do {
+                let (bytes, response) = try await URLSession.shared.data(from: url)
+                guard (response as? HTTPURLResponse)?.statusCode == 200,
+                      !bytes.isEmpty,
+                      bytes.count <= 24 * 1024 * 1024 else {
+                    store.setNotice("GIF download failed — try another")
+                    return
+                }
+                let decoded = await Task.detached(priority: .userInitiated) {
+                    GifFrameSourceIos.decode(bytes)
+                }.value
+                var frames: [MemeEditorStore.MemeGifFrame] = []
+                if let decoded {
+                    decoded.images.enumerated().forEach { pair in
+                        let delay = decoded.delaysMs.indices.contains(pair.offset)
+                            ? decoded.delaysMs[pair.offset]
+                            : GifFrameSourceIos.stillDelayMs
+                        frames.append(
+                            MemeEditorStore.MemeGifFrame(id: "new", image: pair.element, delayMs: delay)
+                        )
+                    }
+                } else if let image = UIImage(data: bytes) {
+                    frames.append(
+                        MemeEditorStore.MemeGifFrame(
+                            id: "new", image: image, delayMs: GifFrameSourceIos.stillDelayMs
+                        )
+                    )
+                }
+                if frames.isEmpty {
+                    store.setNotice("GIF unreadable — try another")
+                    return
+                }
+                let before = store.gifFramesCount
+                store.addGifFrames(frames)
+                if before < 60 && store.gifFramesCount >= 60 {
+                    store.setNotice("Frame limit reached (60)")
+                }
+            } catch {
+                store.setNotice("GIF download failed — try another")
+            }
+        }
+    }
+
     /// Bounded download → asset-with-data → animated image layer. Broken
     /// out of the sheet closure so expression type-checking stays cheap.
     private func handleGifStickerPick(_ gif: GifChoiceItem) {
@@ -2284,6 +2365,7 @@ struct MemeEditorView: View {
             )
         }
         .sheet(isPresented: $showGifStickerPicker) { gifStickerContent }
+        .sheet(isPresented: $showGifBrowse) { gifBrowseContent }
         .photosPicker(
             isPresented: $isPicking,
             selection: $pickerItems,
@@ -2784,14 +2866,23 @@ struct MemeEditorView: View {
                     }
                     .frame(width: fitted.width, height: fitted.height)
                     .stageGestures(store: store, stageSize: fitted)
-                } else if let asset = store.activeAsset {
-                    let fitted = fittedStageSize(container: container, aspect: asset.aspect)
+                } else if store.activeAsset != nil || store.canvasAspect != nil {
+                    // Blank design: a pinned canvas with no pick keeps the
+                    // full overlay/gesture surface over the background fill.
+                    let stageAspect = store.activeAsset?.aspect ?? store.canvasAspect ?? 1
+                    let fitted = fittedStageSize(container: container, aspect: stageAspect)
                     ZStack {
-                        Image(uiImage: store.gradedImage(asset.image, cacheKey: asset.id))
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: fitted.width, height: fitted.height)
-                            .clipped()
+                        if let asset = store.activeAsset {
+                            Image(uiImage: store.gradedImage(asset.image, cacheKey: asset.id))
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: fitted.width, height: fitted.height)
+                                .clipped()
+                        } else {
+                            Rectangle()
+                                .fill(store.canvasBackgroundHex.flatMap(MemeEditorStore.colorHex) ?? BitOSTheme.surface)
+                                .frame(width: fitted.width, height: fitted.height)
+                        }
                         ForEach(store.overlays) { overlay in
                             OverlayUiView(
                                 overlay: overlay,
@@ -2897,30 +2988,56 @@ struct MemeEditorView: View {
 
     private func emptyCta(container: CGSize) -> some View {
         let side = min(container.width * 0.8, min(container.height, container.width * 0.8))
-        return Button {
-            if store.isVideoMode { isPickingVideo = true } else { isPicking = true }
-        } label: {
-            VStack(spacing: BitOSTheme.Spacing.sm) {
-                AppIcons.image(for: AppIcons.photo)
-                    .font(.system(size: 34, weight: .medium))
-                    .foregroundStyle(BitOSTheme.accent)
-                Text(store.isVideoMode ? "Pick a clip" : "Pick an image")
-                    .font(.subheadline.weight(.semibold))
-                Text(store.isVideoMode ? "Up to 60 seconds" : "Up to \(MemeEditorStore.imageAssetCap) images")
-                    .font(.caption)
-                    .foregroundStyle(BitOSTheme.textSecondary)
+        return VStack(spacing: BitOSTheme.Spacing.md) {
+            Button {
+                if store.isVideoMode { isPickingVideo = true } else { isPicking = true }
+            } label: {
+                VStack(spacing: BitOSTheme.Spacing.sm) {
+                    AppIcons.image(for: AppIcons.photo)
+                        .font(.system(size: 34, weight: .medium))
+                        .foregroundStyle(BitOSTheme.accent)
+                    Text(store.isVideoMode ? "Pick a clip" : "Pick an image")
+                        .font(.subheadline.weight(.semibold))
+                    Text(store.isVideoMode ? "Up to 60 seconds" : "Up to \(MemeEditorStore.imageAssetCap) images")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                .frame(width: max(side, 120), height: max(side, 120))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(BitOSTheme.border, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+                )
             }
-            .frame(width: max(side, 120), height: max(side, 120))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(BitOSTheme.border, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
-            )
+            // Create-from-scratch: a pinned 1:1 canvas + background, no
+            // media — text/stickers/draw over it (the Canvas chip re-styles).
+            if !store.isVideoMode && !store.isGifMode {
+                Button {
+                    store.setCanvas(ratio: "1:1", bg: "#FFFFFF")
+                } label: {
+                    Label("Start blank canvas", systemImage: "rectangle.on.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
+            // Browse GIFs: the shared composer sheet (trending, recents,
+            // search) decodes picks straight into the frame tray.
+            if store.isGifMode {
+                Button {
+                    showGifBrowse = true
+                } label: {
+                    Label("Browse GIFs", systemImage: "photo.on.rectangle.angled")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
         }
     }
 
     @State private var isPicking = false
     /// MST-054: Giphy GIF-sticker picker (video-mode layer source).
     @State private var showGifStickerPicker = false
+    /// GIF-mode browser (the same shared sheet, GIFs tab).
+    @State private var showGifBrowse = false
     @State private var isPickingVideo = false
 
     // ── Tray ────────────────────────────────────────────────────────────
@@ -3088,7 +3205,7 @@ struct MemeEditorView: View {
                 QuickToolChip(
                     symbol: AppIcons.save, label: "Export",
                     active: false,
-                    enabled: (store.activeAsset != nil || store.gifFramesCount > 0 ||
+                    enabled: (store.activeAsset != nil || store.isBlankDesign || store.gifFramesCount > 0 ||
                         store.videoClipData != nil) && store.exportState != .saving
                 ) {
                     showExportSheet = true
@@ -3413,6 +3530,7 @@ struct MemeEditorView: View {
                     suiteMode = true
                 }
             } else if store.isGifMode {
+                ClipTool(icon: "photo.on.rectangle.angled", label: "GIFs") { showGifBrowse = true }
                 ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
                 ClipTool(icon: "timer", label: "Speed") {
                     let next = store.gifUniformDelayMs >= 200 ? 50 : store.gifUniformDelayMs + 50
@@ -3491,7 +3609,7 @@ struct MemeEditorView: View {
     /// Header publish entry (prototype "Next · post details") — inline with
     /// draft save so the bottom stack stays tool-only.
     private var headerNextButton: some View {
-        let hasMedia = store.activeAsset != nil || store.gifFramesCount > 0 ||
+        let hasMedia = store.activeAsset != nil || store.isBlankDesign || store.gifFramesCount > 0 ||
             store.videoClipData != nil
         let busy = store.publishState == .uploading || store.publishState == .publishing
         // An incompletely restored timeline must not publish — the post
@@ -4364,7 +4482,7 @@ struct ExportSettingsSheet: View {
     @State private var variationsBusy = false
 
     private var designEligible: Bool {
-        !store.isGifMode && !store.isVideoMode && store.activeAsset != nil &&
+        !store.isGifMode && !store.isVideoMode && (store.activeAsset != nil || store.isBlankDesign) &&
             store.overlays.contains { !$0.isSticker && !$0.text.isEmpty }
     }
 
@@ -4393,6 +4511,12 @@ struct ExportSettingsSheet: View {
             let width = Int((asset.image.size.width * asset.image.scale).rounded())
             let height = Int((asset.image.size.height * asset.image.scale).rounded())
             return ("PNG · \(width)×\(height)", "Full-quality PNG at the media's resolution.")
+        }
+        if store.isBlankDesign, let aspect = store.canvasAspect {
+            let longEdge = 1080.0
+            let w = aspect >= 1 ? longEdge : (longEdge * aspect).rounded()
+            let h = aspect >= 1 ? (longEdge / aspect).rounded() : longEdge
+            return ("PNG · \(Int(w))×\(Int(h))", "Full-quality PNG on the blank canvas.")
         }
         return ("—", "Pick media first.")
     }
@@ -4468,12 +4592,20 @@ struct ExportSettingsSheet: View {
                     variationsBusy = true
                     Task {
                         do {
-                            let png = try await Task.detached(priority: .userInitiated) { [store] in
-                                try await MemeRaster.renderPngData(
-                                    asset: store.activeAsset!.image,
-                                    projectJson: store.projectJson,
+                            let asset = store.activeAsset
+                            let blankProject = store.projectJson
+                            let png = try await Task.detached(priority: .userInitiated) {
+                                if let asset {
+                                    return try MemeRaster.renderPngData(
+                                        asset: asset.image,
+                                        projectJson: blankProject,
+                                        client: FrameworkBusinessCoreClient()
+                                    )
+                                }
+                                return try MemeRaster.renderBlankPngData(
+                                    projectJson: blankProject,
                                     client: FrameworkBusinessCoreClient()
-                                )
+                                ).data
                             }.value
                             dismissSheet()
                             onMakeVariations(store.projectJson, png)
@@ -4944,6 +5076,61 @@ enum MemeRaster {
             throw ExportError(message: "PNG encoding failed")
         }
         return data
+    }
+
+    /// Blank-canvas render (image mode, no source media): a pinned ratio
+    /// + background compose strokes + overlays alone — the "create from
+    /// scratch" path. Same 1080-px long-edge budget and even-dim rules as
+    /// `renderPngData`; parity with Android `MemeRaster.renderBlank`.
+    /// Returns the PNG bytes AND the pixel dims (publish imeta needs them).
+    static func renderBlankPngData(
+        projectJson: String,
+        client: any BusinessCoreClient
+    ) throws -> (data: Data, width: Int, height: Int) {
+        let ratio = MemeEditorStore.canvasRatio(ofProject: projectJson)
+        let terms = ratio?.split(separator: ":").compactMap { Int($0) } ?? []
+        guard terms.count == 2, terms[0] > 0, terms[1] > 0 else {
+            throw ExportError(message: "Blank export needs a canvas ratio")
+        }
+        let aspect = CGFloat(terms[0]) / CGFloat(terms[1])
+        let longEdge: CGFloat = 1080
+        var size = aspect >= 1
+            ? CGSize(width: longEdge, height: longEdge / aspect)
+            : CGSize(width: longEdge * aspect, height: longEdge)
+        size = CGSize(
+            width: (size.width / 2).rounded() * 2,
+            height: (size.height / 2).rounded() * 2
+        )
+        // The shared plan normalizes against the canvas dims (same
+        // re-plan trick the pinned-canvas media path uses).
+        guard let planJson = client.memeExportPlan(
+            projectJson,
+            sourceWidth: Int(size.width),
+            sourceHeight: Int(size.height)
+        ).data(using: .utf8),
+            let plan = try? JSONSerialization.jsonObject(with: planJson) as? [String: Any],
+            let rows = plan["items"] as? [[String: Any]] else {
+            throw ExportError(message: "The meme could not be planned for export")
+        }
+        let strokes = plan["strokes"] as? [[String: Any]] ?? []
+        let bgHex = MemeEditorStore.canvasBg(ofProject: projectJson)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let image = renderer.image { context in
+            if let bgHex, let bg = MemeEditorStore.colorHex(bgHex) {
+                context.cgContext.setFillColor(UIColor(bg).cgColor)
+                context.cgContext.fill(CGRect(origin: .zero, size: size))
+            }
+            paintStrokes(strokes, in: context.cgContext)
+            for row in rows {
+                paint(row, in: context.cgContext)
+            }
+        }
+        guard let data = image.pngData() else {
+            throw ExportError(message: "PNG encoding failed")
+        }
+        return (data, Int(size.width), Int(size.height))
     }
 
     static func paint(_ row: [String: Any], in cgContext: CGContext, images: [String: UIImage] = [:], centerOverride: CGPoint? = nil) {

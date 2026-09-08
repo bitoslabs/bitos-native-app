@@ -729,6 +729,9 @@ fun MemeEditorScreen(
     var showLayers by remember { mutableStateOf(false) }
     /** MST-054: Giphy GIF-sticker picker (the shared composer sheet). */
     var showGifPicker by remember { mutableStateOf(false) }
+    /** GIF-mode browser (same shared sheet, GIFs tab): trending/search
+     *  picks decode straight into the frame tray. */
+    var showGifBrowse by remember { mutableStateOf(false) }
     var showTrim by remember { mutableStateOf(false) }
     /** M5 per-clip management sheet (trim · reorder · remove · duplicate). */
     var showClipSheet by remember { mutableStateOf(false) }
@@ -798,6 +801,11 @@ fun MemeEditorScreen(
         }
     }
     val gifMode = state.project.mode == MemeMode.GIF
+    /** Blank design (image mode): a pinned canvas with no picks — the
+     *  "create from scratch" path (text/stickers over a colored canvas). */
+    val pinnedCanvasTerms = state.project.canvasRatio
+        ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
+    val blankDesignActive = !gifMode && !videoMode && assets.isEmpty() && pinnedCanvasTerms != null
     val memePublishState = mediaPublishViewModel?.memeState?.collectAsStateWithLifecycle()?.value
 
     val activeAsset = assets.firstOrNull { it.id == activeAssetId }
@@ -926,16 +934,21 @@ fun MemeEditorScreen(
         gifPreviewIndex = (gifPreviewIndex + 1) % gifFrames.size
     }
 
-    /** GIF mode: decode picks into bounded frames (animated or stills). */
-    val gifPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    /**
+     * GIF-mode frame import (the photo pick AND the GIF browser share
+     * it): decode → bounded frame-tray append; stills land as one 100 ms
+     * frame. Keeps the wire's frame ids in step with the tray.
+     */
+    fun importGifBytes(bytes: ByteArray?) {
+        if (bytes == null) {
+            exportStatus = "Could not read this GIF"
+            return
+        }
         scope.launch {
             val before = gifFrames.size
             withContext(Dispatchers.IO) {
-                val bytes = readAssetBytes(context, uri) ?: return@withContext
                 val cap = MemeProjectContract.maxAssets(MemeMode.GIF) - before
+                if (cap <= 0) return@withContext
                 val decoded = GifFrameSource.decode(bytes, cap)
                 fun capture(frame: android.graphics.Bitmap) {
                     val stream = java.io.ByteArrayOutputStream()
@@ -948,20 +961,33 @@ fun MemeEditorScreen(
                         gifFrames += it
                     }
                     decoded.delaysMs.forEach { gifDelays += it }
-                } else {
+                } else if (gifFrames.size < MemeProjectContract.maxAssets(MemeMode.GIF)) {
                     // Static image picked in GIF mode: one 100 ms still frame.
                     android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let {
-                        if (gifFrames.size < MemeProjectContract.maxAssets(MemeMode.GIF)) {
-                            capture(it)
-                            gifFrames += it
-                            gifDelays += GifFrameSource.STILL_DELAY_MS
-                        }
+                        capture(it)
+                        gifFrames += it
+                        gifDelays += GifFrameSource.STILL_DELAY_MS
                     }
                 }
             }
             // Keep the project wire's frame ids in step with the tray.
             state.addAssets((before + 1..gifFrames.size).map { "f$it" })
             gifPreviewIndex = 0
+            val frameCap = MemeProjectContract.maxAssets(MemeMode.GIF)
+            if (before < frameCap && gifFrames.size >= frameCap) {
+                exportStatus = "Frame limit reached ($frameCap)"
+            }
+        }
+    }
+
+    /** GIF mode: decode picks into bounded frames (animated or stills). */
+    val gifPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) { readAssetBytes(context, uri) }
+            importGifBytes(bytes)
         }
     }
 
@@ -1203,8 +1229,8 @@ fun MemeEditorScreen(
             return
         }
         val asset = activeAsset
-        if (asset == null) {
-            exportStatus = "Pick an image first"
+        if (asset == null && !blankDesignActive) {
+            exportStatus = "Pick an image first — or start a blank canvas"
             return
         }
         exporting = true
@@ -1214,9 +1240,13 @@ fun MemeEditorScreen(
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
-                        ?: error("Image could not be read")
-                    val rendered = MemeRaster.render(source, exportProject)
+                    val rendered = if (asset != null) {
+                        val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
+                            ?: error("Image could not be read")
+                        MemeRaster.render(source, exportProject)
+                    } else {
+                        MemeRaster.renderBlank(exportProject)
+                    }
                     val pngBytes = java.io.ByteArrayOutputStream().also { stream ->
                         check(rendered.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) {
                             "PNG encode failed"
@@ -1306,7 +1336,7 @@ fun MemeEditorScreen(
             Spacer(Modifier.weight(1f))
             // Publish entry (prototype "Next · post details") lives in the
             // header beside draft save so the bottom stack stays tool-only.
-            val headerHasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo
+            val headerHasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo || blankDesignActive
             val headerPublishBusy = memePublishState?.phase.let {
                 it == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
                     it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
@@ -1411,12 +1441,21 @@ fun MemeEditorScreen(
                     },
                 )
                 }
-            } else if (current == null && !gifMode && !videoMode) {
-                EmptyCanvasCta(onPick = ::launchPicker)
+            } else if (current == null && pinnedCanvasTerms == null && !gifMode && !videoMode) {
+                EmptyCanvasCta(
+                    onPick = ::launchPicker,
+                    onBlank = { state.setCanvas("1:1", "#FFFFFF") },
+                )
             } else if (videoMode) {
                 EmptyCanvasCta(onPick = ::launchPicker)
             } else if (gifMode && gifFrames.isEmpty()) {
-                EmptyCanvasCta(onPick = ::launchPicker)
+                EmptyCanvasCta(
+                    onPick = ::launchPicker,
+                    onBrowseGifs = {
+                        activePanel = null
+                        showGifBrowse = true
+                    },
+                )
             } else if (gifMode) {
                 val frame = gifFrames[gifPreviewIndex.coerceIn(0, gifFrames.size - 1)]
                 val frameAspect = frame.width.toFloat() / frame.height
@@ -1480,13 +1519,13 @@ fun MemeEditorScreen(
                         state = state,
                     )
                 }
-            } else if (current != null) {
-                val canvasTerms = state.project.canvasRatio
-                    ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
-                val stageAspect = if (canvasTerms != null) {
-                    canvasTerms.first.toFloat() / canvasTerms.second
+            } else if (current != null || pinnedCanvasTerms != null) {
+                // Blank design: no pick, a pinned canvas — the stage keeps
+                // the full overlay/gesture surface over the background fill.
+                val stageAspect = if (pinnedCanvasTerms != null) {
+                    pinnedCanvasTerms.first.toFloat() / pinnedCanvasTerms.second
                 } else {
-                    current.aspect
+                    current!!.aspect
                 }
                 Box(
                     modifier = Modifier
@@ -1495,26 +1534,28 @@ fun MemeEditorScreen(
                         .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
                         .onSizeChanged { stagePx = it },
                 ) {
-                    AsyncImage(
-                        model = current.uri,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.FillBounds,
-                        // WYSIWYG: the stage shows the same composed look +
-                        // adjust grade the rasterizer burns (MST-043 + FX).
-                        colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
-                            androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-                                androidx.compose.ui.graphics.ColorMatrix(
-                                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
-                                        state.project.lookId,
-                                        state.project.adjust,
+                    current?.let { picked ->
+                        AsyncImage(
+                            model = picked.uri,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds,
+                            // WYSIWYG: the stage shows the same composed look +
+                            // adjust grade the rasterizer burns (MST-043 + FX).
+                            colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
+                                androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                                    androidx.compose.ui.graphics.ColorMatrix(
+                                        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                            state.project.lookId,
+                                            state.project.adjust,
+                                        ),
                                     ),
-                                ),
-                            )
-                        } else {
-                            null
-                        },
-                    )
+                                )
+                            } else {
+                                null
+                            },
+                        )
+                    }
                     state.project.overlays.forEach { overlay ->
                         OverlayNode(
                             overlay = overlay,
@@ -1776,7 +1817,7 @@ fun MemeEditorScreen(
                     canAddOverlay = state.canAddOverlay,
                     looksEnabled = activeAsset != null || gifFrames.isNotEmpty() || (videoMode && hasVideo),
                     soundEnabled = videoMode && hasVideo,
-                    saveEnabled = (activeAssetId != null || gifFrames.isNotEmpty() || hasVideo) && !exporting,
+                    saveEnabled = (activeAssetId != null || blankDesignActive || gifFrames.isNotEmpty() || hasVideo) && !exporting,
                     activePanel = activePanel,
                     drawActive = drawMode,
                     onPanel = { panel ->
@@ -1912,6 +1953,10 @@ fun MemeEditorScreen(
                     exportStatus = "Frame hold $next ms"
                 },
                 onOpenCanvas = { showCanvas = true },
+                onOpenGifBrowse = {
+                    activePanel = null
+                    showGifBrowse = true
+                },
             )
             statusLine()
         }
@@ -1919,7 +1964,7 @@ fun MemeEditorScreen(
         if (showExportSheet) {
             ModalBottomSheet(onDismissRequest = { showExportSheet = false }) {
                 ExportSettingsContent(
-                    designEligible = !gifMode && !videoMode && activeAsset != null &&
+                    designEligible = !gifMode && !videoMode && (activeAsset != null || blankDesignActive) &&
                         state.project.overlays.any {
                             it.kind == space.bitos.core.studio.MemeOverlayKind.TEXT && it.text.isNotBlank()
                         },
@@ -1928,9 +1973,13 @@ fun MemeEditorScreen(
                             scope.launch {
                                 val result = runCatching {
                                     withContext(Dispatchers.IO) {
-                                        val source = MemeRaster.decodeForExport(context.contentResolver, activeAsset!!.uri)
-                                            ?: error("Image could not be read")
-                                        MemeRaster.render(source, state.project)
+                                        if (activeAsset != null) {
+                                            val source = MemeRaster.decodeForExport(context.contentResolver, activeAsset.uri)
+                                                ?: error("Image could not be read")
+                                            MemeRaster.render(source, state.project)
+                                        } else {
+                                            MemeRaster.renderBlank(state.project)
+                                        }
                                     }
                                 }
                                 result.onSuccess { bitmap ->
@@ -1948,12 +1997,22 @@ fun MemeEditorScreen(
                     onJobDiscard = { exportJobs.discard(it); exportJobsRevision += 1 },
                     isVideo = videoMode && hasVideo,
                     isGif = gifMode && gifFrames.isNotEmpty(),
-                    hasImage = !gifMode && !videoMode && activeAsset != null,
+                    hasImage = !gifMode && !videoMode && (activeAsset != null || blankDesignActive),
                     dims = when {
                         videoMode && hasVideo ->
                             videoClips.firstOrNull()?.probe?.let { "${it.uprightWidth}×${it.uprightHeight}" } ?: "source size"
                         gifMode && gifFrames.isNotEmpty() -> "${gifFrames.size} frames"
-                        else -> activeAsset?.let { "${it.width}×${it.height}" } ?: "—"
+                        activeAsset != null -> "${activeAsset.width}×${activeAsset.height}"
+                        pinnedCanvasTerms != null -> {
+                            val (rw, rh) = pinnedCanvasTerms
+                            val longEdge = space.bitos.core.studio.MemeExportRules.LONG_EDGE
+                            if (rw >= rh) {
+                                "$longEdge×${longEdge.toLong() * rh / rw}"
+                            } else {
+                                "${longEdge.toLong() * rw / rh}×$longEdge"
+                            }
+                        }
+                        else -> "—"
                     },
                     durationSeconds = (timelineDurationMs / 1000).toInt(),
                     gifDelayMs = gifUniformDelayMs,
@@ -2334,6 +2393,38 @@ fun MemeEditorScreen(
         )
     }
 
+    if (showGifBrowse) {
+        // GIF-mode browser: the SAME GifPickerSheet the composers use
+        // (trending cache, recents, search) on the GIFs tab — the pick
+        // downloads the full source (bounded) and decodes straight into
+        // the frame tray through the shared import path.
+        space.bitos.app.ui.create.GifPickerSheet(
+            defaultStickers = false,
+            onPick = { choice ->
+                showGifBrowse = false
+                scope.launch {
+                    val bytes = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val client = okhttp3.OkHttpClient.Builder()
+                                .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                                .build()
+                            client.newCall(okhttp3.Request.Builder().url(choice.url).build())
+                                .execute().use { response ->
+                                    if (!response.isSuccessful) null else response.body?.bytes()
+                                }
+                        }.getOrNull()
+                    }
+                    if (bytes == null || bytes.size > space.bitos.core.studio.GifDecoder.MAX_INPUT_BYTES) {
+                        exportStatus = "GIF download failed — try another"
+                        return@launch
+                    }
+                    importGifBytes(bytes)
+                }
+            },
+            onDismiss = { showGifBrowse = false },
+        )
+    }
+
     if (showLayers) {
         ModalBottomSheet(onDismissRequest = { showLayers = false }) {
             LayersSheetContent(
@@ -2514,7 +2605,8 @@ fun MemeEditorScreen(
                 // session bytes) — the mode itself gates readiness here.
                 val mediaReady = activeAsset != null ||
                     (project.mode == MemeMode.VIDEO && hasVideo) ||
-                    (project.mode == MemeMode.GIF && gifFrames.isNotEmpty())
+                    (project.mode == MemeMode.GIF && gifFrames.isNotEmpty()) ||
+                    (project.mode == MemeMode.IMAGE && blankDesignActive)
                 if (!mediaReady) return@MemePostFlowScreen
                 // MST-036: manual presets gate on the shared ESTIMATE —
                 // blocked with a re-pick ask, never silently degraded
@@ -2609,11 +2701,23 @@ fun MemeEditorScreen(
                                 exported.canvasHeight,
                             ) to "image/gif"
                         } else {
-                            val asset = activeAsset ?: error("Pick an image first")
-                            val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
-                                ?: error("Image could not be read")
-                            val (width, height) = MemeExportRules.outputSize(source.width, source.height)
-                            val bitmap = MemeRaster.render(source, project)
+                            val bitmap: android.graphics.Bitmap
+                            val width: Int
+                            val height: Int
+                            val asset = activeAsset
+                            if (asset != null) {
+                                val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
+                                    ?: error("Image could not be read")
+                                val sized = MemeExportRules.outputSize(source.width, source.height)
+                                width = sized.first
+                                height = sized.second
+                                bitmap = MemeRaster.render(source, project)
+                            } else {
+                                // Blank design: the pinned canvas IS the media.
+                                bitmap = MemeRaster.renderBlank(project)
+                                width = bitmap.width
+                                height = bitmap.height
+                            }
                             val bytes = java.io.ByteArrayOutputStream().also { stream ->
                                 check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream))
                             }.toByteArray()
@@ -3689,6 +3793,7 @@ private fun PerModeBar(
     onOpenSuite: () -> Unit,
     onCycleGifSpeed: () -> Unit,
     onOpenCanvas: () -> Unit = {},
+    onOpenGifBrowse: () -> Unit = {},
 ) {
     val borderColor = BitOSColors.border
     Row(
@@ -3712,6 +3817,7 @@ private fun PerModeBar(
             ClipToolButton(AppIcons.AppsGrid, "Overlay") { onOpenLayers() }
             ClipToolButton(AppIcons.Sparkles, "Timeline") { onOpenSuite() }
         } else if (gifMode) {
+            ClipToolButton(AppIcons.Gif, "GIFs") { onOpenGifBrowse() }
             ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
             ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
             ClipToolButton(AppIcons.Loop, "Loop") { onNotice("GIFs loop forever — nothing to set") }
@@ -3728,8 +3834,16 @@ private fun PerModeBar(
 }
 
 @Composable
-private fun EmptyCanvasCta(onPick: () -> Unit) {
+private fun EmptyCanvasCta(
+    onPick: () -> Unit,
+    onBlank: (() -> Unit)? = null,
+    onBrowseGifs: (() -> Unit)? = null,
+) {
     val borderColor = BitOSColors.border
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = Color.Transparent,
@@ -3771,6 +3885,31 @@ private fun EmptyCanvasCta(onPick: () -> Unit) {
                 )
             }
         }
+    }
+    if (onBlank != null) {
+        OutlinedButton(onClick = onBlank) {
+            Icon(
+                AppIcons.Ratio,
+                contentDescription = null,
+                tint = BitOSColors.textSecondary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(BitOSSpacing.xs))
+            Text("Start blank canvas")
+        }
+    }
+    if (onBrowseGifs != null) {
+        OutlinedButton(onClick = onBrowseGifs) {
+            Icon(
+                AppIcons.Gif,
+                contentDescription = null,
+                tint = BitOSColors.textSecondary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(BitOSSpacing.xs))
+            Text("Browse GIFs")
+        }
+    }
     }
 }
 

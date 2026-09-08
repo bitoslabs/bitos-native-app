@@ -78,6 +78,47 @@ object MemeRaster {
         }
         val out = Bitmap.createBitmap(width.coerceAtLeast(2), height.coerceAtLeast(2), Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
+        fillBackground(canvas, project)
+        canvas.drawBitmap(source, null, mediaRect, basePaint(project))
+        drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
+        MemeExportRules.exportPlan(project, width, height).forEach { item ->
+            drawItem(canvas, item)
+        }
+        return out
+    }
+
+    /**
+     *  Blank-canvas render (image mode, no source media): a pinned ratio
+     *  + background compose strokes + overlays alone — the "create from
+     *  scratch" path. Same LONG_EDGE budget and even-dim rules as
+     *  [render]; callers guarantee a pinned ratio (blank designs always
+     *  set one when created, so this throws only on programmer error).
+     */
+    fun renderBlank(project: MemeProject): Bitmap {
+        val terms = project.canvasRatio
+            ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
+            ?: throw IllegalArgumentException("blank render requires a pinned canvas ratio")
+        val (rw, rh) = terms
+        val longEdge = MemeExportRules.LONG_EDGE
+        val raw = if (rw >= rh) {
+            longEdge to (longEdge.toLong() * rh / rw).toInt()
+        } else {
+            (longEdge.toLong() * rw / rh).toInt() to longEdge
+        }
+        val width = (raw.first - raw.first % 2).coerceAtLeast(2)
+        val height = (raw.second - raw.second % 2).coerceAtLeast(2)
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        fillBackground(canvas, project)
+        drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
+        MemeExportRules.exportPlan(project, width, height).forEach { item ->
+            drawItem(canvas, item)
+        }
+        return out
+    }
+
+    /** Canvas background fill from the wire hex (invalid/absent = transparent). */
+    private fun fillBackground(canvas: Canvas, project: MemeProject) {
         project.canvasBg?.let { hex ->
             val value = hex.drop(1).toLongOrNull(16)
             if (value != null) {
@@ -90,12 +131,6 @@ object MemeRaster {
                 )
             }
         }
-        canvas.drawBitmap(source, null, mediaRect, basePaint(project))
-        drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
-        MemeExportRules.exportPlan(project, width, height).forEach { item ->
-            drawItem(canvas, item)
-        }
-        return out
     }
 
     /** Media paint with the composed look+adjust color matrix (identity =
