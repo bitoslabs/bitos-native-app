@@ -276,7 +276,7 @@ object MemeVideoExport {
     }
 
 
-    /** Probes a picked clip (bounded ≤60 s; dims capped at 1080 by export). */
+    /** Probes a picked clip. Timeline profile owns duration; export caps dims. */
     fun probe(resolver: android.content.ContentResolver, uri: Uri): Probe? = try {
         // Photo Picker returns content:// URIs. Passing that URI as a plain
         // string makes MediaMetadataRetriever treat it as a filesystem path
@@ -331,7 +331,7 @@ object MemeVideoExport {
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(temp.absolutePath)
                 val frame = retriever.getFrameAtTime(
-                    positionMs.coerceIn(0L, 60_000) * 1000, // µs
+                    positionMs.coerceIn(0L, space.bitos.core.studio.MemeProjectContract.MAX_DURATION_MS) * 1000, // µs
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                 ) ?: return null
                 val stream = java.io.ByteArrayOutputStream()

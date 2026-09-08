@@ -1,5 +1,21 @@
 # Multi-server meme video upload
 
+## Video duration and Nostr event kind
+
+Nostr does not impose a video-duration limit. Native Studio defaults to
+**Full** (the whole selected source timeline, bounded by the four-hour project
+safety limit), and offers 10 s, 60 s, 3 min and 5 min timeline profiles: the
+first two publish NIP-71 kind
+`22` (short video) and the longer profiles publish kind `21` (normal video).
+This is selected from the creator's publishing profile, rather than exported
+orientation. A durable retry derives the same result from the final duration.
+
+The current BitOS endpoint accepts at most 100 MiB. Long profiles never use
+the automatic duration-cut ladder: an oversize render fails before signing so
+the creator can lower export quality. Supporting 10–60 minute uploads needs a
+resumable, large-file BitOS media endpoint and file-backed background render;
+that is a hosting/runtime capability, not a Nostr kind limitation.
+
 ## Policy
 
 `MemeUploadRouting` is the cross-platform source of truth:

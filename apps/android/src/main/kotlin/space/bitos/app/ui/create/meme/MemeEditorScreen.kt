@@ -239,6 +239,11 @@ fun MemeEditorScreen(
      *  publish ESTIMATE instead — never silently degraded. */
     var exportPreset by remember { mutableStateOf(MemeExportPresets.AUTO) }
     var exportPresetManual by remember { mutableStateOf(false) }
+    // Full preserves source time up to the project safety cap; the hosting
+    // size gate still blocks an oversize render before signing.
+    // Preserve a newly selected source by default. Creators explicitly pick
+    // a short/long cap when they want the editor to trim to a format.
+    var videoPublishProfile by remember { mutableStateOf(space.bitos.core.studio.MemeVideoCutRules.PublishProfile.FULL) }
     /** MST post-details draft: session-scoped so back-for-cover keeps the
      *  caption, tags, warnings, license, zaps and PoW pick. */
     var postDraft by remember { mutableStateOf(PostDetailsDraft()) }
@@ -287,7 +292,7 @@ fun MemeEditorScreen(
 
     val timelineDurationMs: Long = videoClips.sumOf { clipOutputMs(it) }
     val timelineRemainingMs: Long =
-        (space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS - timelineDurationMs)
+        (videoPublishProfile.maxTimelineMs - timelineDurationMs)
             .coerceAtLeast(0L)
 
     fun timelineDurationWith(index: Int, replacement: SessionClip): Long =
@@ -348,7 +353,7 @@ fun MemeEditorScreen(
             return
         }
         if (timelineRemainingMs * videoRate < 200L) {
-            exportStatus = "Timeline is full — trim a clip to keep this meme within 60 s"
+            exportStatus = "Timeline is full — trim a clip to keep this ${videoPublishProfile.label} video"
             return
         }
         // The remaining budget is output time while source windows are in
@@ -356,7 +361,7 @@ fun MemeEditorScreen(
         val allowedSourceMs = (timelineRemainingMs * videoRate).toLong()
         val cut = space.bitos.core.studio.MemeVideoCutRules.cutForDuration(
             probe.durationMs,
-            minOf(space.bitos.core.studio.MemeVideoCutRules.MAX_CLIP_MS, allowedSourceMs),
+            minOf(videoPublishProfile.maxTimelineMs, allowedSourceMs),
         )
         if (cut.cut) {
             exportStatus = "Added to the remaining ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(timelineRemainingMs)} — ${cut.message}"
@@ -1919,6 +1924,14 @@ fun MemeEditorScreen(
                         positionMs = videoPositionMs,
                         totalMs = timelineDurationMs,
                         remainingMs = timelineRemainingMs,
+                        profile = videoPublishProfile,
+                        onProfile = { next ->
+                            if (timelineDurationMs > next.maxTimelineMs) {
+                                exportStatus = "Trim the timeline before switching to ${next.label}"
+                            } else {
+                                videoPublishProfile = next
+                            }
+                        },
                         onSelectClip = { selectedClipIndex = it },
                         onSplit = ::splitAtPlayhead,
                         onDelete = {
@@ -2506,8 +2519,8 @@ fun MemeEditorScreen(
                     val index = videoClips.indexOf(clip)
                     if (index >= 0) {
                         val updated = clip.copy(startMs = start, endMs = end)
-                        if (timelineDurationWith(index, updated) > space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS) {
-                            exportStatus = "Trim would exceed the 60 s timeline limit"
+                        if (timelineDurationWith(index, updated) > videoPublishProfile.maxTimelineMs) {
+                            exportStatus = "Trim would exceed the ${videoPublishProfile.label} timeline limit"
                             return@TrimSheetContent
                         }
                         state.beginClipsEdit()
@@ -2596,8 +2609,8 @@ fun MemeEditorScreen(
                 onPick = {
                     if (selected != null) {
                         val updated = selected.copy(speed = it)
-                        if (timelineDurationWith(selectedClipIndex, updated) > space.bitos.core.studio.MemeVideoCutRules.MAX_TIMELINE_MS) {
-                            exportStatus = "This speed would exceed the 60 s timeline limit"
+                        if (timelineDurationWith(selectedClipIndex, updated) > videoPublishProfile.maxTimelineMs) {
+                            exportStatus = "This speed would exceed the ${videoPublishProfile.label} timeline limit"
                             showSpeed = false
                             return@SpeedSheetContent
                         }
@@ -2692,11 +2705,10 @@ fun MemeEditorScreen(
                             )
                             var exported = exportNow()
                             var durationMs = timelineDurationMs
-                            if (exportPresetManual) {
+                            if (exportPresetManual || !space.bitos.core.studio.MemeVideoCutRules.isShortForm(videoPublishProfile)) {
                                 // Manual means manual: no cut ladder. A rare
-                                // ABR overshoot past the gated estimate is
-                                // surfaced (actual MB) and the publish
-                                // machine blocks at the 64 MB check.
+                                // ABR overshoot is surfaced, never silently
+                                // truncating a selected long-form video.
                                 if (exported.bytes.size > space.bitos.core.model.Blossom.MAX_FILE_BYTES) {
                                     exportStatus = "Actual render " +
                                         String.format(
@@ -3237,6 +3249,8 @@ private fun TimelineStrip(
     positionMs: Long,
     totalMs: Long,
     remainingMs: Long,
+    profile: space.bitos.core.studio.MemeVideoCutRules.PublishProfile,
+    onProfile: (space.bitos.core.studio.MemeVideoCutRules.PublishProfile) -> Unit,
     onSelectClip: (Int) -> Unit,
     onSplit: () -> Unit,
     onDelete: () -> Unit,
@@ -3290,6 +3304,16 @@ private fun TimelineStrip(
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
+            rowItems(space.bitos.core.studio.MemeVideoCutRules.PublishProfile.entries.toList()) { option ->
+                TextButton(onClick = { onProfile(option) }) {
+                    Text(if (option == profile) "✓ ${option.label}" else option.label)
+                }
+            }
+        }
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()

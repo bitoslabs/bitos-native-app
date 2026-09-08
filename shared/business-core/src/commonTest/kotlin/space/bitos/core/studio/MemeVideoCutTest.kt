@@ -2,6 +2,7 @@ package space.bitos.core.studio
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -11,6 +12,27 @@ import kotlin.test.assertTrue
  * export ladder shrinks duration by the size ratio down to a floor.
  */
 class MemeVideoCutTest {
+
+    @Test
+    fun publishProfilesSeparateShortAndNormalVideoIntent() {
+        assertFalse(MemeVideoCutRules.isShortForm(MemeVideoCutRules.PublishProfile.FULL))
+        assertTrue(MemeVideoCutRules.isShortForm(MemeVideoCutRules.PublishProfile.SHORT_10))
+        assertTrue(MemeVideoCutRules.isShortForm(MemeVideoCutRules.PublishProfile.SHORT_60))
+        assertFalse(MemeVideoCutRules.isShortForm(MemeVideoCutRules.PublishProfile.LONG_3_MIN))
+        assertFalse(MemeVideoCutRules.isShortForm(MemeVideoCutRules.PublishProfile.LONG_5_MIN))
+        assertTrue(MemeVideoCutRules.isShortFormDuration(60_000))
+        assertFalse(MemeVideoCutRules.isShortFormDuration(60_001))
+    }
+
+    @Test
+    fun fullProfileDoesNotApplyTheLegacyOneMinuteCut() {
+        val cut = MemeVideoCutRules.cutForDuration(
+            durationMs = 185_000,
+            maxClipMs = MemeVideoCutRules.PublishProfile.FULL.maxTimelineMs,
+        )
+        assertFalse(cut.cut)
+        assertEquals(185_000, cut.endMs)
+    }
 
     @Test
     fun shortClipsPassThroughUntouched() {

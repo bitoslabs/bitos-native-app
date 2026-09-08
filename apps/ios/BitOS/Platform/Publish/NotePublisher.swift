@@ -845,8 +845,8 @@ final class NotePublisher {
         onStage?(.relayed(eventId))
     }
 
-    /// Video meme from a verified upload (MST-034): kind 22 portrait /
-    /// 21 landscape through the receipt machine.
+    /// Video meme from a verified upload. NIP-71 kind 22 is short-form and
+    /// kind 21 is normal video; duration is the durable publish intent.
     func publishMemeVideoNote(
         caption: String,
         altText: String,
@@ -865,7 +865,7 @@ final class NotePublisher {
             result = .signingRefused
             return
         }
-        let portrait = height >= width
+        let portrait = durationMs > 0 && durationMs <= 60_000
         let now = Int64(Date.now.timeIntervalSince1970)
         var eventId: String
         var frame: String

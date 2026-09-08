@@ -153,7 +153,10 @@ class MediaPublishViewModel(
                 if (job.mode == "video") {
                     publisher.publishMemeVideoNote(
                         job.caption, job.altText, job.contentWarningReason,
-                        portrait = job.height >= job.width,
+                        // NIP-71 kind is a short-vs-normal viewing intent,
+                        // not an orientation heuristic. Retries derive it
+                        // from the immutable rendered duration.
+                        portrait = space.bitos.core.studio.MemeVideoCutRules.isShortFormDuration(job.durationMs),
                         media = media, signerProvider = { signer },
                         writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
                         extraTags = extraTags,
@@ -260,7 +263,7 @@ class MediaPublishViewModel(
                 jobLedger.update(ledgerId, stage = MemePublishStage.BUILD.ordinal, mediaUrl = media.url, sha256 = media.sha256Hex)
                 publisher.publishMemeVideoNote(
                     caption, altText, contentWarningReason,
-                    portrait = height >= width,
+                    portrait = space.bitos.core.studio.MemeVideoCutRules.isShortFormDuration(durationMs),
                     media = sized, signerProvider = { signer },
                     writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
                     extraTags = parseTags(remixTagsJson),

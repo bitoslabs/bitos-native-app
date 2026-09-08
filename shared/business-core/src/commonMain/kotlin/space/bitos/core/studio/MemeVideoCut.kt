@@ -7,10 +7,9 @@ package space.bitos.core.studio
  * common-tested so Android (Media3 clipping) and iOS (AVComposition trim)
  * cut identically.
  *
- *  • [cutForDuration]: the pick-time cap — anything past
- *    [MAX_CLIP_MS] plays back as the first [MAX_CLIP_MS]. A finished
- *    timeline shares that same 60-second budget; native editors use
- *    [MAX_TIMELINE_MS] to reserve time as clips are added or adjusted.
+ *  • [cutForDuration]: applies the caller-selected profile cap. Legacy
+ *    callers retain the one-minute default; Studio's Full profile supplies
+ *    the project safety cap instead.
  *  • [nextCutForSize]: the export ladder — when a rendered meme exceeds
  *    the upload bound, the duration shrinks by the size ratio (bitrate ≈
  *    duration for one transcode), never below [MIN_KEEP_MS], retried at
@@ -23,6 +22,26 @@ object MemeVideoCutRules {
 
     /** One publishable meme is at most one minute, across every clip. */
     const val MAX_TIMELINE_MS = MAX_CLIP_MS
+
+    /**
+     * Creator-facing timeline choices. They are product limits, not Nostr
+     * protocol limits: NIP-71's kind 21/22 distinction is presentation.
+     */
+    enum class PublishProfile(val id: String, val label: String, val maxTimelineMs: Long) {
+        /** Preserve the selected source timeline (up to the project safety cap). */
+        FULL("full", "Full", MemeProjectContract.MAX_DURATION_MS),
+        SHORT_10("short-10", "10 s", 10_000L),
+        SHORT_60("short-60", "60 s", 60_000L),
+        LONG_3_MIN("long-3m", "3 min", 180_000L),
+        LONG_5_MIN("long-5m", "5 min", 300_000L),
+    }
+
+    /** Kind 22 is reserved for short profiles; long profiles use kind 21. */
+    fun isShortForm(profile: PublishProfile): Boolean = profile == PublishProfile.SHORT_10 ||
+        profile == PublishProfile.SHORT_60
+
+    /** A durable retry derives the same intent from its rendered duration. */
+    fun isShortFormDuration(durationMs: Long): Boolean = durationMs in 1..MAX_CLIP_MS
 
     /** Studio source-size bound (256 MB): the single cross-platform cap
      *  for picked/imported video sources — the Create hub's import-media
