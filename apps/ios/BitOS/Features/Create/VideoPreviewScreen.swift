@@ -4,21 +4,25 @@ import SwiftUI
 
 /**
  * Recorded-take preview with trim (CAP-003/004): playback + start/end trim
- * sliders + export via AVAssetExportSession. "Use this" exports the trimmed
- * clip (or the original when untrimmed) and hands the Data to the publish
- * pipeline unchanged.
+ * sliders plus an optional left-to-right mirror. "Use this" exports the
+ * selected edits together, so the visible review result is the video that
+ * enters the publishing pipeline.
  */
 struct VideoPreviewScreen: View {
     let data: Data
     let mimeType: String
+    let initialMirrored: Bool
     let onUse: (Data, String) -> Void
     let onRetake: () -> Void
+    let onBack: (() -> Void)?
     @State private var player: AVPlayer?
     @State private var durationSeconds: Double = 0
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
     @State private var hasTrimmed = false
+    @State private var mirrored = false
     @State private var exporting = false
+    @State private var exportError: String?
     @State private var tempURL: URL?
 
     var body: some View {
@@ -40,10 +44,15 @@ struct VideoPreviewScreen: View {
             Color.black.ignoresSafeArea()
             if let player {
                 VideoPlayer(player: player)
+                    .scaleEffect(x: mirrored ? -1 : 1, y: 1)
                     .ignoresSafeArea()
             }
             VStack {
                 Spacer()
+                if let onBack {
+                    Button("Back to takes", action: onBack)
+                        .buttonStyle(.bordered)
+                }
                 if durationSeconds > 0 {
                     VStack(spacing: 4) {
                         Text("Trim: \(String(format: "%.1f", trimStart))s – \(String(format: "%.1f", trimEnd))s")
@@ -70,18 +79,31 @@ struct VideoPreviewScreen: View {
                     }
                     .padding(.horizontal, BitOSTheme.Spacing.base)
                 }
+                Button(mirrored ? "Mirrored" : "Mirror") {
+                    mirrored.toggle()
+                    player?.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600))
+                }
+                .buttonStyle(.bordered)
+                Text(mirrored ? "Video will be flipped left to right" : "Mirror reverses the final video left to right")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.7))
                 HStack(spacing: BitOSTheme.Spacing.md) {
                     Button("Retake", action: onRetake)
                         .buttonStyle(.bordered)
-                    Button(hasTrimmed ? "Trim & use" : "Use this") {
-                        if hasTrimmed {
-                            exportTrimmed()
+                    Button(hasTrimmed || mirrored ? "Use edited video" : "Use this") {
+                        if hasTrimmed || mirrored {
+                            exportEditedVideo()
                         } else {
                             onUse(data, mimeType)
                         }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(BitOSTheme.accent)
+                }
+                if let exportError {
+                    Text(exportError)
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.error)
                 }
                 Text("\(data.count / 1024 / 1024)MB" + (hasTrimmed ? " → ~\(Int(Double(trimEnd - trimStart) / durationSeconds * Double(data.count)) / 1024 / 1024)MB trimmed" : ""))
                     .font(.caption2)
@@ -91,6 +113,7 @@ struct VideoPreviewScreen: View {
         }
         .preferredColorScheme(BitOSTheme.preferredScheme)
         .onAppear(perform: setup)
+        .onAppear { mirrored = initialMirrored }
         .onDisappear {
             player?.pause()
             player = nil
@@ -121,7 +144,7 @@ struct VideoPreviewScreen: View {
         }
     }
 
-    private func exportTrimmed() {
+    private func exportEditedVideo() {
         guard let sourceURL = tempURL, durationSeconds > 0 else {
             onUse(data, mimeType)
             return
@@ -150,6 +173,9 @@ struct VideoPreviewScreen: View {
             )
             exportSession.outputURL = outputURL
             exportSession.outputFileType = .mp4
+            if mirrored, let videoTrack = asset.tracks(withMediaType: .video).first {
+                exportSession.videoComposition = mirroredComposition(for: videoTrack)
+            }
 
             await exportSession.export()
 
@@ -160,11 +186,52 @@ struct VideoPreviewScreen: View {
                     try? FileManager.default.removeItem(at: outputURL)
                     onUse(trimmed, "video/mp4")
                 } else {
-                    // Fallback: publish the original.
-                    onUse(data, mimeType)
+                    exportError = "Couldn’t apply edits. Try again or use the original take."
                 }
             }
         }
+    }
+
+    /// Builds a composition in the track's upright coordinate space, then
+    /// mirrors it about that canvas's vertical axis. This preserves portrait
+    /// capture orientation instead of mirroring raw encoded pixels.
+    private func mirroredComposition(for track: AVAssetTrack) -> AVVideoComposition {
+        let natural = track.naturalSize
+        let oriented = CGRect(origin: .zero, size: natural)
+            .applying(track.preferredTransform)
+            .standardized
+        let renderSize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
+        let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
+
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+        layerInstruction.setTransform(track.preferredTransform.concatenating(mirror), at: .zero)
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: track.timeRange.duration)
+        instruction.layerInstructions = [layerInstruction]
+
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = renderSize
+        composition.frameDuration = CMTime(value: 1, timescale: 30)
+        composition.instructions = [instruction]
+        return composition
+    }
+}
+
+extension VideoPreviewScreen {
+    init(
+        data: Data,
+        mimeType: String,
+        initialMirrored: Bool = false,
+        onUse: @escaping (Data, String) -> Void,
+        onRetake: @escaping () -> Void,
+        onBack: (() -> Void)? = nil
+    ) {
+        self.data = data
+        self.mimeType = mimeType
+        self.initialMirrored = initialMirrored
+        self.onUse = onUse
+        self.onRetake = onRetake
+        self.onBack = onBack
     }
 }
 

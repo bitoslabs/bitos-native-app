@@ -45,6 +45,9 @@ data class FeedNote(
      * null = the note carries none. Editor-side decode seeds a remix.
      */
     val memeTag: String? = null,
+    /** "Use this sound" (MST-050): the borrowed-sound source parsed from
+     *  the `sound` tag — drives the card's ♪ chip and the Wave C seed. */
+    val soundOf: space.bitos.core.studio.MemeSoundRules.Source? = null,
     /** APP-007 `license` tag value (remix advisory gate), null = permissive. */
     val license: String? = null,
     /** Advisory `["bitz:zaps", "off"]` marker — cards hide the zap action. */
@@ -100,6 +103,7 @@ data class FeedNote(
             remixOfPubkey = remixSource?.pubkey,
             remixRelays = remixSource?.relays ?: emptyList(),
             memeTag = memeTagOf(event.tags),
+            soundOf = space.bitos.core.studio.MemeSoundRules.sourceOf(event.tags),
             license = RemixRules.licenseOf(event.tags),
             zapsDisabled = ZapPolicy.isDisabled(event.tags),
         )

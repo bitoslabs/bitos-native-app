@@ -426,6 +426,23 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-08 (Wave C, Android; left UNCOMMITTED for owner review) —
+  **MST-050 Wave C on ANDROID — "Use this sound" from any bitz**: the
+  TikTok sound-first loop closes. Shared: `FeedNote.soundOf` (the
+  `sound` tag parsed through `MemeSoundRules.sourceOf` — same seam as
+  re-attach/trending). Android: Bitz rail gains a **Sound** action
+  (video notes only, ♪ amber) building a `MemeSoundSeed` (source media
+  URL + event id + author + display label) → full-screen editor
+  handoff (BitOSApp branch mirroring the remix seed); the editor
+  downloads the source bounded (Blossom cap, remix parity), extracts
+  the audio passthrough, decodes the bed, seeds VIDEO mode with the
+  soundtrack attached and NO clip — named failures at every step
+  (unloadable URL, no audio track, undecodable), session-guarded so a
+  re-run never double-attaches. Notes carrying a `sound` tag render a
+  ♪ chip in the Bitz meta row. NEXT: iOS Wave C (BitzView Sound action
+  + seeding via the Wave B store ops), then Wave D rail UI over the
+  landed rank rule.
+
 - 2026-09-08 (later) — **MST-050 Wave B on iOS — parity closed** (the
   TikTok sound loop now runs on BOTH platforms; left UNCOMMITTED for
   owner review). Shared (common-tested): `MemeCommand.SetSoundtrack` +

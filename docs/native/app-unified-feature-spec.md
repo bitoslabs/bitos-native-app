@@ -727,6 +727,15 @@ choice tiles + permission rows):
       off to the Quick Bitz editor — video mode seeded with the take as a
       timeline clip; caption/publish flow through the editor's Post
       details, the ONE studio publish path 2026-09-07)
+- [x] Review tools: start/end trim plus an explicit **Mirror** toggle. The
+      preview flips immediately; choosing “Use edited video” performs one
+      native export pass, so the published file (not merely its preview) is
+      left-to-right mirrored. Source takes stay unchanged until that choice.
+- [x] Capture-time Mirror: the top-bar mirror control previews the next take
+      flipped before recording. That preference is stored per take and opens
+      in review; it never silently changes an earlier take. The take strip
+      scrolls horizontally at its bottom anchor, and review supplies “Back
+      to takes” without deleting the selected take.
 - [x] Capture row: Import (library video picker → same editor seeding as
       the hub's "Import media") · 76dp record button with morphing
       red core · MEM (expert editor seeded with ALL takes — N ≥ 2 merge into

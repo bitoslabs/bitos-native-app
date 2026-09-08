@@ -29,29 +29,40 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
+import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.transformer.Effects
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Recorded-take preview with trim (CAP-003/004): playback + start/end trim
- * sliders + export via Media3 Transformer. "Use this" exports the trimmed
- * clip (or the original when untrimmed) and hands the bytes to the publish
- * pipeline unchanged. Playback always uses a cache-file URI: encoding a
+ * sliders plus an optional left-to-right mirror. "Use this" exports the
+ * requested trim/mirror combination, so the visible choice is the clip that
+ * reaches the publishing pipeline. Playback always uses a cache-file URI: encoding a
  * camera-original clip as a Base64 data URI duplicates it in the app heap.
  */
 @Composable
 fun VideoPreviewScreen(
     bytes: ByteArray,
     mimeType: String,
+    initialMirrored: Boolean = false,
     onUse: (ByteArray, String) -> Unit,
     onRetake: () -> Unit,
+    /** Return to the session strip without deleting this take. */
+    onBack: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // Media3 reads the source from disk. A data: URI needs a Base64 string
@@ -75,8 +86,10 @@ fun VideoPreviewScreen(
     var trimStartMs by remember { mutableLongStateOf(0L) }
     var trimEndMs by remember { mutableLongStateOf(0L) }
     var hasTrimmed by remember { mutableStateOf(false) }
+    var mirrored by remember(initialMirrored) { mutableStateOf(initialMirrored) }
     var exporting by remember { mutableStateOf(false) }
     var exportError by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // Read duration once the player is prepared.
     DisposableEffect(player, sourceFile) {
@@ -118,7 +131,10 @@ fun VideoPreviewScreen(
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
                 },
-                update = { it.player = player },
+                update = {
+                    it.player = player
+                    it.scaleX = if (mirrored) -1f else 1f
+                },
                 modifier = Modifier.fillMaxSize(),
             )
             Column(
@@ -128,6 +144,9 @@ fun VideoPreviewScreen(
                     .padding(BitOSSpacing.lg),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                if (onBack != null) {
+                    OutlinedButton(onClick = onBack) { Text("Back to takes") }
+                }
                 if (durationMs > 0) {
                     // Trim sliders
                     Column(Modifier.fillMaxWidth()) {
@@ -165,60 +184,43 @@ fun VideoPreviewScreen(
                     Text(error, style = MaterialTheme.typography.labelSmall, color = BitOSColors.error)
                 }
 
+                OutlinedButton(onClick = {
+                    mirrored = !mirrored
+                    // Rewind after changing the review transform so the user
+                    // can immediately verify text, handedness, and framing.
+                    player.seekTo(trimStartMs)
+                }) {
+                    Text(if (mirrored) "Mirrored" else "Mirror")
+                }
+                Text(
+                    if (mirrored) "Video will be flipped left to right" else "Mirror reverses the final video left to right",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xB3F8F8FF),
+                )
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
                 ) {
                     OutlinedButton(onClick = onRetake) { Text("Retake") }
                     Button(
                         onClick = {
-                            if (!hasTrimmed) {
+                            if (!hasTrimmed && !mirrored) {
                                 // No trim: hand the original bytes unchanged.
                                 onUse(bytes, mimeType)
                             } else {
                                 exporting = true
                                 exportError = null
-                                // Export the trimmed clip via Transformer.
-                                val output = java.io.File(context.cacheDir, "bitos-trim-${System.currentTimeMillis()}.mp4")
-                                val mediaItem = MediaItem.Builder()
-                                    .setUri(android.net.Uri.fromFile(sourceFile))
-                                    .setClippingConfiguration(
-                                        MediaItem.ClippingConfiguration.Builder()
-                                            .setStartPositionMs(trimStartMs)
-                                            .setEndPositionMs(trimEndMs)
-                                            .build()
+                                scope.launch {
+                                    val edited = exportReviewVideo(
+                                        context, sourceFile, trimStartMs, trimEndMs, mirrored,
                                     )
-                                    .build()
-                                val editedItem = EditedMediaItem.Builder(mediaItem).build()
-                                val transformer = Transformer.Builder(context).build()
-                                transformer.start(editedItem, output.absolutePath)
-                                // Poll for completion (Transformer.Listener on newer API; poll for compat).
-                                Thread {
-                                    try {
-                                        while (output.length() == 0L) {
-                                            Thread.sleep(200)
-                                        }
-                                        val trimmed = output.readBytes()
-                                        output.delete()
-                                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                            exporting = false
-                                            if (trimmed.isNotEmpty() && trimmed.size <= bytes.size) {
-                                                onUse(trimmed, "video/mp4")
-                                            } else {
-                                                exportError = "Trim export failed; publishing original."
-                                                onUse(bytes, mimeType)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                            exporting = false
-                                            exportError = "Trim export failed; publishing original."
-                                            onUse(bytes, mimeType)
-                                        }
-                                    }
-                                }.start()
+                                    exporting = false
+                                    if (edited != null) onUse(edited, "video/mp4")
+                                    else exportError = "Couldn’t apply edits. Try again or use the original take."
+                                }
                             }
                         },
-                    ) { Text(if (hasTrimmed) "Trim & use" else "Use this") }
+                    ) { Text(if (hasTrimmed || mirrored) "Use edited video" else "Use this") }
                 }
                 Text(
                     "${bytes.size / (1024 * 1024)}MB" + if (hasTrimmed) " → ~${(((trimEndMs - trimStartMs).toDouble() / durationMs * bytes.size).toInt() / (1024 * 1024))}MB trimmed" else "",
@@ -227,5 +229,48 @@ fun VideoPreviewScreen(
                 )
             }
         }
+    }
+}
+
+/** Applies review-only edits in one bounded render pass; source bytes remain untouched. */
+private suspend fun exportReviewVideo(
+    context: android.content.Context,
+    source: java.io.File,
+    startMs: Long,
+    endMs: Long,
+    mirrored: Boolean,
+): ByteArray? = withContext(Dispatchers.IO) {
+    val output = java.io.File(context.cacheDir, "bitos-review-${System.nanoTime()}.mp4")
+    try {
+        val mediaItem = MediaItem.Builder()
+            .setUri(android.net.Uri.fromFile(source))
+            .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(startMs).setEndPositionMs(endMs).build())
+            .build()
+        val effects = if (mirrored) listOf(
+            ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build(),
+        ) else emptyList()
+        val item = EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(emptyList(), effects))
+            .build()
+        val transformer = Transformer.Builder(context).build()
+        val composition = Composition.Builder(EditedMediaItemSequence.Builder(item).build()).build()
+        suspendCancellableCoroutine { continuation ->
+            transformer.addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, result: ExportResult) {
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
+                override fun onError(composition: Composition, result: ExportResult, error: ExportException) {
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+            })
+            transformer.start(composition, output.absolutePath)
+            continuation.invokeOnCancellation { transformer.cancel() }
+        }
+        output.takeIf { it.length() in 1..space.bitos.core.model.Blossom.MAX_FILE_BYTES }?.readBytes()
+    } catch (_: Exception) {
+        null
+    } finally {
+        output.delete()
     }
 }

@@ -35,6 +35,8 @@ struct CameraScreen: View {
     @State private var torchOn = false
     @State private var flashAvailable = false
     @State private var gridOn = true
+    @State private var mirrorNextTake = false
+    @State private var recordingMirrored = false
     @State private var zoomRatio: CGFloat = 1
     @State private var timerMode: CaptureTimerMode = .off
     @State private var countdown: Int?
@@ -56,11 +58,13 @@ struct CameraScreen: View {
                 VideoPreviewScreen(
                     data: take.data,
                     mimeType: take.mime,
+                    initialMirrored: take.mirrored,
                     onUse: { data, mime in onCaptured(data, mime) },
                     onRetake: {
                         takes.removeAll { $0.id == take.id }
                         previewId = nil
-                    }
+                    },
+                    onBack: { previewId = nil }
                 )
             } else {
                 cameraSurface
@@ -106,7 +110,9 @@ struct CameraScreen: View {
                     }
                 )
             } else if configured {
-                CameraPreviewLayer(session: session).ignoresSafeArea()
+                CameraPreviewLayer(session: session)
+                    .scaleEffect(x: mirrorNextTake ? -1 : 1, y: 1)
+                    .ignoresSafeArea()
                 if gridOn {
                     GridGuides()
                         .allowsHitTesting(false)
@@ -183,6 +189,13 @@ struct CameraScreen: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(torchOn ? BitOSTheme.warning : .white)
                 }
+            }
+            CircleControl(accessibilityLabel: mirrorNextTake ? "Mirror next take on" : "Mirror next take off") {
+                if !isRecording { mirrorNextTake.toggle() }
+            } icon: {
+                AnyView(Text("↔")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(mirrorNextTake ? BitOSTheme.accent : .white))
             }
             CircleControl(accessibilityLabel: gridOn ? "Grid guides on" : "Grid guides off") {
                 gridOn.toggle()
@@ -314,6 +327,7 @@ struct CameraScreen: View {
             hint = "Take limit reached — review or delete before recording another"
             return
         }
+        recordingMirrored = mirrorNextTake
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("bitos-\(Int(Date.now.timeIntervalSince1970)).mp4")
         movieOutput.startRecording(to: url, recordingDelegate: RecordingDelegate { [weak movieOutput] fileURL in
@@ -365,7 +379,8 @@ struct CameraScreen: View {
                         data: data,
                         mime: "video/mp4",
                         duration: max(duration, 0),
-                        thumbnail: thumbnail
+                        thumbnail: thumbnail,
+                        mirrored: recordingMirrored
                     )
                     let bufferedBytes = takes.reduce(0, { $0 + $1.data.count }) + data.count
                     if bufferedBytes > CameraCaptureLimits.maxPendingBytes {
@@ -531,6 +546,7 @@ private struct PendingTake: Identifiable {
     let mime: String
     let duration: Double
     let thumbnail: UIImage?
+    let mirrored: Bool
 }
 
 // MARK: - Chrome pieces
@@ -650,23 +666,25 @@ private struct TakesStrip: View {
     let onAddTake: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(takes.enumerated()), id: \.element.id) { index, take in
-                takeTile(index: index, take: take)
-            }
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(
-                    Color.white.opacity(0.4),
-                    style: StrokeStyle(lineWidth: 1, dash: [4, 4])
-                )
-                .frame(width: 40, height: 44)
-                .overlay(Text("+").font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)))
-                .accessibilityLabel("Record the next take")
-                .onTapGesture(perform: onAddTake)
-            if !takes.isEmpty {
-                Text("\(takes.count) take\(takes.count == 1 ? "" : "s") · \(CaptureClock.format(takes.reduce(0) { $0 + $1.duration }))")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(takes.enumerated()), id: \.element.id) { index, take in
+                    takeTile(index: index, take: take)
+                }
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(
+                        Color.white.opacity(0.4),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 4])
+                    )
+                    .frame(width: 40, height: 44)
+                    .overlay(Text("+").font(.system(size: 18)).foregroundStyle(.white.opacity(0.6)))
+                    .accessibilityLabel("Record the next take")
+                    .onTapGesture(perform: onAddTake)
+                if !takes.isEmpty {
+                    Text("\(takes.count) take\(takes.count == 1 ? "" : "s") · \(CaptureClock.format(takes.reduce(0) { $0 + $1.duration }))")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -205,6 +205,9 @@ fun BitzScreen(
     onOpenRemixComposer: (List<List<String>>) -> Unit = {},
     /** M4b remix: opens the meme editor with the source bitz attached. */
     onOpenRemixEditor: (space.bitos.app.ui.create.meme.MemeRemixSeed) -> Unit = {},
+    /** "Use this sound" (Wave C): the bitz's audio becomes a studio
+     *  soundtrack — editor handoff with provenance, no media import. */
+    onOpenSoundEditor: (space.bitos.app.ui.create.meme.MemeSoundSeed) -> Unit = {},
     /** UX-010: opens the in-app full profile page for a pubkey. */
     onOpenAuthorProfile: (String) -> Unit = {},
 ) {
@@ -408,6 +411,22 @@ fun BitzScreen(
                 onOpenRemixComposer(remixSeedTags(note))
             }
         }
+    }
+
+    /** "Use this sound" (Wave C): builds the editor handoff — source media
+     *  URL + the lineage facts the soundtrack row stamps at publish
+     *  (sound/p/attribution). Video notes only; no-op otherwise. */
+    fun handleUseSound(note: FeedNote) {
+        val mediaUrl = note.video?.url ?: return
+        val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
+        onOpenSoundEditor(
+            space.bitos.app.ui.create.meme.MemeSoundSeed(
+                eventId = note.id,
+                authorPubkey = note.pubkey,
+                label = label,
+                mediaUrl = mediaUrl,
+            ),
+        )
     }
 
     fun handleRemix(note: FeedNote) {
@@ -681,6 +700,7 @@ fun BitzScreen(
                             zapTarget = it
                         },
                         onRemix = ::handleRemix,
+                        onUseSound = ::handleUseSound,
                         onChain = {
                             chainTarget = it
                             viewModel.loadRemixChain(it)
@@ -777,6 +797,7 @@ fun BitzScreen(
                                 zapTarget = it
                             },
                             onRemix = ::handleRemix,
+                            onUseSound = ::handleUseSound,
                             onChain = {
                                 chainTarget = it
                                 viewModel.loadRemixChain(it)
@@ -1365,6 +1386,32 @@ private fun ExploreTileFooter(
                         modifier = Modifier.padding(start = 2.dp).size(11.dp),
                     )
                 }
+                // "Use this sound" (Wave C): a borrowed sound rides this note
+                // (♪ chip; the rail's Sound action borrows it forward).
+                if (note.soundOf != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.35f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    ) {
+                        Icon(
+                            AppIcons.MusicNote,
+                            contentDescription = null,
+                            tint = Color(0xFFF5C15B),
+                            modifier = Modifier.size(10.dp),
+                        )
+                        Text(
+                            "Original sound",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             if (likes > 0) {
                 Spacer(Modifier.width(4.dp))
@@ -1420,6 +1467,7 @@ private fun BitzVideoPage(
     onFollow: (String) -> Unit,
     onZap: (FeedNote) -> Unit,
     onRemix: (FeedNote) -> Unit,
+    onUseSound: (FeedNote) -> Unit = {},
     onChain: (FeedNote) -> Unit,
     onAuthor: (String) -> Unit,
     isMuted: Boolean,
@@ -1646,6 +1694,7 @@ private fun BitzVideoPage(
             onRepost = onRepost,
             onZap = onZap,
             onRemix = onRemix,
+            onUseSound = onUseSound,
             onChain = onChain,
             isMuted = isMuted,
             onMuteToggle = onMuteToggle,
@@ -1911,6 +1960,7 @@ private fun BitzActionRail(
     onRepost: (FeedNote) -> Unit,
     onZap: (FeedNote) -> Unit,
     onRemix: (FeedNote) -> Unit,
+    onUseSound: (FeedNote) -> Unit = {},
     onChain: (FeedNote) -> Unit,
     isMuted: Boolean,
     onMuteToggle: () -> Unit,
@@ -1933,6 +1983,10 @@ private fun BitzActionRail(
         // User decision 2026-08-29: action order [like · comment · repost ·
         // zap · bookmark], after Remix/Chain; Share lives in the ⋯ sheet.
         BitzRailButton(AppIcons.Sparkles, "Remix", Color(0xFF8B5CF6)) { onRemix(note) }
+        // "Use this sound" (Wave C): only notes with a video track to borrow.
+        if (note.video != null) {
+            BitzRailButton(AppIcons.MusicNote, "Sound", Color(0xFFF5C15B)) { onUseSound(note) }
+        }
         // Chain: only when this note declares a remix source (web parity).
         if (note.remixOfEventId != null) {
             BitzRailButton(AppIcons.AppsGrid, "Chain", Color.White) { onChain(note) }

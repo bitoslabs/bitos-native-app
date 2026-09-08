@@ -199,6 +199,18 @@ data class MemeRemixSeed(
     val memeTag: String?,
 )
 
+/** "Use this sound" handoff (Wave C): a bitz whose AUDIO becomes this
+ *  project's soundtrack. Only the sound crosses — the creator adds
+ *  their own clip (TikTok's sound-first loop); the source event id and
+ *  author ride the wire as provenance (sound/p/attribution at publish). */
+data class MemeSoundSeed(
+    val eventId: String,
+    val authorPubkey: String,
+    /** Author display name for the soundtrack label/credit. */
+    val label: String,
+    val mediaUrl: String,
+)
+
 /**
  * Quick MEM image editor (plan MST-010..015; wave 1 of the M1 execution
  * note in `docs/native/meme-studio-plan.md`). Layout per the app-15
@@ -224,6 +236,8 @@ fun MemeEditorScreen(
     videoSeeds: List<ByteArray>? = null,
     /** M4b remix handoff: source bitz media + layout + lineage. */
     remixSeed: MemeRemixSeed? = null,
+    /** "Use this sound" handoff (Wave C): borrow THIS bitz's audio only. */
+    soundSeed: MemeSoundSeed? = null,
     onSlotsChanged: () -> Unit = {},
     /** MUX-06: hand the frozen design + rendered poster to mass production. */
     onMakeVariations: ((String, ByteArray) -> Unit)? = null,
@@ -805,6 +819,84 @@ fun MemeEditorScreen(
             }
         } catch (error: IllegalStateException) {
             exportStatus = "Remix source could not be loaded (${error.message})"
+        } finally {
+            seedingProgress = null
+        }
+    }
+
+    // "Use this sound" (Wave C): fetch the SOURCE bitz's video (bounded by
+    // the Blossom cap, remix-download parity), pull its audio out as the
+    // soundtrack, and enter video mode with the sound attached but NO
+    // clip — the creator adds their own (TikTok's sound-first loop). Runs
+    // once against an empty session; every failure is named and leaves the
+    // editor usable.
+    LaunchedEffect(soundSeed) {
+        val seed = soundSeed ?: return@LaunchedEffect
+        if (state.project.assets.isNotEmpty() || videoClips.isNotEmpty() ||
+            assets.isNotEmpty() || gifFrames.isNotEmpty() || state.project.soundtrack != null
+        ) {
+            return@LaunchedEffect
+        }
+        val url = runCatching { java.net.URI(seed.mediaUrl).toURL() }.getOrNull()
+        if (url == null || (url.protocol != "https" && url.host != "localhost" && url.host != "127.0.0.1")) {
+            exportStatus = "Sound source URL is not loadable"
+            return@LaunchedEffect
+        }
+        seedingProgress = 0 to 1
+        try {
+            val bytes = withContext(Dispatchers.IO) {
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                try {
+                    connection.connectTimeout = 15_000
+                    connection.readTimeout = 30_000
+                    check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                    connection.inputStream.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            out.write(buffer, 0, read)
+                            check(out.size() <= space.bitos.core.model.Blossom.MAX_FILE_BYTES) { "source too large" }
+                        }
+                        out.toByteArray()
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            val extracted = withContext(Dispatchers.IO) {
+                val temp = java.io.File.createTempFile("meme-sound-src", ".mp4")
+                try {
+                    temp.writeBytes(bytes)
+                    MemeVideoSound.extract(context, android.net.Uri.fromFile(temp))
+                } finally {
+                    runCatching { temp.delete() }
+                }
+            }
+            if (extracted == null) {
+                exportStatus = "That bitz has no readable audio track"
+                return@LaunchedEffect
+            }
+            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+            if (decoded == null) {
+                exportStatus = "That bitz's sound could not be decoded here"
+                return@LaunchedEffect
+            }
+            state.switchMode(MemeMode.VIDEO)
+            soundtrackM4a = extracted.m4aBytes
+            soundtrackPcm = decoded
+            state.setSoundtrack(
+                space.bitos.core.studio.MemeSoundtrack(
+                    sha256 = extracted.sha256Hex,
+                    durationMs = extracted.durationMs,
+                    sourceNoteId = seed.eventId,
+                    sourceAuthorPubkey = seed.authorPubkey,
+                    label = "Original sound · ${seed.label}",
+                ),
+            )
+        } catch (error: IllegalStateException) {
+            exportStatus = "Sound source could not be loaded (${error.message})"
         } finally {
             seedingProgress = null
         }

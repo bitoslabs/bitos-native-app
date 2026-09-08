@@ -32,6 +32,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,6 +125,8 @@ private class PendingTake(
     val mime: String,
     val durationMs: Long,
     val thumbnail: ImageBitmap?,
+    /** Capture-time choice, applied when this take is committed from review. */
+    val mirrored: Boolean = false,
 )
 
 private enum class TimerMode(val label: String, val seconds: Int) {
@@ -166,6 +170,7 @@ fun CameraScreen(
     var torchOn by remember { mutableStateOf(false) }
     var flashAvailable by remember { mutableStateOf(false) }
     var gridOn by remember { mutableStateOf(true) }
+    var mirrorNextTake by remember { mutableStateOf(false) }
     var zoomRatio by remember { mutableStateOf(1f) }
     var timerMode by remember { mutableStateOf(TimerMode.OFF) }
     var countdown by remember { mutableIntStateOf(-1) }
@@ -205,6 +210,7 @@ fun CameraScreen(
             showHint("Take limit reached — review or delete before recording another")
             return
         }
+        val mirroredTake = mirrorNextTake
         val active = engine.startTake(
             context = context,
             onFinalize = { uri, durationMs ->
@@ -215,7 +221,14 @@ fun CameraScreen(
                         if (total > MAX_PENDING_BYTES) {
                             showHint("Take exceeds the session buffer — use or delete earlier takes")
                         } else {
-                            takes = takes + take
+                            takes = takes + PendingTake(
+                                id = take.id,
+                                bytes = take.bytes,
+                                mime = take.mime,
+                                durationMs = take.durationMs,
+                                thumbnail = take.thumbnail,
+                                mirrored = mirroredTake,
+                            )
                         }
                     } else {
                         showHint("Take failed or exceeded the ${Blossom.MAX_FILE_BYTES / (1024 * 1024)}MB publish cap")
@@ -299,11 +312,13 @@ fun CameraScreen(
         VideoPreviewScreen(
             bytes = previewing.bytes,
             mimeType = previewing.mime,
+            initialMirrored = previewing.mirrored,
             onUse = { bytes, mime -> onCaptured(bytes, mime) },
             onRetake = {
                 takes = takes.filterNot { it.id == previewing.id }
                 previewId = null
             },
+            onBack = { previewId = null },
         )
         return
     }
@@ -319,7 +334,11 @@ fun CameraScreen(
                 },
             )
         } else if (hasPermission) {
-            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+            AndroidView(
+                factory = { previewView },
+                update = { it.scaleX = if (mirrorNextTake) -1f else 1f },
+                modifier = Modifier.fillMaxSize(),
+            )
             if (gridOn) {
                 Box(Modifier.fillMaxSize().gridGuides())
             }
@@ -363,6 +382,12 @@ fun CameraScreen(
                             tint = if (gridOn) BitOSColors.primary else Color.White,
                             modifier = Modifier.size(18.dp),
                         )
+                    }
+                    CircleControl(
+                        contentDescription = if (mirrorNextTake) "Mirror next take on" else "Mirror next take off",
+                        onClick = { if (recording == null) mirrorNextTake = !mirrorNextTake },
+                    ) {
+                        Text("↔", color = if (mirrorNextTake) BitOSColors.primary else Color.White, fontWeight = FontWeight.Bold)
                     }
                     TimerChip(mode = timerMode) { timerMode = it }
                 }
@@ -565,12 +590,12 @@ private fun TakesStrip(
     onDeleteTake: (Long) -> Unit,
     onAddTake: () -> Unit,
 ) {
-    Row(
+    LazyRow(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        takes.forEachIndexed { index, take ->
+        itemsIndexed(takes, key = { _, take -> take.id }) { index, take ->
             Box(
                 Modifier
                     .size(width = 56.dp, height = 44.dp)
@@ -617,7 +642,7 @@ private fun TakesStrip(
                 }
             }
         }
-        Box(
+        item { Box(
             Modifier
                 .size(width = 40.dp, height = 44.dp)
                 .dashedBorder(Color(0x66FFFFFF))
@@ -625,14 +650,14 @@ private fun TakesStrip(
             contentAlignment = Alignment.Center,
         ) {
             Text("+", color = Color.White.copy(alpha = 0.6f), fontSize = 18.sp)
-        }
+        } }
         if (takes.isNotEmpty()) {
-            Text(
+            item { Text(
                 "${takes.size} take${if (takes.size == 1) "" else "s"} · ${formatClock(takes.sumOf { it.durationMs })}",
                 color = Color.White.copy(alpha = 0.6f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 9.sp,
-            )
+            ) }
         }
     }
 }

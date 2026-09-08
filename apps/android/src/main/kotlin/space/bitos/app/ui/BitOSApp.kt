@@ -192,6 +192,11 @@ fun BitOSApp(
         fun openRemixEditor(seed: space.bitos.app.ui.create.meme.MemeRemixSeed) {
             memeRemixSeed = seed
         }
+        // "Use this sound" (Wave C): a bitz's audio becomes a studio
+        // soundtrack — same full-screen editor handoff as a remix.
+        var memeSoundSeed by remember {
+            mutableStateOf<space.bitos.app.ui.create.meme.MemeSoundSeed?>(null)
+        }
         // APP-014: zap wallet overlay.
         var showZaps by remember { mutableStateOf(false) }
         // APP-020: static pages overlay (about/privacy/terms).
@@ -462,6 +467,22 @@ fun BitOSApp(
                         store = remixSlotStore,
                         remixSeed = memeRemixSeed,
                     )
+                } else if (memeSoundSeed != null) {
+                    // "Use this sound" (Wave C): the bitz's AUDIO seeds the
+                    // editor as a soundtrack (provenance attached, no clip —
+                    // the creator adds their own).
+                    val soundContext = androidx.compose.ui.platform.LocalContext.current
+                    val soundSlotStore = remember {
+                        space.bitos.app.ui.create.meme.MemeProjectStore(
+                            java.io.File(soundContext.filesDir, "studio"),
+                        )
+                    }
+                    space.bitos.app.ui.create.meme.MemeEditorScreen(
+                        onClose = { memeSoundSeed = null },
+                        mediaPublishViewModel = mediaPublishViewModel,
+                        store = soundSlotStore,
+                        soundSeed = memeSoundSeed,
+                    )
                 } else if (showMore) {
                     space.bitos.app.ui.more.MoreScreen(
                         identityViewModel = identityViewModel,
@@ -515,6 +536,7 @@ fun BitOSApp(
                         onOpenCreate = { showCreateHub = true },
                         onOpenRemixComposer = { openSeededComposer(it) },
                         onOpenRemixEditor = { openRemixEditor(it) },
+                        onOpenSoundEditor = { memeSoundSeed = it },
                         onOpenAuthorProfile = { authorPageTarget = it },
                     )
                 } else if (authorPageTarget != null) {
