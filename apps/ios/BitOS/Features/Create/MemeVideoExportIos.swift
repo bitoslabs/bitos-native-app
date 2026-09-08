@@ -374,7 +374,8 @@ enum MemeVideoExportIos {
         client: any BusinessCoreClient,
         images: [String: UIImage] = [:],
         preset: ExportPreset = .auto,
-        gifReels: [String: GifLayerReel] = [:]
+        gifReels: [String: GifLayerReel] = [:],
+        onProgress: ((Double) -> Void)? = nil
     ) async throws -> Exported {
         // MST-036: the shared encoder plan drives the output canvas (the
         // overlay envelope + layer transform + render size all live on it).
@@ -621,7 +622,21 @@ enum MemeVideoExportIos {
         export.outputFileType = .mp4
         // Public Studio output must not inherit location, device or creation tags.
         export.metadata = []
+        // Render-stage REAL fraction: the burn session's own progress
+        // (KVO-observable Float 0…1), weighted to the first 80% of the
+        // render; the transcode below covers the rest and cannot report
+        // a trustworthy total, so it reports its bounds only.
+        let burnSession = export
+        let burnPoller = onProgress.map { report in
+            Task<Void, Never> {
+                while !Task.isCancelled {
+                    report(min(0.8, Double(burnSession.progress) * 0.8))
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+        }
         await export.export()
+        burnPoller?.cancel()
         defer {
             try? FileManager.default.removeItem(at: outputURL)
             if let sfxWavURL { try? FileManager.default.removeItem(at: sfxWavURL) }
@@ -629,11 +644,13 @@ enum MemeVideoExportIos {
         guard export.status == .completed else {
             throw ExportError(message: export.error?.localizedDescription ?? "Video export failed")
         }
+        onProgress?(0.8)
         // MST-036 bitrate pin: AVAssetExportSession presets expose no
         // bitrate control, so the burn pass writes a highest-quality
         // intermediate and a generic reader→writer pass re-encodes it at
         // the shared targets — the pre-export MB estimate stays honest.
         let pinnedURL = try await transcode(source: outputURL, plan: plan)
+        onProgress?(1.0)
         defer { try? FileManager.default.removeItem(at: pinnedURL) }
         guard let data = try? Data(contentsOf: pinnedURL), !data.isEmpty else {
             throw ExportError(message: "Video export produced an empty file")

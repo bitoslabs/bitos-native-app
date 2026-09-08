@@ -2,10 +2,12 @@ package space.bitos.app.data.media
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import okio.BufferedSink
 import space.bitos.core.identity.IdentitySigner
 import space.bitos.core.model.Blossom
 import space.bitos.core.model.UploadedMedia
@@ -40,6 +42,9 @@ class BlossomUploader(
      * reject the unauthenticated probe with 400, not the 401 challenge of
      * the legacy spec draft), `PUT {server}/upload` with the Base64url
      * `Authorization: Nostr` token, accept 200/201.
+     *
+     * [onProgress] reports REAL bytes handed to the socket during the PUT
+     * (written, total) from the IO thread — never estimated.
      */
     suspend fun upload(
         bytes: ByteArray,
@@ -48,6 +53,7 @@ class BlossomUploader(
         serverUrl: String,
         nowSeconds: Long = System.currentTimeMillis() / 1000,
         onStage: ((UploadStage) -> Unit)? = null,
+        onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)? = null,
     ): UploadedMedia = withContext(Dispatchers.IO) {
         if (bytes.isEmpty() || bytes.size > Blossom.MAX_FILE_BYTES) throw UploadFailure("file out of bounds")
         onStage?.invoke(UploadStage.HASHING)
@@ -80,7 +86,7 @@ class BlossomUploader(
                 .url(endpoint)
                 .header("Authorization", authHeader)
                 .header("X-SHA-256", localHash)
-                .put(bytes.toRequestBody(mimeType.toMediaType()))
+                .put(ProgressRequestBody(bytes, mimeType.toMediaType(), onProgress))
                 .build(),
         ).execute().use { response ->
             if (response.code != 200 && response.code != 201) {
@@ -113,5 +119,38 @@ class BlossomUploader(
             mimeType = mimeType,
             sizeBytes = bytes.size.toLong(),
         )
+    }
+
+    /**
+     * RequestBody that reports cumulative bytes written to OkHttp's sink —
+     * the upload stage's REAL fraction (socket bytes, not a timer). Chunked
+     * writes keep the callback granularity useful for multi-MB renders.
+     * Internal: reused by the BitOS leg of the video route.
+     */
+    internal class ProgressRequestBody(
+        private val bytes: ByteArray,
+        private val contentType: MediaType?,
+        private val onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)?,
+    ) : RequestBody() {
+        override fun contentType(): MediaType? = contentType
+        override fun contentLength(): Long = bytes.size.toLong()
+
+        override fun writeTo(sink: BufferedSink) {
+            val reporter = onProgress ?: run {
+                sink.write(bytes)
+                return
+            }
+            val total = bytes.size.toLong()
+            var written = 0L
+            var offset = 0
+            val chunk = 64 * 1024
+            while (offset < bytes.size) {
+                val length = minOf(chunk, bytes.size - offset)
+                sink.write(bytes, offset, length)
+                offset += length
+                written += length
+                reporter(written, total)
+            }
+        }
     }
 }

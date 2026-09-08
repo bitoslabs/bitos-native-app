@@ -645,7 +645,16 @@ rotating sweep arc plus a spinner on the current row keeps the screen
 visibly alive inside long single stages (video encode, large upload), and
 the caption names the position — `Step 3 of 8 · Upload to Blossom`,
 `Stalled at step 3 of 8` on failure, `All 8 stages complete` with a
-check on success.
+check on success. Where a stage can report a REAL intra-stage fraction
+(2026-09-08, both platforms), it absorbs into the same percent and the
+row: render follows the encoder's own progress API (media3 Transformer
+poll / AVAssetExportSession.progress), upload follows socket bytes
+(OkHttp body-write counter / URLSession didSendBodyData, dual-leg
+BitOS+Blossom stitched 75/25), and the row's detail line shows byte
+truth (`12.4 / 60.0 MB`) under a thin sub-bar. Hash, verify, build,
+sign, relay and confirm stay checkpoint-only (they are instant or
+nondeterministic-by-design) — the sweep arc, never a fake percent,
+covers them.
 Failure marks the stalled stage with Retry/Later; success shows the event
 id + confirmed relay count. Publish attempts are DURABLE jobs: a bounded
 ledger persists inputs + stage at every checkpoint, and the Recovery queue

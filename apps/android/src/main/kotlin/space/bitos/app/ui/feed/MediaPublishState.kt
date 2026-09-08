@@ -22,4 +22,12 @@ data class MemePublishUiState(
     val confirmedRelayHosts: List<String> = emptyList(),
     /** True when the receipt machine reached a terminal result. */
     val terminal: Boolean = false,
+    /**
+     * REAL completion fraction (0..1) INSIDE the current stage, when the
+     * pipeline can report one (render encoder %, upload socket bytes);
+     * null = indeterminate — the sweep arc covers it, never a timer.
+     */
+    val stageProgress: Float? = null,
+    /** Live human detail for the in-flight stage ("12.4 / 60.0 MB"). */
+    val stageProgressDetail: String? = null,
 )

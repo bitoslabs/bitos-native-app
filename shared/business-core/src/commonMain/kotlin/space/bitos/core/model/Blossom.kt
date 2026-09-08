@@ -201,6 +201,8 @@ data class UploadedMedia(
      * as [url]; null = no cover.
      */
     val thumbUrl: String? = null,
+    /** Verified byte-identical media mirrors, tried after [url] by players. */
+    val fallbackUrls: List<String> = emptyList(),
 ) {
     init {
         // HTTPS in production; loopback HTTP is allowed for the local dev stack.
@@ -222,6 +224,15 @@ data class UploadedMedia(
             ) { "Cover thumbs require HTTPS" }
             require(thumb.length <= 2048)
         }
+        require(fallbackUrls.size <= 2) { "At most two media fallbacks" }
+        fallbackUrls.forEach { fallback ->
+            require(
+                fallback.startsWith("https://") ||
+                    fallback.startsWith("http://127.0.0.1:") || fallback.startsWith("http://localhost:")
+            ) { "Media fallbacks require HTTPS" }
+            require(fallback.length <= 2048)
+            require(fallback != url) { "Fallback must differ from primary URL" }
+        }
     }
 
     /**
@@ -234,6 +245,7 @@ data class UploadedMedia(
      */
     fun imetaFields(): List<String> = buildList {
         add("url $url")
+        fallbackUrls.distinct().forEach { add("fallback $it") }
         add("m $mimeType")
         add("size $sizeBytes")
         if (width != null && height != null) add("dim ${width}x${height}")

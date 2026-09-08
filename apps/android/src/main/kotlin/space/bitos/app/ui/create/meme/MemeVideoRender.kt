@@ -15,6 +15,9 @@ import androidx.media3.muxer.MuxerException
 import com.google.common.collect.ImmutableList
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -32,6 +35,11 @@ import kotlin.coroutines.resumeWithException
  * never encoder defaults, so the pre-export MB estimate stays honest.
  */
 internal object MemeVideoRender {
+    /**
+     * [onProgress] receives the encoder's REAL completion fraction (0..1)
+     * from Transformer's pollable progress API while the export runs —
+     * the render stage's percent, never a timer.
+     */
     suspend fun render(
         context: Context,
         composition: Composition,
@@ -39,9 +47,24 @@ internal object MemeVideoRender {
         timeoutMs: Long,
         videoBitrateBps: Int,
         audioBitrateBps: Int,
+        onProgress: ((Float) -> Unit)? = null,
     ) {
         withContext(Dispatchers.Main) {
             var transformer: Transformer? = null
+            val progressHolder = androidx.media3.transformer.ProgressHolder()
+            // Same looper as the Transformer (getProgress contract); the
+            // suspension below frees Main between polls.
+            val poller = launch {
+                while (isActive) {
+                    delay(200)
+                    val current = transformer ?: continue
+                    if (current.getProgress(progressHolder) ==
+                        Transformer.PROGRESS_STATE_AVAILABLE
+                    ) {
+                        onProgress?.invoke(progressHolder.progress.coerceIn(0, 100) / 100f)
+                    }
+                }
+            }
             try {
                 withTimeout(timeoutMs) {
                     suspendCancellableCoroutine<Unit> { continuation ->
@@ -72,8 +95,10 @@ internal object MemeVideoRender {
                         transformer!!.start(composition, path)
                     }
                 }
+                onProgress?.invoke(1f)
             } finally {
                 // Runs on Main before the caller removes temporary input/output files.
+                poller.cancel()
                 transformer?.cancel()
             }
         }

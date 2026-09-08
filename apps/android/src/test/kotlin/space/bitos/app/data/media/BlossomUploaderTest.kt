@@ -133,4 +133,26 @@ class BlossomUploaderTest {
         }
         assertTrue(failure.message!!.contains("hash mismatch"), failure.message)
     }
+
+    @Test
+    fun uploadProgressReportsRealBytes() = runBlocking {
+        val bytes = ByteArray(256 * 1024) { (it % 251).toByte() }
+        val samples = mutableListOf<Pair<Long, Long>>()
+        val media = BlossomUploader().upload(
+            bytes, "video/mp4", signer, serverUrl,
+            nowSeconds = 1_710_000_000,
+        ) { written, total -> samples += written to total }
+
+        // The fraction is socket truth: monotonic, total is the payload,
+        // and the last sample completes it.
+        assertTrue(samples.isNotEmpty())
+        assertEquals(bytes.size.toLong(), samples.first().second)
+        assertEquals(bytes.size.toLong(), samples.last().first)
+        assertEquals(bytes.size.toLong(), samples.last().second)
+        samples.zipWithNext().forEach { (earlier, later) ->
+            assertTrue(later.first >= earlier.first, "$earlier -> $later")
+        }
+        assertEquals(bytes.toList(), lastBody!!.toList())
+        assertEquals(bytes.size.toLong(), media.sizeBytes)
+    }
 }

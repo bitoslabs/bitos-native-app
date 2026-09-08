@@ -2702,6 +2702,7 @@ fun MemeEditorScreen(
                                 imageAssets = imageAssetUris,
                                 preset = exportPreset,
                                 gifReels = gifReels.toMap(),
+                                onProgress = { mediaPublishViewModel?.updateMemeRenderProgress(it) },
                             )
                             var exported = exportNow()
                             var durationMs = timelineDurationMs
@@ -5525,7 +5526,10 @@ private fun PublishMachineSection(
     val rows = listOf(
         "Render & encode" to renderDetail,
         "Content hash" to "SHA-256 over the rendered bytes",
-        "Upload to Blossom" to "blossom.primal.net · authed PUT",
+        // Videos route BitOS-first (canonical) with a Blossom replica; the
+        // row must say where bytes actually go, not just "Blossom".
+        (if (mode == MemeMode.VIDEO) "Upload media" else "Upload to Blossom") to
+            (if (mode == MemeMode.VIDEO) "BitOS API (canonical) + Blossom replica" else "blossom.primal.net · authed PUT"),
         "Verify hash" to "server hash must match the local one",
         "Build event" to kindDetail,
         "Sign" to "key never leaves the device",
@@ -5558,13 +5562,16 @@ private fun PublishMachineSection(
         }
 
         // At-a-glance ring: percent of COMPLETED stages (checkpoints only —
-        // the fraction never simulates) + a rotating sweep arc for liveness
-        // inside a stage, where checkpoints cannot move the fraction, and
-        // the step counter + current stage name beside it.
+        // the fraction never simulates) + the current stage's REAL intra
+        // fraction (render encoder %, upload socket bytes) absorbed into
+        // the overall percent, a rotating sweep arc for liveness on the
+        // stages that cannot report one, and the step counter + current
+        // stage name beside it.
         val stageCount = 8
-        val percent = (doneCount.toFloat() / stageCount * 100).toInt()
+        val stageFraction = if (busy) (state.stageProgress ?: 0f) else 0f
+        val percent = ((doneCount + stageFraction) / stageCount * 100).toInt().coerceIn(0, 100)
         val ringFraction by animateFloatAsState(
-            targetValue = (doneCount / stageCount.toFloat()).coerceIn(0f, 1f),
+            targetValue = ((doneCount + stageFraction) / stageCount.toFloat()).coerceIn(0f, 1f),
             animationSpec = tween(300),
             label = "publishRingFraction",
         )
@@ -5573,7 +5580,11 @@ private fun PublishMachineSection(
             failed -> "Stalled at step ${currentIndex + 1} of $stageCount"
             else -> "Step ${currentIndex + 1} of $stageCount"
         }
-        val stepSubtitle = if (succeeded) "Event confirmed by relay receipt" else rows[currentIndex].first
+        val stepSubtitle = when {
+            succeeded -> "Event confirmed by relay receipt"
+            busy && state.stageProgressDetail != null -> "${rows[currentIndex].first} · ${state.stageProgressDetail}"
+            else -> rows[currentIndex].first
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -5727,11 +5738,42 @@ private fun PublishMachineSection(
                             color = if (rowDone || rowCurrent || rowFailed) BitOSColors.textPrimary else BitOSColors.textSecondary,
                         )
                         Text(
-                            if (index == 7) confirmDetail else detail,
+                            when {
+                                // Live byte/encoder truth replaces the static
+                                // row detail while the stage can report one.
+                                rowCurrent && state.stageProgressDetail != null -> state.stageProgressDetail
+                                index == 7 -> confirmDetail
+                                else -> detail
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                             color = BitOSColors.textTertiary,
                         )
+                        // The in-flight stage's own REAL fraction as a thin
+                        // sub-bar — render encoder %, upload socket bytes.
+                        if (rowCurrent && state.stageProgress != null) {
+                            val rowFraction by animateFloatAsState(
+                                targetValue = state.stageProgress.coerceIn(0f, 1f),
+                                animationSpec = tween(200),
+                                label = "publishRowFraction$index",
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(BitOSColors.border.copy(alpha = 0.35f)),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(rowFraction)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(BitOSColors.primary),
+                                )
+                            }
+                        }
                     }
                 }
                 if (index < rows.lastIndex) {

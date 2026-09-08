@@ -137,6 +137,7 @@ object MemeVideoExport {
         imageAssets: Map<String, Uri> = emptyMap(),
         preset: MemeExportPresets.Preset = MemeExportPresets.AUTO,
         gifReels: Map<String, GifLayerReel> = emptyMap(),
+        onProgress: ((Float) -> Unit)? = null,
     ): Exported {
         require(clips.isNotEmpty()) { "no clips" }
         // One uniform output canvas for the whole timeline (a sequence muxes
@@ -267,6 +268,7 @@ object MemeVideoExport {
                 context, composition, output.absolutePath,
                 120_000L * clips.size.coerceAtMost(4),
                 plan.videoBitrateBps, plan.audioBitrateBps,
+                onProgress = onProgress,
             )
             if (output.length() == 0L) throw ExportFailure("Video export produced an empty file")
             return Exported(output.readBytes(), plan.width, plan.height)

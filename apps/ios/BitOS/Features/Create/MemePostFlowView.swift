@@ -787,6 +787,14 @@ private struct MemePublishingView: View {
         return Double(currentStep.rawValue)
     }
 
+    /// The in-flight step's REAL fraction (render encoder %, upload socket
+    /// bytes) — only while that step is actually current, so a stale value
+    /// never leaks onto another row.
+    private var stageFraction: Double? {
+        guard running, !failed, !succeeded, store.publishStageProgress != nil else { return nil }
+        return store.publishStageProgress
+    }
+
     private func rowState(_ index: Int) -> MemePublishingViewRowState {
         if succeeded { return .done }
         let current = currentStep.rawValue
@@ -834,7 +842,10 @@ private struct MemePublishingView: View {
         [
             ("Render & encode", renderDetail),
             ("Content hash", "SHA-256 over the rendered bytes"),
-            ("Upload to Blossom", "blossom.primal.net · authed PUT"),
+            // Videos route BitOS-first (canonical) with a Blossom replica;
+            // the row must say where bytes actually go, not just "Blossom".
+            (store.isVideoMode ? "Upload media" : "Upload to Blossom",
+             store.isVideoMode ? "BitOS API (canonical) + Blossom replica" : "blossom.primal.net · authed PUT"),
             ("Verify hash", "server hash must match the local one"),
             ("Build event", kindDetail),
             ("Sign", "key never leaves the device"),
@@ -869,14 +880,17 @@ private struct MemePublishingView: View {
                 }
 
                 // At-a-glance ring: percent of completed stages + the
-                // in-flight stage's sweep arc (liveness inside a stage,
-                // where checkpoints cannot move the fraction).
+                // current stage's REAL intra fraction (render encoder %,
+                // upload socket bytes) absorbed into the overall percent,
+                // and the in-flight stage's sweep arc for liveness on the
+                // steps that cannot report one.
                 PublishProgressRing(
-                    fraction: doneCount / 8,
-                    percent: Int((doneCount / 8 * 100).rounded()),
+                    fraction: (doneCount + (stageFraction ?? 0)) / 8,
+                    percent: Int(((doneCount + (stageFraction ?? 0)) / 8 * 100).rounded()),
                     stepIndex: currentStep.rawValue,
                     stepCount: MemeEditorStore.PublishMachineStep.allCases.count,
-                    stepLabel: rows[min(rows.count - 1, max(0, currentStep.rawValue))].0,
+                    stepLabel: rows[min(rows.count - 1, max(0, currentStep.rawValue))].0 +
+                        (running ? (store.publishStageDetail.map { " · \($0)" } ?? "") : ""),
                     running: running,
                     failed: failed,
                     succeeded: succeeded
@@ -888,7 +902,9 @@ private struct MemePublishingView: View {
                             number: index + 1,
                             label: row.0,
                             detail: index == 7 ? confirmDetail : row.1,
-                            state: rowState(index)
+                            state: rowState(index),
+                            liveDetail: rowState(index) == .current ? store.publishStageDetail : nil,
+                            liveFraction: rowState(index) == .current ? stageFraction : nil
                         )
                         if index < rows.count - 1 {
                             Divider().padding(.leading, 32)
@@ -1111,13 +1127,18 @@ private struct PublishSweepArc: View {
     }
 }
 
-/// One stepper row: numbered dot (✓ done · ring current · ✗ failed) +
-/// label + mono detail.
+/// One stepper row: numbered dot (✓ done · spinner current · ✗ failed) +
+/// label + mono detail. The current row can carry its own REAL fraction
+/// (render encoder %, upload socket bytes) as a live detail line + thin
+/// sub-bar.
 private struct MachineRowView: View {
     let number: Int
     let label: String
     let detail: String
     let state: MemePublishingViewRowState
+    /// Live byte/encoder truth for the in-flight stage (nil otherwise).
+    var liveDetail: String? = nil
+    var liveFraction: Double? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: BitOSTheme.Spacing.sm) {
@@ -1155,9 +1176,22 @@ private struct MachineRowView: View {
                 Text(label)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(state == .pending ? BitOSTheme.textSecondary : BitOSTheme.textPrimary)
-                Text(detail)
+                Text(liveDetail ?? detail)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(BitOSTheme.textSecondary)
+                if let fraction = liveFraction {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(BitOSTheme.border.opacity(0.35))
+                            Capsule()
+                                .fill(BitOSTheme.accent)
+                                .frame(width: max(3, geo.size.width * fraction))
+                        }
+                    }
+                    .frame(height: 3)
+                    .padding(.top, 2)
+                    .animation(.easeInOut(duration: 0.2), value: fraction)
+                }
             }
             Spacer(minLength: 0)
         }

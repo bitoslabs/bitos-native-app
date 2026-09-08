@@ -268,6 +268,21 @@ class BlossomTest {
     }
 
     @Test
+    fun imetaIncludesVerifiedMediaFallbacksAfterPrimaryUrl() {
+        val media = UploadedMedia(
+            url = "https://cdn.example/video.mp4",
+            sha256Hex = "ab".repeat(32),
+            mimeType = "video/mp4",
+            sizeBytes = 100,
+            fallbackUrls = listOf("https://blossom.example/ab.mp4"),
+        )
+        assertEquals(
+            listOf("url https://cdn.example/video.mp4", "fallback https://blossom.example/ab.mp4"),
+            media.imetaFields().take(2),
+        )
+    }
+
+    @Test
     fun uploadedMediaValidatesBounds() {
         assertFails {
             UploadedMedia("http://insecure/v.mp4", hash, "video/mp4", 100)

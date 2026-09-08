@@ -24,14 +24,17 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
     }
 
     /// Uploads the bytes and returns the verified (url, hash, mime, size).
-    /// `onStage` receives the REAL checkpoints (hash → upload → verify).
+    /// `onStage` receives the REAL checkpoints (hash → upload → verify);
+    /// `onProgress` reports REAL bytes sent during the PUT (socket truth
+    /// from the task delegate, never estimated).
     func upload(
         bytes: Data,
         mimeType: String,
         identity: IdentityStore,
         serverUrl: String,
         nowSeconds: Int64 = Int64(Date.now.timeIntervalSince1970),
-        onStage: ((UploadStage) -> Void)? = nil
+        onStage: ((UploadStage) -> Void)? = nil,
+        onProgress: ((_ sent: Int, _ total: Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         guard !bytes.isEmpty, bytes.count <= 64 * 1024 * 1024 else { throw UploadFailure(message: "file out of bounds") }
         onStage?(.hashing)
@@ -72,10 +75,11 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         authed.setValue(localHash, forHTTPHeaderField: "X-SHA-256")
         authed.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         authed.httpBody = bytes
-        let (data, response) = try await URLSession.shared.data(for: authed)
+        let (data, response) = try await ProgressUrlUpload.data(for: authed, onProgress: onProgress)
         guard let http2 = response as? HTTPURLResponse, http2.statusCode == 200 || http2.statusCode == 201 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw UploadFailure(message: "upload failed: \(code)")
+            let reason = String(data: data, encoding: .utf8).map { String($0.prefix(160)) } ?? ""
+            throw UploadFailure(message: "upload failed: \(code)\(reason.isEmpty ? "" : " \(reason)")")
         }
         onStage?(.verifying)
         return try verified(from: String(data: data, encoding: .utf8), localHash: localHash, mime: mimeType, size: bytes.count)

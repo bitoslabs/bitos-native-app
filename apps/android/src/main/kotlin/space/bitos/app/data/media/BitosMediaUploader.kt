@@ -5,7 +5,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import space.bitos.core.identity.IdentitySigner
 import space.bitos.core.model.UploadedMedia
@@ -22,7 +21,13 @@ class BitosMediaUploader(
 ) {
     class UploadFailure(reason: String) : Exception(reason)
 
-    suspend fun upload(bytes: ByteArray, mimeType: String, filename: String = "meme.mp4"): UploadedMedia =
+    /** [onProgress] reports REAL bytes handed to the socket on the POST. */
+    suspend fun upload(
+        bytes: ByteArray,
+        mimeType: String,
+        filename: String = "meme.mp4",
+        onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)? = null,
+    ): UploadedMedia =
         withContext(Dispatchers.IO) {
             if (bytes.isEmpty() || bytes.size.toLong() > MemeUploadRouting.BITOS_API_MAX_BYTES) {
                 throw UploadFailure("file out of bounds")
@@ -33,7 +38,7 @@ class BitosMediaUploader(
                     .url(API_URL)
                     .header("X-Upload-Filename", filename)
                     .header("X-SHA-256", hash)
-                    .post(bytes.toRequestBody(mimeType.toMediaType()))
+                    .post(BlossomUploader.ProgressRequestBody(bytes, mimeType.toMediaType(), onProgress))
                     .build(),
             ).execute().use { httpResponse ->
                 val body = httpResponse.body?.string().orEmpty()
@@ -76,19 +81,43 @@ class MemeVideoUploader(
         signer: IdentitySigner,
         blossomServerUrl: String,
         onStage: ((UploadStage) -> Unit)? = null,
+        onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)? = null,
     ): UploadedMedia {
         val route = MemeUploadRouting.destinations(mimeType, bytes.size.toLong())
         if (route.isEmpty()) throw BitosMediaUploader.UploadFailure("unsupported video upload size")
+        // Dual-leg fraction: each leg's inner progress is REAL socket
+        // bytes; the fixed 75/25 weights only stitch the two legs into one
+        // monotonic fraction (the replica exists solely for small videos).
+        val replicaRuns = MemeUploadRouting.Destination.BLOSSOM in route
+        val canonicalSpan = if (replicaRuns) 0.75 else 1.0
         onStage?.invoke(UploadStage.HASHING)
         onStage?.invoke(UploadStage.UPLOADING_BITOS)
-        val canonical = bitos.upload(bytes, mimeType)
+        val canonical = bitos.upload(bytes, mimeType) { written, total ->
+            onProgress?.invoke(
+                (written.toDouble() / total.coerceAtLeast(1).toDouble() * canonicalSpan).toLong(),
+                total,
+            )
+        }
         onStage?.invoke(UploadStage.VERIFYING_BITOS)
-        if (MemeUploadRouting.Destination.BLOSSOM in route) {
-            blossom.upload(bytes, mimeType, signer, blossomServerUrl) { stage ->
-                onStage?.invoke(
-                    if (stage == BlossomUploader.UploadStage.VERIFYING) UploadStage.VERIFYING_BLOSSOM
-                    else UploadStage.UPLOADING_BLOSSOM,
-                )
+        if (replicaRuns) {
+            // Name the leg in failures: both legs surface under the same
+            // "Upload" machine step, so the error must say WHICH one died.
+            try {
+                val replica = blossom.upload(bytes, mimeType, signer, blossomServerUrl, onStage = { stage ->
+                    onStage?.invoke(
+                        if (stage == BlossomUploader.UploadStage.VERIFYING) UploadStage.VERIFYING_BLOSSOM
+                        else UploadStage.UPLOADING_BLOSSOM,
+                    )
+                }, onProgress = { written, total ->
+                    val inner = written.toDouble() / total.coerceAtLeast(1).toDouble()
+                    onProgress?.invoke(
+                        (canonicalSpan + inner * (1.0 - canonicalSpan)).toLong().coerceAtMost(total),
+                        total,
+                    )
+                })
+                return canonical.copy(fallbackUrls = listOf(replica.url))
+            } catch (failure: Exception) {
+                throw BitosMediaUploader.UploadFailure("Blossom replica: ${failure.message}")
             }
         }
         return canonical
