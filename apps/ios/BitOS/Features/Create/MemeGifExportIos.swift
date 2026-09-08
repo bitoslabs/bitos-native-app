@@ -27,7 +27,8 @@ enum MemeGifExportIos {
         frames: [UIImage],
         delaysMs: [Int],
         projectJson: String,
-        client: any BusinessCoreClient
+        client: any BusinessCoreClient,
+        images: [String: UIImage] = [:]
     ) throws -> Result {
         guard !frames.isEmpty else { throw ExportError(message: "Pick frames first") }
 
@@ -61,7 +62,7 @@ enum MemeGifExportIos {
             let encoded = try encode(
                 frames: frames, delaysMs: delaysMs, steps: steps,
                 projectJson: projectJson, client: client,
-                width: width, height: height
+                width: width, height: height, images: images
             )
             if encoded.count <= 8 * 1024 * 1024 || step >= 3 {
                 return Result(
@@ -80,7 +81,8 @@ enum MemeGifExportIos {
         projectJson: String,
         client: any BusinessCoreClient,
         width: Int,
-        height: Int
+        height: Int,
+        images: [String: UIImage] = [:]
     ) throws -> Data {
         // The shared envelope carries the per-canvas paint rows (overlays
         // burned in at the ladder canvas size).
@@ -121,7 +123,7 @@ enum MemeGifExportIos {
                     in: context.cgContext
                 )
                 for row in rows {
-                    MemeRaster.paint(row, in: context.cgContext)
+                    MemeRaster.paint(row, in: context.cgContext, images: images)
                 }
             }
             let properties: [CFString: Any] = [

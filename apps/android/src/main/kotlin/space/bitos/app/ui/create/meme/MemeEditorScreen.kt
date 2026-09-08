@@ -1088,6 +1088,17 @@ fun MemeEditorScreen(
     }
 
     /**
+     * IMAGE layer bitmaps decoded ONCE per export (bounded sample via
+     * [MemeRaster.decodeForExport]) — feeds `imageFor` so stacked layers
+     * burn into PNG/GIF renders exactly like the video path. Call from
+     * an IO context.
+     */
+    fun decodeLayerBitmaps(): Map<String, android.graphics.Bitmap?> =
+        imageAssetUris.mapValues { (_, uri) ->
+            MemeRaster.decodeForExport(context.contentResolver, uri)
+        }
+
+    /**
      * Animated GIF layer reels (MST-053, web `gifLayerPainter` parity):
      * asset id → decoded frames. Decoded lazily for EVERY image-layer
      * asset — picking AND draft resume both land here, so an animated GIF
@@ -1135,7 +1146,8 @@ fun MemeEditorScreen(
                 var gifExportInfo: MemeGifExport.Result? = null
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
-                        val exported = MemeGifExport.export(exportFrames, exportDelays, exportProject)
+                        val layerBitmaps = decodeLayerBitmaps()
+                        val exported = MemeGifExport.export(exportFrames, exportDelays, exportProject) { layerBitmaps[it] }
                             ?: error("GIF export failed")
                         check(exportJobs.artifactReady(exportJob, exported.gifBytes)) {
                             "Could not persist the render"
@@ -1248,12 +1260,13 @@ fun MemeEditorScreen(
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
+                    val layerBitmaps = decodeLayerBitmaps()
                     val rendered = if (asset != null) {
                         val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
                             ?: error("Image could not be read")
-                        MemeRaster.render(source, exportProject)
+                        MemeRaster.render(source, exportProject) { layerBitmaps[it] }
                     } else {
-                        MemeRaster.renderBlank(exportProject)
+                        MemeRaster.renderBlank(exportProject) { layerBitmaps[it] }
                     }
                     val pngBytes = java.io.ByteArrayOutputStream().also { stream ->
                         check(rendered.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) {
@@ -1507,6 +1520,7 @@ fun MemeEditorScreen(
                             stageWidthPx = stageWidth,
                             stageHeightPx = stageHeight,
                             selected = overlay.id == state.selectedOverlayId,
+                            imageAssets = imageAssetMap,
                         )
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
@@ -1570,6 +1584,7 @@ fun MemeEditorScreen(
                             stageWidthPx = stageWidth,
                             stageHeightPx = stageHeight,
                             selected = overlay.id == state.selectedOverlayId,
+                            imageAssets = imageAssetMap,
                         )
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
@@ -1981,12 +1996,13 @@ fun MemeEditorScreen(
                             scope.launch {
                                 val result = runCatching {
                                     withContext(Dispatchers.IO) {
+                                        val layerBitmaps = decodeLayerBitmaps()
                                         if (activeAsset != null) {
                                             val source = MemeRaster.decodeForExport(context.contentResolver, activeAsset.uri)
                                                 ?: error("Image could not be read")
-                                            MemeRaster.render(source, state.project)
+                                            MemeRaster.render(source, state.project) { layerBitmaps[it] }
                                         } else {
-                                            MemeRaster.renderBlank(state.project)
+                                            MemeRaster.renderBlank(state.project) { layerBitmaps[it] }
                                         }
                                     }
                                 }
@@ -2701,7 +2717,8 @@ fun MemeEditorScreen(
                             } else {
                                 gifDelays.toList()
                             }
-                            val exported = MemeGifExport.export(gifFrames.toList(), delays, project)
+                            val layerBitmaps = decodeLayerBitmaps()
+                            val exported = MemeGifExport.export(gifFrames.toList(), delays, project) { layerBitmaps[it] }
                                 ?: error("GIF export failed")
                             Triple(
                                 exported.gifBytes,
@@ -2712,6 +2729,7 @@ fun MemeEditorScreen(
                             val bitmap: android.graphics.Bitmap
                             val width: Int
                             val height: Int
+                            val layerBitmaps = decodeLayerBitmaps()
                             val asset = activeAsset
                             if (asset != null) {
                                 val source = MemeRaster.decodeForExport(context.contentResolver, asset.uri)
@@ -2719,10 +2737,10 @@ fun MemeEditorScreen(
                                 val sized = MemeExportRules.outputSize(source.width, source.height)
                                 width = sized.first
                                 height = sized.second
-                                bitmap = MemeRaster.render(source, project)
+                                bitmap = MemeRaster.render(source, project) { layerBitmaps[it] }
                             } else {
                                 // Blank design: the pinned canvas IS the media.
-                                bitmap = MemeRaster.renderBlank(project)
+                                bitmap = MemeRaster.renderBlank(project) { layerBitmaps[it] }
                                 width = bitmap.width
                                 height = bitmap.height
                             }

@@ -52,7 +52,11 @@ object MemeRaster {
      *  A pinned canvas re-frames the output: same long-edge budget, media
      *  letterboxed centered over the background fill, plan re-mapped to
      *  the canvas size. */
-    fun render(source: Bitmap, project: MemeProject): Bitmap {
+    fun render(
+        source: Bitmap,
+        project: MemeProject,
+        imageFor: ((String) -> Bitmap?)? = null,
+    ): Bitmap {
         val (mediaWidth, mediaHeight) = MemeExportRules.outputSize(source.width, source.height)
         val canvasTerms = project.canvasRatio?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
         var width = mediaWidth
@@ -82,7 +86,7 @@ object MemeRaster {
         canvas.drawBitmap(source, null, mediaRect, basePaint(project))
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
         MemeExportRules.exportPlan(project, width, height).forEach { item ->
-            drawItem(canvas, item)
+            drawItem(canvas, item, imageFor)
         }
         return out
     }
@@ -94,7 +98,7 @@ object MemeRaster {
      *  [render]; callers guarantee a pinned ratio (blank designs always
      *  set one when created, so this throws only on programmer error).
      */
-    fun renderBlank(project: MemeProject): Bitmap {
+    fun renderBlank(project: MemeProject, imageFor: ((String) -> Bitmap?)? = null): Bitmap {
         val terms = project.canvasRatio
             ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
             ?: throw IllegalArgumentException("blank render requires a pinned canvas ratio")
@@ -112,7 +116,7 @@ object MemeRaster {
         fillBackground(canvas, project)
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
         MemeExportRules.exportPlan(project, width, height).forEach { item ->
-            drawItem(canvas, item)
+            drawItem(canvas, item, imageFor)
         }
         return out
     }
@@ -157,13 +161,14 @@ object MemeRaster {
         project: MemeProject,
         width: Int,
         height: Int,
+        imageFor: ((String) -> Bitmap?)? = null,
     ): ByteArray {
         val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawBitmap(frame, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
         MemeExportRules.exportPlan(project, width, height).forEach { item ->
-            drawItem(canvas, item)
+            drawItem(canvas, item, imageFor)
         }
         val argb = IntArray(width * height)
         out.getPixels(argb, 0, width, 0, 0, width, height)

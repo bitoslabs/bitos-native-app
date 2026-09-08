@@ -1469,7 +1469,8 @@ final class MemeEditorStore {
                             frames: frames.map(\.image),
                             delaysMs: frames.map(\.delayMs),
                             projectJson: project,
-                            client: client
+                            client: client,
+                            images: images
                         )
                     }.value
                     guard exportJobs.artifactReady(exportJob, bytes: result.data, nowMs: nowMs()) else {
@@ -1497,14 +1498,15 @@ final class MemeEditorStore {
         let project = projectJson
         let client = self.client
         let source = activeAsset?.image
+        let images = layerImages
         let exportJob = exportJobs.begin(format: "png", nowMs: nowMs())
         Task {
             do {
                 let data = try await Task.detached(priority: .userInitiated) {
                     if let source {
-                        try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
+                        try MemeRaster.renderPngData(asset: source, projectJson: project, client: client, images: images)
                     } else {
-                        try MemeRaster.renderBlankPngData(projectJson: project, client: client).data
+                        try MemeRaster.renderBlankPngData(projectJson: project, client: client, images: images).data
                     }
                 }.value
                 guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
@@ -1649,6 +1651,7 @@ final class MemeEditorStore {
         let client = self.client
         let gifSourceFrames = gifFrames.map { MemeGifFrame(id: $0.id, image: $0.image, delayMs: holdMs(for: $0)) }
         let source = activeAsset?.image
+        let images = layerImages
         Task {
             do {
                 let mime: String
@@ -1723,7 +1726,8 @@ final class MemeEditorStore {
                             frames: gifSourceFrames.map(\.image),
                             delaysMs: gifSourceFrames.map(\.delayMs),
                             projectJson: project,
-                            client: client
+                            client: client,
+                            images: images
                         )
                     }.value
                     bytes = exported.data
@@ -1734,7 +1738,7 @@ final class MemeEditorStore {
                     // 1. Render at export resolution (dims ride the event imeta).
                     if let source {
                         let png = try await Task.detached(priority: .userInitiated) {
-                            try MemeRaster.renderPngData(asset: source, projectJson: project, client: client)
+                            try MemeRaster.renderPngData(asset: source, projectJson: project, client: client, images: images)
                         }.value
                         let envelopeJson = client.memeExportPlan(
                             project,
@@ -2839,7 +2843,8 @@ struct MemeEditorView: View {
                                 overlay: overlay,
                                 stageSize: fitted,
                                 selected: overlay.id == store.selectedId,
-                                paletteHex: store.paletteHex
+                                paletteHex: store.paletteHex,
+                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
                             )
                         }
                         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
@@ -2888,7 +2893,8 @@ struct MemeEditorView: View {
                                 overlay: overlay,
                                 stageSize: fitted,
                                 selected: overlay.id == store.selectedId,
-                                paletteHex: store.paletteHex
+                                paletteHex: store.paletteHex,
+                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
                             )
                         }
                         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
@@ -4594,17 +4600,20 @@ struct ExportSettingsSheet: View {
                         do {
                             let asset = store.activeAsset
                             let blankProject = store.projectJson
+                            let layerImages = store.layerImages
                             let png = try await Task.detached(priority: .userInitiated) {
                                 if let asset {
                                     return try MemeRaster.renderPngData(
                                         asset: asset.image,
                                         projectJson: blankProject,
-                                        client: FrameworkBusinessCoreClient()
+                                        client: FrameworkBusinessCoreClient(),
+                                        images: layerImages
                                     )
                                 }
                                 return try MemeRaster.renderBlankPngData(
                                     projectJson: blankProject,
-                                    client: FrameworkBusinessCoreClient()
+                                    client: FrameworkBusinessCoreClient(),
+                                    images: layerImages
                                 ).data
                             }.value
                             dismissSheet()
@@ -4979,7 +4988,8 @@ enum MemeRaster {
     static func renderPngData(
         asset: UIImage,
         projectJson: String,
-        client: any BusinessCoreClient
+        client: any BusinessCoreClient,
+        images: [String: UIImage] = [:]
     ) throws -> Data {
         // MST-043 + adjust: the grade burns into the MEDIA only (the
         // composed look+adjust matrix, same values the Android rasterizer
@@ -5069,7 +5079,7 @@ enum MemeRaster {
             media.draw(in: mediaRect)
             paintStrokes(canvasStrokes, in: context.cgContext)
             for row in canvasRows {
-                paint(row, in: context.cgContext)
+                paint(row, in: context.cgContext, images: images)
             }
         }
         guard let data = image.pngData() else {
@@ -5085,7 +5095,8 @@ enum MemeRaster {
     /// Returns the PNG bytes AND the pixel dims (publish imeta needs them).
     static func renderBlankPngData(
         projectJson: String,
-        client: any BusinessCoreClient
+        client: any BusinessCoreClient,
+        images: [String: UIImage] = [:]
     ) throws -> (data: Data, width: Int, height: Int) {
         let ratio = MemeEditorStore.canvasRatio(ofProject: projectJson)
         let terms = ratio?.split(separator: ":").compactMap { Int($0) } ?? []
@@ -5124,7 +5135,7 @@ enum MemeRaster {
             }
             paintStrokes(strokes, in: context.cgContext)
             for row in rows {
-                paint(row, in: context.cgContext)
+                paint(row, in: context.cgContext, images: images)
             }
         }
         guard let data = image.pngData() else {

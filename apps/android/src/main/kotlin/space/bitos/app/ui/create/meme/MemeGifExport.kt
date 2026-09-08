@@ -36,6 +36,7 @@ object MemeGifExport {
         frames: List<Bitmap>,
         frameDelaysMs: List<Int>,
         project: MemeProject,
+        imageFor: ((String) -> Bitmap?)? = null,
     ): Result? {
         if (frames.isEmpty()) return null
         val delays = frameDelaysMs.take(frames.size).map { delay ->
@@ -53,7 +54,7 @@ object MemeGifExport {
         while (true) {
             val canvas = GifExportPlan.SizeLadder.canvasFor(original.first, original.second, step)
                 ?: return null
-            val encoded = encodeAt(frames, delays, plan, project, canvas.first, canvas.second)
+            val encoded = encodeAt(frames, delays, plan, project, canvas.first, canvas.second, imageFor)
             if (encoded != null && !GifExportPlan.SizeLadder.shouldStep(encoded.size, step)) {
                 return Result(encoded, canvas.first, canvas.second, step, plan.capped)
             }
@@ -75,11 +76,12 @@ object MemeGifExport {
         project: MemeProject,
         width: Int,
         height: Int,
+        imageFor: ((String) -> Bitmap?)? = null,
     ): ByteArray? {
         val encodeFrames = plan.steps.map { step ->
             val frame = frameActiveAt(frames, delays, step.atSec)
             GifEncodeFrame(
-                rgba = MemeRaster.renderFrameRgba(frame, project, width, height),
+                rgba = MemeRaster.renderFrameRgba(frame, project, width, height, imageFor),
                 delayMs = step.delayMs,
             )
         }
