@@ -1,5 +1,83 @@
 package space.bitos.core.studio
 
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Soundtrack PCM bed math ("use this sound" Wave B, plan
+ * docs/product/use-this-sound-plan.md §5): a decoded soundtrack is
+ * resampled to the SFX bed rate, placed at its timeline offset with its
+ * gain, truncated at the timeline end — then mixed with the cue bed into
+ * ONE mono PCM track (the same MST-041 WAV path Transformer already
+ * mixes as a second sequence). Pure + common-tested so the platforms mix
+ * byte-identically; the natives only decode bytes → PCM.
+ */
+object MemeSoundMix {
+
+    /** The one bed rate (MST-041 SfxSynth bed). */
+    const val BED_RATE = SfxSynth.SAMPLE_RATE
+
+    /**
+     * Linear-interpolation resample. Junk/zero rates fall back to a
+     * passthrough (the decode already emitted bed-rate PCM or garbage —
+     * never divide by zero, never throw).
+     */
+    fun resample(pcm: FloatArray, fromRate: Int, toRate: Int = BED_RATE): FloatArray {
+        if (pcm.isEmpty() || fromRate <= 0 || toRate <= 0 || fromRate == toRate) return pcm
+        val outLength = (pcm.size.toLong() * toRate / fromRate).toInt()
+        if (outLength <= 0) return FloatArray(0)
+        val out = FloatArray(outLength)
+        val step = fromRate.toDouble() / toRate
+        for (i in 0 until outLength) {
+            val position = i * step
+            val base = position.toInt()
+            val frac = (position - base).toFloat()
+            val a = pcm[base.coerceIn(pcm.indices)]
+            val b = pcm[min(base + 1, pcm.size - 1)]
+            out[i] = a + (b - a) * frac
+        }
+        return out
+    }
+
+    /**
+     * The soundtrack's bed segment: `track` (at `trackRate`) resampled to
+     * [BED_RATE], gain-clamped 0..1, placed at `offsetMs`, truncated at
+     * `timelineDurationMs` — exactly the timeline-length FloatArray the
+     * cue bed uses. Degenerate inputs yield an empty bed.
+     */
+    fun bedTrack(
+        track: FloatArray,
+        trackRate: Int,
+        timelineDurationMs: Long,
+        offsetMs: Long,
+        volume: Float,
+    ): FloatArray {
+        if (track.isEmpty() || timelineDurationMs <= 0) return FloatArray(0)
+        val bed = FloatArray((timelineDurationMs * BED_RATE / 1_000L).toInt())
+        val source = resample(track, trackRate)
+        val startSample = (max(0, offsetMs) * BED_RATE / 1_000L).toInt()
+        val gain = if (volume.isNaN()) 1f else min(1f, max(0f, volume))
+        val room = bed.size - startSample
+        if (room <= 0) return bed
+        val count = min(source.size, room)
+        for (i in 0 until count) {
+            bed[startSample + i] = source[i] * gain
+        }
+        return bed
+    }
+
+    /** Elementwise add (clamped −1..+1), the longer bed's tail survives. */
+    fun mix(a: FloatArray, b: FloatArray): FloatArray {
+        val out = FloatArray(max(a.size, b.size))
+        for (i in out.indices) {
+            val sum = (a.getOrNull(i) ?: 0f) + (b.getOrNull(i) ?: 0f)
+            out[i] = min(1f, max(-1f, sum))
+        }
+        return out
+    }
+}
+
 /** One imported-audio soundtrack attached to a VIDEO project (wire row
  *  `"sound"`; additive — old readers simply ignore it). [url] exists only
  *  after the hash-verified Blossom upload (attach-time = blank);

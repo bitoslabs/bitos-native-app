@@ -340,6 +340,36 @@ class MemeEditorState(
         revision += 1
     }
 
+    /**
+     * "Use this sound" Wave B: attach/replace the imported soundtrack
+     * (VIDEO mode only; the picked/decoded bytes + preview player live in
+     * the SESSION — the wire row carries bounds + provenance). A session
+     * seed, not an undo step (switchMode precedent); [removeSoundtrack]
+     * is its explicit inverse.
+     */
+    fun setSoundtrack(soundtrack: space.bitos.core.studio.MemeSoundtrack?) {
+        if (project.mode != MemeMode.VIDEO && soundtrack != null) return
+        val normalized = space.bitos.core.studio.MemeSoundRules.normalize(soundtrack)
+        if (project.soundtrack == normalized) return
+        project = project.copy(soundtrack = normalized)
+        revision += 1
+    }
+
+    fun removeSoundtrack() {
+        if (project.soundtrack == null) return
+        project = project.copy(soundtrack = null)
+        revision += 1
+    }
+
+    /** Soundtrack gain (Wave B Sound tool row; bounded like clip volume). */
+    fun setSoundtrackVolume(volume: Float) {
+        val sound = project.soundtrack ?: return
+        val clamped = if (volume.isNaN()) 1f else volume.coerceIn(0f, MemeProjectContract.MAX_CLIP_VOLUME)
+        if (sound.volume == clamped) return
+        project = project.copy(soundtrack = sound.copy(volume = clamped))
+        revision += 1
+    }
+
     /** Whole-clip playback rate (V2 suite Speed chip); undoable. */
     fun setSpeed(rate: Float) {
         val clamped = MemeProjectContract.clampSpeed(rate)

@@ -663,6 +663,64 @@ fun MemeEditorScreen(
             if (failed) exportStatus = "A source clip could not be read"
         }
     }
+
+    // ── "Use this sound" (MST-050 Wave B) ────────────────────────────
+    // Session audio: the publishable m4a + the decoded bed PCM (native
+    // rate — MemeSoundMix owns placement/resampling). The wire row carries
+    // bounds + provenance; these bytes never ride the project wire.
+    var soundtrackM4a by remember { mutableStateOf<ByteArray?>(null) }
+    var soundtrackPcm by remember { mutableStateOf<Pair<FloatArray, Int>?>(null) }
+    var extractingSound by remember { mutableStateOf(false) }
+    val soundtrackPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        extractingSound = true
+        scope.launch {
+            val extracted = withContext(Dispatchers.IO) { MemeVideoSound.extract(context, uri) }
+            if (extracted == null) {
+                extractingSound = false
+                exportStatus = "No readable audio track in that video"
+                return@launch
+            }
+            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+            extractingSound = false
+            if (decoded == null) {
+                exportStatus = "That sound could not be decoded on this device"
+                return@launch
+            }
+            soundtrackM4a = extracted.m4aBytes
+            soundtrackPcm = decoded
+            state.setSoundtrack(
+                space.bitos.core.studio.MemeSoundtrack(
+                    sha256 = extracted.sha256Hex,
+                    durationMs = extracted.durationMs,
+                    label = "Original sound",
+                ),
+            )
+            exportStatus = null
+        }
+    }
+    // Resume: the slot's `sound` asset rehydrates the session audio. A
+    // sound the session cannot hear would export SILENT while the wire
+    // promises it — strip the row and say so instead (consistency over
+    // silent loss).
+    LaunchedEffect(resume) {
+        val saved = resume ?: return@LaunchedEffect
+        val sound = saved.document.project.soundtrack ?: return@LaunchedEffect
+        val file = saved.assetFiles["sound"] ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            val bytes = runCatching { file.readBytes() }.getOrNull()
+            val decoded = bytes?.let { MemeVideoSound.decodePcm(context, it) }
+            if (bytes != null && decoded != null) {
+                soundtrackM4a = bytes
+                soundtrackPcm = decoded
+            } else {
+                state.removeSoundtrack()
+                exportStatus = "The saved soundtrack could not be restored"
+            }
+        }
+    }
     var activeAssetId by remember { mutableStateOf(resume?.document?.assets?.firstOrNull()?.id) }
 
     // M4b remix seeding (web `consumeRemixHandoff` parity): fetch the
@@ -912,18 +970,24 @@ fun MemeEditorScreen(
             val frameBytes = gifFrameBytes.toMap()
             val clipSources = videoClips.associate { clip -> "mem:${clip.id}" to clip.bytes }
             val opener = MemeProjectStore.AssetOpener { key ->
-                if (key.startsWith("mem:v")) {
-                    clipSources[key]
-                } else if (key.startsWith("mem:")) {
-                    val mem: ByteArray? = frameBytes[key.removePrefix("mem:")]
-                    mem
-                } else {
-                    readAssetBytes(context, android.net.Uri.parse(key))
+                when {
+                    key == "mem:sound" -> soundtrackM4a
+                    key.startsWith("mem:v") -> clipSources[key]
+                    key.startsWith("mem:") -> {
+                        val mem: ByteArray? = frameBytes[key.removePrefix("mem:")]
+                        mem
+                    }
+                    else -> readAssetBytes(context, android.net.Uri.parse(key))
                 }
             }
             val refs = assets.map { MemeProjectStore.AssetRef(it.id, it.uri.toString()) } +
                 (1..gifFrames.size).map { MemeProjectStore.AssetRef("f$it", "mem:f$it") } +
-                videoClips.map { MemeProjectStore.AssetRef(it.id, "mem:${it.id}") }
+                videoClips.map { MemeProjectStore.AssetRef(it.id, "mem:${it.id}") } +
+                // "Use this sound": the m4a rides the slot like any asset
+                // (id `sound`; resume rehydrates the session audio from it).
+                listOfNotNull(
+                    state.project.soundtrack?.let { MemeProjectStore.AssetRef("sound", "mem:sound") },
+                )
             val saved = runCatching {
                 slotStore.save(
                     slotId = slotId,
@@ -1157,6 +1221,7 @@ fun MemeEditorScreen(
         val exportClips = videoClips.toList().toClipInputs(videoRate)
         val exportImages = imageAssetUris.toMap()
         val exportFrames = gifFrames.toList()
+        val exportSoundPcm = soundtrackPcm
         val exportDelays = if (gifUniformDelayMs > 0) List(exportFrames.size) { gifUniformDelayMs } else gifDelays.toList()
         if (gifMode) {
             if (gifFrames.isEmpty()) {
@@ -1229,7 +1294,7 @@ fun MemeEditorScreen(
                     withContext(Dispatchers.IO) {
                         val exported = MemeVideoExport.exportClips(
                             context, exportClips, exportProject,
-                            sfxMixTimeline(exportProject, timelineMs),
+                            audioBedTimeline(exportProject, timelineMs, exportSoundPcm),
                             imageAssets = exportImages,
                             preset = exportPreset,
                             gifReels = gifReels.toMap(),
@@ -1452,6 +1517,8 @@ fun MemeEditorScreen(
                     clips = videoClips.toList(),
                     project = state.project,
                     gifFrameAt = { id, atMs -> gifReels[id]?.frameAt(atMs) },
+                    soundtrack = state.project.soundtrack,
+                    soundtrackBytes = soundtrackM4a,
                     rate = videoRate,
                     stageWidthPx = stageWidth,
                     stageHeightPx = stageHeight,
@@ -2150,6 +2217,19 @@ fun MemeEditorScreen(
                             )
                             MemeEditorPanel.SOUND -> SoundPanelContent(
                                 cueCount = state.project.sfxCues.size,
+                                soundtrack = state.project.soundtrack,
+                                extracting = extractingSound,
+                                onPickSound = {
+                                    soundtrackPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                                    )
+                                },
+                                onSoundVolume = { state.setSoundtrackVolume(it) },
+                                onRemoveSound = {
+                                    state.removeSoundtrack()
+                                    soundtrackM4a = null
+                                    soundtrackPcm = null
+                                },
                                 onOpenStudio = {
                                     activePanel = null
                                     showSfx = true
@@ -2698,7 +2778,7 @@ fun MemeEditorScreen(
                             // M5: the ladder trims the LAST clip's window.
                             suspend fun exportNow(): MemeVideoExport.Exported = MemeVideoExport.exportClips(
                                 context, videoClips.toList().toClipInputs(videoRate), state.project,
-                                sfxMixTimeline(state.project, timelineDurationMs),
+                                audioBedTimeline(state.project, timelineDurationMs, soundtrackPcm),
                                 imageAssets = imageAssetUris,
                                 preset = exportPreset,
                                 gifReels = gifReels.toMap(),
@@ -2826,6 +2906,11 @@ fun MemeEditorScreen(
                             thumbUrl = coverThumbUrl,
                             remixTagsJson = mergedTags,
                             powBits = powBits,
+                            // "Use this sound": the m4a uploads (hash-
+                            // verified) BEFORE the note is signed, then the
+                            // sound/p/attribution tags stamp the real URL.
+                            soundtrackBytes = soundtrackM4a,
+                            soundtrackProjectJson = space.bitos.core.studio.MemeProjectContract.encode(state.project),
                         )
                     } else {
                         mediaPublishViewModel.publishMemePicture(
@@ -3161,31 +3246,114 @@ private fun TextPanelContent(onAdd: (String, MemeFontSlot) -> Unit) {
 
 /** Sound panel (prototype sound row): cue summary + jump to the studio. */
 @Composable
-private fun SoundPanelContent(cueCount: Int, onOpenStudio: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
-        Column(Modifier.weight(1f)) {
+private fun SoundPanelContent(
+    cueCount: Int,
+    soundtrack: space.bitos.core.studio.MemeSoundtrack? = null,
+    extracting: Boolean = false,
+    onPickSound: () -> Unit = {},
+    onSoundVolume: (Float) -> Unit = {},
+    onRemoveSound: () -> Unit = {},
+    onOpenStudio: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (cueCount == 0) "Original clip audio" else "$cueCount synth cues",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.W600,
+                )
+                Text(
+                    if (cueCount == 0) "Drop risers, zaps and coin SFX at the playhead"
+                    else "Cues bake into the export mix",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BitOSColors.textSecondary,
+                )
+            }
             Text(
-                if (cueCount == 0) "Original clip audio" else "$cueCount synth cues",
-                style = MaterialTheme.typography.titleSmall,
+                "Change",
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.W600,
-            )
-            Text(
-                if (cueCount == 0) "Drop risers, zaps and coin SFX at the playhead"
-                else "Cues bake into the export mix",
-                style = MaterialTheme.typography.bodySmall,
-                color = BitOSColors.textSecondary,
+                color = BitOSColors.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable { onOpenStudio() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
             )
         }
-        Text(
-            "Change",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.W600,
-            color = BitOSColors.primary,
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .clickable { onOpenStudio() }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-        )
+        // ── "Use this sound" (MST-050 Wave B): the borrowed track row ──
+        when {
+            extracting -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            ) {
+                CircularProgressIndicator(
+                    color = BitOSColors.primary,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text("Extracting the sound…", style = MaterialTheme.typography.bodySmall, color = BitOSColors.textSecondary)
+            }
+            soundtrack != null -> Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                Surface(shape = RoundedCornerShape(12.dp), color = BitOSColors.surface) {
+                    Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                            Text("♪", style = MaterialTheme.typography.titleSmall)
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    soundtrack.label.ifBlank { "Original sound" },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.W600,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "${soundtrack.durationMs / 1000.0}s · mixes into preview and export",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                )
+                            }
+                            Text(
+                                "Remove",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.W600,
+                                color = BitOSColors.error,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable(onClickLabel = "Remove soundtrack") { onRemoveSound() }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                            Text("Mute", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = soundtrack.volume <= 0f,
+                                onCheckedChange = { mute -> onSoundVolume(if (mute) 0f else 1f) },
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                if (soundtrack.volume <= 0f) "muted" else "${"%.2f".format(soundtrack.volume)}×",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                        BitosSlider(
+                            value = soundtrack.volume.coerceIn(0f, 1f),
+                            onValueChange = onSoundVolume,
+                            valueRange = 0f..1f,
+                        )
+                    }
+                }
+            }
+        }
+        if (soundtrack == null && !extracting) {
+            OutlinedButton(
+                onClick = onPickSound,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(50),
+            ) {
+                Text("♪ Pick sound from a video…")
+            }
+        }
     }
 }
 
@@ -6346,15 +6514,32 @@ private fun List<SessionClip>.toClipInputs(rate: Float): List<MemeVideoExport.Cl
 }
 
 /**
- * M5 cue mix: cues live on the TIMELINE clock already (added at the
- * timeline playhead), so the mix renders straight against the timeline
- * duration — no per-source mapping.
+ * M5 cue mix + "use this sound" bed (Wave B): cues AND the placed
+ * soundtrack render into ONE mono PCM bed (the same MST-041 WAV path the
+ * export mixes as a second sequence) — sample-accurate, offset honored.
  */
-private fun sfxMixTimeline(project: space.bitos.core.studio.MemeProject, timelineDurationMs: Long): ByteArray? {
-    if (!space.bitos.core.studio.SfxSynth.hasAudibleCues(project.sfxCues, timelineDurationMs)) return null
-    return space.bitos.core.studio.SfxSynth.pcm16Le(
-        space.bitos.core.studio.SfxSynth.renderCueTrack(project.sfxCues, timelineDurationMs),
-    )
+private fun audioBedTimeline(
+    project: space.bitos.core.studio.MemeProject,
+    timelineDurationMs: Long,
+    soundtrackPcm: Pair<FloatArray, Int>?,
+): ByteArray? {
+    val cueBed = if (space.bitos.core.studio.SfxSynth.hasAudibleCues(project.sfxCues, timelineDurationMs)) {
+        space.bitos.core.studio.SfxSynth.renderCueTrack(project.sfxCues, timelineDurationMs)
+    } else {
+        null
+    }
+    val soundBed = project.soundtrack?.let { sound ->
+        soundtrackPcm?.let { (pcm, rate) ->
+            space.bitos.core.studio.MemeSoundMix.bedTrack(pcm, rate, timelineDurationMs, sound.offsetMs, sound.volume)
+        }
+    }?.takeIf { it.isNotEmpty() }
+    val bed = when {
+        cueBed != null && soundBed != null -> space.bitos.core.studio.MemeSoundMix.mix(cueBed, soundBed)
+        cueBed != null -> cueBed
+        soundBed != null -> soundBed
+        else -> null
+    } ?: return null
+    return space.bitos.core.studio.SfxSynth.pcm16Le(bed)
 }
 
 /** SFX sheet (MST-041): 5 buckets × 31 synth sounds, tap = preview,

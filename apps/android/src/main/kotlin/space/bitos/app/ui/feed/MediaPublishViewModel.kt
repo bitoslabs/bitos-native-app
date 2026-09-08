@@ -252,6 +252,12 @@ class MediaPublishViewModel(
         thumbUrl: String? = null,
         remixTagsJson: String = "",
         powBits: Int = 0,
+        /** "Use this sound" (MST-050 Wave B): the extracted m4a + the
+         *  project wire carrying its soundtrack row. The audio uploads
+         *  hash-verified BEFORE the note signs; sound/p/attribution tags
+         *  then stamp the real URL (never a pre-upload stamp). */
+        soundtrackBytes: ByteArray? = null,
+        soundtrackProjectJson: String = "",
     ) {
         if (memePublishBusy()) return
         if (bytes.isEmpty() || bytes.size.toLong() > space.bitos.core.studio.MemeUploadRouting.BITOS_API_MAX_BYTES) {
@@ -309,6 +315,29 @@ class MediaPublishViewModel(
                     thumbUrl = thumbUrl,
                     fallbackUrls = media.fallbackUrls,
                 )
+                // Soundtrack upload + tag stamping (Wave B): nothing stamps
+                // until the audio upload verifies — the same order the
+                // safety rule demands for the video itself.
+                var extra = parseTags(remixTagsJson)
+                if (soundtrackBytes != null && soundtrackBytes.isNotEmpty() && soundtrackProjectJson.isNotBlank()) {
+                    val audio = withContext(Dispatchers.IO) {
+                        uploader.upload(soundtrackBytes, "audio/mp4", signer, DefaultBlossomServer.url)
+                    }
+                    val project = space.bitos.core.studio.MemeProjectContract.decode(soundtrackProjectJson)
+                    val sound = project?.soundtrack
+                    if (project == null || sound == null) {
+                        throw BlossomUploader.UploadFailure("The soundtrack row was missing at publish time")
+                    }
+                    if (!audio.sha256Hex.equals(sound.sha256, ignoreCase = true)) {
+                        throw BlossomUploader.UploadFailure("Soundtrack hash mismatch — nothing was signed")
+                    }
+                    val stamped = space.bitos.core.studio.MemeProjectContract.encode(
+                        project.copy(soundtrack = sound.copy(url = audio.url)),
+                    )
+                    val soundTags = space.bitos.core.bridge.BusinessCoreBridge()
+                        .memeSoundTagsFor(stamped)
+                    extra = extra + parseTags(soundTags)
+                }
                 mutableMemeState.value = mutableMemeState.value.copy(
                     phase = MemePublishPhase.PUBLISHING,
                     stage = MemePublishStage.BUILD,
@@ -319,7 +348,7 @@ class MediaPublishViewModel(
                     portrait = space.bitos.core.studio.MemeVideoCutRules.isShortFormDuration(durationMs),
                     media = sized, signerProvider = { signer },
                     writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
-                    extraTags = parseTags(remixTagsJson),
+                    extraTags = extra,
                     powBits = powBits,
                     onStage = { stage, eventId -> onMemeNoteStage(stage, eventId, ledgerId) },
                 )

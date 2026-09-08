@@ -92,6 +92,10 @@ internal fun VideoStage(
     showScrub: Boolean = true,
     /** Player control surface for the suite dock (registered, not owned). */
     transport: VideoTransport? = null,
+    /** "Use this sound" (MST-050 Wave B): the borrowed track + its m4a
+     *  bytes — a second audio-only player follows the timeline clock. */
+    soundtrack: space.bitos.core.studio.MemeSoundtrack? = null,
+    soundtrackBytes: ByteArray? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     if (clips.isEmpty()) return
@@ -154,6 +158,37 @@ internal fun VideoStage(
         }
     }
     var previewError by remember(player) { mutableStateOf<String?>(null) }
+    // ── Soundtrack preview player ("use this sound" Wave B) ──────────
+    // A second audio-only ExoPlayer plays the extracted m4a from its
+    // in-point; the timeline clock loop below keeps it glued to the video
+    // (seek on drift, pause outside the placement window). No video track
+    // means no second surface/effect pipeline to fight with.
+    val soundFile = remember(soundtrackBytes) {
+        soundtrackBytes?.let { bytes ->
+            File(context.cacheDir, "meme-sound-stage-${System.nanoTime()}.m4a").apply {
+                writeBytes(bytes)
+            }
+        }
+    }
+    val soundPlayer = remember(soundFile) {
+        soundFile?.let { file ->
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(
+                    androidx.media3.common.MediaItem.Builder()
+                        .setUri(android.net.Uri.fromFile(file))
+                        .build(),
+                )
+                playWhenReady = false
+                prepare()
+            }
+        }
+    }
+    DisposableEffect(soundPlayer, soundFile) {
+        onDispose {
+            soundPlayer?.release()
+            soundFile?.let { file -> runCatching { file.delete() } }
+        }
+    }
     DisposableEffect(player, project.lookId, project.adjust, clips) {
         fun updateLook(redrawPausedFrame: Boolean) {
             val active = clips.getOrNull(player.currentMediaItemIndex)
@@ -233,6 +268,21 @@ internal fun VideoStage(
             playing = player.isPlaying
             // Per-clip audio follows the playhead (mute/volume preview).
             player.volume = (clips.getOrNull(index)?.volume ?: 1f).coerceIn(0f, 1f)
+            // Soundtrack follows the same clock: inside its placement
+            // window it plays from the in-point (re-seek on drift), outside
+            // it pauses — scrub, seek and rate all stay glued.
+            soundPlayer?.let { sound ->
+                val track = soundtrack ?: return@let
+                val into = timelineMs - track.offsetMs
+                if (into in 0 until track.durationMs) {
+                    val target = (track.startMs + into).coerceIn(0L, max(1L, track.durationMs))
+                    if (kotlin.math.abs(sound.currentPosition - target) > 120) sound.seekTo(target)
+                    sound.volume = track.volume.coerceIn(0f, 1f)
+                    sound.playWhenReady = player.isPlaying
+                } else {
+                    sound.playWhenReady = false
+                }
+            }
             // 30 fps keeps the cursor and timed overlays fluid without
             // spending a frame loop while playback is paused.
             kotlinx.coroutines.delay(if (player.isPlaying) 33 else 100)

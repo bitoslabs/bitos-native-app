@@ -426,6 +426,27 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-08 — **MST-050 Wave B on ANDROID — "pick sound from a video"
+  end-to-end** (Wave A contract → the editor loop; iOS pending, shared
+  math ready). Shared (common-tested): `MemeSoundMix` — linear resample →
+  bed placement (offset/gain/truncate at the timeline end) → elementwise
+  mix, so cues + soundtrack render into the ONE mono PCM bed the export
+  already mixes as its second Transformer sequence (sample-accurate, no
+  new audio pipeline). Android: `MemeVideoSound` (passthrough extractor→
+  muxer m4a ≤ 60 s + MediaCodec mono PCM decode); Sound tool gained the
+  "♪ Pick sound from a video…" row + attached-track row (label/duration,
+  mute switch + slider volume, Remove) with named failure states (no
+  audio track / undecodable); a second audio-only ExoPlayer in VideoStage
+  glues to the timeline clock (seek-on-drift, pauses outside the
+  placement window); autosave persists the m4a as slot asset `sound` and
+  resume rehydrates it — an undecodable restore strips the wire row +
+  surfaces a notice instead of exporting silent; publish uploads the m4a
+  hash-verified BEFORE the note signs, verifies sha vs the wire (mismatch
+  = blocking integrity error) and stamps sound/p/attribution with the
+  real URL. State tests: attach/normalize/volume/mode-gate. Full shared +
+  Android suites green. NEXT: iOS Wave B (AVAssetExportSession +
+  AVMutableComposition bed), then Wave C (bitz "Use this sound").
+
 - 2026-09-07 — **Feed quick-import REMOVED** (user ask; reverses the
   same-day "Android feed quick-import parity" entry below): the Home
   app-bar photo icon ("Import and publish a video") is gone on BOTH

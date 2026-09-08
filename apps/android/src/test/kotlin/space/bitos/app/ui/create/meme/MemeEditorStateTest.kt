@@ -1,6 +1,7 @@
 package space.bitos.app.ui.create.meme
 
 import space.bitos.core.studio.MemeFontSlot
+import space.bitos.core.studio.MemeMode
 import space.bitos.core.studio.MemeOverlayKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -401,5 +402,36 @@ class MemeEditorStateTest {
         val sizeAtCap = state.project.overlays.size
         assertNull(state.duplicateOverlay(state.project.overlays.last().id))
         assertEquals(sizeAtCap, state.project.overlays.size)
+    }
+
+    @Test
+    fun soundtrackAttachesNormalizesAndRemovesInVideoMode() {
+        val state = MemeEditorState()
+        state.switchMode(MemeMode.VIDEO)
+        val sha = "a".repeat(64)
+        state.setSoundtrack(
+            space.bitos.core.studio.MemeSoundtrack(
+                sha256 = sha.uppercase(),
+                durationMs = 12_000,
+                volume = 9f,
+                startMs = 99_000,
+                label = "x".repeat(200),
+            ),
+        )
+        val sound = state.project.soundtrack!!
+        assertEquals(sha, sound.sha256, "hash canonicalized to lowercase")
+        assertEquals(2f, sound.volume, "volume clamped to the clip bound")
+        assertEquals(11_999, sound.startMs, "in-point clamped inside the audio")
+        assertEquals(space.bitos.core.studio.MemeSoundRules.MAX_LABEL_LENGTH, sound.label.length)
+        // Volume edits clamp through the same bound.
+        state.setSoundtrackVolume(7f)
+        assertEquals(2f, state.project.soundtrack!!.volume)
+        // Remove is the explicit inverse.
+        state.removeSoundtrack()
+        assertNull(state.project.soundtrack)
+        // IMAGE projects never attach (the Sound tool is video-gated).
+        val image = MemeEditorState()
+        image.setSoundtrack(space.bitos.core.studio.MemeSoundtrack(sha256 = sha, durationMs = 1_000))
+        assertNull(image.project.soundtrack)
     }
 }
