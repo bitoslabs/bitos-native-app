@@ -36,6 +36,12 @@ object BlankClipSource {
     private const val LONG_EDGE = 720
     private const val BIT_RATE = 1_000_000
 
+    /** Presentation times start at 1 s, never 0 — some surface encoders
+     *  mishandle a zero timestamp (dropped first frame / wrong duration);
+     *  an arbitrary monotonic base is the standard practice. Duration is
+     *  unaffected (last − first + one frame). */
+    private const val PTS_BASE_NS = 1_000_000_000L
+
     /**
      * @param ratioId `w:h` preset id from [space.bitos.core.studio.MemeCanvas]
      * @param bgHex `#rrggbb` canvas background
@@ -45,9 +51,35 @@ object BlankClipSource {
     fun create(context: Context, ratioId: String, bgHex: String, durationMs: Long): File? {
         val terms = space.bitos.core.studio.MemeCanvas.ratioTerms(ratioId) ?: return null
         if (!space.bitos.core.studio.MemeCanvas.isValidBackground(bgHex)) return null
-        val color = runCatching { Color.parseColor(bgHex) }.getOrNull() ?: return null
         val durationMs = durationMs.coerceIn(1_000L, 60_000L)
 
+        // Self-check + retry (user-reported "set 10 s → 0 s"): some
+        // encoders mis-handle a non-zero pts base (or produce a broken
+        // stream); the honest extractor-backed probe catches a short file
+        // and one zero-base retry fixes the base-sensitive devices. A
+        // second failure refuses loudly instead of shipping a 0 s canvas.
+        val first = write(context, terms, bgHex, durationMs, PTS_BASE_NS)
+        if (first != null && honestDurationMs(first) >= durationMs - 400L) return first
+        runCatching { first?.delete() }
+        val second = write(context, terms, bgHex, durationMs, 0L)
+        if (second != null && honestDurationMs(second) >= durationMs - 400L) return second
+        runCatching { second?.delete() }
+        return null
+    }
+
+    /** Duration via the (extractor-backed) probe — the honest truth about
+     *  what the device's encoder actually produced. */
+    private fun honestDurationMs(file: File): Long =
+        MemeVideoExport.probeFile(file)?.durationMs ?: 0L
+
+    private fun write(
+        context: Context,
+        terms: Pair<Int, Int>,
+        bgHex: String,
+        durationMs: Long,
+        ptsBaseNs: Long,
+    ): File? {
+        val color = runCatching { Color.parseColor(bgHex) }.getOrNull() ?: return null
         var width = LONG_EDGE
         var height = ((LONG_EDGE.toLong() * terms.second) / terms.first).toInt()
         if (height > LONG_EDGE) {
@@ -82,7 +114,7 @@ object BlankClipSource {
             var muxerStarted = false
 
             for (frame in 0 until totalFrames) {
-                gl.drawColor(color, frameNs = frame * 1_000_000_000L / FPS)
+                gl.drawColor(color, frameNs = ptsBaseNs + frame * 1_000_000_000L / FPS)
                 // Interleaved drain — the encoder stalls once its output
                 // buffers fill (usually ~10), long before 30 solid frames.
                 drain(encoder, muxer, info, endOfStream = false) { track, started ->

@@ -1260,8 +1260,17 @@ final class MemeEditorStore {
         rebuilt.reserveCapacity(rows.count)
         for row in rows {
             guard let base = clipArchive[row.id] else { return false }
-            let start = min(row.startMs, base.probe.durationMs)
-            let end = min(row.endMs, base.probe.durationMs)
+            // A 0-duration probe read is garbage, not a bound — never let
+            // it collapse the wire window (parity with the Android fix).
+            let bound = base.probe.durationMs > 0 ? base.probe.durationMs : Int64.max
+            var start = min(row.startMs, bound)
+            var end = min(row.endMs, bound)
+            // SELF-HEAL (drafts saved by the pre-fix bug): a degenerate
+            // blank-canvas window restores to the probe's honest length.
+            if end <= start, row.id.hasPrefix("blank"), base.probe.durationMs > 0 {
+                start = 0
+                end = base.probe.durationMs
+            }
             guard end > start else { return false }
             rebuilt.append(
                 EditorClip(
@@ -1330,9 +1339,11 @@ final class MemeEditorStore {
     }
 
     /// Blank sessions export only with real content (plan §3.5: no
-    /// exporting a colored rectangle).
+    /// exporting a colored rectangle). A soundtrack counts — music over a
+    /// canvas IS the meme.
     var blankVideoHasContent: Bool {
-        !isBlankVideo || !overlays.isEmpty || !drawStrokes.isEmpty || !sfxCues.isEmpty
+        !isBlankVideo || !overlays.isEmpty || !drawStrokes.isEmpty ||
+            !sfxCues.isEmpty || soundtrackRow != nil
     }
 
     /// Session-only canvas spec (ratio+bg ride the clip itself; this only
@@ -1353,8 +1364,26 @@ final class MemeEditorStore {
                 let data = try Data(contentsOf: url)
                 try? FileManager.default.removeItem(at: url)
                 blankCanvasSpec = (ratioId, bgHex)
+                // Exact requested window (user-reported fix): the synthesizer
+                // guarantees the duration — NEVER clamp to the probed container
+                // (a 0-duration probe read must not collapse the timeline to
+                // 0 s); only the remaining timeline budget may trim it.
+                let allowedEnd = min(
+                    durationMs,
+                    max(200, Int64((Double(timelineRemainingMs) * Double(rate)).rounded()))
+                )
                 if appendClip(data: data, undoable: false, id: "blank1") {
-                    setNotice("Blank canvas ready — add text, stickers, layers or sound")
+                    let index = clips.firstIndex(where: { $0.id == "blank1" })
+                    if let index, clips[index].endMs != allowedEnd {
+                        clips[index].endMs = allowedEnd
+                        videoRevision += 1
+                        syncWireClips()
+                    }
+                    setNotice(
+                        allowedEnd < durationMs
+                            ? "Blank canvas trimmed to the remaining timeline"
+                            : "Blank canvas ready — add text, stickers, layers or sound"
+                    )
                 }
             } catch {
                 setNotice("Could not create the blank canvas")
@@ -1382,10 +1411,14 @@ final class MemeEditorStore {
                 let data = try Data(contentsOf: url)
                 blankCanvasSpec = (ratioId, bgHex)
                 pushHistory(projectJson)
+                // The new PICKED duration IS the window (user-reported
+                // fix): extending no longer keeps the old short window, and
+                // NEVER clamps to the probe — a blank source has no content
+                // to preserve; overlays/cues ride timeline ms.
                 clips[index] = EditorClip(
                     id: current.id, data: data, url: url, probe: probe,
-                    startMs: min(current.startMs, probe.durationMs),
-                    endMs: min(current.endMs, probe.durationMs),
+                    startMs: 0,
+                    endMs: durationMs,
                     volume: current.volume, lookId: current.lookId
                 )
                 archiveClip(clips[index])
@@ -1500,8 +1533,17 @@ final class MemeEditorStore {
         clips = entries.compactMap { entry in
             guard let data = try? Data(contentsOf: entry.url),
                   let probe = MemeVideoExportIos.probe(url: entry.url) else { return nil }
-            let start = min(entry.startMs, probe.durationMs)
-            let end = min(entry.endMs, probe.durationMs)
+            // A 0-duration probe read is garbage, not a bound — the wire
+            // window survives (parity with the Android fix).
+            let bound = probe.durationMs > 0 ? probe.durationMs : Int64.max
+            var start = min(entry.startMs, bound)
+            var end = min(entry.endMs, bound)
+            // SELF-HEAL (drafts saved by the pre-fix bug): a degenerate
+            // blank-canvas window restores to the probe's honest length.
+            if end <= start, entry.id.hasPrefix("blank"), probe.durationMs > 0 {
+                start = 0
+                end = probe.durationMs
+            }
             // A probe that disagrees with the wire enough to collapse the
             // window would render a zero-length segment — drop it instead.
             guard end > start else { return nil }
@@ -4663,6 +4705,10 @@ struct MemeEditorView: View {
                     Text(notice)
                         .font(.caption2)
                         .foregroundStyle(BitOSTheme.textSecondary)
+                } else if store.isBlankVideo && !store.blankVideoHasContent {
+                    Text("Add text, stickers, layers, sound or a soundtrack to export & publish")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
                 } else if store.selectedId != nil {
                     Text("drag · scale · rotate")
                         .font(.caption2)
@@ -7456,7 +7502,9 @@ private struct BlankCanvasSheetIos: View {
 
     private static let swatches = ["#000000", "#ffffff", "#fde047", "#f97316", "#22d3ee", "#a3e635", "#f472b6"]
     private static let ratios = ["1:1", "4:5", "9:16", "16:9"]
-    private static let durations: [(Double, String)] = [(3, "3 s"), (5, "5 s"), (10, "10 s")]
+    private static let durations: [(Double, String)] = [
+        (3, "3 s"), (5, "5 s"), (10, "10 s"), (30, "30 s"), (60, "60 s")
+    ]
     private static let gifDurations: [(Double, String)] = [(1, "1 s"), (2, "2 s"), (3, "3 s")]
     private static let fpsChoices = [10, 15]
 

@@ -429,14 +429,34 @@ fun MemeEditorScreen(
             if (file == null || probe == null) {
                 runCatching { file?.delete() }
                 seedingProgress = null
-                exportStatus = "Could not create the blank canvas"
+                exportStatus = "Could not create the blank canvas — the device encoder produced a broken clip; try again"
                 return@launch
             }
             val bytes = withContext(Dispatchers.IO) { file.readBytes() }
             runCatching { file.delete() }
             blankCanvasSpec = ratioId to bgHex
+            // Exact requested window (user-reported fix): the synthesizer
+            // guarantees the duration, so the clip rides the PICKED length —
+            // NEVER the probed container (some retrievers report 0 for the
+            // tiny no-audio file, which collapsed the timeline to 0 s),
+            // clamped only by the timeline budget left at append time.
+            val allowedEnd = minOf(
+                durationMs,
+                (timelineRemainingMs * videoRate).toLong().coerceAtLeast(200L),
+            )
             appendClip(bytes, probe, undoable = false, id = "blank1")
-            exportStatus = "Blank canvas ready — add text, stickers, layers or sound"
+            val index = videoClips.indexOfFirst { it.id == "blank1" }
+            if (index >= 0 && videoClips[index].endMs != allowedEnd) {
+                videoClips[index] = videoClips[index].copy(endMs = allowedEnd)
+                syncWireClips()
+            }
+            exportStatus = if (allowedEnd < durationMs) {
+                "Blank canvas trimmed to the remaining " +
+                    space.bitos.core.studio.MemeVideoCutRules.durationLabel(allowedEnd) +
+                    " of this timeline"
+            } else {
+                "Blank canvas ready — add text, stickers, layers or sound"
+            }
             seedingProgress = null
         }
     }
@@ -467,11 +487,17 @@ fun MemeEditorScreen(
             runCatching { file.delete() }
             blankCanvasSpec = ratioId to bgHex
             state.beginClipsEdit()
+            // The new PICKED duration IS the window (user-reported fix):
+            // extending no longer keeps the old short window, shrinking
+            // clamps honestly — and NEVER clamps to the probe (a 0-duration
+            // probe read must not collapse the timeline). A blank source
+            // has no content to preserve — overlays/strokes/cues ride
+            // timeline ms and only clamp when the window shrinks below them.
             videoClips[index] = current.copy(
                 bytes = bytes,
                 probe = probe,
-                startMs = current.startMs.coerceIn(0, probe.durationMs),
-                endMs = current.endMs.coerceAtMost(probe.durationMs),
+                startMs = 0L,
+                endMs = durationMs,
             )
             archiveClip(videoClips[index])
             selectedClipIndex = index
@@ -560,8 +586,18 @@ fun MemeEditorScreen(
         val wire = state.project.clips
         val rebuilt = wire.mapNotNull { row ->
             clipArchive[row.id]?.let { (bytes, probe) ->
-                val start = row.startMs.coerceIn(0, probe.durationMs)
-                val end = row.endMs.coerceAtMost(probe.durationMs)
+                // A 0-duration probe read is garbage, not a bound — never
+                // let it collapse the wire window (user-reported bug).
+                val bound = probe.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+                var start = row.startMs.coerceIn(0, bound)
+                var end = row.endMs.coerceAtMost(bound)
+                // SELF-HEAL (drafts saved by the pre-fix bug): a blank
+                // canvas clip whose wire window degenerated to 0 restores
+                // to the probe's honest full length instead of 0 s forever.
+                if (end <= start && row.id.startsWith("blank") && probe.durationMs > 0) {
+                    start = 0L
+                    end = probe.durationMs
+                }
                 if (end > start) SessionClip(
                     row.id, bytes, probe, start, end, row.volume, row.lookId, row.speed,
                 ) else null
@@ -618,8 +654,17 @@ fun MemeEditorScreen(
             if (bytes == null) { dropped++; return@forEach }
             val probe = MemeVideoExport.probeFile(file)
             if (probe == null) { dropped++; return@forEach }
-            val start = wireClip.startMs.coerceIn(0, probe.durationMs)
-            val end = wireClip.endMs.coerceAtMost(probe.durationMs)
+            // A 0-duration probe read is garbage, not a bound — the wire
+            // window survives (the synthesized/real length is the truth).
+            val bound = probe.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+            var start = wireClip.startMs.coerceIn(0, bound)
+            var end = wireClip.endMs.coerceAtMost(bound)
+            // SELF-HEAL (drafts saved by the pre-fix bug): a degenerate
+            // blank-canvas window restores to the probe's honest length.
+            if (end <= start && wireClip.id.startsWith("blank") && probe.durationMs > 0) {
+                start = 0L
+                end = probe.durationMs
+            }
             // A probe that disagrees with the wire enough to collapse the
             // window would render a zero-length segment — dropped, not added.
             if (end <= start) { dropped++; return@forEach }
@@ -1129,7 +1174,8 @@ fun MemeEditorScreen(
     val blankVideoHasContent = !blankVideoActive ||
         state.project.overlays.isNotEmpty() ||
         state.project.drawStrokes.isNotEmpty() ||
-        state.project.sfxCues.isNotEmpty()
+        state.project.sfxCues.isNotEmpty() ||
+        state.project.soundtrack != null
     /** Blank design (image mode): a pinned canvas with no picks — the
      *  "create from scratch" path (text/stickers over a colored canvas). */
     val pinnedCanvasTerms = state.project.canvasRatio
@@ -2271,6 +2317,14 @@ fun MemeEditorScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+                blankVideoActive && !blankVideoHasContent -> Text(
+                "Add text, stickers, layers, sound or a soundtrack to export & publish",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textTertiary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         }
 
@@ -3170,7 +3224,7 @@ fun MemeEditorScreen(
                     initialRatio = blankCanvasSpec?.first,
                     initialBg = blankCanvasSpec?.second,
                     initialDurationMs = videoClips.firstOrNull()
-                        ?.let { it.probe.durationMs.coerceIn(3_000L, 10_000L) },
+                        ?.let { it.probe.durationMs.coerceIn(3_000L, 60_000L) },
                     onCreate = { ratioId, bgHex, durationMs, _ ->
                         showCanvas = false
                         restyleBlankClip(ratioId, bgHex, durationMs)
@@ -3340,9 +3394,15 @@ fun MemeEditorScreen(
                                         remaining -= clipOutputMs(clip)
                                         clip
                                     } else {
+                                        // A 0-duration probe read is garbage, not a
+                                        // bound — coerce against the wire window
+                                        // instead (also avoids an empty-range
+                                        // crash when the probe read failed).
+                                        val bound = clip.probe.durationMs.takeIf { it > 0 }
+                                            ?: (clip.endMs - clip.startMs).coerceAtLeast(200L)
                                         val window = (remaining * videoRate).toLong()
-                                            .coerceIn(200L, clip.probe.durationMs)
-                                        clip.copy(endMs = (clip.startMs + window).coerceAtMost(clip.probe.durationMs))
+                                            .coerceIn(200L, bound)
+                                        clip.copy(endMs = (clip.startMs + window).coerceAtMost(bound))
                                     }
                                 }
                                 videoClips.clear()
@@ -4194,8 +4254,10 @@ private fun BlankCanvasSheetContent(
             fontWeight = FontWeight.W600,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-            (if (isVideo) listOf(3_000L to "3 s", 5_000L to "5 s", 10_000L to "10 s")
-            else space.bitos.core.studio.MemeCanvas.BLANK_GIF_MS_choices.map { it to "${it / 1000} s" })
+            (if (isVideo) listOf(
+                3_000L to "3 s", 5_000L to "5 s", 10_000L to "10 s",
+                30_000L to "30 s", 60_000L to "60 s",
+            ) else space.bitos.core.studio.MemeCanvas.BLANK_GIF_MS_choices.map { it to "${it / 1000} s" })
                 .forEach { (ms, label) ->
                     Surface(
                         shape = RoundedCornerShape(50),

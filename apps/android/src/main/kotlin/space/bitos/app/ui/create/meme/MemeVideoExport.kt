@@ -3,6 +3,7 @@ package space.bitos.app.ui.create.meme
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.MediaItem
@@ -287,7 +288,7 @@ object MemeVideoExport {
         resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(descriptor.fileDescriptor)
-                probeRetriever(retriever)
+                probeRetriever(retriever, extractorDurationMs(descriptor.fileDescriptor))
             }
         }
     } catch (_: Exception) {
@@ -303,19 +304,55 @@ object MemeVideoExport {
     fun probeFile(file: File): Probe? = try {
         MediaMetadataRetriever().use { retriever ->
             retriever.setDataSource(file.absolutePath)
-            probeRetriever(retriever)
+            probeRetriever(retriever, extractorDurationMs(file.absolutePath))
         }
     } catch (_: Exception) {
         null
     }
 
-    private fun probeRetriever(retriever: MediaMetadataRetriever): Probe? {
+    /**
+     * Duration fallback (user-reported blank-canvas bug): some devices'
+     * retrievers return NO duration metadata for small/no-audio files
+     * (the blank-canvas synth among them) — the old `?: 0L` collapsed
+     * every window that trusted the probe into a 0-second timeline. The
+     * container's video-track header (MediaMuxer always writes it) is the
+     * honest bound; 0 only when even that is absent.
+     */
+    private fun extractorDurationMs(source: Any): Long = try {
+        val extractor = android.media.MediaExtractor()
+        try {
+            when (source) {
+                is String -> extractor.setDataSource(source)
+                is java.io.FileDescriptor -> extractor.setDataSource(source)
+                else -> return 0L
+            }
+            (0 until extractor.trackCount).firstNotNullOfOrNull { index ->
+                val format = extractor.getTrackFormat(index)
+                val mime = format.getString(MediaFormat.KEY_MIME)
+                if (mime?.startsWith("video/") == true && format.containsKey(MediaFormat.KEY_DURATION)) {
+                    format.getLong(MediaFormat.KEY_DURATION) / 1000L
+                } else {
+                    null
+                }
+            } ?: 0L
+        } finally {
+            runCatching { extractor.release() }
+        }
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun probeRetriever(retriever: MediaMetadataRetriever, durationFallbackMs: Long = 0L): Probe? {
         val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
             ?.toIntOrNull() ?: return null
         val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
             ?.toIntOrNull() ?: return null
+        // A missing/zero duration read is garbage, not a bound — prefer the
+        // container's track duration before ever reporting 0.
         val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            ?.toLongOrNull() ?: 0L
+            ?.toLongOrNull()?.takeIf { it > 0 }
+            ?: durationFallbackMs.takeIf { it > 0 }
+            ?: 0L
         val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
             ?.toIntOrNull() ?: 0
         return Probe(rawW, rawH, duration, rotation)

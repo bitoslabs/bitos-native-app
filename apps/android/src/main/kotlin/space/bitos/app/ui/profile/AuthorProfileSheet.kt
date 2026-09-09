@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,11 +45,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.bitos.app.data.feed.AuthorUiState
 import space.bitos.app.data.feed.FeedUiState
@@ -199,7 +202,28 @@ fun AuthorProfileContent(
             Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                 SheetCloseIcon(onClose = onClose)
             }
+            // This lives with the banner—not inside the lazy content—so it
+            // can genuinely cross the cover edge without being clipped.
+            AuthorProfileHero(
+                authorPubkey = authorPubkey,
+                profile = profile,
+                npub = npub,
+                npubCopied = npubCopied,
+                onCopyNpub = {
+                    npub?.let {
+                        clipboard.setText(AnnotatedString(it))
+                        npubCopied = true
+                    }
+                },
+                onOpenFullProfile = { onOpenFullProfile(authorPubkey) },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(y = 42.dp),
+            )
         }
+
+        // Reserve the lower half of the floating avatar before the list.
+        Spacer(Modifier.height(42.dp))
 
         // ── Content below banner ────────────────────────────────────────
         Column(
@@ -215,108 +239,8 @@ fun AuthorProfileContent(
                 ),
                 verticalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
             ) {
-                // ── Avatar + "View Profile" pill (mock parity) ─────────
-                item(key = "header") {
-                    // Keep the identity at the visual seam between cover and
-                    // sheet content. Centering the hex makes the banner read
-                    // as a profile hero instead of a generic card header;
-                    // the navigation pill remains a secondary edge action.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .overlapAbove(42.dp),
-                    ) {
-                        // Hex avatar floating over the banner edge: a
-                        // background-colored hex plate forms the border
-                        // (mock border-4) — no circular plate.
-                        Box(
-                            modifier = Modifier
-                                .size(84.dp)
-                                .align(Alignment.Center)
-                                .shadow(6.dp, space.bitos.app.ui.components.HexShape())
-                                .clip(space.bitos.app.ui.components.HexShape())
-                                .background(BitOSColors.background),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            PubkeyAvatar(
-                                pubkey = authorPubkey,
-                                size = 76,
-                                pictureUrl = profile?.picture,
-                                label = profile?.bestDisplayName,
-                                hasLightning = !profile?.lud16.isNullOrBlank(),
-                            )
-                        }
-                        // In-app full profile route (UX-010) — white pill
-                        // at the seam's trailing edge, never an external link.
-                        Button(
-                            onClick = { onOpenFullProfile(authorPubkey) },
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = BitOSColors.textPrimary,
-                                contentColor = BitOSColors.background,
-                            ),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .height(34.dp),
-                        ) {
-                            Text("View Profile", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700)
-                        }
-                    }
-                }
-
-                // ── Name block ───────────────────────────────────────
-                item(key = "name") {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                profile?.bestDisplayName ?: shortPubkey(authorPubkey),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.W700,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            if (!profile?.nip05.isNullOrBlank()) {
-                                Spacer(Modifier.width(4.dp))
-                                Icon(
-                                    AppIcons.CheckCircle,
-                                    contentDescription = "Verified",
-                                    tint = BitOSColors.accent,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
-                        }
-                        profile?.nip05?.takeIf { it.isNotBlank() }?.let { nip05 ->
-                            Text(nip05, style = MaterialTheme.typography.bodySmall, color = BitOSColors.accent)
-                        }
-                        // Copy npub chip (moved from the header row).
-                        androidx.compose.material3.TextButton(
-                            onClick = {
-                                val npub = space.bitos.core.identity.NostrKeyCodec.npub(authorPubkey)
-                                if (npub != null) {
-                                    clipboard.setText(AnnotatedString(npub))
-                                    npubCopied = true
-                                }
-                            },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                        ) {
-                            Icon(
-                                imageVector = AppIcons.Copy,
-                                contentDescription = null,
-                                tint = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
-                                modifier = Modifier.size(12.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (npubCopied) "npub copied" else shortPubkey(authorPubkey),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            )
-                        }
-                    }
-                }
+                // Clear the floating avatar before the bio and detail rows.
+                item(key = "hero-clearance") { Spacer(Modifier.height(24.dp)) }
 
                 // ── About ────────────────────────────────────────────
                 val about = profile?.about?.trim()?.takeIf { it.isNotBlank() }
@@ -551,6 +475,103 @@ fun AuthorProfileContent(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Banner-owned profile identity layer. It may extend below its parent
+ * banner because it is not rendered by (and clipped inside) a LazyColumn. */
+@Composable
+private fun AuthorProfileHero(
+    authorPubkey: String,
+    profile: ProfileMetadata?,
+    npub: String?,
+    npubCopied: Boolean,
+    onCopyNpub: () -> Unit,
+    onOpenFullProfile: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier.fillMaxWidth().height(84.dp)) {
+        Box(
+            modifier = Modifier
+                .padding(start = BitOSSpacing.screen)
+                .size(84.dp)
+                .align(Alignment.TopStart)
+                .zIndex(2f)
+                .shadow(6.dp, space.bitos.app.ui.components.HexShape())
+                .clip(space.bitos.app.ui.components.HexShape())
+                .background(BitOSColors.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            PubkeyAvatar(
+                pubkey = authorPubkey,
+                size = 76,
+                pictureUrl = profile?.picture,
+                label = profile?.bestDisplayName,
+                hasLightning = !profile?.lud16.isNullOrBlank(),
+            )
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .zIndex(3f)
+                .padding(start = BitOSSpacing.screen + 96.dp, top = 8.dp, end = 112.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    profile?.bestDisplayName ?: shortPubkey(authorPubkey),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.W700,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!profile?.nip05.isNullOrBlank()) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(AppIcons.CheckCircle, "Verified", tint = BitOSColors.accent, modifier = Modifier.size(16.dp))
+                }
+            }
+            // A compact identity chip, intentionally not a Material button:
+            // profile metadata must not inherit the 48dp action target.
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClickLabel = "Copy npub", onClick = onCopyNpub)
+                    .background(BitOSColors.surfaceElevated)
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    AppIcons.Copy,
+                    contentDescription = null,
+                    tint = if (npubCopied) BitOSColors.success else BitOSColors.textTertiary,
+                    modifier = Modifier.size(10.dp),
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    if (npubCopied) "npub copied" else shortPubkey(authorPubkey),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = if (npubCopied) BitOSColors.success else BitOSColors.textSecondary,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                )
+            }
+        }
+        Button(
+            onClick = onOpenFullProfile,
+            shape = RoundedCornerShape(50),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BitOSColors.textPrimary,
+                contentColor = BitOSColors.background,
+            ),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = BitOSSpacing.screen)
+                .zIndex(1f)
+                .height(34.dp),
+        ) {
+            Text("View Profile", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700)
         }
     }
 }

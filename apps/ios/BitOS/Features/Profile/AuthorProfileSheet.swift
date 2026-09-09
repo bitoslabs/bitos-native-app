@@ -44,7 +44,9 @@ struct AuthorProfileSheet: View {
                     bannerSection
                     VStack(alignment: .leading, spacing: BitOSTheme.Spacing.base) {
                         avatarActionsRow
-                        nameBlock
+                        // Leave breathing room beneath the floating hero
+                        // before the bio and information rows begin.
+                        Color.clear.frame(height: 16)
                         if let about = profile?.about?.trimmingCharacters(in: .whitespacesAndNewlines),
                            !about.isEmpty {
                             aboutBlock(about)
@@ -321,10 +323,9 @@ struct AuthorProfileSheet: View {
     // MARK: - Avatar + action row
 
     private var avatarActionsRow: some View {
-        // The hex is deliberately centered on the banner/content seam. It
-        // gives the profile a stable focal point while the full-profile route
-        // remains a secondary trailing action.
-        ZStack(alignment: .trailing) {
+        // Mirror the profile hero: avatar on the cover edge, identity beside
+        // it, and the page action aligned with the content boundary.
+        ZStack(alignment: .topLeading) {
             // Hex avatar floating over the banner edge (mock parity): a
             // background-colored hex plate forms the border, so the avatar
             // reads as a pure floating hexagon — no circular plate.
@@ -341,11 +342,18 @@ struct AuthorProfileSheet: View {
                     hasLightning: !(profile?.lud16 ?? "").isEmpty
                 )
             }
-            .offset(y: -21)
+            .offset(y: -42)
+            .zIndex(2)
 
-            // "View Profile" pill at the seam's trailing edge (mock parity)
-            // — routes to the in-app full profile page, never an external
-            // link.
+            nameBlock
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 96)
+                .padding(.trailing, 112)
+                .offset(y: -34)
+                .zIndex(3)
+
+            // "View Profile" pill at the content line (mock parity) —
+            // routes to the in-app full profile page, never an external link.
             Button {
                 if let external = onOpenFullProfile {
                     onClose()
@@ -363,11 +371,12 @@ struct AuthorProfileSheet: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("View this author's full profile")
-            .offset(y: -21)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .offset(y: 4)
+            .zIndex(1)
         }
-        // Reserve only the visible lower half of the avatar. The negative
-        // offset centers its 84pt plate on the 130pt banner boundary.
-        .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42)
+        // Reserve the lower half of the avatar; its top half sits on cover.
+        .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42, alignment: .top)
     }
 
     // MARK: - Quick actions (Zap + Follow, mock parity)
@@ -460,13 +469,7 @@ struct AuthorProfileSheet: View {
                         .accessibilityLabel("Verified identity")
                 }
             }
-            if let nip05 = profile?.nip05, !nip05.isEmpty {
-                Text(nip05)
-                    .font(.system(size: 12))
-                    .foregroundStyle(BitOSTheme.accent)
-                    .lineLimit(1)
-            }
-            // Copy npub chip (moved from the header row).
+            // Compact copy chip directly under the name, matching the hero.
             Button {
                 if let npub = BusinessCoreBridge().npubEncode(pubkeyHex: authorPubkey) as String? {
                     UIPasteboard.general.string = npub
@@ -479,11 +482,14 @@ struct AuthorProfileSheet: View {
             } label: {
                 HStack(spacing: 4) {
                     AppIcons.image(for: npubCopied ? AppIcons.checkCircle : AppIcons.copy)
-                        .font(.system(size: 12))
+                        .font(.system(size: 10))
                     Text(npubCopied ? "npub copied" : FeedFormat.shortPubkey(authorPubkey))
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 10, design: .monospaced))
                 }
                 .foregroundStyle(npubCopied ? BitOSTheme.success : BitOSTheme.textTertiary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(BitOSTheme.surfaceElevated))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Copy npub")
