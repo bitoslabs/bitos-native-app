@@ -361,6 +361,14 @@ class MemeEditorState(
         revision += 1
     }
 
+    /** Soundtrack loop toggle (TikTok loop semantics — repeat to fill). */
+    fun setSoundtrackLoop(loop: Boolean) {
+        val sound = project.soundtrack ?: return
+        if (sound.loop == loop) return
+        project = project.copy(soundtrack = sound.copy(loop = loop))
+        revision += 1
+    }
+
     /** Soundtrack gain (Wave B Sound tool row; bounded like clip volume). */
     fun setSoundtrackVolume(volume: Float) {
         val sound = project.soundtrack ?: return
@@ -387,6 +395,19 @@ class MemeEditorState(
         if (project.canvasRatio == nextRatio && project.canvasBg == nextBg) return
         beginClipsEdit()
         project = project.copy(canvasRatio = nextRatio, canvasBg = nextBg)
+        revision += 1
+    }
+
+    /**
+     * Blank-GIF loop timing (plan D3, MST-079): `sec`/`fps` on the wire,
+     * clamped by the shared rules; null clears both (picked-GIF).
+     */
+    fun setBlankGifTiming(secMs: Long?, fps: Int?) {
+        val nextSec = secMs?.let { space.bitos.core.studio.MemeCanvas.clampBlankGifMs(it) }
+        val nextFps = fps?.let { space.bitos.core.studio.MemeCanvas.clampBlankGifFps(it) }
+        if (project.canvasSec == nextSec && project.canvasFps == nextFps) return
+        beginClipsEdit()
+        project = project.copy(canvasSec = nextSec, canvasFps = nextFps)
         revision += 1
     }
 

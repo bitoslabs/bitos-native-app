@@ -117,6 +117,7 @@ object MemeCommandCodec {
                     sound.sourceNoteId?.let { put("src", it) }
                     sound.sourceAuthorPubkey?.let { put("author", it) }
                     if (sound.label.isNotBlank()) put("label", sound.label)
+                    if (sound.loop) put("loop", true)
                 }
             }
 
@@ -239,6 +240,7 @@ object MemeCommandCodec {
                         sourceNoteId = obj["src"]?.jsonPrimitive?.content,
                         sourceAuthorPubkey = obj["author"]?.jsonPrimitive?.content,
                         label = obj["label"]?.jsonPrimitive?.content ?: "",
+                        loop = obj["loop"]?.jsonPrimitive?.content == "true",
                     ),
                 )
 

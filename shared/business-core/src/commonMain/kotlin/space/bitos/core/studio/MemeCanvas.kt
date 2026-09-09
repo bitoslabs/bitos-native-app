@@ -37,6 +37,53 @@ object MemeCanvas {
     /** True for a 6-digit hex color (`#rrggbb`, the wire form). */
     fun isValidBackground(hex: String): Boolean = hexRegex.matches(hex)
 
+    // ── Blank-GIF timing (plan D3, additive canvas wire keys) ─────────
+
+    /** Blank-GIF loop lengths the sheet offers (ms). */
+    val BLANK_GIF_MS_choices = listOf(1_000L, 2_000L, 3_000L)
+
+    /** Blank-GIF frame rates; 10 is the default. */
+    val BLANK_GIF_FPS = setOf(10, 15)
+
+    /** Hostile-input bounds (decode clamps to these, not the choices). */
+    const val MIN_BLANK_GIF_MS = 500L
+    const val MAX_BLANK_GIF_MS = 10_000L
+    const val DEFAULT_BLANK_GIF_MS = 2_000L
+    const val DEFAULT_BLANK_GIF_FPS = 10
+
+    fun isValidBlankGifMs(ms: Long): Boolean = ms in MIN_BLANK_GIF_MS..MAX_BLANK_GIF_MS
+
+    fun clampBlankGifMs(ms: Long): Long = ms.coerceIn(MIN_BLANK_GIF_MS, MAX_BLANK_GIF_MS)
+
+    fun clampBlankGifFps(fps: Int): Int =
+        if (fps in BLANK_GIF_FPS) fps else DEFAULT_BLANK_GIF_FPS
+
+    /** Derived frame count for a blank loop (≥1, capped by the GIF asset cap). */
+    fun blankGifFrameCount(secMs: Long, fps: Int): Int =
+        ((clampBlankGifMs(secMs) * clampBlankGifFps(fps)) / 1000L).toInt()
+            .coerceAtLeast(1)
+            .coerceAtMost(60)
+
+    /** Per-frame delay for a loop rate (never under the wire delay floor). */
+    fun loopDelayMs(fps: Int): Int =
+        (1000 / clampBlankGifFps(fps)).coerceAtLeast(MemeProjectContract.MIN_FRAME_DELAY_MS)
+
+    // ── Video→GIF sampling bounds (plan D4, MST-081/082) ────────────
+
+    const val VIDEO_GIF_FPS = 10
+    const val VIDEO_GIF_MAX_SPAN_MS = 10_000L
+    private const val VIDEO_GIF_MAX_FRAMES = 150
+
+    /** True when the timeline is longer than the sampled span (say so). */
+    fun videoGifSpanTrimmed(durationMs: Long): Boolean = durationMs > VIDEO_GIF_MAX_SPAN_MS
+
+    fun videoGifFrameCount(durationMs: Long): Int {
+        val span = minOf(durationMs.coerceAtLeast(1L), VIDEO_GIF_MAX_SPAN_MS)
+        return ((span * VIDEO_GIF_FPS) / 1000L).toInt().coerceIn(1, VIDEO_GIF_MAX_FRAMES)
+    }
+
+    fun videoGifDelayMs(): Int = loopDelayMs(VIDEO_GIF_FPS)
+
     /** Parses `w:h` → (w, h); `source` → null (take the media's). */
     fun ratioTerms(id: String): Pair<Int, Int>? {
         if (!isValidRatio(id) || id == RATIO_SOURCE) return null

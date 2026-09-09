@@ -228,14 +228,27 @@ object MemeExportRules {
      * The export envelope for the Swift bridge consumer: the evened output
      * canvas (web `targetSize` of the SOURCE dims) plus the paint rows —
      * one call, so the size math stays single-sourced on the shared side.
+     *
+     * [atMs] (MST-077) switches the rows to the TIMED plan: rows outside
+     * their visibility window are dropped, and survivors carry the fx
+     * transform at that moment (`fxScale`/`fxRot` radians/`fxDx`/`fxDy`/
+     * `fxAlpha`). The GIF exporter and the stage preview loop both ride
+     * this — no display-side mirror of `MemeFxRules`.
      */
-    fun exportEnvelope(project: MemeProject, sourceWidth: Int, sourceHeight: Int): String {
+    fun exportEnvelope(
+        project: MemeProject,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        atMs: Long? = null,
+    ): String {
         val (width, height) = outputSize(sourceWidth, sourceHeight)
+        val timed = paintPlanAt(project, width, height, atMs)
         return buildJsonObject {
             put("width", width)
             put("height", height)
             put("items", buildJsonArray {
-                exportPlan(project, width, height).forEach { item ->
+                timed.forEach { paint ->
+                    val item = paint.item
                     add(buildJsonObject {
                         put("id", item.id)
                         put("text", item.text)
@@ -252,6 +265,13 @@ object MemeExportRules {
                         if (item.image) {
                             put("image", true)
                             put("asset", item.assetId ?: "")
+                        }
+                        if (atMs != null) {
+                            put("fxScale", paint.fx.scale)
+                            put("fxRot", paint.fx.rotateRad)
+                            put("fxDx", paint.fx.dx)
+                            put("fxDy", paint.fx.dy)
+                            put("fxAlpha", paint.fx.alpha)
                         }
                     }
                     )

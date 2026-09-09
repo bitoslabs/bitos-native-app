@@ -162,13 +162,16 @@ object MemeRaster {
         width: Int,
         height: Int,
         imageFor: ((String) -> Bitmap?)? = null,
+        atMs: Long? = null,
     ): ByteArray {
         val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         canvas.drawBitmap(frame, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
-        MemeExportRules.exportPlan(project, width, height).forEach { item ->
-            drawItem(canvas, item, imageFor)
+        // Timed plan (MST-077): visibility windows + per-moment fx — the
+        // same math the video exporter burns, so GIFs go kinetic too.
+        MemeExportRules.paintPlanAt(project, width, height, atMs).forEach { timed ->
+            drawExportItem(canvas, timed.item, imageFor, timed.fx)
         }
         val argb = IntArray(width * height)
         out.getPixels(argb, 0, width, 0, 0, width, height)

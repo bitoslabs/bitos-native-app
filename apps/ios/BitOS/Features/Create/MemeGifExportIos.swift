@@ -114,6 +114,17 @@ enum MemeGifExportIos {
         for stepRow in steps {
             let frame = frameActive(at: stepRow.atSec, frames: frames, delays: delaysMs)
             let media = MemeRaster.applyLook(frame, matrixJson: matrixJson) ?? frame
+            // Timed paint rows at THIS step's moment (MST-077): fx windows
+            // + transforms go kinetic — same shared math as the video burn.
+            let atMs = Int64((stepRow.atSec * 1000).rounded())
+            var timedRows = rows
+            if let timedJson = client.memeExportPlanAt(
+                projectJson, sourceWidth: width, sourceHeight: height, atMs: atMs
+            ).data(using: .utf8),
+               let timedPlan = try? JSONSerialization.jsonObject(with: timedJson) as? [String: Any],
+               let timed = timedPlan["items"] as? [[String: Any]] {
+                timedRows = timed
+            }
             let renderer = UIGraphicsImageRenderer(size: size, format: format)
             let composed = renderer.image { context in
                 media.draw(in: CGRect(origin: .zero, size: size))
@@ -122,7 +133,7 @@ enum MemeGifExportIos {
                     envelope["strokes"] as? [[String: Any]] ?? [],
                     in: context.cgContext
                 )
-                for row in rows {
+                for row in timedRows {
                     MemeRaster.paint(row, in: context.cgContext, images: images)
                 }
             }

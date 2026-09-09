@@ -156,6 +156,11 @@ data class MemeProject(
     val canvasRatio: String? = null,
     /** Canvas background `#rrggbb` (null = platform default). */
     val canvasBg: String? = null,
+    /** Blank-GIF loop length in ms (plan D3; written only for blank GIFs,
+     *  clamped by [MemeCanvas]; null = picked-GIF behavior). */
+    val canvasSec: Long? = null,
+    /** Blank-GIF frame rate ([MemeCanvas.BLANK_GIF_FPS] set; null = default). */
+    val canvasFps: Int? = null,
 ) {
     /** True when nothing worth confirming a discard for exists. */
     val isEmpty: Boolean
@@ -260,6 +265,7 @@ object MemeProjectContract {
                     sound.sourceNoteId?.let { put("src", it) }
                     sound.sourceAuthorPubkey?.let { put("author", it) }
                     if (sound.label.isNotBlank()) put("label", sound.label)
+                    if (sound.loop) put("loop", true)
                 })
             }
             // M5 timeline clips: additive v1 wire key (old readers ignore it
@@ -341,10 +347,14 @@ object MemeProjectContract {
         // so older wires stay byte-identical; unknown ids drop on read.
         val ratio = project.canvasRatio?.takeIf { it != MemeCanvas.RATIO_SOURCE }
         val bg = project.canvasBg?.takeIf { MemeCanvas.isValidBackground(it) }
-        if (ratio != null || bg != null) {
+        val sec = project.canvasSec?.let { MemeCanvas.clampBlankGifMs(it) }
+        val fps = project.canvasFps?.let { MemeCanvas.clampBlankGifFps(it) }
+        if (ratio != null || bg != null || sec != null || fps != null) {
             put("canvas", buildJsonObject {
                 ratio?.take(12)?.let { put("ratio", it) }
                 bg?.let { put("bg", it) }
+                sec?.let { put("sec", it) }
+                fps?.let { put("fps", it) }
             })
         }
     }.toString()
@@ -416,6 +426,7 @@ object MemeProjectContract {
                         sourceNoteId = (sound["src"] as? JsonPrimitive)?.content,
                         sourceAuthorPubkey = (sound["author"] as? JsonPrimitive)?.content,
                         label = (sound["label"] as? JsonPrimitive)?.content ?: "",
+                        loop = (sound["loop"] as? JsonPrimitive)?.content == "true",
                     ),
                 )
             }
@@ -473,6 +484,13 @@ object MemeProjectContract {
                 canvasBg = (root["canvas"] as? kotlinx.serialization.json.JsonObject)
                     ?.get("bg")?.let { (it as? JsonPrimitive)?.content }
                     ?.takeIf { it.length == 7 && MemeCanvas.isValidBackground(it) },
+                canvasSec = (root["canvas"] as? kotlinx.serialization.json.JsonObject)
+                    ?.get("sec")?.let { (it as? JsonPrimitive)?.content?.toLongOrNull() }
+                    ?.takeIf { MemeCanvas.isValidBlankGifMs(it) }
+                    ?.let { MemeCanvas.clampBlankGifMs(it) },
+                canvasFps = (root["canvas"] as? kotlinx.serialization.json.JsonObject)
+                    ?.get("fps")?.let { (it as? JsonPrimitive)?.content?.toIntOrNull() }
+                    ?.takeIf { it in MemeCanvas.BLANK_GIF_FPS },
             )
         } catch (_: Exception) {
             null

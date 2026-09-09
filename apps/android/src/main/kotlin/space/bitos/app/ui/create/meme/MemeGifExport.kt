@@ -81,7 +81,12 @@ object MemeGifExport {
         val encodeFrames = plan.steps.map { step ->
             val frame = frameActiveAt(frames, delays, step.atSec)
             GifEncodeFrame(
-                rgba = MemeRaster.renderFrameRgba(frame, project, width, height, imageFor),
+                rgba = MemeRaster.renderFrameRgba(
+                    frame, project, width, height, imageFor,
+                    // Timed plan clock (MST-077): each step paints at its
+                    // own moment — fx windows + transforms go kinetic.
+                    (step.atSec * 1000).toLong(),
+                ),
                 delayMs = step.delayMs,
             )
         }

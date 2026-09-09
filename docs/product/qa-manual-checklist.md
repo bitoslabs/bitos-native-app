@@ -81,7 +81,38 @@
 | 7 | Publish a borrowed-sound meme | Feed/Bitz card shows the ♪ chip; the sound/p/attribution credit the source |
 | 8 | More → Trending sounds | The published borrow ranks (uses count, 3-day half-life); ▶ streams the artifact (one row at a time) and the waveform bars appear after the first preview (accent-tinted while playing); empty state explains the loop when none |
 | 9 | Trending row → "Use in Studio" | Hash-verified re-attach: editor seeds with the sound, publish stamps the EXISTING URL (no re-upload; a hash mismatch loads nothing and says so) |
-| 10 | Corrupt cases: pick a video with no audio / undecodable file | Named failures ("No readable audio track…" / "could not be decoded…"), session usable |
+| 10 | Soundtrack shorter than the timeline → enable "Loop to fill" | Preview repeats the sound to the end; the exported file's mix loops identically; "plays once" restores silence after one pass |
+| 11 | Select a timed overlay (visibility window) → open the Sound effects sheet | The "Cue anchor · selected overlay window" row appears; ＋ places the cue at the window start/end per the toggle instead of the playhead |
+| 12 | Corrupt cases: pick a video with no audio / undecodable file | Named failures ("No readable audio track…" / "could not be decoded…"), session usable |
+
+## S7 — Blank canvases + cross-format export (Android + iOS; run after any blank-canvas / GIF-path change)
+
+Covers `meme-blank-canvas-crossmode-plan.md` waves 1–4: blank sessions in all three
+modes, the kinetic-GIF path and video→GIF conversion.
+
+| # | Step | Expected |
+|---|---|---|
+| 1 | IMAGE empty state → "Start blank canvas" → add text + stickers → export | PNG at the canvas ratio/background; overlays + image layers burned (no white-rectangle export before content — buttons stay disabled) |
+| 2 | VIDEO empty state → "Start blank canvas" → 9:16 · color · 10 s → add text + a GIF layer + an SFX cue → export | MP4 plays the canvas with overlays, the animated layer and the cue mixed; timeline shows the `canvas` segment; blank session with no content refuses with the named notice |
+| 3 | Blank video → Canvas chip → change bg / duration / ratio | Source regenerates in place; overlays/cues keep timeline positions; shorter duration clamps the window (nothing silently dropped) |
+| 4 | Blank video → kill app → relaunch → resume | Timeline restores (`canvas` label + clip bytes); edits survive; Canvas chip still offered |
+| 5 | GIF empty state → "Start blank canvas" → 2 s · 15 fps → add text → give it POP fx + a visibility window | Stage animates the overlay on the loop clock; exported GIF loops with the SAME motion (WYSIWYG) |
+| 6 | Blank GIF → Duration chip → change loop/fps → export | Loop re-times; windows stay proportional; blank with no content refuses with the named notice |
+| 7 | Blank GIF → kill app → relaunch | Loop resumes from the wire (`canvas.sec`/`fps`); preview animates again |
+| 8 | Picked GIF with a POP/shake overlay → export | Overlay animates in the exported GIF (timed plan per frame); no-animation GIFs are byte-stable as before |
+| 9 | Any video (blank or picked, ≥12 s) → Export → Format GIF | Saved GIF: ~10 fps, silent, covers the FIRST 10 s (outcome says "· first 10 s"), overlays + fx motion + layers burned once (no double-paint); oversize auto-downscales ("Saved at a smaller size") |
+| 10 | Video→GIF with layers/looks/trim/speed set | Conversion honors per-clip trims + speed + grades + image/GIF layers exactly like the MP4 burn |
+| 11 | Video→GIF export → kill app mid-render → relaunch → Export sheet → Retry | Retry reuses the rendered artifact (durable `gif` job), never re-renders |
+| 12 | Publish each mode's blank session | VIDEO publishes MP4 (kind 22/21, sound mixed); GIF publishes kind-20; IMAGE publishes PNG — and a content-less blank never reaches Post details (Next stays disabled) |
+
+### Perf gates (device; MST-086)
+
+| Gate | Budget |
+|---|---|
+| Blank-video synthesis (10 s clip) | ≤ 300 ms on a mid-range device; file ≤ ~100 KiB |
+| Video→GIF sampling (10 s timeline) | ≤ ~10 s wall time; peak frames ≤ 100 × 480 px long edge (≤ ~60 MiB) |
+| Blank-GIF export (3 s × 15 fps) | ≤ 60 frames held; ladder ≤ 3 downscales / 8 MB — outcome copy says which |
+| Derived bounds | Common-tested in `MemeCanvasAndSfxTemplatesTest.derivedGifTimingClampsIdentically` (single-sourced clamps) |
 
 ## Run log
 

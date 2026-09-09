@@ -4,6 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Export geometry goldens (plan MST-016; web `render.ts` parity). The plan
@@ -214,5 +217,43 @@ class MemeExportRulesTest {
             emptyList<MemeExportRules.MemeExportItem>(),
             MemeExportRules.exportPlan(project, 0, 0),
         )
+    }
+
+    /**
+     * MST-077 timed envelope: rows outside their visibility window drop,
+     * survivors carry the fx transform, and `atMs = null` keeps the
+     * static envelope byte-shape (no fx keys — old consumers unchanged).
+     */
+    @Test
+    fun timedEnvelopeDropsInvisibleRowsAndCarriesFx() {
+        val withFx = overlay("gm").copy(
+            fx = MemeOverlayFx.POP,
+            startMs = 500,
+            endMs = 1_500,
+        )
+        val project = MemeProject(mode = MemeMode.GIF, overlays = listOf(withFx))
+
+        fun rowsAt(atMs: Long?) = MemeExportRules.exportEnvelope(project, 1080, 1080, atMs)
+            .let { wire ->
+                Json.parseToJsonElement(wire).jsonObject["items"]!!.jsonArray
+            }
+
+        // Outside the window: dropped entirely.
+        assertEquals(0, rowsAt(0L).size, "before start → invisible")
+        assertEquals(0, rowsAt(2_000L).size, "after end → invisible")
+
+        // Inside: the row carries fx (pop scales through the entry —
+        // atMs 700 is t=200 into the 380 ms entry, past the easeOutBack
+        // midpoint where it overshoots above 1).
+        val mid = rowsAt(700L).single().jsonObject
+        val scale = (mid["fxScale"] as kotlinx.serialization.json.JsonPrimitive).content.toFloat()
+        assertTrue(scale > 1f, "pop entry scales up (got $scale)")
+        assertEquals(1.0, (mid["fxAlpha"] as kotlinx.serialization.json.JsonPrimitive).content.toDouble(), 1e-4)
+
+        // Static envelope keeps its byte-shape: no fx keys at all.
+        val static = MemeExportRules.exportEnvelope(project, 1080, 1080)
+            .let { Json.parseToJsonElement(it).jsonObject["items"]!!.jsonArray.single().jsonObject }
+        assertFalse(static.containsKey("fxScale"))
+        assertFalse(static.containsKey("fxAlpha"))
     }
 }

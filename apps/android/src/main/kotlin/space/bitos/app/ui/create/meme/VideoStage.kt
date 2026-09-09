@@ -274,11 +274,19 @@ internal fun VideoStage(
             soundPlayer?.let { sound ->
                 val track = soundtrack ?: return@let
                 val into = timelineMs - track.offsetMs
-                if (into in 0 until track.durationMs) {
-                    val target = (track.startMs + into).coerceIn(0L, max(1L, track.durationMs))
-                    if (kotlin.math.abs(sound.currentPosition - target) > 120) sound.seekTo(target)
-                    sound.volume = track.volume.coerceIn(0f, 1f)
-                    sound.playWhenReady = player.isPlaying
+                if (into >= 0) {
+                    // The audible window starts at the in-point; looping
+                    // wraps the position so repeats stay glued to the clock.
+                    val windowMs = (track.durationMs - track.startMs).coerceAtLeast(1L)
+                    val localInto = if (track.loop) into % windowMs else into
+                    if (localInto < windowMs) {
+                        val target = (track.startMs + localInto).coerceIn(0L, max(1L, track.durationMs))
+                        if (kotlin.math.abs(sound.currentPosition - target) > 120) sound.seekTo(target)
+                        sound.volume = track.volume.coerceIn(0f, 1f)
+                        sound.playWhenReady = player.isPlaying
+                    } else {
+                        sound.playWhenReady = false
+                    }
                 } else {
                     sound.playWhenReady = false
                 }

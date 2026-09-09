@@ -1326,16 +1326,25 @@ struct VideoStageIos: View {
                     // glued ("use this sound" Wave B).
                     if let soundPlayer, let soundtrack {
                         let intoMs = Int64(positionSeconds * 1000) - soundtrack.offsetMs
-                        if intoMs >= 0 && intoMs < soundtrack.durationMs {
-                            let target = Double(soundtrack.startMs + intoMs) / 1000
-                            if abs(soundPlayer.currentTime().seconds - target) > 0.12 {
-                                await soundPlayer.seek(
-                                    to: CMTime(seconds: target, preferredTimescale: 600),
-                                    toleranceBefore: .zero, toleranceAfter: .zero
-                                )
+                        if intoMs >= 0 {
+                            // The audible window starts at the in-point;
+                            // looping wraps the position so repeats stay
+                            // glued to the stage clock.
+                            let windowMs = max(1, soundtrack.durationMs - soundtrack.startMs)
+                            let localInto = soundtrack.loop ? intoMs % windowMs : intoMs
+                            if localInto < windowMs {
+                                let target = Double(soundtrack.startMs + localInto) / 1000
+                                if abs(soundPlayer.currentTime().seconds - target) > 0.12 {
+                                    await soundPlayer.seek(
+                                        to: CMTime(seconds: target, preferredTimescale: 600),
+                                        toleranceBefore: .zero, toleranceAfter: .zero
+                                    )
+                                }
+                                soundPlayer.volume = min(1, max(0, soundtrack.volume))
+                                if playing { soundPlayer.play() } else { soundPlayer.pause() }
+                            } else {
+                                soundPlayer.pause()
                             }
-                            soundPlayer.volume = min(1, max(0, soundtrack.volume))
-                            if playing { soundPlayer.play() } else { soundPlayer.pause() }
                         } else {
                             soundPlayer.pause()
                         }

@@ -91,6 +91,40 @@ class MemeSoundMixTest {
         assertTrue(bed.take(44).all { it == 1f }, "offset coerced to 0, gain clamped to 1")
     }
 
+    @Test
+    fun bedLoopsToFillTheTimelineWhenLoopIsSet() {
+        val bedRate = SfxSynth.SAMPLE_RATE
+        // 0.5 s of unity PCM, offset 250 ms, looping over a 2 s timeline.
+        val track = FloatArray(bedRate / 2) { 1f }
+        val bed = MemeSoundMix.bedTrack(
+            track, bedRate,
+            timelineDurationMs = 2_000, offsetMs = 250, volume = 1f,
+            loop = true,
+        )
+        assertEquals((bedRate * 2f).toInt(), bed.size, "bed spans the whole timeline")
+        // Silence before the offset; the track then repeats cyclically to
+        // the end — no gap after the first placement.
+        assertTrue(bed.take(bedRate / 4).all { it == 0f }, "silence before the offset")
+        assertTrue(
+            bed.drop(bedRate / 4).all { it == 1f },
+            "loop repeats fill every cycle to the timeline end",
+        )
+    }
+
+    @Test
+    fun bedLoopRespectsGainAndDegenerateShapes() {
+        val bedRate = SfxSynth.SAMPLE_RATE
+        val track = FloatArray(bedRate / 2) { 1f }
+        val bed = MemeSoundMix.bedTrack(track, bedRate, 2_000, 0, 0.5f, loop = true)
+        assertTrue(bed.drop(bedRate / 2).take(100).all { kotlin.math.abs(it - 0.5f) < 1e-6f }, "gain kept across cycles")
+        // Offset beyond the timeline: an all-silent bed, never a crash.
+        val beyond = MemeSoundMix.bedTrack(track, bedRate, 1_000, 5_000, 1f, loop = true)
+        assertEquals((bedRate * 1f).toInt(), beyond.size)
+        assertTrue(beyond.all { it == 0f })
+        // Empty track with loop stays empty (nothing to repeat).
+        assertEquals(0, MemeSoundMix.bedTrack(FloatArray(0), bedRate, 1_000, 0, 1f, loop = true).size)
+    }
+
     // ── mix (cue bed + soundtrack bed = one track) ───────────────────
 
     @Test

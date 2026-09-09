@@ -257,6 +257,8 @@ final class MemeEditorStore {
         var offsetMs: Int64
         var volume: Float
         var label: String
+        /// Loop to fill the timeline when shorter (TikTok semantics).
+        var loop: Bool = false
     }
 
     private(set) var soundtrackRow: SoundtrackRow?
@@ -382,7 +384,8 @@ final class MemeEditorStore {
             volume: clamped,
             offsetMs: row.offsetMs,
             url: row.url,
-            label: row.label
+            label: row.label,
+            loop: row.loop
         )
     }
 
@@ -399,7 +402,7 @@ final class MemeEditorStore {
     private func applySoundCommand(
         sha256: String, durationMs: Int64, startMs: Int64,
         volume: Float, offsetMs: Int64, url: String, label: String,
-        sourceEventId: String? = nil, author: String? = nil
+        sourceEventId: String? = nil, author: String? = nil, loop: Bool = false
     ) {
         var row: [String: Any] = ["op": "sound", "sha256": sha256, "ms": durationMs]
         if !url.isEmpty { row["url"] = url }
@@ -409,7 +412,23 @@ final class MemeEditorStore {
         if let sourceEventId { row["src"] = sourceEventId }
         if let author { row["author"] = author }
         if !label.isEmpty { row["label"] = label }
+        if loop { row["loop"] = true }
         apply(commandJson: Self.encode(row))
+    }
+
+    /// Soundtrack loop toggle (TikTok loop semantics — repeat to fill).
+    func setSoundtrackLoop(_ loop: Bool) {
+        guard let row = soundtrackRow, row.loop != loop else { return }
+        applySoundCommand(
+            sha256: row.sha256,
+            durationMs: row.durationMs,
+            startMs: row.startMs,
+            volume: row.volume,
+            offsetMs: row.offsetMs,
+            url: row.url,
+            label: row.label,
+            loop: loop
+        )
     }
 
     private func refreshSoundtrackRow() {
@@ -427,7 +446,8 @@ final class MemeEditorStore {
             startMs: (sound["start"] as? NSNumber)?.int64Value ?? 0,
             offsetMs: (sound["offset"] as? NSNumber)?.int64Value ?? 0,
             volume: (sound["vol"] as? NSNumber)?.floatValue ?? 1,
-            label: (sound["label"] as? String) ?? ""
+            label: (sound["label"] as? String) ?? "",
+            loop: (sound["loop"] as? Bool) ?? false
         )
     }
 
@@ -462,6 +482,107 @@ final class MemeEditorStore {
     // MARK: - Pen drawing (V2 Draw chip)
 
     private(set) var drawStrokes: [MemeStrokeUi] = []
+    /// Kinetic blank-GIF preview clock (MST-078): loop time in ms.
+    var blankGifTickMs: Int64 = 0
+
+    /// Video→GIF sampler inputs (MST-082) — a value snapshot a background
+    /// task can capture without touching MainActor state. [outputMs] is
+    /// precomputed (windows are media-time; output time divides by the
+    /// session rate).
+    struct GifSampleClip: Sendable {
+        let url: URL
+        let startMs: Int64
+        let endMs: Int64
+        let outputMs: Int64
+    }
+
+    var gifSampleClips: [GifSampleClip] {
+        clips.map { GifSampleClip(url: $0.url, startMs: $0.startMs, endMs: $0.endMs, outputMs: clipOutputMs($0)) }
+    }
+
+    /**
+     * Video→GIF sampler (plan D4, MST-082): renders the composed timeline
+     * into GIF source frames by decoding the RAW clip windows
+     * (AVAssetImageGenerator, half-frame tolerance) — the GIF encoder
+     * then paints the timed overlay plan per frame, so overlays, fx
+     * kinetics, layers and looks arrive like the MP4 burn, with no
+     * double-paint and no extra compose pass. Bounds: 10 fps, the FIRST
+     * 10 s, 480 px long-edge frames; the ladder owns the final size.
+     */
+    nonisolated static func sampleVideoGifFrames(
+        clips: [GifSampleClip],
+        bgHex: String?
+    ) -> (images: [UIImage], delays: [Int], trimmed: Bool)? {
+        guard !clips.isEmpty else { return nil }
+        let outputs = clips.map { max(1, $0.outputMs) }
+        let totalMs = outputs.reduce(0, +)
+        guard totalMs > 0 else { return nil }
+        let spanMs = min(totalMs, 10_000)
+        let fps = 10
+        let frameCount = max(1, min(150, Int(spanMs) * fps / 1000))
+        let delayMs = 1000 / fps
+
+        func makeGenerator(_ url: URL) -> AVAssetImageGenerator {
+            let generator = AVAssetImageGenerator(asset: AVAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 480, height: 480)
+            generator.requestedTimeToleranceBefore = CMTime(value: 50, timescale: 1000)
+            generator.requestedTimeToleranceAfter = CMTime(value: 50, timescale: 1000)
+            return generator
+        }
+
+        func decodeAt(timelineMs: Int64) -> UIImage? {
+            var offset: Int64 = 0
+            for (index, clip) in clips.enumerated() {
+                let outMs = outputs[index]
+                if timelineMs < offset + outMs || index == clips.count - 1 {
+                    let into = max(0, timelineMs - offset)
+                    let window = max(1, clip.endMs - clip.startMs)
+                    let mediaMs = clip.startMs + Int64((Double(into) * Double(window) / Double(outMs)).rounded())
+                    guard let cg = try? makeGenerator(clip.url).copyCGImage(
+                        at: CMTime(value: min(mediaMs, clip.endMs - 1), timescale: 1000), actualTime: nil
+                    ) else { return nil }
+                    return UIImage(cgImage: cg)
+                }
+                offset += outMs
+            }
+            return nil
+        }
+
+        guard let first = decodeAt(timelineMs: 0) else { return nil }
+        let aspect = first.size.width / max(1, first.size.height)
+        let longEdge: CGFloat = 480
+        var baseW = aspect >= 1 ? longEdge : (longEdge * aspect).rounded(.down)
+        var baseH = aspect >= 1 ? (longEdge / aspect).rounded(.down) : longEdge
+        baseW = CGFloat(max(2, (Int(baseW) / 2) * 2))
+        baseH = CGFloat(max(2, (Int(baseH) / 2) * 2))
+        let bg = bgHex.flatMap { MemeEditorStore.colorHex($0) } ?? .black
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+
+        var images: [UIImage] = []
+        for index in 0..<frameCount {
+            let source = index == 0 ? first : decodeAt(timelineMs: Int64(index) * Int64(delayMs))
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: baseW, height: baseH), format: format)
+            let composed = renderer.image { context in
+                context.cgContext.setFillColor(UIColor(bg).cgColor)
+                context.cgContext.fill(CGRect(origin: .zero, size: CGSize(width: baseW, height: baseH)))
+                if let source {
+                    // Letterbox onto the base canvas (mixed-clip timelines).
+                    let size = source.size
+                    let scale = min(baseW / max(1, size.width), baseH / max(1, size.height))
+                    let w = size.width * scale
+                    let h = size.height * scale
+                    source.draw(in: CGRect(
+                        x: (baseW - w) / 2, y: (baseH - h) / 2, width: w, height: h
+                    ))
+                }
+            }
+            images.append(composed)
+        }
+        guard !images.isEmpty else { return nil }
+        return (images, Array(repeating: delayMs, count: images.count), totalMs > spanMs)
+    }
 
     /** Commits a finished stroke; true when it landed (budget caps adds). */
     @discardableResult
@@ -1164,7 +1285,7 @@ final class MemeEditorStore {
     /// reason surfaces as a notice). Returns false when caps refuse it.
     /// Seeding passes `undoable: false` — a session start is not an edit.
     @discardableResult
-    func appendClip(data: Data, undoable: Bool = true) -> Bool {
+    func appendClip(data: Data, undoable: Bool = true, id: String? = nil) -> Bool {
         guard clips.count < 8 else {
             setNotice("Clip limit reached (8)")
             return false
@@ -1191,7 +1312,7 @@ final class MemeEditorStore {
         }
         if undoable { pushHistory(projectJson) }
         let clip = EditorClip(
-            id: "v\(maxClipCounter() + 1)", data: data, url: url, probe: probe,
+            id: id ?? "v\(maxClipCounter() + 1)", data: data, url: url, probe: probe,
             startMs: start, endMs: end, volume: 1, lookId: nil
         )
         clips.append(clip)
@@ -1200,6 +1321,81 @@ final class MemeEditorStore {
         videoRevision += 1
         syncWireClips()
         return true
+    }
+
+    /// Blank video (plan D1): every timeline source is a synthesized
+    /// canvas clip (reserved `blank` id prefix) — the canvas IS the media.
+    var isBlankVideo: Bool {
+        isVideoMode && !clips.isEmpty && clips.allSatisfy { $0.id.hasPrefix("blank") }
+    }
+
+    /// Blank sessions export only with real content (plan §3.5: no
+    /// exporting a colored rectangle).
+    var blankVideoHasContent: Bool {
+        !isBlankVideo || !overlays.isEmpty || !drawStrokes.isEmpty || !sfxCues.isEmpty
+    }
+
+    /// Session-only canvas spec (ratio+bg ride the clip itself; this only
+    /// prefills the re-style sheet after a resume).
+    var blankCanvasSpec: (ratio: String, bg: String)?
+
+    /// Blank-video creation (MST-071): synthesize the solid canvas clip
+    /// and append it like a camera take — the whole M5 machinery (timeline,
+    /// trim/split/speed/volume, SFX mix, layers, export, publish, slots)
+    /// then works on it unchanged.
+    func appendBlankClip(ratioId: String, bgHex: String, durationMs: Int64) {
+        Task {
+            setNotice("Creating blank canvas…")
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try BlankClipSourceIos.create(ratioId: ratioId, bgHex: bgHex, durationMs: durationMs)
+                }.value
+                let data = try Data(contentsOf: url)
+                try? FileManager.default.removeItem(at: url)
+                blankCanvasSpec = (ratioId, bgHex)
+                if appendClip(data: data, undoable: false, id: "blank1") {
+                    setNotice("Blank canvas ready — add text, stickers, layers or sound")
+                }
+            } catch {
+                setNotice("Could not create the blank canvas")
+            }
+        }
+    }
+
+    /// Blank-video re-style/extend (MST-073): regenerate the canvas source
+    /// with a new ratio/background/duration. Overlays, strokes and cues
+    /// keep their timeline positions; a shorter duration clamps the
+    /// window, never silently drops edits.
+    func restyleBlankClip(ratioId: String, bgHex: String, durationMs: Int64) {
+        guard let index = clips.firstIndex(where: { $0.id.hasPrefix("blank") }) else { return }
+        let current = clips[index]
+        Task {
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try BlankClipSourceIos.create(ratioId: ratioId, bgHex: bgHex, durationMs: durationMs)
+                }.value
+                guard let probe = MemeVideoExportIos.probe(url: url) else {
+                    try? FileManager.default.removeItem(at: url)
+                    setNotice("Could not restyle the canvas")
+                    return
+                }
+                let data = try Data(contentsOf: url)
+                blankCanvasSpec = (ratioId, bgHex)
+                pushHistory(projectJson)
+                clips[index] = EditorClip(
+                    id: current.id, data: data, url: url, probe: probe,
+                    startMs: min(current.startMs, probe.durationMs),
+                    endMs: min(current.endMs, probe.durationMs),
+                    volume: current.volume, lookId: current.lookId
+                )
+                archiveClip(clips[index])
+                selectedClipIndex = index
+                videoRevision += 1
+                syncWireClips()
+            } catch {
+                setNotice("Could not restyle the canvas")
+            }
+        }
     }
 
     func removeClip(at index: Int) {
@@ -1389,6 +1585,82 @@ final class MemeEditorStore {
         refresh()
     }
 
+    /**
+     * Blank-GIF loop timing (plan D3, MST-079): `sec`/`fps` on the wire,
+     * clamped by the shared rules; nil clears both (picked-GIF).
+     */
+    func setCanvasTiming(secMs: Int64?, fps: Int?) {
+        let next = client.memeSetCanvasTiming(projectJson, secMs: secMs, fps: fps)
+        guard !next.isEmpty else { return }
+        pushHistory(projectJson)
+        projectJson = next
+        refresh()
+    }
+
+    /**
+     * One overlay's fx at a loop moment (MST-078 stage): the shared
+     * `memeFxTransformAt` seam (`scale|rot|dx|dy|alpha`); nil = identity.
+     */
+    func fxAt(_ overlayId: String, atMs: Int64) -> FxTransformUi? {
+        let raw = client.memeFxTransformAt(projectJson, overlayId: overlayId, atMs: atMs)
+        let parts = raw.split(separator: "|").compactMap { Float($0) }
+        guard parts.count == 5 else { return nil }
+        let fx = FxTransformUi(
+            scale: parts[0], rotateRad: parts[1], dx: parts[2], dy: parts[3], alpha: parts[4]
+        )
+        return fx.alpha > 0.01 ? fx : nil
+    }
+
+    /**
+     * Blank-GIF source frames (MST-078): ONE solid canvas image shared by
+     * every step — the timed plan paints per frame inside the encoder.
+     */
+    func blankGifSource() -> (images: [UIImage], delaysMs: [Int]) {
+        guard let ratio = canvasRatio,
+              let terms = ratio.split(separator: ":").compactMap({ Int($0) }) as [Int]?,
+              terms.count == 2, terms[0] > 0, terms[1] > 0,
+              let bg = canvasBackgroundHex.flatMap(MemeEditorStore.colorHex) else {
+            return ([], [])
+        }
+        let aspect = CGFloat(terms[0]) / CGFloat(terms[1])
+        let longEdge: CGFloat = 480
+        let size = aspect >= 1
+            ? CGSize(width: longEdge, height: (longEdge / aspect).rounded(.down))
+            : CGSize(width: (longEdge * aspect).rounded(.down), height: longEdge)
+        let evened = CGSize(
+            width: max(2, (Int(size.width) / 2) * 2),
+            height: max(2, (Int(size.height) / 2) * 2)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let canvas = UIGraphicsImageRenderer(size: evened, format: format).image { context in
+            context.cgContext.setFillColor(UIColor(bg).cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: evened))
+        }
+        let fps = blankGifFps
+        let count = max(1, min(60, Int(blankGifSecMs) * fps / 1000))
+        let delay = max(20, 1000 / fps)
+        return (Array(repeating: canvas, count: count), Array(repeating: delay, count: count))
+    }
+
+    /** Blank-GIF loop length (ms) on the additive canvas key; nil = picked GIF. */
+    nonisolated static func canvasSecMs(ofProject json: String) -> Int64? {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let canvas = root["canvas"] as? [String: Any],
+              let sec = canvas["sec"] as? NSNumber else { return nil }
+        return sec.int64Value
+    }
+
+    /** Blank-GIF frame rate on the additive canvas key; nil = default. */
+    nonisolated static func canvasFps(ofProject json: String) -> Int? {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let canvas = root["canvas"] as? [String: Any],
+              let fps = canvas["fps"] as? NSNumber else { return nil }
+        return fps.intValue
+    }
+
     /** Canvas aspect override for the stage; nil = keep the media's. */
     var canvasAspect: CGFloat? {
         guard let ratio = canvasRatio else { return nil }
@@ -1405,6 +1677,26 @@ final class MemeEditorStore {
     var isBlankDesign: Bool {
         !isVideoMode && !isGifMode && assets.isEmpty && canvasRatio != nil
     }
+
+    /// Kinetic blank GIF (plan D2, MST-078): canvas + fx-animated
+    /// overlays, no picked frames. Timing rides the wire (canvas sec/fps)
+    /// so a relaunch resumes the loop; blank needs content to export.
+    var isBlankGif: Bool {
+        isGifMode && gifFramesCount == 0 && canvasRatio != nil
+    }
+
+    var blankGifHasContent: Bool {
+        !isBlankGif || !overlays.isEmpty || !drawStrokes.isEmpty
+    }
+
+    var blankGifSecMs: Int64 { Self.canvasSecMs(ofProject: projectJson) ?? 2_000 }
+
+    var blankGifFps: Int { Self.canvasFps(ofProject: projectJson) ?? 10 }
+
+    /** Wire canvas timing (optional accessors for the sheets). */
+    var canvasSecMs: Int64? { Self.canvasSecMs(ofProject: projectJson) }
+
+    var canvasFps: Int? { Self.canvasFps(ofProject: projectJson) }
 
     /** `#rrggbb` → Color (stage/export fill); nil when malformed. */
     nonisolated static func colorHex(_ hex: String) -> Color? {
@@ -1686,11 +1978,55 @@ final class MemeEditorStore {
         syncWireClips()
     }
 
-    func exportActiveAssetToPhotos() {
+    func exportActiveAssetToPhotos(asGif: Bool = false) {
         guard exportState != .saving else { return }
         if isVideoMode {
             guard !clips.isEmpty else {
                 exportState = .failed("Pick a clip first")
+                return
+            }
+            if isBlankVideo && !blankVideoHasContent {
+                exportState = .failed("Add text, stickers, layers or sound first — the canvas alone is not a video")
+                return
+            }
+            if asGif {
+                // MST-082/083: video→GIF — sample the composed timeline (raw
+                // windows; the encoder paints the timed plan) and ride the
+                // existing GIF ladder + durable job machinery.
+                exportState = .saving
+                let project = projectJson
+                let client = self.client
+                let images = layerImages
+                let sampleClips = gifSampleClips
+                let bgHex = canvasBg
+                let exportJob = exportJobs.begin(format: "gif", nowMs: nowMs())
+                Task {
+                    do {
+                        let data = try await Task.detached(priority: .userInitiated) {
+                            guard let sampled = MemeEditorStore.sampleVideoGifFrames(clips: sampleClips, bgHex: bgHex) else {
+                                throw MemeRaster.ExportError(message: "Could not sample the video for GIF export")
+                            }
+                            return try MemeGifExportIos.export(
+                                frames: sampled.images,
+                                delaysMs: sampled.delays,
+                                projectJson: project,
+                                client: client,
+                                images: images
+                            ).data
+                        }.value
+                        guard exportJobs.artifactReady(exportJob, bytes: data, nowMs: nowMs()) else {
+                            throw MemeRaster.ExportError(message: "Could not persist the render")
+                        }
+                        lastExportSizeBytes = data.count
+                        exportJobs.update(exportJob, phase: "saving", nowMs: nowMs())
+                        try await MemeRaster.saveToPhotos(data)
+                        exportJobs.finish(exportJob)
+                        exportState = .saved
+                    } catch {
+                        exportJobs.update(exportJob, phase: "failed", error: error.localizedDescription, nowMs: nowMs())
+                        exportState = .failed(error.localizedDescription)
+                    }
+                }
                 return
             }
             exportState = .saving
@@ -1724,14 +2060,27 @@ final class MemeEditorStore {
             return
         }
         if isGifMode {
-            guard gifFramesCount > 0 else {
-                exportState = .failed("Pick frames first")
-                return
+            let frames: [MemeGifFrame]
+            if isBlankGif {
+                guard blankGifHasContent else {
+                    exportState = .failed("Add text or stickers first — the canvas alone is not a GIF")
+                    return
+                }
+                let source = blankGifSource()
+                frames = source.images.enumerated().map {
+                    MemeGifFrame(id: "f\($0.offset + 1)", image: $0.element, delayMs: source.delaysMs[$0.offset])
+                }
+            } else {
+                guard gifFramesCount > 0 else {
+                    exportState = .failed("Pick frames first")
+                    return
+                }
+                frames = gifFrames.map { MemeGifFrame(id: $0.id, image: $0.image, delayMs: holdMs(for: $0)) }
             }
             exportState = .saving
             let project = projectJson
             let client = self.client
-            let frames = gifFrames.map { MemeGifFrame(id: $0.id, image: $0.image, delayMs: holdMs(for: $0)) }
+            let images = layerImages
             let exportJob = exportJobs.begin(format: "gif", nowMs: nowMs())
             Task {
                 do {
@@ -1922,8 +2271,11 @@ final class MemeEditorStore {
         bridge: BusinessCoreBridge
     ) {
         guard publishState != .uploading, publishState != .publishing else { return }
-        guard isVideoMode || isGifMode || activeAsset != nil || isBlankDesign else {
-            publishFailure = "Pick an image first"
+        guard (isVideoMode && blankVideoHasContent) ||
+            (isGifMode && (gifFramesCount > 0 || (isBlankGif && blankGifHasContent))) ||
+            activeAsset != nil || isBlankDesign else {
+            publishFailure = isBlankVideo ?
+                "Add text, stickers, layers or sound first" : "Pick an image first"
             return
         }
         // MST-036: manual presets gate on the shared ESTIMATE — blocked
@@ -2035,12 +2387,20 @@ final class MemeEditorStore {
                     // multi-clip; single-clip divides by the wire rate.
                     videoDurationMs = clips.count > 1 ? durationMs : Int64((Double(durationMs) / Double(speed)).rounded())
                     mime = "video/mp4"
-                } else if isGifMode && gifSourceFrames.count > 0 {
+                } else if isGifMode && (gifSourceFrames.count > 0 || (isBlankGif && blankGifHasContent)) {
                     // MST-023: GIF memes publish as kind-20 m image/gif.
+                    // A blank GIF generates its canvas frames at loop timing.
+                    let source: ([UIImage], [Int])
+                    if isBlankGif {
+                        let generated = blankGifSource()
+                        source = (generated.images, generated.delaysMs)
+                    } else {
+                        source = (gifSourceFrames.map(\.image), gifSourceFrames.map(\.delayMs))
+                    }
                     let exported = try await Task.detached(priority: .userInitiated) {
                         try MemeGifExportIos.export(
-                            frames: gifSourceFrames.map(\.image),
-                            delaysMs: gifSourceFrames.map(\.delayMs),
+                            frames: source.0,
+                            delaysMs: source.1,
                             projectJson: project,
                             client: client,
                             images: images
@@ -2432,6 +2792,16 @@ struct MemeEditorView: View {
     @State private var activePanel: EditorPanel?
     @State private var showLooks = false
     @State private var showSfx = false
+    /// Selected overlay's visibility window (startMs, endMs) — the SFX
+    /// sheet's cue anchors when a timed element is selected.
+    private var selectedOverlayWindow: (startMs: Int64, endMs: Int64)? {
+        guard let id = store.selectedId,
+              let overlay = store.overlays.first(where: { $0.id == id }) else { return nil }
+        guard overlay.startMs != nil || overlay.endMs != nil else { return nil }
+        let start = overlay.startMs ?? 0
+        let end = overlay.endMs ?? Int64(videoPositionSec * 1000)
+        return (start, end)
+    }
     @State private var showLayers = false
     @State private var showTrim = false
     @State private var showSpeed = false
@@ -2528,6 +2898,9 @@ struct MemeEditorView: View {
     }
 
     var body: some View { sheetLayer }
+
+    /// The composed presentation layer: pickers/observers + hoisted sheets.
+    private var sheetLayer: some View { interactionLayer }
 
     /// The bare chrome/branch/next column.
     private var layoutLayer: some View {
@@ -2723,8 +3096,9 @@ struct MemeEditorView: View {
         }
     }
 
-    /// Sheets, pickers and the trim cover (the presentation layer).
-    private var sheetLayer: some View {
+    /// The sheet half of the presentation layer (split from the picker
+    /// half so expression type-checking stays linear).
+    private var sheetedLayer: some View {
         lifecycleLayer
         .sheet(isPresented: Binding(
             get: { editingOverlayId != nil },
@@ -2740,7 +3114,9 @@ struct MemeEditorView: View {
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showSfx) {
-            SfxSheet(store: store, positionSec: videoPositionSec)
+            // Per-overlay sound windows: a selected overlay WITH a visibility
+            // window offers its start/end as cue anchors.
+            SfxSheet(store: store, positionSec: videoPositionSec, overlayWindow: selectedOverlayWindow)
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showLayers) {
@@ -2775,10 +3151,6 @@ struct MemeEditorView: View {
             SpeedSheetView(store: store)
                 .presentationDetents([.medium])
         }
-        .sheet(isPresented: $showCanvas) {
-            CanvasSheet(store: store)
-                .presentationDetents([.medium])
-        }
         .sheet(isPresented: $showDetailsFlow) {
             MemePostFlowView(
                 store: store,
@@ -2793,6 +3165,12 @@ struct MemeEditorView: View {
         }
         .sheet(isPresented: $showGifStickerPicker) { gifStickerContent }
         .sheet(isPresented: $showGifBrowse) { gifBrowseContent }
+    }
+
+    /// Pickers, observers and the trim cover (split out of the sheet chain
+    /// so expression type-checking stays linear).
+    private var interactionLayer: some View {
+        sheetedLayer
         .photosPicker(
             isPresented: $isPicking,
             selection: $pickerItems,
@@ -2858,6 +3236,50 @@ struct MemeEditorView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showCanvas) {
+            if store.isBlankVideo {
+                // MST-073: on a blank timeline the Canvas sheet re-styles
+                // THE SOURCE CLIP (ratio · bg · duration regenerate it;
+                // overlays/cues keep their timeline positions).
+                BlankCanvasSheetIos(
+                    isVideo: true,
+                    createLabel: "Apply to canvas",
+                    initialRatio: store.blankCanvasSpec?.ratio,
+                    initialBg: store.blankCanvasSpec?.bg,
+                    initialDurationSec: store.clips.first.map { Double($0.probe.durationMs) / 1000 } ?? 5
+                ) { ratio, bg, seconds, _ in
+                    store.restyleBlankClip(ratioId: ratio, bgHex: bg, durationMs: Int64(seconds * 1000))
+                }
+                .presentationDetents([.medium])
+            } else {
+                CanvasSheet(store: store)
+                    .presentationDetents([.medium])
+            }
+        }
+        .sheet(isPresented: $showBlankCreate) {
+            BlankCanvasSheetIos(isVideo: true, createLabel: "Create blank video") { ratio, bg, seconds, _ in
+                store.appendBlankClip(ratioId: ratio, bgHex: bg, durationMs: Int64(seconds * 1000))
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showBlankGifCreate) {
+            // MST-078/080: blank-GIF creation + Duration re-style. The
+            // timing rides the wire (canvas sec/fps), so a relaunch
+            // resumes the loop.
+            BlankCanvasSheetIos(
+                isVideo: false,
+                createLabel: store.isBlankGif && store.canvasSecMs != nil ? "Apply" : "Create blank GIF",
+                initialRatio: store.canvasRatio,
+                initialBg: store.canvasBg,
+                initialDurationSec: store.canvasSecMs.map { Double($0) / 1000 },
+                initialFps: store.canvasFps
+            ) { ratio, bg, seconds, fps in
+                store.setCanvas(ratio: ratio, bg: bg)
+                store.setCanvasTiming(secMs: Int64(seconds * 1000), fps: fps)
+                store.setNotice("Blank GIF ready — add text or stickers, then give them motion")
+            }
+            .presentationDetents([.medium])
         }
     }
 
@@ -3114,7 +3536,12 @@ struct MemeEditorView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showExportSheet) {
-            ExportSettingsSheet(store: store, onMakeVariations: onMakeVariations)
+            ExportSettingsSheet(
+                store: store,
+                onMakeVariations: onMakeVariations,
+                videoFormatGif: exportVideoAsGif,
+                onVideoFormatGif: { exportVideoAsGif = $0 }
+            )
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
@@ -3356,6 +3783,60 @@ struct MemeEditorView: View {
                         soundtrack: store.soundtrackRow,
                         soundtrackUrl: store.soundtrackUrl
                     )
+                } else if store.isBlankGif {
+                    // Kinetic blank GIF (MST-078): canvas + fx-animated
+                    // overlays on a loop clock — WYSIWYG with the timed
+                    // exporter (shared `memeFxTransformAt` seam).
+                    let aspect = store.canvasAspect ?? 1
+                    let fitted = fittedStageSize(container: container, aspect: aspect)
+                    ZStack {
+                        Rectangle()
+                            .fill(store.canvasBackgroundHex.flatMap(MemeEditorStore.colorHex) ?? BitOSTheme.surface)
+                            .frame(width: fitted.width, height: fitted.height)
+                        ForEach(store.overlays) { overlay in
+                            if let fx = store.fxAt(overlay.id, atMs: store.blankGifTickMs) {
+                                OverlayUiView(
+                                    overlay: overlay,
+                                    stageSize: fitted,
+                                    selected: overlay.id == store.selectedId,
+                                    paletteHex: store.paletteHex,
+                                    fx: fx,
+                                    layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
+                                )
+                            }
+                        }
+                        if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
+                           let bounds = store.boundsFraction(for: selected.id) {
+                            DeleteHandleView(
+                                overlay: selected,
+                                stageSize: fitted,
+                                bounds: bounds
+                            )
+                        }
+                        if store.selectedId != nil {
+                            VStack {}
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                .overlay(alignment: .topLeading) {
+                                    Text("drag · scale · rotate")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                                }
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(width: fitted.width, height: fitted.height)
+                    .stageGestures(store: store, stageSize: fitted)
+                    .task {
+                        let stepMs = Int64(1000 / max(1, store.blankGifFps))
+                        let loopMs = max(stepMs, store.blankGifSecMs)
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: UInt64(stepMs) * 1_000_000)
+                            store.blankGifTickMs = (store.blankGifTickMs + stepMs) % loopMs
+                        }
+                    }
                 } else if store.isGifMode, let frame = store.gifActiveFrame {
                     let aspect = frame.image.size.width / max(1, frame.image.size.height)
                     let fitted = fittedStageSize(container: container, aspect: aspect)
@@ -3554,6 +4035,18 @@ struct MemeEditorView: View {
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
             }
+            // Blank VIDEO (plan D1): the synthesized canvas clip is the
+            // media — ratio · background · duration picked in the sheet.
+            if store.isVideoMode {
+                Button {
+                    activePanel = nil
+                    showBlankCreate = true
+                } label: {
+                    Label("Start blank canvas", systemImage: "rectangle.on.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
             // Browse GIFs: the shared composer sheet (trending, recents,
             // search) decodes picks straight into the frame tray.
             if store.isGifMode {
@@ -3561,6 +4054,17 @@ struct MemeEditorView: View {
                     showGifBrowse = true
                 } label: {
                     Label("Browse GIFs", systemImage: "photo.on.rectangle.angled")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
+            // Kinetic blank GIF: canvas + fx-animated text/stickers.
+            if store.isGifMode {
+                Button {
+                    activePanel = nil
+                    showBlankGifCreate = true
+                } label: {
+                    Label("Start blank canvas", systemImage: "wand.and.stars")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
@@ -3573,6 +4077,12 @@ struct MemeEditorView: View {
     @State private var showGifStickerPicker = false
     /// GIF-mode browser (the same shared sheet, GIFs tab).
     @State private var showGifBrowse = false
+    /// Blank-video creation sheet (MST-071).
+    @State private var showBlankCreate = false
+    /// Blank-GIF creation/re-style sheet (MST-078/080).
+    @State private var showBlankGifCreate = false
+    /// MST-083: video export format — MP4 (default) or GIF.
+    @State private var exportVideoAsGif = false
     @State private var isPickingVideo = false
     /// "Use this sound" (MST-050 Wave B): video picker → audio extraction.
     @State private var isPickingSound = false
@@ -3614,7 +4124,7 @@ struct MemeEditorView: View {
                 onOpenClips: { showClipSheet = true },
                 onOpenVolume: { showVolume = true },
                 onSplit: { store.splitClip(atTimelineMs: Int64(videoPositionSec * 1000)) },
-                onExport: { store.exportActiveAssetToPhotos() },
+                onExport: { store.exportActiveAssetToPhotos(asGif: exportVideoAsGif) },
                 onClose: { suiteMode = false }
             )
         } else if store.isGifMode {
@@ -3743,8 +4253,9 @@ struct MemeEditorView: View {
                 QuickToolChip(
                     symbol: AppIcons.save, label: "Export",
                     active: false,
-                    enabled: (store.activeAsset != nil || store.isBlankDesign || store.gifFramesCount > 0 ||
-                        store.videoClipData != nil) && store.exportState != .saving
+                    enabled: (store.activeAsset != nil || store.isBlankDesign ||
+                        (store.gifFramesCount > 0 || (store.isBlankGif && store.blankGifHasContent)) ||
+                        (store.videoClipData != nil && store.blankVideoHasContent)) && store.exportState != .saving
                 ) {
                     showExportSheet = true
                 }
@@ -3790,6 +4301,7 @@ struct MemeEditorView: View {
             case .sound:
                 SoundPanelContent(
                     store: store,
+                    hasSourceAudio: !store.isBlankVideo,
                     onPickSound: { isPickingSound = true },
                     onOpenStudio: {
                         activePanel = nil
@@ -3842,7 +4354,7 @@ struct MemeEditorView: View {
                                 store.selectClip(index)
                             } label: {
                                 VStack(spacing: 2) {
-                                    Text("vdo \(index + 1)")
+                                    Text(clip.id.hasPrefix("blank") ? "canvas" : "vdo \(index + 1)")
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     HStack(spacing: 3) {
                                         if clip.volume == 0 {
@@ -4069,6 +4581,9 @@ struct MemeEditorView: View {
     private var perModeBar: some View {
         HStack {
             if store.isVideoMode {
+                if store.isBlankVideo {
+                    ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
+                }
                 ClipTool(icon: "film", label: "Clips") { showClipSheet = true }
                 ClipTool(icon: "slider.horizontal.3", label: "Adjust") { togglePanel(.fx) }
                 ClipTool(icon: "scissors", label: "Trim") { showTrim = true }
@@ -4083,10 +4598,18 @@ struct MemeEditorView: View {
             } else if store.isGifMode {
                 ClipTool(icon: "photo.on.rectangle.angled", label: "GIFs") { showGifBrowse = true }
                 ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
-                ClipTool(icon: "timer", label: "Speed") {
-                    let next = store.gifUniformDelayMs >= 200 ? 50 : store.gifUniformDelayMs + 50
-                    store.setGifUniformDelay(next)
-                    store.setNotice("Frame hold \(next) ms")
+                if store.isBlankGif {
+                    // Blank GIF: the loop length replaces the frame-hold speed.
+                    ClipTool(icon: "timer", label: "Duration") {
+                        activePanel = nil
+                        showBlankGifCreate = true
+                    }
+                } else {
+                    ClipTool(icon: "timer", label: "Speed") {
+                        let next = store.gifUniformDelayMs >= 200 ? 50 : store.gifUniformDelayMs + 50
+                        store.setGifUniformDelay(next)
+                        store.setNotice("Frame hold \(next) ms")
+                    }
                 }
                 ClipTool(icon: "arrow.triangle.2.circlepath", label: "Loop") {
                     store.setNotice("GIFs loop forever — nothing to set")
@@ -4160,8 +4683,9 @@ struct MemeEditorView: View {
     /// Header publish entry (prototype "Next · post details") — inline with
     /// draft save so the bottom stack stays tool-only.
     private var headerNextButton: some View {
-        let hasMedia = store.activeAsset != nil || store.isBlankDesign || store.gifFramesCount > 0 ||
-            store.videoClipData != nil
+        let hasMedia = store.activeAsset != nil || store.isBlankDesign ||
+            (store.gifFramesCount > 0 || (store.isBlankGif && store.blankGifHasContent)) ||
+            (store.videoClipData != nil && store.blankVideoHasContent)
         let busy = store.publishState == .uploading || store.publishState == .publishing
         // An incompletely restored timeline must not publish — the post
         // would be an irreversible partial video.
@@ -5035,6 +5559,9 @@ struct ExportSettingsSheet: View {
     @Environment(\.dismiss) private var dismissSheet
     let store: MemeEditorStore
     var onMakeVariations: ((String, Data) -> Void)? = nil
+    /// MST-083: video→GIF format choice (bound to the editor's session state).
+    var videoFormatGif: Bool = false
+    var onVideoFormatGif: (Bool) -> Void = { _ in }
     @State private var variationsBusy = false
 
     private var designEligible: Bool {
@@ -5102,6 +5629,35 @@ struct ExportSettingsSheet: View {
                 .font(.caption)
                 .foregroundStyle(BitOSTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if store.isVideoMode {
+                // MST-083: FORMAT row — MP4 (sound) or GIF (sampled from
+                // the composed timeline; silent by format).
+                Text("Format").font(.subheadline.weight(.semibold))
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach([(false, "MP4"), (true, "GIF")], id: \.0) { entry in
+                        let (gif, label) = entry
+                        Button {
+                            onVideoFormatGif(gif)
+                        } label: {
+                            Text(label)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    videoFormatGif == gif ? BitOSTheme.accent : BitOSTheme.surfaceElevated,
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(videoFormatGif == gif ? .black : BitOSTheme.textPrimary)
+                        }
+                        .accessibilityLabel("Export as \(label)")
+                    }
+                }
+                if videoFormatGif {
+                    Text("Looping, silent · ~10 fps · up to the first 10 s · auto-downscaled to fit 8 MB")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
             if store.isVideoMode, !store.clips.isEmpty {
                 ExportPresetPicker(store: store)
             }
@@ -5189,7 +5745,7 @@ struct ExportSettingsSheet: View {
             }
             Button {
                 dismissSheet()
-                store.exportActiveAssetToPhotos()
+                store.exportActiveAssetToPhotos(asGif: store.isVideoMode && videoFormatGif)
             } label: {
                 HStack {
                     if store.exportState == .saving { ProgressView().tint(.white) }
@@ -5377,6 +5933,7 @@ private struct StickerPanelContent: View {
 /// into the full cue studio sheet.
 private struct SoundPanelContent: View {
     @Bindable var store: MemeEditorStore
+    var hasSourceAudio = true
     var onPickSound: () -> Void = {}
     var onOpenStudio: () -> Void
 
@@ -5384,11 +5941,14 @@ private struct SoundPanelContent: View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(store.sfxCues.isEmpty ? "Original clip audio" : "\(store.sfxCues.count) synth cue\(store.sfxCues.count == 1 ? "" : "s")")
+                    Text(!store.sfxCues.isEmpty ? "\(store.sfxCues.count) synth cue\(store.sfxCues.count == 1 ? "" : "s")"
+                        : (hasSourceAudio ? "Original clip audio" : "Silent canvas"))
                         .font(.subheadline)
-                    Text(store.sfxCues.isEmpty
-                         ? "Drop risers, zaps and coin SFX at the playhead"
-                         : "Cues bake into the export mix")
+                    Text(!store.sfxCues.isEmpty
+                         ? "Cues bake into the export mix"
+                         : (hasSourceAudio
+                            ? "Drop risers, zaps and coin SFX at the playhead"
+                            : "The blank canvas has no audio of its own — add SFX or a soundtrack"))
                         .font(.caption)
                         .foregroundStyle(BitOSTheme.textSecondary)
                 }
@@ -5452,6 +6012,19 @@ private struct SoundPanelContent: View {
                             in: 0...1
                         )
                     }
+                    Toggle(isOn: Binding(
+                        get: { sound.loop },
+                        set: { store.setSoundtrackLoop($0) }
+                    )) {
+                        HStack {
+                            Text("Loop to fill").font(.caption)
+                            Spacer()
+                            Text(sound.loop ? "repeats to the end" : "plays once")
+                                .font(.caption2)
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
                 .padding(BitOSTheme.Spacing.sm)
                 .background(
@@ -5788,9 +6361,22 @@ enum MemeRaster {
         let shadow = (paintRow["shadow"] as? NSNumber)?.boolValue ?? false
         guard !lines.isEmpty else { return }
 
+        // Timed-plan fx (MST-077): absent keys = identity (static rows).
+        let fxScale = (paintRow["fxScale"] as? NSNumber)?.doubleValue ?? 1
+        let fxAlpha = (paintRow["fxAlpha"] as? NSNumber)?.doubleValue ?? 1
+        guard fxAlpha > 0.01, fxScale > 0.01 else { return }
+        let fxDx = (paintRow["fxDx"] as? NSNumber)?.doubleValue ?? 0
+        let fxDy = (paintRow["fxDy"] as? NSNumber)?.doubleValue ?? 0
+        let fxRotDeg = ((paintRow["fxRot"] as? NSNumber)?.doubleValue ?? 0) * 180 / .pi
+
         cgContext.saveGState()
-        cgContext.translateBy(x: CGFloat(x), y: CGFloat(y))
-        cgContext.rotate(by: CGFloat(rotation) * .pi / 180)
+        cgContext.setAlpha(CGFloat(fxAlpha))
+        cgContext.translateBy(
+            x: CGFloat(x) + CGFloat(fxDx) * CGFloat(cgContext.width),
+            y: CGFloat(y) + CGFloat(fxDy) * CGFloat(cgContext.height)
+        )
+        cgContext.scaleBy(x: CGFloat(fxScale), y: CGFloat(fxScale))
+        cgContext.rotate(by: CGFloat(rotation + fxRotDeg) * .pi / 180)
 
         let lineHeight = CGFloat(fontSize) * 1.2
         let totalHeight = lineHeight * CGFloat(lines.count)
@@ -5826,9 +6412,22 @@ enum MemeRaster {
         let y = (row["y"] as? NSNumber)?.doubleValue ?? 0
         let rotation = (row["rot"] as? NSNumber)?.doubleValue ?? 0
 
+        // Timed-plan fx (MST-077): absent keys = identity (static rows).
+        let fxScale = (row["fxScale"] as? NSNumber)?.doubleValue ?? 1
+        let fxAlpha = (row["fxAlpha"] as? NSNumber)?.doubleValue ?? 1
+        guard fxAlpha > 0.01, fxScale > 0.01 else { return }
+        let fxDx = (row["fxDx"] as? NSNumber)?.doubleValue ?? 0
+        let fxDy = (row["fxDy"] as? NSNumber)?.doubleValue ?? 0
+        let fxRotDeg = ((row["fxRot"] as? NSNumber)?.doubleValue ?? 0) * 180 / .pi
+
         cgContext.saveGState()
-        cgContext.translateBy(x: CGFloat(x), y: CGFloat(y))
-        cgContext.rotate(by: CGFloat(rotation) * .pi / 180)
+        cgContext.setAlpha(CGFloat(fxAlpha))
+        cgContext.translateBy(
+            x: CGFloat(x) + CGFloat(fxDx) * CGFloat(cgContext.width),
+            y: CGFloat(y) + CGFloat(fxDy) * CGFloat(cgContext.height)
+        )
+        cgContext.scaleBy(x: CGFloat(fxScale), y: CGFloat(fxScale))
+        cgContext.rotate(by: CGFloat(rotation + fxRotDeg) * .pi / 180)
         // UIKit context is top-left flipped; draw through UIImage keeps parity
         // with the still-raster path.
         UIGraphicsPushContext(cgContext)
@@ -6100,6 +6699,9 @@ private struct SfxSheet: View {
     @Environment(\.dismiss) private var dismiss
     let store: MemeEditorStore
     let positionSec: Double
+    /// Selected overlay's visibility window — the cue anchor row.
+    var overlayWindow: (startMs: Int64, endMs: Int64)? = nil
+    @State private var anchorAtOverlayStart = true
     @State private var bucketId = "funny"
     @State private var search = ""
 
@@ -6159,6 +6761,12 @@ private struct SfxSheet: View {
         return all.filter { $0.1.lowercased().contains(query) }
     }
 
+    /// The ＋ anchor: the selected overlay's window edge (per-overlay
+    /// sound windows), else nil = the playhead.
+    private var cueAnchorMs: Int64? {
+        overlayWindow.map { anchorAtOverlayStart ? $0.startMs : $0.endMs }
+    }
+
     var body: some View {
         let catalog = Self.catalog()
         let allBuckets = catalog?.buckets ?? []
@@ -6166,6 +6774,40 @@ private struct SfxSheet: View {
         let searching = !search.trimmingCharacters(in: .whitespaces).isEmpty
         let bucket = allBuckets.first { $0.id == bucketId } ?? allBuckets.first
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            if let window = overlayWindow {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(String(
+                        format: "Cue anchor · selected overlay window %.1f–%.1fs",
+                        Double(window.startMs) / 1000, Double(window.endMs) / 1000
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        Button {
+                            anchorAtOverlayStart = true
+                        } label: {
+                            Text("At overlay start")
+                                .font(.caption.weight(anchorAtOverlayStart ? .bold : .regular))
+                                .foregroundStyle(anchorAtOverlayStart ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        Button {
+                            anchorAtOverlayStart = false
+                        } label: {
+                            Text("At overlay end")
+                                .font(.caption.weight(anchorAtOverlayStart ? .regular : .bold))
+                                .foregroundStyle(anchorAtOverlayStart ? BitOSTheme.textSecondary : BitOSTheme.accent)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+                .padding(BitOSTheme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm).fill(BitOSTheme.surface)
+                )
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Sound effects").font(.headline)
                 Text(String(
@@ -6213,7 +6855,7 @@ private struct SfxSheet: View {
                         }
                         .buttonStyle(.plain)
                         Button {
-                            store.addSfxCue(row.sfx, atMs: Int64(positionSec * 1000))
+                            store.addSfxCue(row.sfx, atMs: cueAnchorMs ?? Int64(positionSec * 1000))
                             dismiss()
                         } label: {
                             HStack(spacing: 2) {
@@ -6792,6 +7434,105 @@ private struct TrimSheetView: View {
 /// bounds 0.5–2×). Pitch shifts with the clip in V1 — said out loud.
 /// Canvas settings (image/GIF): ratio preset + background color (shared
 /// `MemeCanvas` rules through the wire; the media letterboxes onto it).
+/**
+ * Blank-video creation/re-style sheet (plan §3.2/§3.3, MST-071/073):
+ * ratio · background · duration → the synthesized solid canvas clip. On
+ * re-style the source regenerates in place; overlays, strokes and cues
+ * keep their timeline positions.
+ */
+private struct BlankCanvasSheetIos: View {
+    let isVideo: Bool
+    let createLabel: String
+    var initialRatio: String? = nil
+    var initialBg: String? = nil
+    var initialDurationSec: Double? = nil
+    var initialFps: Int? = nil
+    let onCreate: (_ ratio: String, _ bgHex: String, _ durationSec: Double, _ fps: Int) -> Void
+
+    @State private var ratio: String = "1:1"
+    @State private var bg: String = "#FFFFFF"
+    @State private var durationSec: Double = 5
+    @State private var fps: Int = 10
+
+    private static let swatches = ["#000000", "#ffffff", "#fde047", "#f97316", "#22d3ee", "#a3e635", "#f472b6"]
+    private static let ratios = ["1:1", "4:5", "9:16", "16:9"]
+    private static let durations: [(Double, String)] = [(3, "3 s"), (5, "5 s"), (10, "10 s")]
+    private static let gifDurations: [(Double, String)] = [(1, "1 s"), (2, "2 s"), (3, "3 s")]
+    private static let fpsChoices = [10, 15]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Text("Blank canvas").font(.headline)
+            Text("Size").font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(Self.ratios, id: \.self) { id in
+                    chip(id, selected: ratio == id) { ratio = id }
+                }
+            }
+            Text("Background").font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(Self.swatches, id: \.self) { hex in
+                    let selected = bg == hex
+                    Circle()
+                        .fill(MemeEditorStore.colorHex(hex) ?? BitOSTheme.surface)
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Circle().strokeBorder(
+                                selected ? BitOSTheme.accent : BitOSTheme.border,
+                                lineWidth: selected ? 2 : 1
+                            )
+                        )
+                        .onTapGesture { bg = hex }
+                        .accessibilityLabel("Background \(hex)")
+                }
+            }
+            Text(isVideo ? "Duration" : "Loop length").font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(isVideo ? Self.durations : Self.gifDurations, id: \.0) { sec, label in
+                    chip(label, selected: durationSec == sec) { durationSec = sec }
+                }
+            }
+            if !isVideo {
+                Text("Frame rate").font(.subheadline.weight(.semibold))
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(Self.fpsChoices, id: \.self) { rate in
+                        chip("\(rate) fps", selected: fps == rate) { fps = rate }
+                    }
+                }
+            }
+            Button {
+                onCreate(ratio, bg, durationSec, fps)
+            } label: {
+                Text(createLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, BitOSTheme.Spacing.xs + 2)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, BitOSTheme.Spacing.md)
+        .padding(.top, BitOSTheme.Spacing.sm)
+        .padding(.bottom, BitOSTheme.Spacing.lg)
+        .onAppear {
+            ratio = initialRatio ?? "1:1"
+            bg = initialBg ?? "#FFFFFF"
+            durationSec = initialDurationSec ?? (isVideo ? 5 : 2)
+            fps = initialFps ?? 10
+        }
+    }
+
+    private func chip(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(selected ? BitOSTheme.accent : BitOSTheme.surfaceElevated, in: Capsule())
+                .foregroundStyle(selected ? .black : BitOSTheme.textPrimary)
+        }
+    }
+}
+
 private struct CanvasSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: MemeEditorStore

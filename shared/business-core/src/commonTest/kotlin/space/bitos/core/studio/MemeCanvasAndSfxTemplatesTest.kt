@@ -40,6 +40,70 @@ class MemeCanvasAndSfxTemplatesTest {
         assertFalse(plain.contains("\"canvas\""))
     }
 
+    /**
+     * Blank-GIF timing (plan D3, MST-079): `sec`/`fps` round-trip inside
+     * the additive canvas object, hostile values clamp (not drop — the
+     * cap owns them), junk drops, and old wires stay byte-identical.
+     */
+    @Test
+    fun blankGifTimingRoundTripsClampsAndStaysAdditive() {
+        val project = MemeProject(
+            mode = MemeMode.GIF,
+            canvasRatio = "1:1",
+            canvasBg = "#22d3ee",
+            canvasSec = 2_000L,
+            canvasFps = 15,
+        )
+        val decoded = MemeProjectContract.decode(MemeProjectContract.encode(project))!!
+        assertEquals(2_000L, decoded.canvasSec)
+        assertEquals(15, decoded.canvasFps)
+
+        // Hostile in-bounds clamp; out-of-bounds decode drops to null.
+        val clamped = MemeProjectContract.decode(
+            MemeProjectContract.encode(MemeProject(mode = MemeMode.GIF, canvasSec = 99_000L, canvasFps = 42)),
+        )!!
+        assertEquals(10_000L, clamped.canvasSec, "the shared cap owns the loop length")
+        assertEquals(10, clamped.canvasFps, "a non-preset fps clamps to the default on write")
+        val junk = MemeProjectContract.decode(
+            """{"v":1,"mode":"gif","assets":[],"overlays":[],"canvas":{"sec":100,"fps":3}}""",
+        )!!
+        assertNull(junk.canvasSec)
+        assertNull(junk.canvasFps)
+
+        // Old canvas wires (ratio/bg only) decode with null timing.
+        val legacy = MemeProjectContract.decode(
+            """{"v":1,"mode":"gif","assets":[],"overlays":[],"canvas":{"ratio":"9:16"}}""",
+        )!!
+        assertNull(legacy.canvasSec)
+        assertNull(legacy.canvasFps)
+    }
+
+    /**
+     * Derived GIF timing (MST-086 single-sourcing): loop frame counts and
+     * per-frame delays clamp identically everywhere they're computed, and
+     * the video→GIF sampling bounds (fps · span · trimmed flag) are pure.
+     */
+    @Test
+    fun derivedGifTimingClampsIdentically() {
+        // Blank loop: 3 s × 15 fps = 45; hostile inputs clamp first.
+        assertEquals(45, MemeCanvas.blankGifFrameCount(3_000, 15))
+        assertEquals(60, MemeCanvas.blankGifFrameCount(10_000, 15))
+        assertEquals(5, MemeCanvas.blankGifFrameCount(500, 10))
+        // Delay floor holds; rates are preset-clamped before dividing.
+        assertEquals(100, MemeCanvas.loopDelayMs(10))
+        assertEquals(66, MemeCanvas.loopDelayMs(15))
+        assertEquals(MemeCanvas.loopDelayMs(10), MemeCanvas.loopDelayMs(7))
+
+        // Video→GIF span: capped at 10 s, flagged when trimmed.
+        assertEquals(100, MemeCanvas.videoGifFrameCount(10_000))
+        assertEquals(100, MemeCanvas.videoGifFrameCount(60_000))
+        assertEquals(30, MemeCanvas.videoGifFrameCount(3_000))
+        assertEquals(1, MemeCanvas.videoGifFrameCount(1))
+        assertFalse(MemeCanvas.videoGifSpanTrimmed(10_000))
+        assertTrue(MemeCanvas.videoGifSpanTrimmed(10_001))
+        assertEquals(100, MemeCanvas.videoGifDelayMs())
+    }
+
     @Test
     fun ratioFitLetterboxesTheMedia() {
         // 1920×1080 media on a 1:1 canvas → 1080×1080.

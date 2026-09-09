@@ -1913,6 +1913,20 @@ class BusinessCoreBridge {
         )
     }
 
+    /**
+     * Blank-GIF timing (plan D3, MST-079): sets the additive canvas
+     * `sec`/`fps` keys — clamped by the shared rules; null clears both
+     * (picked-GIF behavior). "" only when the project wire is corrupt.
+     */
+    fun memeSetCanvasTiming(projectJson: String, secMs: Long?, fps: Int?): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        val nextSec = secMs?.let { space.bitos.core.studio.MemeCanvas.clampBlankGifMs(it) }
+        val nextFps = fps?.let { space.bitos.core.studio.MemeCanvas.clampBlankGifFps(it) }
+        return space.bitos.core.studio.MemeProjectContract.encode(
+            project.copy(canvasSec = nextSec, canvasFps = nextFps),
+        )
+    }
+
     // ── M5 timeline seams: the shared clip list rules for both platforms'
     // multi-clip editors (clips JSON = the wire's `clips` rows). ─────────
 
@@ -2060,7 +2074,7 @@ class BusinessCoreBridge {
         val soundBed = project.soundtrack?.let { sound ->
             decodeFloatPcm(soundPcmBase64)?.let { pcm ->
                 space.bitos.core.studio.MemeSoundMix.bedTrack(
-                    pcm, soundRate, durationMs, sound.offsetMs, sound.volume,
+                    pcm, soundRate, durationMs, sound.offsetMs, sound.volume, sound.loop,
                 ).takeIf { it.isNotEmpty() }
             }
         }
@@ -2473,6 +2487,23 @@ class BusinessCoreBridge {
     fun memeExportPlan(projectJson: String, sourceWidth: Int, sourceHeight: Int): String {
         val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
         return space.bitos.core.studio.MemeExportRules.exportEnvelope(project, sourceWidth, sourceHeight)
+    }
+
+    /**
+     * MST-077 timed paint rows (Swift seam): the export envelope at ONE
+     * moment — rows outside their visibility window are dropped and
+     * survivors carry `fxScale|fxRot(rad)|fxDx|fxDy|fxAlpha`. The iOS GIF
+     * exporter and the blank-GIF preview loop both ride this seam (the
+     * per-overlay `memeFxTransformAt` stays for the video stage).
+     */
+    fun memeExportPlanAt(
+        projectJson: String,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        atMs: Long,
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
+        return space.bitos.core.studio.MemeExportRules.exportEnvelope(project, sourceWidth, sourceHeight, atMs)
     }
 
     /**

@@ -76,7 +76,9 @@ object MemeSoundMix {
      * The soundtrack's bed segment: `track` (at `trackRate`) resampled to
      * [BED_RATE], gain-clamped 0..1, placed at `offsetMs`, truncated at
      * `timelineDurationMs` — exactly the timeline-length FloatArray the
-     * cue bed uses. Degenerate inputs yield an empty bed.
+     * cue bed uses. `loop` repeats the placed track cyclically to fill the
+     * rest of the timeline (TikTok loop semantics). Degenerate inputs
+     * yield an empty bed.
      */
     fun bedTrack(
         track: FloatArray,
@@ -84,6 +86,7 @@ object MemeSoundMix {
         timelineDurationMs: Long,
         offsetMs: Long,
         volume: Float,
+        loop: Boolean = false,
     ): FloatArray {
         if (track.isEmpty() || timelineDurationMs <= 0) return FloatArray(0)
         val bed = FloatArray((timelineDurationMs * BED_RATE / 1_000L).toInt())
@@ -92,9 +95,11 @@ object MemeSoundMix {
         val gain = if (volume.isNaN()) 1f else min(1f, max(0f, volume))
         val room = bed.size - startSample
         if (room <= 0) return bed
-        val count = min(source.size, room)
-        for (i in 0 until count) {
-            bed[startSample + i] = source[i] * gain
+        val count = if (loop) room else min(source.size, room)
+        var i = 0
+        while (i < count) {
+            bed[startSample + i] = source[i % source.size] * gain
+            i++
         }
         return bed
     }
@@ -130,6 +135,9 @@ data class MemeSoundtrack(
     val sourceAuthorPubkey: String? = null,
     /** Display label ("Original sound · author"). */
     val label: String = "",
+    /** Loop the soundtrack to fill the timeline when it is shorter
+     *  (TikTok loop semantics; false = play once, then silence). */
+    val loop: Boolean = false,
 )
 
 /**

@@ -321,7 +321,10 @@ struct AuthorProfileSheet: View {
     // MARK: - Avatar + action row
 
     private var avatarActionsRow: some View {
-        HStack(alignment: .bottom, spacing: BitOSTheme.Spacing.sm) {
+        // The hex is deliberately centered on the banner/content seam. It
+        // gives the profile a stable focal point while the full-profile route
+        // remains a secondary trailing action.
+        ZStack(alignment: .trailing) {
             // Hex avatar floating over the banner edge (mock parity): a
             // background-colored hex plate forms the border, so the avatar
             // reads as a pure floating hexagon — no circular plate.
@@ -338,13 +341,11 @@ struct AuthorProfileSheet: View {
                     hasLightning: !(profile?.lud16 ?? "").isEmpty
                 )
             }
-            .offset(y: -38)
-            .padding(.bottom, -38)
+            .offset(y: -21)
 
-            Spacer()
-
-            // "View Profile" pill beside the avatar (mock parity) — routes
-            // to the in-app full profile page, never an external link.
+            // "View Profile" pill at the seam's trailing edge (mock parity)
+            // — routes to the in-app full profile page, never an external
+            // link.
             Button {
                 if let external = onOpenFullProfile {
                     onClose()
@@ -362,8 +363,11 @@ struct AuthorProfileSheet: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("View this author's full profile")
+            .offset(y: -21)
         }
-        .padding(.top, BitOSTheme.Spacing.sm)
+        // Reserve only the visible lower half of the avatar. The negative
+        // offset centers its 84pt plate on the 130pt banner boundary.
+        .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42)
     }
 
     // MARK: - Quick actions (Zap + Follow, mock parity)
@@ -817,4 +821,3 @@ private extension String {
         return [".mp4", ".webm", ".mov", ".m4v"].contains { lower.hasSuffix($0) }
     }
 }
-

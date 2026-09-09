@@ -88,9 +88,14 @@ the one seam the feed chip, re-attach and trending all use.
   hash-verified download, no extraction, pre-filled URL → publish stamps
   the existing artifact WITHOUT re-uploading | rank deterministic from fixtures; re-attach = Wave C path |
 
-Out of scope V1: looping, per-overlay sound windows, voice-over record,
-licensed marketplace (MST-047 stays separate), zap-splits to sound
-authors (needs invoice + preimage verification — future).
+Shipped follow-ons (2026-09-08): soundtrack LOOPING (wire `loop` flag;
+the bed repeats cyclically to fill the timeline — preview glue wraps
+the position modulo the audible window; both platforms) and per-overlay
+sound windows (the SFX sheet anchors new cues to a selected overlay's
+visibility window start/end instead of the raw playhead; both
+platforms). Still out of scope: voice-over record, licensed marketplace
+(MST-047 stays separate), zap-splits to sound authors (needs invoice +
+preimage verification — future).
 
 ## 6. Risks / notes
 

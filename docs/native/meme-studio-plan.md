@@ -3,9 +3,11 @@
 Status: proposed · Owner: native (both platforms) · Spec:
 `app-unified-feature-spec.md` §3.19 · Quick MEM editor V1 · Epics: EDT-/MEM-
 tables in `delivery-plan.md` · Ship target: V1 in 4 milestones (M0–M3), V1.x
-polish (M4). Follow-on wave: **M5 multi-clip timeline / take-native
+polish (M4). Follow-on waves: **M5 multi-clip timeline / take-native
 camera handoff / picker layer expansion — see
-`meme-studio-multiclip-plan.md` (MST-050..063).**
+`meme-studio-multiclip-plan.md` (MST-050..063)** · **blank canvases for
+all modes + kinetic GIF + video→GIF export — see
+`meme-blank-canvas-crossmode-plan.md` (MST-070..087).**
 
 This plan turns §3.19 into a concrete, phased build. It follows the repo
 architecture: deterministic rules and schemas in `shared/business-core`

@@ -213,6 +213,12 @@ protocol BusinessCoreClient: Sendable {
     /// Sets the canvas fields (ratio preset + `#rrggbb` background); nil
     /// clears; "" when the project wire is corrupt.
     func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String
+    /// Blank-GIF loop timing on the additive canvas keys (clamped shared-
+    /// side; nil clears both).
+    func memeSetCanvasTiming(_ projectJson: String, secMs: Int64?, fps: Int?) -> String
+    /// Timed paint rows at ONE moment (MST-077): visibility-filtered +
+    /// `fxScale|fxRot(rad)|fxDx|fxDy|fxAlpha` per row.
+    func memeExportPlanAt(_ projectJson: String, sourceWidth: Int, sourceHeight: Int, atMs: Int64) -> String
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String
     /// Top-most overlay id at the normalized point; "" = no hit.
     func memeHitTest(_ projectJson: String, x: Float, y: Float) -> String
@@ -696,6 +702,23 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
 
     func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String {
         bridge.memeSetCanvas(projectJson: projectJson, ratio: ratio, bg: bg)
+    }
+
+    func memeSetCanvasTiming(_ projectJson: String, secMs: Int64?, fps: Int?) -> String {
+        bridge.memeSetCanvasTiming(
+            projectJson: projectJson,
+            secMs: secMs.map { KotlinLong(longLong: $0) },
+            fps: fps.map { KotlinInt(int: Int32($0)) }
+        )
+    }
+
+    func memeExportPlanAt(_ projectJson: String, sourceWidth: Int, sourceHeight: Int, atMs: Int64) -> String {
+        bridge.memeExportPlanAt(
+            projectJson: projectJson,
+            sourceWidth: Int32(sourceWidth),
+            sourceHeight: Int32(sourceHeight),
+            atMs: atMs
+        )
     }
 
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String {
@@ -1187,6 +1210,12 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeSetCanvas(_ projectJson: String, ratio: String?, bg: String?) -> String {
         FrameworkBusinessCoreClient().memeSetCanvas(projectJson, ratio: ratio, bg: bg)
+    }
+    func memeSetCanvasTiming(_ projectJson: String, secMs: Int64?, fps: Int?) -> String {
+        FrameworkBusinessCoreClient().memeSetCanvasTiming(projectJson, secMs: secMs, fps: fps)
+    }
+    func memeExportPlanAt(_ projectJson: String, sourceWidth: Int, sourceHeight: Int, atMs: Int64) -> String {
+        FrameworkBusinessCoreClient().memeExportPlanAt(projectJson, sourceWidth: sourceWidth, sourceHeight: sourceHeight, atMs: atMs)
     }
     func memeApplyCommand(_ projectJson: String, commandJson: String) -> String {
         FrameworkBusinessCoreClient().memeApplyCommand(projectJson, commandJson: commandJson)

@@ -217,9 +217,14 @@ fun AuthorProfileContent(
             ) {
                 // ── Avatar + "View Profile" pill (mock parity) ─────────
                 item(key = "header") {
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        modifier = Modifier.overlapAbove(32.dp),
+                    // Keep the identity at the visual seam between cover and
+                    // sheet content. Centering the hex makes the banner read
+                    // as a profile hero instead of a generic card header;
+                    // the navigation pill remains a secondary edge action.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .overlapAbove(42.dp),
                     ) {
                         // Hex avatar floating over the banner edge: a
                         // background-colored hex plate forms the border
@@ -227,6 +232,7 @@ fun AuthorProfileContent(
                         Box(
                             modifier = Modifier
                                 .size(84.dp)
+                                .align(Alignment.Center)
                                 .shadow(6.dp, space.bitos.app.ui.components.HexShape())
                                 .clip(space.bitos.app.ui.components.HexShape())
                                 .background(BitOSColors.background),
@@ -240,9 +246,8 @@ fun AuthorProfileContent(
                                 hasLightning = !profile?.lud16.isNullOrBlank(),
                             )
                         }
-                        Spacer(Modifier.weight(1f))
                         // In-app full profile route (UX-010) — white pill
-                        // beside the avatar, never an external link.
+                        // at the seam's trailing edge, never an external link.
                         Button(
                             onClick = { onOpenFullProfile(authorPubkey) },
                             shape = RoundedCornerShape(50),
@@ -251,7 +256,9 @@ fun AuthorProfileContent(
                                 contentColor = BitOSColors.background,
                             ),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                            modifier = Modifier.height(34.dp),
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .height(34.dp),
                         ) {
                             Text("View Profile", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.W700)
                         }

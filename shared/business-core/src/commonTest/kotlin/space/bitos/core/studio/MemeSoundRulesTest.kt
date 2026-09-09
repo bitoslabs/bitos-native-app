@@ -147,15 +147,19 @@ class MemeSoundRulesTest {
 
     @Test
     fun setSoundtrackCommandRoundTripsAndApplies() {
-        val command = MemeCommand.SetSoundtrack(soundtrack())
+        val looping = soundtrack().copy(loop = true)
+        val command = MemeCommand.SetSoundtrack(looping)
         val json = MemeCommandCodec.encode(command)
         val decoded = MemeCommandCodec.decode(json)!! as MemeCommand.SetSoundtrack
-        assertEquals(soundtrack(), decoded.soundtrack)
+        assertEquals(looping, decoded.soundtrack)
         val project = MemeRules.apply(
             MemeProject(mode = MemeMode.VIDEO),
             decoded,
         )
-        assertEquals(soundtrack(), project.soundtrack)
+        assertEquals(looping, project.soundtrack)
+        // The wire row carries the flag both ways.
+        val roundTripped = MemeProjectContract.decode(MemeProjectContract.encode(project))!!
+        assertEquals(true, roundTripped.soundtrack!!.loop)
         // sound-del removes; a junk row normalizes to the same removal.
         val removed = MemeRules.apply(
             project,

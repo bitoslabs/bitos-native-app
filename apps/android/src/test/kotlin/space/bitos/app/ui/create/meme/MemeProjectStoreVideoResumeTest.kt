@@ -92,4 +92,41 @@ class MemeProjectStoreVideoResumeTest {
         assertEquals(2, loaded.document.project.clips.size, "the second half survives a re-save")
         assertTrue(loaded.assetFiles.keys.containsAll(listOf("v1", "v2")))
     }
+
+    /**
+     * Blank-video canvas (plan `meme-blank-canvas-crossmode-plan.md` D1,
+     * MST-076): the synthesized clip rides the wire under the RESERVED
+     * `blank` id prefix — the shared decode must accept it like any id,
+     * and the slot join must restore its bytes so a relaunched session
+     * is still a blank-timeline session (label + Canvas re-style chip
+     * derive from the prefix).
+     */
+    @Test
+    fun blankCanvasClipSurvivesSaveAndRelaunch() {
+        val root = tempRoot()
+        val canvasBytes = ByteArray(48) { 9 } // the synthesized solid MP4
+        val blankWire = """
+            {"v":1,"mode":"video","assets":[{"id":"blank1","kind":"video"}],
+             "overlays":[{"id":"o1","kind":"text","text":"gm","font":"impact","size":64,"color":0,"outline":2,"shadow":false,"x":0.5,"y":0.3,"scale":1,"rot":0}],
+             "clips":[{"id":"blank1","start":0,"end":5000}]}
+        """.trimIndent()
+        val editor = MemeProjectStore(root, FakeBitmaps())
+        editor.save(
+            slotId = "s-blank",
+            projectWire = blankWire,
+            assets = listOf(MemeProjectStore.AssetRef("blank1", "mem:blank1")),
+            opener = { key -> if (key == "mem:blank1") canvasBytes else null },
+            nowMs = 1_000,
+        )
+
+        val loaded = MemeProjectStore(root, FakeBitmaps()).loadSlot("s-blank")!!
+        val clips = loaded.document.project.clips
+        assertEquals(listOf("blank1"), clips.map { it.id }, "the reserved prefix decodes like any clip id")
+        assertEquals(0L, clips[0].startMs)
+        assertEquals(5_000L, clips[0].endMs, "the exact synthesized duration survives")
+        val file = loaded.assetFiles["blank1"]
+        assertNotNull(file, "the canvas clip has a slot asset file")
+        assertTrue(file.exists() && file.length() > 0)
+        assertEquals(1, loaded.document.project.overlays.size, "content gating inputs (overlays) survive too")
+    }
 }

@@ -260,6 +260,9 @@ fun MemeEditorScreen(
      *  publish ESTIMATE instead — never silently degraded. */
     var exportPreset by remember { mutableStateOf(MemeExportPresets.AUTO) }
     var exportPresetManual by remember { mutableStateOf(false) }
+    /** MST-083: video export format — MP4 (default) or GIF (sampled from
+     *  the composed timeline through the GIF ladder; silent by format). */
+    var exportVideoAsGif by remember { mutableStateOf(false) }
     // Full preserves source time up to the project safety cap; the hosting
     // size gate still blocks an oversize render before signing.
     // Preserve a newly selected source by default. Creators explicitly pick
@@ -363,8 +366,21 @@ fun MemeEditorScreen(
         it.id.removePrefix("v").takeWhile(Char::isDigit).toIntOrNull() ?: 0
     } ?: 0
 
-    /** Appends a probed source as a new timeline clip (cut rules applied). */
-    fun appendClip(bytes: ByteArray, probe: MemeVideoExport.Probe, undoable: Boolean = true) {
+    // Clip-import progress (camera handoff / picker insert / blank-canvas
+    // synthesis): "1/3"-style loading state so the studio never looks
+    // dead while sources probe. Declared before the helpers that set it.
+    var seedingProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    /** Blank-video creation sheet (MST-071) + its session spec (ratio+bg
+     *  ride the clip itself; the spec only prefills the re-style sheet). */
+    var showBlankCreate by remember { mutableStateOf(false) }
+    var blankCanvasSpec by remember { mutableStateOf<Pair<String, String>?>(null) }
+    /** Blank-GIF creation/re-style sheet (MST-078/080). */
+    var showBlankGifCreate by remember { mutableStateOf(false) }
+
+    /** Appends a probed source as a new timeline clip (cut rules
+     *  applied). [id] overrides the minted id — the blank-video canvas
+     *  source rides the reserved `blank` prefix (MST-071/072 detection). */
+    fun appendClip(bytes: ByteArray, probe: MemeVideoExport.Probe, undoable: Boolean = true, id: String? = null) {
         if (videoClips.size >= MAX_TIMELINE_CLIPS) {
             exportStatus = "Clip limit reached ($MAX_TIMELINE_CLIPS)"
             return
@@ -387,14 +403,81 @@ fun MemeEditorScreen(
         if (cut.cut) {
             exportStatus = "Added to the remaining ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(timelineRemainingMs)} — ${cut.message}"
         }
-        val id = "v${maxClipCounter() + 1}"
+        val clipId = id ?: "v${maxClipCounter() + 1}"
         if (undoable) state.beginClipsEdit()
-        state.addAssets(listOf(id), kind = MemeMode.VIDEO)
-        val clip = SessionClip(id, bytes, probe, cut.startMs, cut.endMs, speed = videoRate)
+        state.addAssets(listOf(clipId), kind = MemeMode.VIDEO)
+        val clip = SessionClip(clipId, bytes, probe, cut.startMs, cut.endMs, speed = videoRate)
         videoClips += clip
         archiveClip(clip)
         selectedClipIndex = videoClips.lastIndex
         syncWireClips()
+    }
+
+    /**
+     * Blank-video creation (plan D1, MST-071): synthesize the solid
+     * canvas clip and append it like a camera take — the whole M5
+     * machinery (timeline, trim/split/speed/volume, SFX mix, layers,
+     * export, publish, slots) then works on it unchanged.
+     */
+    fun appendBlankClip(ratioId: String, bgHex: String, durationMs: Long) {
+        scope.launch {
+            seedingProgress = 0 to 1
+            val file = withContext(Dispatchers.IO) {
+                BlankClipSource.create(context, ratioId, bgHex, durationMs)
+            }
+            val probe = file?.let { withContext(Dispatchers.IO) { MemeVideoExport.probeFile(it) } }
+            if (file == null || probe == null) {
+                runCatching { file?.delete() }
+                seedingProgress = null
+                exportStatus = "Could not create the blank canvas"
+                return@launch
+            }
+            val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+            runCatching { file.delete() }
+            blankCanvasSpec = ratioId to bgHex
+            appendClip(bytes, probe, undoable = false, id = "blank1")
+            exportStatus = "Blank canvas ready — add text, stickers, layers or sound"
+            seedingProgress = null
+        }
+    }
+
+    /**
+     * Blank-video re-style/extend (MST-073): regenerate the canvas source
+     * with a new ratio/background/duration. Overlays, strokes and SFX cues
+     * keep their timeline positions (they live in timeline ms); a shorter
+     * duration clamps the window, never silently drops edits.
+     */
+    fun restyleBlankClip(ratioId: String, bgHex: String, durationMs: Long) {
+        val index = videoClips.indexOfFirst { it.id.startsWith("blank") }
+        if (index == -1) return
+        val current = videoClips[index]
+        scope.launch {
+            seedingProgress = 0 to 1
+            val file = withContext(Dispatchers.IO) {
+                BlankClipSource.create(context, ratioId, bgHex, durationMs)
+            }
+            val probe = file?.let { withContext(Dispatchers.IO) { MemeVideoExport.probeFile(it) } }
+            if (file == null || probe == null) {
+                runCatching { file?.delete() }
+                seedingProgress = null
+                exportStatus = "Could not restyle the canvas"
+                return@launch
+            }
+            val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+            runCatching { file.delete() }
+            blankCanvasSpec = ratioId to bgHex
+            state.beginClipsEdit()
+            videoClips[index] = current.copy(
+                bytes = bytes,
+                probe = probe,
+                startMs = current.startMs.coerceIn(0, probe.durationMs),
+                endMs = current.endMs.coerceAtMost(probe.durationMs),
+            )
+            archiveClip(videoClips[index])
+            selectedClipIndex = index
+            syncWireClips()
+            seedingProgress = null
+        }
     }
 
     fun removeClip(index: Int) {
@@ -648,9 +731,7 @@ fun MemeEditorScreen(
             }
         }
     }
-    // Clip-import progress (camera handoff / picker insert): "1/3" style
-    // loading state so the studio never looks dead while sources probe.
-    var seedingProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
 
     // CAP handoff (M5): camera takes enter video mode AS CLIPS — no merge.
     // Each take is probed and cut to the allowed window, then joins the
@@ -1040,11 +1121,28 @@ fun MemeEditorScreen(
         }
     }
     val gifMode = state.project.mode == MemeMode.GIF
+    /** Blank video (plan D1): every timeline source is a synthesized
+     *  canvas clip (reserved `blank` id prefix) — the canvas IS the media.
+     *  Blank sessions export only with real content (§3.5: no exporting
+     *  a colored rectangle). */
+    val blankVideoActive = videoMode && videoClips.isNotEmpty() && videoClips.all { it.id.startsWith("blank") }
+    val blankVideoHasContent = !blankVideoActive ||
+        state.project.overlays.isNotEmpty() ||
+        state.project.drawStrokes.isNotEmpty() ||
+        state.project.sfxCues.isNotEmpty()
     /** Blank design (image mode): a pinned canvas with no picks — the
      *  "create from scratch" path (text/stickers over a colored canvas). */
     val pinnedCanvasTerms = state.project.canvasRatio
         ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
     val blankDesignActive = !gifMode && !videoMode && assets.isEmpty() && pinnedCanvasTerms != null
+    /** Kinetic blank GIF (plan D2, MST-078): canvas + fx-animated
+     *  overlays, no picked frames. Timing rides the wire (MST-079) so a
+     *  relaunch resumes the loop; blank needs content to export (§3.5). */
+    val blankGifActive = gifMode && gifFrames.isEmpty() && pinnedCanvasTerms != null
+    val blankGifHasContent = !blankGifActive ||
+        state.project.overlays.isNotEmpty() || state.project.drawStrokes.isNotEmpty()
+    val blankGifSecMs = state.project.canvasSec ?: space.bitos.core.studio.MemeCanvas.DEFAULT_BLANK_GIF_MS
+    val blankGifFps = state.project.canvasFps ?: space.bitos.core.studio.MemeCanvas.DEFAULT_BLANK_GIF_FPS
     val memePublishState = mediaPublishViewModel?.memeState?.collectAsStateWithLifecycle()?.value
 
     val activeAsset = assets.firstOrNull { it.id == activeAssetId }
@@ -1363,6 +1461,30 @@ fun MemeEditorScreen(
     }
 
     /** MST-016/022: render (+ GIF-encode) → MediaStore, off the UI. */
+    /**
+     * Blank-GIF source (MST-078): one solid canvas bitmap shared by every
+     * step — the timed plan paints per frame inside the encoder, so the
+     * loop is pure overlay motion (strokes included).
+     */
+    fun blankGifSource(): Pair<List<android.graphics.Bitmap>, List<Int>> {
+        val terms = pinnedCanvasTerms ?: return emptyList<android.graphics.Bitmap>() to emptyList()
+        val (rw, rh) = terms
+        val longEdge = 480
+        var w = if (rw >= rh) longEdge else longEdge * rw / rh
+        var h = if (rw >= rh) longEdge * rh / rw else longEdge
+        w -= w % 2
+        h -= h % 2
+        if (w <= 0 || h <= 0) return emptyList<android.graphics.Bitmap>() to emptyList<Int>()
+        val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(
+            runCatching { android.graphics.Color.parseColor(state.project.canvasBg ?: "#FFFFFF") }
+                .getOrDefault(android.graphics.Color.WHITE),
+        )
+        val count = space.bitos.core.studio.MemeCanvas.blankGifFrameCount(blankGifSecMs, blankGifFps)
+        val delay = space.bitos.core.studio.MemeCanvas.loopDelayMs(blankGifFps)
+        return List(count) { bitmap } to List(count) { delay }
+    }
+
     fun saveToDevice() {
         if (exporting) return
         val exportProject = state.project
@@ -1372,9 +1494,23 @@ fun MemeEditorScreen(
         val exportSoundPcm = soundtrackPcm
         val exportDelays = if (gifUniformDelayMs > 0) List(exportFrames.size) { gifUniformDelayMs } else gifDelays.toList()
         if (gifMode) {
-            if (gifFrames.isEmpty()) {
-                exportStatus = "Pick frames first"
-                return
+            val framesForExport: List<android.graphics.Bitmap>
+            val delaysForExport: List<Int>
+            if (blankGifActive) {
+                if (!blankGifHasContent) {
+                    exportStatus = "Add text or stickers first — the canvas alone is not a GIF"
+                    return
+                }
+                val generated = blankGifSource()
+                framesForExport = generated.first
+                delaysForExport = generated.second
+            } else {
+                if (gifFrames.isEmpty()) {
+                    exportStatus = "Pick frames first"
+                    return
+                }
+                framesForExport = exportFrames
+                delaysForExport = exportDelays
             }
             exporting = true
             showExport = true
@@ -1385,7 +1521,7 @@ fun MemeEditorScreen(
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
                         val layerBitmaps = decodeLayerBitmaps()
-                        val exported = MemeGifExport.export(exportFrames, exportDelays, exportProject) { layerBitmaps[it] }
+                        val exported = MemeGifExport.export(framesForExport, delaysForExport, exportProject) { layerBitmaps[it] }
                             ?: error("GIF export failed")
                         check(exportJobs.artifactReady(exportJob, exported.gifBytes)) {
                             "Could not persist the render"
@@ -1431,6 +1567,70 @@ fun MemeEditorScreen(
         }
         if (videoMode) {
             if (!hasVideo) { exportStatus = "Pick a clip first"; return }
+            if (blankVideoActive && !blankVideoHasContent) {
+                exportStatus = "Add text, stickers, layers or sound first — the canvas alone is not a video"
+                return
+            }
+            if (exportVideoAsGif) {
+                // MST-081/083: video→GIF — sample the composed timeline
+                // (raw windows; the encoder paints the timed plan) and ride
+                // the existing GIF ladder + durable job machinery.
+                exporting = true
+                showExport = true
+                exportStatus = null
+                val exportJob = exportJobs.begin("gif")
+                scope.launch {
+                    var gifExportInfo: MemeGifExport.Result? = null
+                    var gifSpanTrimmed = false
+                    val result = runCatching {
+                        withContext(Dispatchers.IO) {
+                            val sampled = VideoGifSampler.sample(context, exportClips, exportProject)
+                                ?: error("Could not sample the video for GIF export")
+                            gifSpanTrimmed = sampled.trimmed
+                            val layerBitmaps = decodeLayerBitmaps()
+                            val exported = MemeGifExport.export(sampled.frames, sampled.delaysMs, exportProject) { layerBitmaps[it] }
+                                ?: error("GIF export failed")
+                            gifExportInfo = exported
+                            check(exportJobs.artifactReady(exportJob, exported.gifBytes)) {
+                                "Could not persist the render"
+                            }
+                            exportJobs.update(exportJob, phase = "saving")
+                            MemeRaster.saveMediaFile(
+                                context,
+                                exported.gifBytes,
+                                "image/gif",
+                                "bitos-meme-${System.currentTimeMillis()}",
+                            )
+                        }
+                    }
+                    exporting = false
+                    exportJobsRevision += 1
+                    result.onSuccess {
+                        lastExportSizeBytes = exportJobs.list().firstOrNull { it.id == exportJob }?.artifactBytes
+                        exportJobs.finish(exportJob)
+                    }
+                        .onFailure { exportJobs.update(exportJob, phase = "failed", error = it.message) }
+                    exportOutcome = result.fold(
+                        onSuccess = {
+                            val exported = gifExportInfo
+                            val spanNote = if (gifSpanTrimmed) " · first 10 s" else ""
+                            when {
+                                exported != null && (exported.ladderStep > 0 || exported.capped) ->
+                                    ExportOutcome.SuccessAdjusted("Saved at a smaller size (downscaled ×${exported.ladderStep})$spanNote")
+                                else -> ExportOutcome.Success("Saved to Photos ✓ (GIF · silent)$spanNote")
+                            }
+                        },
+                        onFailure = { ExportOutcome.Failure("Save failed: ${it.message}") },
+                    )
+                    exportStatus = when (val outcome = exportOutcome) {
+                        is ExportOutcome.Success -> outcome.detail
+                        is ExportOutcome.SuccessAdjusted -> outcome.detail
+                        is ExportOutcome.Failure -> outcome.message
+                        null -> null
+                    }
+                }
+                return
+            }
             val timelineMs = timelineDurationMs
             exporting = true
             showExport = true
@@ -1595,7 +1795,9 @@ fun MemeEditorScreen(
             Spacer(Modifier.weight(1f))
             // Publish entry (prototype "Next · post details") lives in the
             // header beside draft save so the bottom stack stays tool-only.
-            val headerHasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo || blankDesignActive
+            val headerHasMedia = activeAssetId != null ||
+                (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
+                (hasVideo && blankVideoHasContent) || blankDesignActive
             val headerPublishBusy = memePublishState?.phase.let {
                 it == space.bitos.app.ui.feed.MemePublishPhase.UPLOADING ||
                     it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
@@ -1722,10 +1924,69 @@ fun MemeEditorScreen(
                     onBlank = { state.setCanvas("1:1", "#FFFFFF") },
                 )
             } else if (videoMode) {
-                EmptyCanvasCta(onPick = ::launchPicker)
+                EmptyCanvasCta(
+                    onPick = ::launchPicker,
+                    onBlank = {
+                        activePanel = null
+                        showBlankCreate = true
+                    },
+                )
+            } else if (blankGifActive) {
+                // Kinetic blank GIF (MST-078): the canvas with fx-animated
+                // overlays on a loop clock — WYSIWYG with the timed
+                // exporter (same `MemeFxRules` transforms).
+                var blankGifTickMs by remember { mutableStateOf(0L) }
+                val frameStepMs = 1000L / blankGifFps
+                LaunchedEffect(blankGifActive, blankGifSecMs, blankGifFps) {
+                    if (!blankGifActive) return@LaunchedEffect
+                    while (true) {
+                        kotlinx.coroutines.delay(frameStepMs)
+                        blankGifTickMs = (blankGifTickMs + frameStepMs) % blankGifSecMs
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .aspectRatio(
+                            pinnedCanvasTerms!!.first.toFloat() / pinnedCanvasTerms.second,
+                        )
+                        .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
+                        .onSizeChanged { stagePx = it },
+                ) {
+                    state.project.overlays.forEach { overlay ->
+                        if (space.bitos.core.studio.MemeFxRules.visibleAt(overlay, blankGifTickMs)) {
+                            OverlayNode(
+                                overlay = overlay,
+                                stageWidthPx = stageWidth,
+                                stageHeightPx = stageHeight,
+                                selected = overlay.id == state.selectedOverlayId,
+                                imageAssets = imageAssetMap,
+                                fx = space.bitos.core.studio.MemeFxRules.transformAt(overlay, blankGifTickMs),
+                            )
+                        }
+                    }
+                    val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
+                    if (selected != null) {
+                        DeleteHandle(
+                            overlay = selected,
+                            stageWidthPx = stageWidth,
+                            stageHeightPx = stageHeight,
+                        )
+                    }
+                    StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    StageGestures(
+                        stageWidthPx = stageWidth,
+                        stageHeightPx = stageHeight,
+                        state = state,
+                    )
+                }
             } else if (gifMode && gifFrames.isEmpty()) {
                 EmptyCanvasCta(
                     onPick = ::launchPicker,
+                    onBlank = {
+                        activePanel = null
+                        showBlankGifCreate = true
+                    },
                     onBrowseGifs = {
                         activePanel = null
                         showGifBrowse = true
@@ -1768,14 +2029,27 @@ fun MemeEditorScreen(
                             null
                         },
                     )
+                    // Picked-GIF preview goes kinetic too (MST-077 stage
+                    // honesty): overlays render at the CURRENT frame's
+                    // loop time — the same transforms the exporter burns.
+                    val frameStartMs = if (gifUniformDelayMs > 0) {
+                        gifPreviewIndex * gifUniformDelayMs.toLong()
+                    } else {
+                        (0 until gifPreviewIndex).sumOf {
+                            gifDelays.getOrElse(it) { GifFrameSource.STILL_DELAY_MS }.toLong()
+                        }
+                    }
                     state.project.overlays.forEach { overlay ->
-                        OverlayNode(
-                            overlay = overlay,
-                            stageWidthPx = stageWidth,
-                            stageHeightPx = stageHeight,
-                            selected = overlay.id == state.selectedOverlayId,
-                            imageAssets = imageAssetMap,
-                        )
+                        if (space.bitos.core.studio.MemeFxRules.visibleAt(overlay, frameStartMs)) {
+                            OverlayNode(
+                                overlay = overlay,
+                                stageWidthPx = stageWidth,
+                                stageHeightPx = stageHeight,
+                                selected = overlay.id == state.selectedOverlayId,
+                                imageAssets = imageAssetMap,
+                                fx = space.bitos.core.studio.MemeFxRules.transformAt(overlay, frameStartMs),
+                            )
+                        }
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
                     if (selected != null) {
@@ -2094,7 +2368,9 @@ fun MemeEditorScreen(
                     canAddOverlay = state.canAddOverlay,
                     looksEnabled = activeAsset != null || gifFrames.isNotEmpty() || (videoMode && hasVideo),
                     soundEnabled = videoMode && hasVideo,
-                    saveEnabled = (activeAssetId != null || blankDesignActive || gifFrames.isNotEmpty() || hasVideo) && !exporting,
+                    saveEnabled = (activeAssetId != null || blankDesignActive ||
+                        (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
+                        (hasVideo && blankVideoHasContent)) && !exporting,
                     activePanel = activePanel,
                     drawActive = drawMode,
                     onPanel = { panel ->
@@ -2253,6 +2529,12 @@ fun MemeEditorScreen(
                     exportStatus = "Frame hold $next ms"
                 },
                 onOpenCanvas = { showCanvas = true },
+                showCanvasChip = blankVideoActive,
+                gifDurationChip = blankGifActive,
+                onOpenGifDuration = {
+                    activePanel = null
+                    showBlankGifCreate = true
+                },
                 onOpenGifBrowse = {
                     activePanel = null
                     showGifBrowse = true
@@ -2322,6 +2604,8 @@ fun MemeEditorScreen(
                     failure = (exportOutcome as? ExportOutcome.Failure)?.message,
                     preset = exportPreset,
                     presetManual = exportPresetManual,
+                    videoFormatGif = exportVideoAsGif,
+                    onVideoFormatGif = { exportVideoAsGif = it },
                     onPresetAuto = {
                         exportPreset = MemeExportPresets.AUTO
                         exportPresetManual = false
@@ -2393,6 +2677,7 @@ fun MemeEditorScreen(
                             )
                             MemeEditorPanel.SOUND -> SoundPanelContent(
                                 cueCount = state.project.sfxCues.size,
+                                hasSourceAudio = !blankVideoActive,
                                 soundtrack = state.project.soundtrack,
                                 extracting = extractingSound,
                                 onPickSound = {
@@ -2401,6 +2686,7 @@ fun MemeEditorScreen(
                                     )
                                 },
                                 onSoundVolume = { state.setSoundtrackVolume(it) },
+                                onSoundLoop = { state.setSoundtrackLoop(it) },
                                 onRemoveSound = {
                                     state.removeSoundtrack()
                                     soundtrackM4a = null
@@ -2654,15 +2940,22 @@ fun MemeEditorScreen(
     }
 
     if (showSfx) {
+        // Per-overlay sound windows: a selected overlay WITH a visibility
+        // window offers its start/end as cue anchors — sounds land exactly
+        // when the element appears/leaves instead of the raw playhead.
+        val windowedOverlay = state.project.overlays.firstOrNull {
+            it.id == state.selectedOverlayId && (it.startMs != null || it.endMs != null)
+        }
         ModalBottomSheet(onDismissRequest = { showSfx = false; SfxPreview.stop() }) {
             SfxSheetContent(
                 cues = state.project.sfxCues,
                 positionMs = videoPositionMs,
+                overlayWindow = windowedOverlay?.let { (it.startMs ?: 0L) to (it.endMs ?: videoPositionMs) },
                 onApplyTemplate = { id ->
                     space.bitos.core.studio.SfxTemplates.ALL.firstOrNull { it.id == id }
                         ?.cues?.forEach { cue -> state.addSfxCue(cue.sfx, videoPositionMs + cue.atMs) }
                 },
-                onAdd = { state.addSfxCue(it, videoPositionMs) },
+                onAdd = { sfx, atMs -> state.addSfxCue(sfx, atMs ?: videoPositionMs) },
                 onRemove = { state.removeSfxCue(it) },
             )
         }
@@ -2705,6 +2998,43 @@ fun MemeEditorScreen(
             },
             onDismiss = { showGifPicker = false },
         )
+    }
+
+    if (showBlankCreate) {
+        // MST-071: blank-video creation — ratio · background · duration
+        // → the synthesized canvas clip ("the canvas IS the media").
+        ModalBottomSheet(onDismissRequest = { showBlankCreate = false }) {
+            BlankCanvasSheetContent(
+                isVideo = true,
+                createLabel = "Create blank video",
+                onCreate = { ratioId, bgHex, durationMs, _ ->
+                    showBlankCreate = false
+                    appendBlankClip(ratioId, bgHex, durationMs)
+                },
+            )
+        }
+    }
+
+    if (showBlankGifCreate) {
+        // MST-078/080: blank-GIF creation + Duration re-style. The timing
+        // rides the wire (canvas sec/fps), so a relaunch resumes the loop;
+        // the loop length re-opens here with the current values applied.
+        ModalBottomSheet(onDismissRequest = { showBlankGifCreate = false }) {
+            BlankCanvasSheetContent(
+                isVideo = false,
+                createLabel = if (blankGifActive && state.project.canvasSec != null) "Apply" else "Create blank GIF",
+                initialRatio = state.project.canvasRatio,
+                initialBg = state.project.canvasBg,
+                initialDurationMs = state.project.canvasSec,
+                initialFps = state.project.canvasFps,
+                onCreate = { ratioId, bgHex, secMs, fps ->
+                    showBlankGifCreate = false
+                    state.setCanvas(ratioId, bgHex)
+                    state.setBlankGifTiming(secMs, fps)
+                    exportStatus = "Blank GIF ready — add text or stickers, then give them motion"
+                },
+            )
+        }
     }
 
     if (showGifBrowse) {
@@ -2828,13 +3158,31 @@ fun MemeEditorScreen(
         }
     }
 
-    if (showCanvas && !videoMode) {
+    if (showCanvas && (!videoMode || blankVideoActive)) {
         ModalBottomSheet(onDismissRequest = { showCanvas = false }) {
+            if (blankVideoActive) {
+                // MST-073: on a blank timeline the Canvas sheet re-styles
+                // THE SOURCE CLIP (ratio · bg · duration regenerate it;
+                // overlays/cues keep their timeline positions).
+                BlankCanvasSheetContent(
+                    isVideo = true,
+                    createLabel = "Apply to canvas",
+                    initialRatio = blankCanvasSpec?.first,
+                    initialBg = blankCanvasSpec?.second,
+                    initialDurationMs = videoClips.firstOrNull()
+                        ?.let { it.probe.durationMs.coerceIn(3_000L, 10_000L) },
+                    onCreate = { ratioId, bgHex, durationMs, _ ->
+                        showCanvas = false
+                        restyleBlankClip(ratioId, bgHex, durationMs)
+                    },
+                )
+            } else {
             CanvasSheetContent(
                 ratio = state.project.canvasRatio ?: space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
                 bg = state.project.canvasBg,
                 onPick = { ratio, bg -> state.setCanvas(ratio, bg) },
             )
+            }
         }
     }
 
@@ -2929,8 +3277,8 @@ fun MemeEditorScreen(
                 // Video/GIF modes have no `activeAsset` (their media lives in
                 // session bytes) — the mode itself gates readiness here.
                 val mediaReady = activeAsset != null ||
-                    (project.mode == MemeMode.VIDEO && hasVideo) ||
-                    (project.mode == MemeMode.GIF && gifFrames.isNotEmpty()) ||
+                    (project.mode == MemeMode.VIDEO && hasVideo && blankVideoHasContent) ||
+                    (project.mode == MemeMode.GIF && (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent))) ||
                     (project.mode == MemeMode.IMAGE && blankDesignActive)
                 if (!mediaReady) return@MemePostFlowScreen
                 // MST-036: manual presets gate on the shared ESTIMATE —
@@ -3009,17 +3357,25 @@ fun MemeEditorScreen(
                             // Actual export dims (preset canvas, not probe) —
                             // imeta must match the published media (MST-036).
                             Triple(exported.bytes, exported.width, exported.height) to "video/mp4"
-                        } else if (project.mode == MemeMode.GIF && gifFrames.isNotEmpty()) {
+                        } else if (project.mode == MemeMode.GIF &&
+                            (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent))
+                        ) {
                             // MST-023: GIF memes publish as kind-20 with
                             // imeta `m image/gif` (the same verify-before-sign
-                            // machine as PNG — only the bytes differ).
+                            // machine as PNG — only the bytes differ). A blank
+                            // GIF generates its canvas frames at loop timing.
                             val delays = if (gifUniformDelayMs > 0) {
                                 List(gifFrames.size) { gifUniformDelayMs }
                             } else {
                                 gifDelays.toList()
                             }
                             val layerBitmaps = decodeLayerBitmaps()
-                            val exported = MemeGifExport.export(gifFrames.toList(), delays, project) { layerBitmaps[it] }
+                            val source = if (blankGifActive) blankGifSource() else gifFrames.toList() to delays
+                            val exported = MemeGifExport.export(
+                                source.first,
+                                if (blankGifActive) source.second else delays,
+                                project,
+                            ) { layerBitmaps[it] }
                                 ?: error("GIF export failed")
                             Triple(
                                 exported.gifBytes,
@@ -3424,10 +3780,12 @@ private fun TextPanelContent(onAdd: (String, MemeFontSlot) -> Unit) {
 @Composable
 private fun SoundPanelContent(
     cueCount: Int,
+    hasSourceAudio: Boolean = true,
     soundtrack: space.bitos.core.studio.MemeSoundtrack? = null,
     extracting: Boolean = false,
     onPickSound: () -> Unit = {},
     onSoundVolume: (Float) -> Unit = {},
+    onSoundLoop: (Boolean) -> Unit = {},
     onRemoveSound: () -> Unit = {},
     onOpenStudio: () -> Unit,
 ) {
@@ -3435,13 +3793,20 @@ private fun SoundPanelContent(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.base)) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (cueCount == 0) "Original clip audio" else "$cueCount synth cues",
+                    when {
+                        cueCount > 0 -> "$cueCount synth cues"
+                        hasSourceAudio -> "Original clip audio"
+                        else -> "Silent canvas"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.W600,
                 )
                 Text(
-                    if (cueCount == 0) "Drop risers, zaps and coin SFX at the playhead"
-                    else "Cues bake into the export mix",
+                    when {
+                        cueCount > 0 -> "Cues bake into the export mix"
+                        hasSourceAudio -> "Drop risers, zaps and coin SFX at the playhead"
+                        else -> "The blank canvas has no audio of its own — add SFX or a soundtrack"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = BitOSColors.textSecondary,
                 )
@@ -3512,6 +3877,19 @@ private fun SoundPanelContent(
                                 color = BitOSColors.textSecondary,
                             )
                         }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                            Text("Loop to fill", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = soundtrack.loop,
+                                onCheckedChange = onSoundLoop,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                if (soundtrack.loop) "repeats to the end" else "plays once",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
                         BitosSlider(
                             value = soundtrack.volume.coerceIn(0f, 1f),
                             onValueChange = onSoundVolume,
@@ -3542,6 +3920,7 @@ private fun TimelineClipSegment(
     speed: Float,
     muted: Boolean,
     selected: Boolean,
+    label: String = "vdo ${index + 1}",
     onSelect: () -> Unit,
 ) {
     Column(
@@ -3564,7 +3943,7 @@ private fun TimelineClipSegment(
             .clickable { onSelect() },
     ) {
         Text(
-            "vdo ${index + 1}",
+            label,
             style = MaterialTheme.typography.labelSmall,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
@@ -3683,6 +4062,7 @@ private fun TimelineStrip(
                             speed = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed),
                             muted = clip.volume == 0f,
                             selected = index == selectedClipIndex,
+                            label = if (clip.id.startsWith("blank")) "canvas" else "vdo ${index + 1}",
                             onSelect = { onSelectClip(index) },
                         )
                     }
@@ -3741,6 +4121,130 @@ private fun ClipToolButton(
 
 /** Canvas settings (image/GIF): ratio preset + background color (shared
  *  [space.bitos.core.studio.MemeCanvas] rules; the media letterboxes). */
+/**
+ * Blank-video creation/re-style sheet (plan §3.2/§3.3, MST-071/073):
+ * ratio · background · duration → the synthesized solid canvas clip. On
+ * re-style the source regenerates in place; overlays, strokes and cues
+ * keep their timeline positions.
+ */
+@Composable
+private fun BlankCanvasSheetContent(
+    isVideo: Boolean,
+    createLabel: String,
+    onCreate: (ratioId: String, bgHex: String, durationMs: Long, fps: Int) -> Unit,
+    initialRatio: String? = null,
+    initialBg: String? = null,
+    initialDurationMs: Long? = null,
+    initialFps: Int? = null,
+) {
+    var ratio by remember { mutableStateOf(initialRatio ?: "1:1") }
+    var bg by remember { mutableStateOf(initialBg ?: "#FFFFFF") }
+    var durationMs by remember { mutableStateOf(initialDurationMs ?: if (isVideo) 5_000L else 2_000L) }
+    var fps by remember { mutableStateOf(initialFps ?: space.bitos.core.studio.MemeCanvas.DEFAULT_BLANK_GIF_FPS) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = BitOSSpacing.base)
+            .padding(bottom = BitOSSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Text("Blank canvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text("Size", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            space.bitos.core.studio.MemeCanvas.RATIOS
+                .filter { it.first != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }
+                .forEach { (id, label) ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (ratio == id) BitOSColors.primary else BitOSColors.surfaceElevated,
+                        modifier = Modifier.clickable(onClickLabel = label) { ratio = id },
+                    ) {
+                        Text(
+                            id,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (ratio == id) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+        }
+        Text("Background", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            listOf("#000000", "#ffffff", "#fde047", "#f97316", "#22d3ee", "#a3e635", "#f472b6")
+                .forEach { hex ->
+                    val selected = bg == hex
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(parseCanvasColor(hex) ?: androidx.compose.ui.graphics.Color.White)
+                            .border(
+                                if (selected) 2.dp else 1.dp,
+                                if (selected) BitOSColors.primary else BitOSColors.border,
+                                androidx.compose.foundation.shape.CircleShape,
+                            )
+                            .clickable(onClickLabel = "Background $hex") { bg = hex },
+                    )
+                }
+        }
+        Text(
+            if (isVideo) "Duration" else "Loop length",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.W600,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            (if (isVideo) listOf(3_000L to "3 s", 5_000L to "5 s", 10_000L to "10 s")
+            else space.bitos.core.studio.MemeCanvas.BLANK_GIF_MS_choices.map { it to "${it / 1000} s" })
+                .forEach { (ms, label) ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (durationMs == ms) BitOSColors.primary else BitOSColors.surfaceElevated,
+                        modifier = Modifier.clickable(onClickLabel = label) { durationMs = ms },
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (durationMs == ms) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+        }
+        if (!isVideo) {
+            Text("Frame rate", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                space.bitos.core.studio.MemeCanvas.BLANK_GIF_FPS.sorted().forEach { rate ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (fps == rate) BitOSColors.primary else BitOSColors.surfaceElevated,
+                        modifier = Modifier.clickable(onClickLabel = "$rate fps") { fps = rate },
+                    ) {
+                        Text(
+                            "$rate fps",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (fps == rate) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+        Button(
+            onClick = { onCreate(ratio, bg, durationMs, fps) },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BitOSColors.primary,
+                contentColor = androidx.compose.ui.graphics.Color.White,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(createLabel)
+        }
+    }
+}
+
 @Composable
 private fun CanvasSheetContent(
     ratio: String,
@@ -3871,6 +4375,9 @@ private fun ExportSettingsContent(
     presetManual: Boolean = false,
     onPresetAuto: () -> Unit = {},
     onPresetPick: (MemeExportPresets.Resolution, MemeExportPresets.Quality) -> Unit = { _, _ -> },
+    /** MST-083: video→GIF format choice (MP4 default). */
+    videoFormatGif: Boolean = false,
+    onVideoFormatGif: (Boolean) -> Unit = {},
     onExport: () -> Unit,
 ) {
     fun sizeText(bytes: Int): String = String.format(java.util.Locale.US, "%.1f MB", bytes / 1_000_000.0)
@@ -3911,6 +4418,35 @@ private fun ExportSettingsContent(
             style = MaterialTheme.typography.bodySmall,
             color = BitOSColors.textSecondary,
         )
+        if (isVideo) {
+            // MST-083: FORMAT row — MP4 (sound) or GIF (sampled from the
+            // composed timeline; silent by format).
+            Text("Format", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                listOf(false to "MP4", true to "GIF").forEach { (gif, label) ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (videoFormatGif == gif) BitOSColors.primary else BitOSColors.surfaceElevated,
+                        modifier = Modifier.clickable(onClickLabel = "Export as $label") { onVideoFormatGif(gif) },
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (videoFormatGif == gif) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+            if (videoFormatGif) {
+                Text(
+                    "Looping, silent · ~10 fps · up to the first 10 s · auto-downscaled to fit 8 MB",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BitOSColors.textSecondary,
+                )
+            }
+        }
         if (isVideo && durationSeconds > 0) {
             ExportPresetSection(
                 preset = preset,
@@ -4222,6 +4758,11 @@ private fun PerModeBar(
     onCycleGifSpeed: () -> Unit,
     onOpenCanvas: () -> Unit = {},
     onOpenGifBrowse: () -> Unit = {},
+    /** Blank timeline: show the Canvas (re-style) chip in video mode. */
+    showCanvasChip: Boolean = false,
+    /** Blank GIF: swap the Speed chip for the Duration (re-style) chip. */
+    gifDurationChip: Boolean = false,
+    onOpenGifDuration: () -> Unit = {},
 ) {
     val borderColor = BitOSColors.border
     Row(
@@ -4239,6 +4780,9 @@ private fun PerModeBar(
         horizontalArrangement = Arrangement.SpaceAround,
     ) {
         if (videoMode) {
+            if (showCanvasChip) {
+                ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
+            }
             ClipToolButton(AppIcons.Video, "Clips") { onOpenClips() }
             ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
             ClipToolButton(AppIcons.Crop, "Trim") { onOpenTrim() }
@@ -4247,7 +4791,12 @@ private fun PerModeBar(
         } else if (gifMode) {
             ClipToolButton(AppIcons.Gif, "GIFs") { onOpenGifBrowse() }
             ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
-            ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
+            if (gifDurationChip) {
+                // Blank GIF: the loop length replaces the frame-hold speed.
+                ClipToolButton(AppIcons.Speed, "Duration") { onOpenGifDuration() }
+            } else {
+                ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
+            }
             ClipToolButton(AppIcons.Loop, "Loop") { onNotice("GIFs loop forever — nothing to set") }
             ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
             ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
@@ -6706,7 +7255,9 @@ private fun audioBedTimeline(
     }
     val soundBed = project.soundtrack?.let { sound ->
         soundtrackPcm?.let { (pcm, rate) ->
-            space.bitos.core.studio.MemeSoundMix.bedTrack(pcm, rate, timelineDurationMs, sound.offsetMs, sound.volume)
+            space.bitos.core.studio.MemeSoundMix.bedTrack(
+                pcm, rate, timelineDurationMs, sound.offsetMs, sound.volume, sound.loop,
+            )
         }
     }?.takeIf { it.isNotEmpty() }
     val bed = when {
@@ -6724,14 +7275,22 @@ private fun audioBedTimeline(
 private fun SfxSheetContent(
     cues: List<space.bitos.core.studio.MemeSfxCue>,
     positionMs: Long,
-    onAdd: (String) -> Unit,
+    onAdd: (String, Long?) -> Unit,
     onRemove: (String) -> Unit,
     onApplyTemplate: (String) -> Unit = {},
+    /** Selected overlay's visibility window (startMs, endMs) — the cue
+     *  anchor row when a timed element is selected. */
+    overlayWindow: Pair<Long, Long>? = null,
 ) {
     var bucketId by remember { mutableStateOf(space.bitos.core.studio.SfxSynth.BUCKETS.first().id) }
     var search by remember { mutableStateOf("") }
     val bucket = space.bitos.core.studio.SfxSynth.BUCKETS.first { it.id == bucketId }
     val searching = search.isNotBlank()
+    // Per-overlay anchor: "overlay start" / "overlay end" / playhead.
+    var anchorAtOverlayStart by remember { mutableStateOf(true) }
+    val cueAnchorMs: Long? = overlayWindow?.let { (start, end) ->
+        if (anchorAtOverlayStart) start else end
+    }
     // Case-insensitive label search (web filterEntries parity): a query
     // flattens the buckets; empty keeps the bucket view.
     val entries: List<Pair<String, String>> = if (searching) {
@@ -6741,6 +7300,30 @@ private fun SfxSheetContent(
         bucket.sfx.map { it to space.bitos.core.studio.SfxSynth.labelOf(it) }
     }
     Column(Modifier.padding(BitOSSpacing.base)) {
+        if (overlayWindow != null) {
+            val (start, end) = overlayWindow
+            Surface(shape = RoundedCornerShape(10.dp), color = BitOSColors.surface) {
+                Column(Modifier.padding(BitOSSpacing.sm), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Cue anchor · selected overlay window ${"%.1f".format(start / 1000f)}–${"%.1f".format(end / 1000f)}s",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                        FilterChip(
+                            selected = anchorAtOverlayStart,
+                            onClick = { anchorAtOverlayStart = true },
+                            label = { Text("At overlay start", style = MaterialTheme.typography.labelSmall) },
+                        )
+                        FilterChip(
+                            selected = !anchorAtOverlayStart,
+                            onClick = { anchorAtOverlayStart = false },
+                            label = { Text("At overlay end", style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                }
+            }
+        }
         Text("Sound effects", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
         Text(
             "Tap to preview · Add cue schedules it at ${(positionMs / 1000.0).let { "%.1f".format(it) }}s (≤16, fully synthesized — zero audio assets)",
@@ -6804,7 +7387,7 @@ private fun SfxSheetContent(
                                 color = BitOSColors.textSecondary,
                             )
                         }
-                        TextButton(onClick = { onAdd(id); }) {
+                        TextButton(onClick = { onAdd(id, cueAnchorMs); }) {
                             Icon(
                                 AppIcons.Add,
                                 contentDescription = null,
