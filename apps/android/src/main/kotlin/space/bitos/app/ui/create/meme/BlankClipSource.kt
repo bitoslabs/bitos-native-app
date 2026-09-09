@@ -117,12 +117,12 @@ object BlankClipSource {
                 gl.drawColor(color, frameNs = ptsBaseNs + frame * 1_000_000_000L / FPS)
                 // Interleaved drain — the encoder stalls once its output
                 // buffers fill (usually ~10), long before 30 solid frames.
-                drain(encoder, muxer, info, endOfStream = false) { track, started ->
+                drain(encoder, muxer, info, endOfStream = false, trackIndex = trackIndex) { track, started ->
                     trackIndex = track; muxerStarted = started
                 }
             }
             encoder.signalEndOfInputStream()
-            drain(encoder, muxer, info, endOfStream = true) { track, started ->
+            drain(encoder, muxer, info, endOfStream = true, trackIndex = trackIndex) { track, started ->
                 trackIndex = track; muxerStarted = started
             }
             if (!muxerStarted || trackIndex < 0) return null
@@ -145,10 +145,14 @@ object BlankClipSource {
         muxer: MediaMuxer,
         info: MediaCodec.BufferInfo,
         endOfStream: Boolean,
+        trackIndex: Int,
         onState: (track: Int, started: Boolean) -> Unit,
     ) {
-        var track = -1
-        var started = false
+        // `INFO_OUTPUT_FORMAT_CHANGED` occurs only once. The track must
+        // survive every interleaved drain below or all later encoded frames
+        // are dropped because their local track would be -1.
+        var track = trackIndex
+        var started = track >= 0
         while (true) {
             val index = encoder.dequeueOutputBuffer(info, if (endOfStream) 10_000L else 0L)
             when {

@@ -435,6 +435,9 @@ fun MemeEditorScreen(
             val bytes = withContext(Dispatchers.IO) { file.readBytes() }
             runCatching { file.delete() }
             blankCanvasSpec = ratioId to bgHex
+            // Keep the canvas facts with the draft so a resumed blank video
+            // can be extended without asking the creator to re-pick its look.
+            state.setCanvas(ratioId, bgHex)
             // Exact requested window (user-reported fix): the synthesizer
             // guarantees the duration, so the clip rides the PICKED length —
             // NEVER the probed container (some retrievers report 0 for the
@@ -486,6 +489,7 @@ fun MemeEditorScreen(
             val bytes = withContext(Dispatchers.IO) { file.readBytes() }
             runCatching { file.delete() }
             blankCanvasSpec = ratioId to bgHex
+            state.setCanvas(ratioId, bgHex)
             state.beginClipsEdit()
             // The new PICKED duration IS the window (user-reported fix):
             // extending no longer keeps the old short window, shrinking
@@ -504,6 +508,30 @@ fun MemeEditorScreen(
             syncWireClips()
             seedingProgress = null
         }
+    }
+
+    /** Adds time to a blank canvas without making the duration picker feel
+     * like it replaces the creator's existing timeline. A synthesized source
+     * is intentionally capped at 60 s; longer video work uses real clips. */
+    fun extendBlankClip(additionalMs: Long) {
+        val current = videoClips.firstOrNull { it.id.startsWith("blank") } ?: return
+        val spec = blankCanvasSpec ?: run {
+            val ratio = state.project.canvasRatio
+            val bg = state.project.canvasBg
+            if (ratio != null && bg != null) ratio to bg else null
+        }
+        if (spec == null) {
+            exportStatus = "Open Canvas to set its size and background before extending this older draft"
+            return
+        }
+        val maximumMs = minOf(60_000L, videoPublishProfile.maxTimelineMs)
+        val targetMs = (current.endMs + additionalMs).coerceAtMost(maximumMs)
+        if (targetMs <= current.endMs) {
+            exportStatus = "Canvas is already at its ${maximumMs / 1_000} s limit"
+            return
+        }
+        restyleBlankClip(spec.first, spec.second, targetMs)
+        exportStatus = "Extending canvas to ${targetMs / 1_000} s…"
     }
 
     fun removeClip(index: Int) {
@@ -3229,6 +3257,10 @@ fun MemeEditorScreen(
                         showCanvas = false
                         restyleBlankClip(ratioId, bgHex, durationMs)
                     },
+                    onExtend = { additionalMs ->
+                        showCanvas = false
+                        extendBlankClip(additionalMs)
+                    },
                 )
             } else {
             CanvasSheetContent(
@@ -4196,6 +4228,7 @@ private fun BlankCanvasSheetContent(
     initialBg: String? = null,
     initialDurationMs: Long? = null,
     initialFps: Int? = null,
+    onExtend: ((additionalMs: Long) -> Unit)? = null,
 ) {
     var ratio by remember { mutableStateOf(initialRatio ?: "1:1") }
     var bg by remember { mutableStateOf(initialBg ?: "#FFFFFF") }
@@ -4291,6 +4324,14 @@ private fun BlankCanvasSheetContent(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         )
                     }
+                }
+            }
+        }
+        if (isVideo && onExtend != null) {
+            Text("Extend timeline", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                listOf(3_000L to "+3 s", 5_000L to "+5 s", 10_000L to "+10 s").forEach { (ms, label) ->
+                    OutlinedButton(onClick = { onExtend(ms) }) { Text(label) }
                 }
             }
         }

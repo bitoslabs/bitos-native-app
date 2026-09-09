@@ -1364,6 +1364,7 @@ final class MemeEditorStore {
                 let data = try Data(contentsOf: url)
                 try? FileManager.default.removeItem(at: url)
                 blankCanvasSpec = (ratioId, bgHex)
+                setCanvas(ratio: ratioId, bg: bgHex)
                 // Exact requested window (user-reported fix): the synthesizer
                 // guarantees the duration — NEVER clamp to the probed container
                 // (a 0-duration probe read must not collapse the timeline to
@@ -1410,6 +1411,7 @@ final class MemeEditorStore {
                 }
                 let data = try Data(contentsOf: url)
                 blankCanvasSpec = (ratioId, bgHex)
+                setCanvas(ratio: ratioId, bg: bgHex)
                 pushHistory(projectJson)
                 // The new PICKED duration IS the window (user-reported
                 // fix): extending no longer keeps the old short window, and
@@ -1429,6 +1431,27 @@ final class MemeEditorStore {
                 setNotice("Could not restyle the canvas")
             }
         }
+    }
+
+    /// Adds time to a blank canvas while preserving its chosen look. The
+    /// synthesized source remains bounded to 60 seconds.
+    func extendBlankClip(by additionalMs: Int64) {
+        guard let current = clips.first(where: { $0.id.hasPrefix("blank") }) else { return }
+        guard let spec = blankCanvasSpec ?? {
+            guard let ratio = canvasRatio, let bg = canvasBg else { return nil }
+            return (ratio: ratio, bg: bg)
+        }() else {
+            setNotice("Open Canvas to set its size and background before extending this older draft")
+            return
+        }
+        let maximumMs = min(Int64(60_000), videoPublishProfile.maxTimelineMs)
+        let targetMs = min(current.endMs + additionalMs, maximumMs)
+        guard targetMs > current.endMs else {
+            setNotice("Canvas is already at its \(maximumMs / 1_000) s limit")
+            return
+        }
+        setNotice("Extending canvas to \(targetMs / 1_000) s…")
+        restyleBlankClip(ratioId: spec.ratio, bgHex: spec.bg, durationMs: targetMs)
     }
 
     func removeClip(at index: Int) {
@@ -3289,7 +3312,11 @@ struct MemeEditorView: View {
                     createLabel: "Apply to canvas",
                     initialRatio: store.blankCanvasSpec?.ratio,
                     initialBg: store.blankCanvasSpec?.bg,
-                    initialDurationSec: store.clips.first.map { Double($0.probe.durationMs) / 1000 } ?? 5
+                    initialDurationSec: store.clips.first.map { Double($0.probe.durationMs) / 1000 } ?? 5,
+                    onExtend: { additionalMs in
+                        showCanvas = false
+                        store.extendBlankClip(by: additionalMs)
+                    }
                 ) { ratio, bg, seconds, _ in
                     store.restyleBlankClip(ratioId: ratio, bgHex: bg, durationMs: Int64(seconds * 1000))
                 }
@@ -7493,6 +7520,7 @@ private struct BlankCanvasSheetIos: View {
     var initialBg: String? = nil
     var initialDurationSec: Double? = nil
     var initialFps: Int? = nil
+    var onExtend: ((_ additionalMs: Int64) -> Void)? = nil
     let onCreate: (_ ratio: String, _ bgHex: String, _ durationSec: Double, _ fps: Int) -> Void
 
     @State private var ratio: String = "1:1"
@@ -7545,6 +7573,15 @@ private struct BlankCanvasSheetIos: View {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
                     ForEach(Self.fpsChoices, id: \.self) { rate in
                         chip("\(rate) fps", selected: fps == rate) { fps = rate }
+                    }
+                }
+            }
+            if isVideo, let onExtend {
+                Text("Extend timeline").font(.subheadline.weight(.semibold))
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach([3_000, 5_000, 10_000], id: \.self) { milliseconds in
+                        Button("+\(milliseconds / 1_000) s") { onExtend(Int64(milliseconds)) }
+                            .buttonStyle(.bordered)
                     }
                 }
             }

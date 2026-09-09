@@ -90,6 +90,9 @@ is your clip") replaces the empty CTA for ~4 s.
   - **Canvas chip appears in VIDEO mode** while the timeline is
     all-blank: bg re-tint regenerates the source (cheap: no content to
     lose); ratio changes require confirmation (re-frame).
+  - The Canvas sheet also exposes **Extend timeline** (+3 s, +5 s, +10 s).
+    It adds time to the current blank source rather than replacing the
+    selected duration, up to the 60 s synthesized-canvas bound.
   - **Sound** keeps its existing gating (`videoMode && hasVideo`) — a
     blank video satisfies it; the SFX sheet already mixes cues into the
     export. V1 sound = synth buckets (no user audio import; see §6).
