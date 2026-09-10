@@ -3,6 +3,27 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseStoreFile = providers.gradleProperty("BITOS_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.gradleProperty("BITOS_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.gradleProperty("BITOS_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.gradleProperty("BITOS_RELEASE_KEY_PASSWORD").orNull
+val appVersionName = providers.gradleProperty("BITOS_APP_VERSION_NAME").orNull
+    ?: error("BITOS_APP_VERSION_NAME must be configured in gradle.properties.")
+val appVersionCode = providers.gradleProperty("BITOS_APP_VERSION_CODE").orNull
+    ?.toIntOrNull()
+    ?.takeIf { it > 0 }
+    ?: error("BITOS_APP_VERSION_CODE must be a positive integer.")
+val releaseSigningValues = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+
+require(releaseSigningValues.none { it != null } || releaseSigningValues.all { it != null }) {
+    "Configure all BITOS_RELEASE_* signing properties or none of them."
+}
+
 android {
     namespace = "space.bitos.app"
     compileSdk = 36
@@ -11,8 +32,8 @@ android {
         applicationId = "space.bitos.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -33,6 +54,16 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+    }
+
+    if (releaseSigningValues.all { it != null }) {
+        signingConfigs.getByName("release") {
+            storeFile = file(checkNotNull(releaseStoreFile))
+            storePassword = checkNotNull(releaseStorePassword)
+            keyAlias = checkNotNull(releaseKeyAlias)
+            keyPassword = checkNotNull(releaseKeyPassword)
+        }
+        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
     }
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
