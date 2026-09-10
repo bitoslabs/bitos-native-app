@@ -61,7 +61,7 @@ shared/
         └── commonTest/           # ~55 test files mirroring every package (JVM host + macOS/iOS lanes)
 ```
 
-Wave-scope packages that are *planned but not yet implemented* (relay
+Wave-scope packages that are _planned but not yet implemented_ (relay
 transport, social graph services, studio, wallet beyond zap models, messaging
 beyond DM grouping, moderation, analytics, api) will be added under the same
 `space.bitos.core` root when their epics land — do not create the

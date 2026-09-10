@@ -20,11 +20,11 @@ that is a hosting/runtime capability, not a Nostr kind limitation.
 
 `MemeUploadRouting` is the cross-platform source of truth:
 
-| Rendered video size | Required verified destinations | Event media URL |
-| --- | --- | --- |
-| `< 20 MiB` | BitOS API and Blossom | BitOS API |
-| `20 MiB` to `100 MiB` | BitOS API | BitOS API |
-| `> 100 MiB` | Refuse before signing | — |
+| Rendered video size   | Required verified destinations | Event media URL |
+| --------------------- | ------------------------------ | --------------- |
+| `< 20 MiB`            | BitOS API and Blossom          | BitOS API       |
+| `20 MiB` to `100 MiB` | BitOS API                      | BitOS API       |
+| `> 100 MiB`           | Refuse before signing          | —               |
 
 The boundary is byte-based (`20 * 1024 * 1024`), so it is stable across
 platforms. Images and GIFs retain their existing Blossom path.

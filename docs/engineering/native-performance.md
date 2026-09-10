@@ -18,15 +18,15 @@ Measure release builds on a low supported device and a median device. Record
 device, OS, build revision, relay set, cache state and test data with every
 result. Simulator/emulator measurements are diagnostic only.
 
-| Journey | Initial budget |
-|---|---:|
-| Warm top-level tab switch to first complete frame | p95 ≤ 100 ms |
-| Cached cold launch to interactive shell | median ≤ 1.5 s; p95 ≤ 2.5 s |
-| Cached Home content visible after shell mounts | median ≤ 500 ms |
-| Home/Bitz scroll or pager janky frames | < 5%; zero frozen frames |
-| Main-thread stall during steady scrolling | no task ≥ 100 ms |
-| Verified event accepted to visible UI state | p95 ≤ 100 ms, excluding network |
-| Hidden feed video players | zero playing; resources released |
+| Journey                                           |                   Initial budget |
+| ------------------------------------------------- | -------------------------------: |
+| Warm top-level tab switch to first complete frame |                     p95 ≤ 100 ms |
+| Cached cold launch to interactive shell           |      median ≤ 1.5 s; p95 ≤ 2.5 s |
+| Cached Home content visible after shell mounts    |                  median ≤ 500 ms |
+| Home/Bitz scroll or pager janky frames            |         < 5%; zero frozen frames |
+| Main-thread stall during steady scrolling         |                 no task ≥ 100 ms |
+| Verified event accepted to visible UI state       |  p95 ≤ 100 ms, excluding network |
+| Hidden feed video players                         | zero playing; resources released |
 
 These are regression budgets, not claims about current production devices.
 Tighten them after a repeatable baseline exists. A PR that exceeds a budget

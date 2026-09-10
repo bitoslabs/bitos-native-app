@@ -63,9 +63,17 @@ Additive v1-compatible project row `"sound"` (old readers ignore it;
 junk degrades to "no soundtrack", never a failed decode):
 
 ```json
-{"url":"https://…/audio.mp4","sha256":"<64hex>","ms":12000,
- "start":1000,"vol":0.8,"offset":500,"src":"<event-id>","author":"<pubkey>",
- "label":"Original sound · author"}
+{
+  "url": "https://…/audio.mp4",
+  "sha256": "<64hex>",
+  "ms": 12000,
+  "start": 1000,
+  "vol": 0.8,
+  "offset": 500,
+  "src": "<event-id>",
+  "author": "<pubkey>",
+  "label": "Original sound · author"
+}
 ```
 
 Bounds (MemeSoundRules): duration ≤ 60 s (`MemeVideoCutRules.MAX_CLIP_MS`),
@@ -75,18 +83,18 @@ the one seam the feed chip, re-attach and trending all use.
 
 ## 5. Waves (each shippable, leaves the app consistent)
 
-| Wave | Scope | Definition of done |
-| --- | --- | --- |
-| **A — contract (shipped)** | `MemeSoundtrack` + codec row + `MemeSoundRules` (normalize/tagsFor/sourceOf) + bridge `memeSoundTagsFor` + common tests (round-trip, hostile, bounds, tag battery) | all common tests green; old wires decode unchanged |
+| Wave                                                                     | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Definition of done                                                                                                           |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **A — contract (shipped)**                                               | `MemeSoundtrack` + codec row + `MemeSoundRules` (normalize/tagsFor/sourceOf) + bridge `memeSoundTagsFor` + common tests (round-trip, hostile, bounds, tag battery)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | all common tests green; old wires decode unchanged                                                                           |
 | **B — editor attach + mixdown (both platforms shipped; iOS 2026-09-08)** | Sound tool "♪ Pick sound from a video…" → passthrough extraction (Android `MemeVideoSound`: extractor→muxer m4a ≤ 60 s + MediaCodec PCM decode; iOS `MemeVideoSoundIos`: AVAssetExportSession AppleM4A + AVAssetReader float PCM at the bed rate) → attach/replace/remove + volume (shared `SetSoundtrack` command on the iOS wire seam); dual-player preview glued to the stage clock; export mixes cues + soundtrack into ONE PCM bed (`MemeSoundMix`, common-tested) riding the existing second-sequence path (Media3 sequence / `memeAudioBedWavBase64` bridge seam); the m4a persists with the slot (asset `sound`) and rehydrates on resume (undecodable → row stripped + named notice, never a silent export); publish uploads the m4a hash-verified BEFORE signing, verifies sha vs the wire, then stamps sound/p/attribution with the real URL | attach → caption → export round-trip on device; common bed/command/seam tests + state tests green; nothing stamps pre-upload |
-| **C — "Use this sound" from a bitz (both platforms shipped 2026-09-08)** | Bitz rail **Sound** action (video notes only) → bounded download (remix parity) → passthrough extraction → editor seeds VIDEO mode with the soundtrack and NO clip (TikTok's sound-first loop; the creator adds their own); `sourceNoteId`/`author` ride the wire → publish stamps sound/p/attribution with "Original sound · <author>"; notes carrying a `sound` tag render a ♪ chip in the Bitz meta row (Android `FeedNote.soundOf`; iOS via the bridge-note projection `soundUrl`/`soundSourceEventId`/`soundAuthorPubkey` → the Swift mirror) | end-to-end on device; provenance survives round-trip |
-| **D — trending sounds (both platforms shipped 2026-09-08)** | More → **Trending sounds** rail over the LIVE feed window (APP-021
-  bootstrap — no marketplace): shared `MemeSoundTrending.rank` (3-day
-  half-life, dedup by url+sha, deterministic order) fed by `sound` tags
-  (`FeedNote.soundOf` + `soundSha256` through the bridge note projection);
-  "Use in Studio" re-attaches by URL through the Wave C editor path —
-  hash-verified download, no extraction, pre-filled URL → publish stamps
-  the existing artifact WITHOUT re-uploading | rank deterministic from fixtures; re-attach = Wave C path |
+| **C — "Use this sound" from a bitz (both platforms shipped 2026-09-08)** | Bitz rail **Sound** action (video notes only) → bounded download (remix parity) → passthrough extraction → editor seeds VIDEO mode with the soundtrack and NO clip (TikTok's sound-first loop; the creator adds their own); `sourceNoteId`/`author` ride the wire → publish stamps sound/p/attribution with "Original sound · <author>"; notes carrying a `sound` tag render a ♪ chip in the Bitz meta row (Android `FeedNote.soundOf`; iOS via the bridge-note projection `soundUrl`/`soundSourceEventId`/`soundAuthorPubkey` → the Swift mirror)                                                                                                                                                                                                                                                                                                      | end-to-end on device; provenance survives round-trip                                                                         |
+| **D — trending sounds (both platforms shipped 2026-09-08)**              | More → **Trending sounds** rail over the LIVE feed window (APP-021                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| bootstrap — no marketplace): shared `MemeSoundTrending.rank` (3-day      |
+| half-life, dedup by url+sha, deterministic order) fed by `sound` tags    |
+| (`FeedNote.soundOf` + `soundSha256` through the bridge note projection); |
+| "Use in Studio" re-attaches by URL through the Wave C editor path —      |
+| hash-verified download, no extraction, pre-filled URL → publish stamps   |
+| the existing artifact WITHOUT re-uploading                               | rank deterministic from fixtures; re-attach = Wave C path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Shipped follow-ons (2026-09-08): soundtrack LOOPING (wire `loop` flag;
 the bed repeats cyclically to fill the timeline — preview glue wraps

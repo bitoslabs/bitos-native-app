@@ -10,7 +10,7 @@
 > mark it done in [`native-ui-build-tracker.md`](./native-ui-build-tracker.md).
 >
 > **Superseded inputs.** The per-platform feature audits are fully merged
-> here; when they disagreed, this file's *Native decision* column won. Engineering rules live in `docs/engineering/`; protocol/backend
+> here; when they disagreed, this file's _Native decision_ column won. Engineering rules live in `docs/engineering/`; protocol/backend
 > ownership in the other `docs/native/` files; the task ledger in
 > `delivery-plan.md` (epics SBC/PRO/ID/DAT/REL/FED/CAP/MED/EDT/MEM/PUB/SOC…)
 > covers infrastructure. This spec adds the **APP epic** (all user-facing UI
@@ -31,7 +31,7 @@
    every visible control. States = loading/empty/error/success variants.
 3. Platform deltas from the two legacy apps are marked **[W]** (web-only
    feature) or **[F]** (flutter-only). Unmarked = both had it. Conflicts are
-   resolved once in the *Native decision* and never re-litigated.
+   resolved once in the _Native decision_ and never re-litigated.
 4. Native tier per surface: **V1** (alpha-blocking), **V1.x** (beta),
    **V2** (post-V1 differentiation) — aligned with `delivery-plan.md` phases
    and `web-parity-audit.md` decisions (e.g. WebLN rejected, communities and
@@ -49,14 +49,14 @@
 
 Six tabs — **supersedes** the 5-tab map in `product-system.md` §1:
 
-| Tab | Surface | Absorbs (legacy routes) |
-|:--|:--|:--|
-| **Home** | Scrolling notes card list (For you/Following, filter, pill, FAB) | web `/` notes feed, flutter `/home` notes mode |
-| **Bitz** | Full-screen vertical video reels pager | web `/bitz`, flutter `/bitz` video mode |
-| **Discover** | Search + trending | web/flutter `/discover` |
-| **Chats** | DMs (W2 placeholder) | web `/messages`, flutter `/messages`, `/chat` |
-| **Activity** | Notifications | web/flutter `/notifications` |
-| **You** | Profile + hub entries (Settings/More push here) | web `/profile`, `/more`, `/zaps`, `/settings`; flutter `/profile`, `/more` |
+| Tab          | Surface                                                          | Absorbs (legacy routes)                                                    |
+| :----------- | :--------------------------------------------------------------- | :------------------------------------------------------------------------- |
+| **Home**     | Scrolling notes card list (For you/Following, filter, pill, FAB) | web `/` notes feed, flutter `/home` notes mode                             |
+| **Bitz**     | Full-screen vertical video reels pager                           | web `/bitz`, flutter `/bitz` video mode                                    |
+| **Discover** | Search + trending                                                | web/flutter `/discover`                                                    |
+| **Chats**    | DMs (W2 placeholder)                                             | web `/messages`, flutter `/messages`, `/chat`                              |
+| **Activity** | Notifications                                                    | web/flutter `/notifications`                                               |
+| **You**      | Profile + hub entries (Settings/More push here)                  | web `/profile`, `/more`, `/zaps`, `/settings`; flutter `/profile`, `/more` |
 
 Create/Studio entry points: Home composer FAB, Bitz header record/import,
 and the You hub (APP-017). Settings (APP-018) pushes from You. The feed
@@ -69,28 +69,28 @@ image/lightbox viewers, call panel (overlay), zap dialog (sheet).
 
 ### 1.2 Complete destination map (union of all legacy routes)
 
-| # | Legacy route(s) | Surface (spec §) | Native destination | Auth | Tier |
-|:--|:--|:--|:--|:--|:--|
-| 1 | `/auth` | Boot & Auth §3.1 | Pre-shell gate + account switcher overlay | public | V1 |
-| 2 | `/welcome`, `/onboarding` | Onboarding §3.2 | First-launch carousel | public | V1 |
-| 3 | shell | App shell §3.3 | Root TabView/NavHost | — | V1 (done) |
-| 4 | `/` (notes mode) | Home feed §3.4 | Home notes surface / mode | public (actions gated) | V1 |
-| 5 | `/bitz` | Bitz player §3.7 | Home video default + explore grid + search | public | V1 |
-| 6 | `/create` | Composer §3.8 | Pushed composer + Home FAB | actions gated | V1 |
-| 7 | `/note/:id` | Thread §3.9 | Pushed thread | public | V1 |
-| 8 | `/discover` | Discover §3.10 | Discover tab | public | V1 |
-| 9 | `/messages`, `/chat` | Messages §3.11 | Inbox → Messages | protected | V1 (DMs), calls V1.x |
-| 10 | `/notifications` | Notifications §3.12 | Inbox → Activity | protected | V1 |
-| 11 | `/profile`, `/profile/:pubkey` | Profile §3.13 | Profile tab + pushed | public | V1 |
-| 12 | `/zaps` | Zaps wallet §3.14 | Pushed from Profile/More | protected | V1 |
-| 13 | `/bookmarks` | Bookmarks §3.15 | Pushed | protected | V1 |
-| 14 | `/communities` | Communities §3.16 | Pushed (More hub entry) | protected | V1.x |
-| 15 | `/more` | More/You hub §3.17 | Profile tab overflow + hub | public | V1 |
-| 16 | `/settings`, `/settings/:section` | Settings §3.18 | Pushed | protected | V1 |
-| 17 | `/studio`, `/studio/create`, `/meme` | Studio §3.19 | Create tab + full-bleed editor | public, publish gated | V1 quick, V2 full |
-| 18 | `/more/sounds` | Trending sounds §3.21 | Pushed from More/Discover | public | V1.x |
-| 19 | `/about`, `/privacy`, `/terms` | Static §3.20 | Pushed | public | V1 |
-| 20 | `/pulse` | — | **Reference only** (design showcase; do not port) | — | rejected |
+| #   | Legacy route(s)                      | Surface (spec §)      | Native destination                                | Auth                   | Tier                 |
+| :-- | :----------------------------------- | :-------------------- | :------------------------------------------------ | :--------------------- | :------------------- |
+| 1   | `/auth`                              | Boot & Auth §3.1      | Pre-shell gate + account switcher overlay         | public                 | V1                   |
+| 2   | `/welcome`, `/onboarding`            | Onboarding §3.2       | First-launch carousel                             | public                 | V1                   |
+| 3   | shell                                | App shell §3.3        | Root TabView/NavHost                              | —                      | V1 (done)            |
+| 4   | `/` (notes mode)                     | Home feed §3.4        | Home notes surface / mode                         | public (actions gated) | V1                   |
+| 5   | `/bitz`                              | Bitz player §3.7      | Home video default + explore grid + search        | public                 | V1                   |
+| 6   | `/create`                            | Composer §3.8         | Pushed composer + Home FAB                        | actions gated          | V1                   |
+| 7   | `/note/:id`                          | Thread §3.9           | Pushed thread                                     | public                 | V1                   |
+| 8   | `/discover`                          | Discover §3.10        | Discover tab                                      | public                 | V1                   |
+| 9   | `/messages`, `/chat`                 | Messages §3.11        | Inbox → Messages                                  | protected              | V1 (DMs), calls V1.x |
+| 10  | `/notifications`                     | Notifications §3.12   | Inbox → Activity                                  | protected              | V1                   |
+| 11  | `/profile`, `/profile/:pubkey`       | Profile §3.13         | Profile tab + pushed                              | public                 | V1                   |
+| 12  | `/zaps`                              | Zaps wallet §3.14     | Pushed from Profile/More                          | protected              | V1                   |
+| 13  | `/bookmarks`                         | Bookmarks §3.15       | Pushed                                            | protected              | V1                   |
+| 14  | `/communities`                       | Communities §3.16     | Pushed (More hub entry)                           | protected              | V1.x                 |
+| 15  | `/more`                              | More/You hub §3.17    | Profile tab overflow + hub                        | public                 | V1                   |
+| 16  | `/settings`, `/settings/:section`    | Settings §3.18        | Pushed                                            | protected              | V1                   |
+| 17  | `/studio`, `/studio/create`, `/meme` | Studio §3.19          | Create tab + full-bleed editor                    | public, publish gated  | V1 quick, V2 full    |
+| 18  | `/more/sounds`                       | Trending sounds §3.21 | Pushed from More/Discover                         | public                 | V1.x                 |
+| 19  | `/about`, `/privacy`, `/terms`       | Static §3.20          | Pushed                                            | public                 | V1                   |
+| 20  | `/pulse`                             | —                     | **Reference only** (design showcase; do not port) | —                      | rejected             |
 
 Deep links to support: `nostr:` entities (npub/note/nevent/naddr/nprofile),
 `lightning:` invoices, nostr: web links → threads/profiles.
@@ -106,24 +106,24 @@ Deep links to support: `nostr:` entities (npub/note/nevent/naddr/nprofile),
 
 ### 2.1 Color tokens (dark = default, light = secondary)
 
-| Token | Hex | SwiftUI (BitOSTheme) | Compose | Use |
-|:--|:--|:--|:--|:--|
-| background | `0xFF0A0A0F` | `background` | `Background` | app canvas (OLED near-black) |
-| surface | `0xFF12121A` | `surface` | `Surface` | cards, sheets, nav bars |
-| surfaceElevated | `0xFF1A1A26` | `surfaceElevated` | `SurfaceElevated` | elevated cards, modals |
-| surfaceOverlay | `0xFF22222E` | `surfaceOverlay` | `SurfaceOverlay` | dropdowns, tooltips, menus |
-| primary | `0xFFF7931A` | `accent` | `Accent` | brand, links, focus, CTA |
-| primaryLight / primaryDark | `0xFFF9A84B` / `0xFFD4790F` | — | — | hover / pressed states |
-| primaryGlow | `#F7931A @20%` | — | — | glow shadows |
-| accent (cyan) | `0xFF06B6D4` | `cyan` | — | secondary accent |
-| accentWarm | `0xFFF59E0B` | `warning` | — | zaps/lightning amber |
-| accentPink | `0xFFEC4899` | `like` | — | likes |
-| textPrimary / Secondary / Tertiary | `0xFFF8F8FF` / `0xFF9CA3AF` / `0xFF6B7280` | `textPrimary…` | `TextPrimary…` | text hierarchy |
-| textLink | `0xFFF7931A` | — | — | in-content links |
-| success / warning / error / info | `0xFF10B981` / `0xFFF59E0B` / `0xFFEF4444` / `0xFF3B82F6` | ✓ | ✓ | semantic |
-| like / repost / zap / reply / bookmark | pink / green / amber / blue / orange | ✓ | ✓ | action-icon colors |
-| border / borderFocused / divider | `0xFF2A2A3A` / `0xFFF7931A` / `0xFF1F1F2E` | ✓ | ✓ | lines |
-| Light theme | bg `0xFFFAFAFC`, surface white, elevated `0xFFF5F5F7`, overlay `0xFFEEEEF0`, text `0xFF111827`/`0xFF6B7280`/`0xFF9CA3AF`, border `0xFFE5E7EB`, divider `0xFFF3F4F6` | — | — | mode flip |
+| Token                                  | Hex                                                                                                                                                                 | SwiftUI (BitOSTheme) | Compose           | Use                          |
+| :------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------- | :---------------- | :--------------------------- |
+| background                             | `0xFF0A0A0F`                                                                                                                                                        | `background`         | `Background`      | app canvas (OLED near-black) |
+| surface                                | `0xFF12121A`                                                                                                                                                        | `surface`            | `Surface`         | cards, sheets, nav bars      |
+| surfaceElevated                        | `0xFF1A1A26`                                                                                                                                                        | `surfaceElevated`    | `SurfaceElevated` | elevated cards, modals       |
+| surfaceOverlay                         | `0xFF22222E`                                                                                                                                                        | `surfaceOverlay`     | `SurfaceOverlay`  | dropdowns, tooltips, menus   |
+| primary                                | `0xFFF7931A`                                                                                                                                                        | `accent`             | `Accent`          | brand, links, focus, CTA     |
+| primaryLight / primaryDark             | `0xFFF9A84B` / `0xFFD4790F`                                                                                                                                         | —                    | —                 | hover / pressed states       |
+| primaryGlow                            | `#F7931A @20%`                                                                                                                                                      | —                    | —                 | glow shadows                 |
+| accent (cyan)                          | `0xFF06B6D4`                                                                                                                                                        | `cyan`               | —                 | secondary accent             |
+| accentWarm                             | `0xFFF59E0B`                                                                                                                                                        | `warning`            | —                 | zaps/lightning amber         |
+| accentPink                             | `0xFFEC4899`                                                                                                                                                        | `like`               | —                 | likes                        |
+| textPrimary / Secondary / Tertiary     | `0xFFF8F8FF` / `0xFF9CA3AF` / `0xFF6B7280`                                                                                                                          | `textPrimary…`       | `TextPrimary…`    | text hierarchy               |
+| textLink                               | `0xFFF7931A`                                                                                                                                                        | —                    | —                 | in-content links             |
+| success / warning / error / info       | `0xFF10B981` / `0xFFF59E0B` / `0xFFEF4444` / `0xFF3B82F6`                                                                                                           | ✓                    | ✓                 | semantic                     |
+| like / repost / zap / reply / bookmark | pink / green / amber / blue / orange                                                                                                                                | ✓                    | ✓                 | action-icon colors           |
+| border / borderFocused / divider       | `0xFF2A2A3A` / `0xFFF7931A` / `0xFF1F1F2E`                                                                                                                          | ✓                    | ✓                 | lines                        |
+| Light theme                            | bg `0xFFFAFAFC`, surface white, elevated `0xFFF5F5F7`, overlay `0xFFEEEEF0`, text `0xFF111827`/`0xFF6B7280`/`0xFF9CA3AF`, border `0xFFE5E7EB`, divider `0xFFF3F4F6` | —                    | —                 | mode flip                    |
 
 Gradients: `gradientPrimary` orange→amber TL→BR (brand), `gradientZap`
 amber→orange (zap surfaces), `gradientDark` transparent→80% black top→bottom
@@ -131,16 +131,16 @@ amber→orange (zap surfaces), `gradientDark` transparent→80% black top→bott
 
 ### 2.2 Typography — Inter (+ JetBrains Mono for keys/npub/sats)
 
-| Style | Size/w/height | Notes |
-|:--|:--|:--|
-| displayLarge | 32 / w700 / 1.2 / ls −0.5 | onboarding heroes, auth title |
-| headlineLarge | 24 / w700 / 1.3 | page titles |
-| headlineMedium | 20 / w600 / 1.35 | section headers |
-| headlineSmall | 18 / w600 / 1.4 | card titles |
-| bodyLarge/Medium/Small | 16/14/12 / w400 / 1.5 | note body / rows / meta |
-| labelLarge/Medium/Small | 14 w600 / 12 w500 / 10 w500 | buttons / chips / timestamps |
-| menuItem | 13 / w600 | popover rows |
-| mono | 13 / w400 / ls 0.5 | npub/nsec/ids/sats |
+| Style                   | Size/w/height               | Notes                         |
+| :---------------------- | :-------------------------- | :---------------------------- |
+| displayLarge            | 32 / w700 / 1.2 / ls −0.5   | onboarding heroes, auth title |
+| headlineLarge           | 24 / w700 / 1.3             | page titles                   |
+| headlineMedium          | 20 / w600 / 1.35            | section headers               |
+| headlineSmall           | 18 / w600 / 1.4             | card titles                   |
+| bodyLarge/Medium/Small  | 16/14/12 / w400 / 1.5       | note body / rows / meta       |
+| labelLarge/Medium/Small | 14 w600 / 12 w500 / 10 w500 | buttons / chips / timestamps  |
+| menuItem                | 13 / w600                   | popover rows                  |
+| mono                    | 13 / w400 / ls 0.5          | npub/nsec/ids/sats            |
 
 SwiftUI: custom `Font` set; Compose: `Typography` override. Respect system
 font scaling to 200%.
@@ -211,6 +211,7 @@ IdentityStore/SecureKeyStore (Keychain / Keystore), multi-account registry,
 NIP-19 codecs (shared core).
 
 Anatomy — **Boot splash** (legacy Flutter parity, implemented 2026-08-28):
+
 - [x] **App icon**: iOS `Assets.xcassets/AppIcon` (1024pt bolt mark, copied
       from the legacy Runner appiconset); Android adaptive icon
       (`mipmap-anydpi-v26` foreground + monochrome at 16% inset over
@@ -239,6 +240,7 @@ Anatomy — **Boot splash** (legacy Flutter parity, implemented 2026-08-28):
       flashes a bare spinner between branded screens.
 
 Anatomy — **Login** (no app bar):
+
 - [ ] App icon/rocket 72 pt in `primary` + app name `displayLarge` + tagline
 - [ ] Key import field: paste support, autofocus, nsec/npub/hex accept,
       masked echo `head…tail` for short keys, inline validation errors
@@ -248,6 +250,7 @@ Anatomy — **Login** (no app bar):
 - [ ] Guest browse entry (continues to shell read-only; guest banner later)
 
 Anatomy — **Backup reveal** (post-generate, blocking before first publish):
+
 - [ ] Warning card ("cannot be recovered — back this up") `error`-tinted
 - [ ] `_CopyableKey` rows: npub + nsec, reveal/copy each (copy→check)
 - [ ] Identity QR (BrandedQrCode) "scan QR backup"
@@ -295,6 +298,7 @@ never logs — Safety rule).
 surface = cards list.
 
 Anatomy:
+
 - [ ] App bar: wordmark logo (light/dark variants) leading
 - [ ] Centered content-filter trigger → popover menu (screen-clamped):
       All · Original · Replies · Media · Liked · Mine — checkmarks,
@@ -369,6 +373,7 @@ progression bar, per-slide like (kind 7 on slide id), author header →
 profile, auto-advance, close.
 
 **Composer sheet**:
+
 - [ ] Live 9:16 preview: image + caption scrim OR gradient + bold text
 - [ ] Slide-queue strip: numbered thumbs, order badges, per-thumb remove ✕,
       dashed "+" add slot, tap-to-preview, chevron paging
@@ -404,6 +409,7 @@ use a separate fallback filter. Kind 23 is not a Bitz kind; NIP-23 long-form
 content uses kind 30023 and stays outside the reels feed.
 
 **Player mode** — vertical snap `PageView` of 9:16 items:
+
 - [ ] Media: full-bleed, multi-rendition fallback (imeta `fallback`/
       `fallbackrendition` deduped hi-q first), autoplay gated by real
       surface visibility (RouteAware — built), mute memory persisted,
@@ -514,6 +520,7 @@ unless explicit `from` source.
 ### 3.11 APP-011 — Messages / DMs (V1 DMs; calls + groups V1.x)
 
 **List** (Inbox → Messages):
+
 - [x] App bar "Messages" (+ [W] subtitle: N unread · N encrypted · N groups)
 - [ ] Search (name/content) + [W] pill tabs All / Unread (badge) / Groups
 - [x] Conversation rows: hex avatar · name · last-message preview (media/
@@ -527,6 +534,7 @@ unless explicit `from` source.
 - [x] Empty state (chat icon + CTA)
 
 **Chat**:
+
 - [x] Header: peer avatar + name (→profile) · NIP-05 verified badge ·
       voice-call · video-call actions · ⋯ menu (details) (avatar+name→profile
       · ⚡ zap chip; calls/menu V1.x)
@@ -619,6 +627,7 @@ wire protocol per NIP-29.)
 ### 3.14 APP-014 — Zaps & wallet (V1 ledger + dialog; NWC V1.x)
 
 **Ledger page**:
+
 - [ ] Stat tiles: total sent sats · received sats · counts (+ [W] avg zap)
 - [ ] Tabs All · Received · Sent (+counts) → ledger rows: direction icon
       (⚡ in/out) · sats · peer (avatar →profile) · time-ago · comment
@@ -632,6 +641,7 @@ wire protocol per NIP-29.)
       (QR-first). **WebLN rejected on native** (parity audit).
 
 **ZapDialog (shared send flow, NIP-57)**:
+
 - [ ] lud16/lud06 resolve (LNURL pay request) → 4 amount tiers ⚡💜🔥🚀 +
       custom input + 200-char comment + anonymous toggle
 - [ ] BOLT-11 invoice: branded QR + live expiry countdown + `lightning:`
@@ -690,33 +700,34 @@ contract tests: `SettingsStoreTests.swift` / `SettingsStoreTest.kt`.
 **Hub** (implemented, legacy `SettingsView` parity): account hero + grouped
 hex icon tiles (iOS index style):
 
-| Group | Sections (key · tint) |
-|:--|:--|
+| Group       | Sections (key · tint)                                                                                        |
+| :---------- | :----------------------------------------------------------------------------------------------------------- |
 | preferences | `lightning` ⚡ FF9500 · `privacy` 5856D6 · `notifications` FF3B30 · `appearance` FF2D92 · `algorithm` BF5AF2 |
-| content | `security` FF9500 · `media` 34C759 · `language` 5AC8FA · `relays` 5AC8FA |
-| support | `help` 32ADE6 · `about` 8E8E93 |
+| content     | `security` FF9500 · `media` 34C759 · `language` 5AC8FA · `relays` 5AC8FA                                     |
+| support     | `help` 32ADE6 · `about` 8E8E93                                                                               |
 
 **Section pages** (shared chrome: scaffold + settings cards + switches +
 choice tiles + permission rows):
 
-| Key | Contents |
-|:--|:--|
-| `account`/`profile` | kind-0 editor: display name, username, about, picture, banner (pickers + crop + Blossom upload), website, NIP-05, lud16 → publish — profile fields live in ProfileEdit (You tab); Account page here: identity + copy npub + settings cache size + clear cache |
-| `appearance` | theme mode (dark/light/system) · accent palette · font size · font family · compact mode · live preview — live: theme/accent/font/compact apply app-wide from the shared settings contract (APP-023); font family + live preview remain |
-| `security` | nsec reveal (confirm-gated) + copy · app-lock (biometric) · sign-out · danger zone |
-| `relays` | relay CRUD (add/edit/remove) · read/write toggles · live status dots + latency · recommended list · NIP-65 relay-list publish indicator · [W] event outbox viewer (pending ACKs) |
-| `algorithm` | per-surface enable (feed/bitz/discover) · presets Latest/Balanced/Trending/Trusted/Custom · freshness Live 1h/Balanced 6h/Relaxed 24h/Chill 3d · per-signal weight sliders (Recency/Engagement/Zaps/Affinity/Topics/WoT) + total readout · interaction-profile reset · [W] settings-sync backup/restore (kind 30078) — live: full ranking controls (shared `AlgorithmContract` + `FeedRanking.rank` drives the For-You window on both platforms; off = chronological, Following always chronological; Topics/WoT rows render but contribute 0 until their data feeds land) + timeline Latest/Trending · media previews · reactions · protocol notes · default zap amount |
-| `lightning` | default zap amount · wallet → zaps page |
-| `privacy` | per-type notification mutes · DM/mention/zap gates · read-receipt behavior · blocked users manage · media auto-load rules · sensitive-media default — live: media auto-load · protocol notes · sensitive-media default (drives the NIP-36 cover on both platforms) · blocked users manage (kind-10004 head view + unblock publish; blocked set filters feeds AND the inbox) |
-| `notifications` | master toggle · sound · haptics · per-type toggles — live: master/sound/haptics + per-type toggles (all six kinds, same muted-kinds store as the inbox header) |
-| `media` | autoplay · video quality · playback rate · default upload provider (`_ProviderTile`: Blossom default; [W] Cloudinary/S3/server fallback config) — live: autoplay/quality/playback rate + honest Blossom provider row |
-| `language` | English / Lao (+ system) — live: en/lo picker + date format + timezone display |
-| `help` | FAQ · shortcuts · support/donate widget · contributors — live: FAQ (shared `AppFacts` single source) · support/contribute card (donate tiers render when the project LUD-16 is configured) · links; shortcuts + contributors pending |
-| `about` | version · links · `/about` — live: brand card (legacy copy), honest supported-NIP chips, links, schema rows |
+| Key                 | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account`/`profile` | kind-0 editor: display name, username, about, picture, banner (pickers + crop + Blossom upload), website, NIP-05, lud16 → publish — profile fields live in ProfileEdit (You tab); Account page here: identity + copy npub + settings cache size + clear cache                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `appearance`        | theme mode (dark/light/system) · accent palette · font size · font family · compact mode · live preview — live: theme/accent/font/compact apply app-wide from the shared settings contract (APP-023); font family + live preview remain                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `security`          | nsec reveal (confirm-gated) + copy · app-lock (biometric) · sign-out · danger zone                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `relays`            | relay CRUD (add/edit/remove) · read/write toggles · live status dots + latency · recommended list · NIP-65 relay-list publish indicator · [W] event outbox viewer (pending ACKs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `algorithm`         | per-surface enable (feed/bitz/discover) · presets Latest/Balanced/Trending/Trusted/Custom · freshness Live 1h/Balanced 6h/Relaxed 24h/Chill 3d · per-signal weight sliders (Recency/Engagement/Zaps/Affinity/Topics/WoT) + total readout · interaction-profile reset · [W] settings-sync backup/restore (kind 30078) — live: full ranking controls (shared `AlgorithmContract` + `FeedRanking.rank` drives the For-You window on both platforms; off = chronological, Following always chronological; Topics/WoT rows render but contribute 0 until their data feeds land) + timeline Latest/Trending · media previews · reactions · protocol notes · default zap amount |
+| `lightning`         | default zap amount · wallet → zaps page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `privacy`           | per-type notification mutes · DM/mention/zap gates · read-receipt behavior · blocked users manage · media auto-load rules · sensitive-media default — live: media auto-load · protocol notes · sensitive-media default (drives the NIP-36 cover on both platforms) · blocked users manage (kind-10004 head view + unblock publish; blocked set filters feeds AND the inbox)                                                                                                                                                                                                                                                                                              |
+| `notifications`     | master toggle · sound · haptics · per-type toggles — live: master/sound/haptics + per-type toggles (all six kinds, same muted-kinds store as the inbox header)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `media`             | autoplay · video quality · playback rate · default upload provider (`_ProviderTile`: Blossom default; [W] Cloudinary/S3/server fallback config) — live: autoplay/quality/playback rate + honest Blossom provider row                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `language`          | English / Lao (+ system) — live: en/lo picker + date format + timezone display                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `help`              | FAQ · shortcuts · support/donate widget · contributors — live: FAQ (shared `AppFacts` single source) · support/contribute card (donate tiers render when the project LUD-16 is configured) · links; shortcuts + contributors pending                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `about`             | version · links · `/about` — live: brand card (legacy copy), honest supported-NIP chips, links, schema rows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### 3.19 APP-019 — Studio & Meme Studio (V1 quick editor; V2 full suite)
 
 **Record screen** (camera capture, reference `docs/ui/app-app-04-create-camera-editor.html`):
+
 - [x] Full-bleed preview + rule-of-thirds grid toggle
 - [x] Top bar: ✕ close (discard confirm when takes pending) · torch · grid ·
       off/3s/10s self-timer
@@ -756,6 +767,7 @@ choice tiles + permission rows):
 - [ ] Multi-take merge into one clip — needs media-core (V1.x)
 
 **Studio home** (Create tab):
+
 - [ ] "Start something new" cards: Bitz (camera) · Meme · templates
 - [ ] Continue-creating slots (≤6 WIP, label + destination chip, one-tap
       resume into exact state, delete)
@@ -763,6 +775,7 @@ choice tiles + permission rows):
 - [ ] [W] batch tip cards · batch queue bar (V2)
 
 **Quick MEM editor (V1 — flutter parity)**:
+
 - [ ] Top chrome: ✕ exit (discard confirm) · mode pill Image/GIF/Video ·
       undo · Post
 - [ ] Media tray: multi-import (image/video/audio/file) · asset picker ·
@@ -828,26 +841,26 @@ recovery banner.
 
 ## 4. Shared component library (APP-022 — build as needed per surface)
 
-| Component | Role | First needed by |
-|:--|:--|:--|
-| `HexAvatar` / `HexIcon` / `HexShape` | hexagonal identity motif (deterministic gradient fallback from pubkey); geometry = web `.hex-clip` `polygon(25% 6.7%, 75% 6.7%, 100% 50%, 75% 93.3%, 25% 93.3%, 0% 50%)` — regular flat-top hexagon, 6.7% vertical inset, identical on iOS/Android/Flutter/web | everywhere |
-| `BootSplashScreen` / `BootSplashTiming` | branded boot splash: hex bolt avatar + orbit sweep + PoW segments + wordmark + status pill (timing parity with web/Flutter) | app launch |
-| `NoteCard` (+ compact feed variant) | §3.5 rich note card | feed, search, bookmarks |
-| `CommentContent` | tappable-token rich body + media (≤9) for comments/captions | threads, bitz, notifications |
-| `AppMenu` / `AppMenuItem` / `AppMenuDivider` / `AppBottomSheetMenu` | screen-clamped popover (`showAt`) + sheet menus | feed app bar, card ⋯, row menus |
-| `ZapDialog` | §3.14 send flow (tiers, QR, countdown, receipt) | everywhere zap |
-| `PowCard` / `PowBadge` | NIP-13 slider + isolate mining + hash viz / badge | composer, thread reply, stories |
-| `MediaGrid` / `AttachmentPreviewRow` (64×64, GIF badge, ✕) / `ImageViewer` (lightbox) / `VideoPlayerWidget` / `BitzVideoCover` | media surfaces | composer, cards, bitz, DMs |
-| `GifPickerSheet` | Giphy trending + 350 ms search + Recent, 24 h cache | composer, thread, bitz, stories |
-| `PollComposerSheet` | 2–6 options + limits + preview | composer |
-| `ImageCropEditor` | avatar/cover crop | settings profile |
-| `BrandQrCode` | branded QR (profile id, invoices) | auth backup, more hub, zap |
-| `Nip05Badge` / `RelayStatusDot` | identity / relay status | cards, profiles, settings |
-| `AccountSwitchOverlay` / `AccountSwitcherSheet` | multi-account UX | auth, more |
-| `BootSplash` / `ErrorRetryWidget` / skeleton grid/list / empty-state widget | states | everywhere |
-| `GlassContainer` | blur-20 frosted surface | bitz chrome, profile hero |
-| `LikeButton` (animated §2.4) / `FeedActionBar` | action row with animations | cards, threads, reels |
-| `AppAvatar` (sizes §2.3, online dot, story ring, verified tick) | standard avatar | everywhere |
+| Component                                                                                                                      | Role                                                                                                                                                                                                                                                           | First needed by                 |
+| :----------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------ |
+| `HexAvatar` / `HexIcon` / `HexShape`                                                                                           | hexagonal identity motif (deterministic gradient fallback from pubkey); geometry = web `.hex-clip` `polygon(25% 6.7%, 75% 6.7%, 100% 50%, 75% 93.3%, 25% 93.3%, 0% 50%)` — regular flat-top hexagon, 6.7% vertical inset, identical on iOS/Android/Flutter/web | everywhere                      |
+| `BootSplashScreen` / `BootSplashTiming`                                                                                        | branded boot splash: hex bolt avatar + orbit sweep + PoW segments + wordmark + status pill (timing parity with web/Flutter)                                                                                                                                    | app launch                      |
+| `NoteCard` (+ compact feed variant)                                                                                            | §3.5 rich note card                                                                                                                                                                                                                                            | feed, search, bookmarks         |
+| `CommentContent`                                                                                                               | tappable-token rich body + media (≤9) for comments/captions                                                                                                                                                                                                    | threads, bitz, notifications    |
+| `AppMenu` / `AppMenuItem` / `AppMenuDivider` / `AppBottomSheetMenu`                                                            | screen-clamped popover (`showAt`) + sheet menus                                                                                                                                                                                                                | feed app bar, card ⋯, row menus |
+| `ZapDialog`                                                                                                                    | §3.14 send flow (tiers, QR, countdown, receipt)                                                                                                                                                                                                                | everywhere zap                  |
+| `PowCard` / `PowBadge`                                                                                                         | NIP-13 slider + isolate mining + hash viz / badge                                                                                                                                                                                                              | composer, thread reply, stories |
+| `MediaGrid` / `AttachmentPreviewRow` (64×64, GIF badge, ✕) / `ImageViewer` (lightbox) / `VideoPlayerWidget` / `BitzVideoCover` | media surfaces                                                                                                                                                                                                                                                 | composer, cards, bitz, DMs      |
+| `GifPickerSheet`                                                                                                               | Giphy trending + 350 ms search + Recent, 24 h cache                                                                                                                                                                                                            | composer, thread, bitz, stories |
+| `PollComposerSheet`                                                                                                            | 2–6 options + limits + preview                                                                                                                                                                                                                                 | composer                        |
+| `ImageCropEditor`                                                                                                              | avatar/cover crop                                                                                                                                                                                                                                              | settings profile                |
+| `BrandQrCode`                                                                                                                  | branded QR (profile id, invoices)                                                                                                                                                                                                                              | auth backup, more hub, zap      |
+| `Nip05Badge` / `RelayStatusDot`                                                                                                | identity / relay status                                                                                                                                                                                                                                        | cards, profiles, settings       |
+| `AccountSwitchOverlay` / `AccountSwitcherSheet`                                                                                | multi-account UX                                                                                                                                                                                                                                               | auth, more                      |
+| `BootSplash` / `ErrorRetryWidget` / skeleton grid/list / empty-state widget                                                    | states                                                                                                                                                                                                                                                         | everywhere                      |
+| `GlassContainer`                                                                                                               | blur-20 frosted surface                                                                                                                                                                                                                                        | bitz chrome, profile hero       |
+| `LikeButton` (animated §2.4) / `FeedActionBar`                                                                                 | action row with animations                                                                                                                                                                                                                                     | cards, threads, reels           |
+| `AppAvatar` (sizes §2.3, online dot, story ring, verified tick)                                                                | standard avatar                                                                                                                                                                                                                                                | everywhere                      |
 
 ## 5. Data models (union — shared/business-core authority)
 
@@ -855,52 +868,52 @@ Wire model (already shared): `NostrEvent` (id, pubkey, createdAt, kind,
 tags, content, sig — canonical `serializeForId`), `NostrFilter`
 (authors/kinds/ids/#tags/limit/since/until/search).
 
-| Model | Fields / notes |
-|:--|:--|
-| `Profile` | pubkey, name, display_name, about, picture, banner, website, nip05, lud06/16 (kind 0) |
-| `FeedNote` | id, pubkey, content, createdAt, pow?, tags, replyTo?, reactions[] (emoji/count/byMe/myEventId), repostCount, zapCount, zapTotalSats, source (configured/discovery/followed-tag), poll?, repostedBy? |
-| `PollData/Option/Voter` | options (`poll_option` tags), votes map, total, myVote, closedAt, voters cap 100 (vote kind 1018) |
-| `NotificationItem` | type (like/comment/repost/follow/mention/zap), pubkey, targetId/Kind, content, read, amountSats? |
-| `Conversation/DirectMessage` | protocol (nip04/nip17), delivery (pending/sent/failed), peer, readCursor, unread |
-| `RelayRecord` | url, read/write flags, status (unknown/connecting/ok/fail), latency, checkedAt |
-| `Identity/AccountSummary` | sk/pk hex (secret in secure storage only), npub, profile |
-| `CallSignal` | callId, type (offer/answer/ice/end/log/state), kind (voice/video), from, groupId?, sdp/candidate/outcome |
-| `StorySlide/StoryAuthor` | kind 30315 + NIP-40 24 h TTL; ≤12/author; seen-set persisted |
-| `MemeProject` (v1, local store) | native working wire (`studio/MemeProject.kt`): mode, assets, overlays ≤48 (px @1080, scale/rot, colorIndex, outline), trim, frame delay, cw/alt/tags; autosave only |
+| Model                                             | Fields / notes                                                                                                                                                                                                                                                               |
+| :------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Profile`                                         | pubkey, name, display_name, about, picture, banner, website, nip05, lud06/16 (kind 0)                                                                                                                                                                                        |
+| `FeedNote`                                        | id, pubkey, content, createdAt, pow?, tags, replyTo?, reactions[] (emoji/count/byMe/myEventId), repostCount, zapCount, zapTotalSats, source (configured/discovery/followed-tag), poll?, repostedBy?                                                                          |
+| `PollData/Option/Voter`                           | options (`poll_option` tags), votes map, total, myVote, closedAt, voters cap 100 (vote kind 1018)                                                                                                                                                                            |
+| `NotificationItem`                                | type (like/comment/repost/follow/mention/zap), pubkey, targetId/Kind, content, read, amountSats?                                                                                                                                                                             |
+| `Conversation/DirectMessage`                      | protocol (nip04/nip17), delivery (pending/sent/failed), peer, readCursor, unread                                                                                                                                                                                             |
+| `RelayRecord`                                     | url, read/write flags, status (unknown/connecting/ok/fail), latency, checkedAt                                                                                                                                                                                               |
+| `Identity/AccountSummary`                         | sk/pk hex (secret in secure storage only), npub, profile                                                                                                                                                                                                                     |
+| `CallSignal`                                      | callId, type (offer/answer/ice/end/log/state), kind (voice/video), from, groupId?, sdp/candidate/outcome                                                                                                                                                                     |
+| `StorySlide/StoryAuthor`                          | kind 30315 + NIP-40 24 h TTL; ≤12/author; seen-set persisted                                                                                                                                                                                                                 |
+| `MemeProject` (v1, local store)                   | native working wire (`studio/MemeProject.kt`): mode, assets, overlays ≤48 (px @1080, scale/rot, colorIndex, outline), trim, frame delay, cw/alt/tags; autosave only                                                                                                          |
 | `MemeWireDocument` (web `com.bitos.bitz.meme` v1) | interop wire for remix payloads/templates/fixtures (`meme-studio-plan.md` §3.1): mediaKind, overlays ≤12 (≤300 chars, size 0.03–0.22 of stage height, caps/stroke/bar, ms visibility windows, fx), sfxCues ≤16, caption ≤1000, lookId; ms time units; unknown fields ignored |
-| `AlgorithmPreferences` | per-surface config, signal defs + weights, presets, freshness |
-| `ZapEntry` | direction, sats (bolt11 msat), peer, comment, noteId?, timestamp |
+| `AlgorithmPreferences`                            | per-surface config, signal defs + weights, presets, freshness                                                                                                                                                                                                                |
+| `ZapEntry`                                        | direction, sats (bolt11 msat), peer, comment, noteId?, timestamp                                                                                                                                                                                                             |
 
 **Nostr kinds (union table — shared core)**
 
-| Kind | NIP | Use |
-|:--|:--|:--|
-| 0 | 01 | profile metadata |
-| 1 | 01 | text notes (+ inline polls, meme publish [F]) |
-| 3 | 02 | contact/follow list |
-| 4 | 04 | legacy DM (fallback) |
-| 5 | 01 | deletion (notes, stories) |
-| 6 / 16 | 18 | repost / generic repost |
-| 7 | 25 | reactions (+ per-story-slide) |
-| 9 / 10 | 29 | group message / reply [W] |
-| 13 / 14 / 1059 | 17/59 | seal / DM / gift wrap |
-| 20 | 68 | picture post (image reels) |
-| 21 / 22 | 71 | video / short-form video |
-| 1018 / 1068 | — | poll response / definition |
-| 1111 | 22 | comments (non-kind-1 replies) [W] |
-| 1984 | 56 | reports |
-| 9734 / 9735 | 57 | zap request / receipt |
-| 10001 | 51 | pinned notes |
-| 10002 | 65 | relay list metadata |
-| 30003 | 51 | bookmark sets |
-| 30015 | 51 | interest set — followed hashtags |
-| 30030 | 30 | custom emoji packs |
-| 30078 | 78 | app data (shared sounds/templates, settings sync) |
-| 30311 | 53 | live activity (zap compat) |
-| 30315 | 38 | user status / stories (+40 expiration) |
-| 34235 / 34236 | 71 | addressable video (dedupe `kind:pubkey:d`) |
-| 9000–9007 / 9021 / 9022 | 29 | group admin / join / leave |
-| 39000–39002 | 29 | group metadata / members / admins |
+| Kind                    | NIP   | Use                                               |
+| :---------------------- | :---- | :------------------------------------------------ |
+| 0                       | 01    | profile metadata                                  |
+| 1                       | 01    | text notes (+ inline polls, meme publish [F])     |
+| 3                       | 02    | contact/follow list                               |
+| 4                       | 04    | legacy DM (fallback)                              |
+| 5                       | 01    | deletion (notes, stories)                         |
+| 6 / 16                  | 18    | repost / generic repost                           |
+| 7                       | 25    | reactions (+ per-story-slide)                     |
+| 9 / 10                  | 29    | group message / reply [W]                         |
+| 13 / 14 / 1059          | 17/59 | seal / DM / gift wrap                             |
+| 20                      | 68    | picture post (image reels)                        |
+| 21 / 22                 | 71    | video / short-form video                          |
+| 1018 / 1068             | —     | poll response / definition                        |
+| 1111                    | 22    | comments (non-kind-1 replies) [W]                 |
+| 1984                    | 56    | reports                                           |
+| 9734 / 9735             | 57    | zap request / receipt                             |
+| 10001                   | 51    | pinned notes                                      |
+| 10002                   | 65    | relay list metadata                               |
+| 30003                   | 51    | bookmark sets                                     |
+| 30015                   | 51    | interest set — followed hashtags                  |
+| 30030                   | 30    | custom emoji packs                                |
+| 30078                   | 78    | app data (shared sounds/templates, settings sync) |
+| 30311                   | 53    | live activity (zap compat)                        |
+| 30315                   | 38    | user status / stories (+40 expiration)            |
+| 34235 / 34236           | 71    | addressable video (dedupe `kind:pubkey:d`)        |
+| 9000–9007 / 9021 / 9022 | 29    | group admin / join / leave                        |
+| 39000–39002             | 29    | group metadata / members / admins                 |
 
 **imeta codec (bitz)**: `imeta` authoritative — url (primary), fallback
 mirrors, fallbackrendition variants (deduped hi-q first), x sha-256, dim
@@ -908,38 +921,38 @@ WxH, duration, m mime, thumb, alt; addressable dedupe by event-ref.
 
 ## 6. NIP matrix (union; native status column = target)
 
-| NIP | Feature | Legacy status | Native target |
-|:--|:--|:--|:--|
-| 01 | events/filters/subs | ✅ | ✅ done (shared core) |
-| 02 | contact lists | ✅ | ✅ done |
-| 04 | legacy DM | ✅ fallback | V1 (fallback) |
-| 05 | DNS identity + badge | ✅ | V1 |
-| 09 | deletion | ✅ | partial → V1 |
-| 10 | reply/root markers | ✅ | ✅ done |
-| 13 | PoW (background mining) | ✅ | V1 (never block UI thread) |
-| 17 | private DMs gift-wrap | ✅ | V1 |
-| 18 | reposts (+embedded) | ✅ | ✅ done |
-| 19 | bech32 entities + TLV | ✅ | ✅ done |
-| 22 | comments kind 1111 | [W] | V1.x |
-| 25 | reactions | ✅ | ✅ done |
-| 27 | text note references | ✅ | V1 (renderer) |
-| 29 | relay communities | ⚠️ UI-only [F], ✅ wire [W] | V1.x full |
-| 30 | emoji packs | [W] | V2 |
-| 36 | content warnings | ✅ | V1 |
-| 38+40 | stories + expiration | ✅ [F] | V1.x |
-| 44 | v2 encryption | ✅ own impl | V1 (shared core, audited impl) |
-| 50 | relay search | ✅ | partial → V1 |
-| 51 | lists (bookmarks/mutes/pins/interests) | ✅ | bookmarks done; rest V1.x |
-| 53 | live activity | [W] | V2 |
-| 56 | reports | ✅ | ✅ done |
-| 57 | zaps + LUD-21 verify | ✅ | partial → V1 |
-| 58 | badges | 📋 | V2 |
-| 59 | gift wrap | ✅ | V1 |
-| 65 | relay list metadata | ✅ | V1 (settings publish) |
-| 68/71 | picture/video posts | ✅ | kind 22 done; 20/21/34235/6 V1 |
-| 78 | app data (sounds/templates/sync) | [W] | V2 |
-| 92 | imeta | ✅ | ✅ done |
-| 94/96 | file metadata / HTTP storage + Blossom BUD-02 | ✅ | ✅ done |
+| NIP   | Feature                                       | Legacy status               | Native target                  |
+| :---- | :-------------------------------------------- | :-------------------------- | :----------------------------- |
+| 01    | events/filters/subs                           | ✅                          | ✅ done (shared core)          |
+| 02    | contact lists                                 | ✅                          | ✅ done                        |
+| 04    | legacy DM                                     | ✅ fallback                 | V1 (fallback)                  |
+| 05    | DNS identity + badge                          | ✅                          | V1                             |
+| 09    | deletion                                      | ✅                          | partial → V1                   |
+| 10    | reply/root markers                            | ✅                          | ✅ done                        |
+| 13    | PoW (background mining)                       | ✅                          | V1 (never block UI thread)     |
+| 17    | private DMs gift-wrap                         | ✅                          | V1                             |
+| 18    | reposts (+embedded)                           | ✅                          | ✅ done                        |
+| 19    | bech32 entities + TLV                         | ✅                          | ✅ done                        |
+| 22    | comments kind 1111                            | [W]                         | V1.x                           |
+| 25    | reactions                                     | ✅                          | ✅ done                        |
+| 27    | text note references                          | ✅                          | V1 (renderer)                  |
+| 29    | relay communities                             | ⚠️ UI-only [F], ✅ wire [W] | V1.x full                      |
+| 30    | emoji packs                                   | [W]                         | V2                             |
+| 36    | content warnings                              | ✅                          | V1                             |
+| 38+40 | stories + expiration                          | ✅ [F]                      | V1.x                           |
+| 44    | v2 encryption                                 | ✅ own impl                 | V1 (shared core, audited impl) |
+| 50    | relay search                                  | ✅                          | partial → V1                   |
+| 51    | lists (bookmarks/mutes/pins/interests)        | ✅                          | bookmarks done; rest V1.x      |
+| 53    | live activity                                 | [W]                         | V2                             |
+| 56    | reports                                       | ✅                          | ✅ done                        |
+| 57    | zaps + LUD-21 verify                          | ✅                          | partial → V1                   |
+| 58    | badges                                        | 📋                          | V2                             |
+| 59    | gift wrap                                     | ✅                          | V1                             |
+| 65    | relay list metadata                           | ✅                          | V1 (settings publish)          |
+| 68/71 | picture/video posts                           | ✅                          | kind 22 done; 20/21/34235/6 V1 |
+| 78    | app data (sounds/templates/sync)              | [W]                         | V2                             |
+| 92    | imeta                                         | ✅                          | ✅ done                        |
+| 94/96 | file metadata / HTTP storage + Blossom BUD-02 | ✅                          | ✅ done                        |
 
 ## 7. i18n (APP-024)
 
@@ -998,97 +1011,97 @@ match this spec's checklists, tracker updated same change (AGENTS.md rule).
 
 ### 9.1 Route / destination status (spec §1.2 vs shipped code)
 
-| # | Destination (spec §) | Status | Gap summary |
-|:--|:--|:--|:--|
-| 1 | Auth gate §3.1 | ◐ both | Browse-first; create/import + npub confirm live. Missing: dedicated backup-reveal flow post-generate (warning card, nsec/npub copy rows, identity QR), branded switcher overlay, guest entry as first-class action |
-| 2 | Onboarding §3.2 | ☐ both | No carousel, no `hasOnboarded` gate |
-| 3 | Shell §3.3 | ◐ both | 5 visible tabs — **Discover is filtered out of the nav bar** (Android `BitOSApp.kt:106` `filterNot`, iOS 5-case enum + Discover as sheet). See drift finding 9.4-1 |
-| 4 | Home notes feed §3.4 | ✅ both | W2 items only (banners, hashtag chips, ZapLiveStrip, rank chips) |
-| 5 | Bitz §3.7 | ◐ both | Snap player + rail live; explore grid, glass top bar/mode pills, search overlay, comments sheet, video controls (scrubber/±10 s/mute memory) missing |
-| 6 | Composer §3.8 | ✅ both | poll voting render-only (decision pending); Meme Studio button awaits studio phase |
-| 7 | Thread §3.9 | ◐ both | Sheet-based; tree assembled by shared `ThreadAssembly` but **iOS renders the flat list**; root action row, live deltas, reply-bar options missing |
-| 8 | Discover §3.10 | ◐ both | NIP-50 search + chips + npub resolve live; results tabs (Posts/People/Hashtags), trending mosaic, fullscreen image viewer missing. Reached via Home search icon + hub only |
-| 9 | Messages/DMs §3.11 | ◐ both | NIP-17 gift-wrap live both platforms: conversation list with generic previews + unread dots + message requests, secure chat (encryption banner, delivery ticks via relay OK), new-chat by npub, chat ⚡ zap chip, Chats shell badge. Missing: search/tabs, attachments, reactions, calls (V1.x), groups, NIP-04 fallback |
-| 10 | Notifications §3.12 | ✅ both | No push delivery (FCM/APNs) — later wave |
-| 11 | Profile §3.13 | ◐ both | Own page + author sheet live; stats/tabs derive from the **live feed window only** (no dedicated author REQ); no banner/picture editing, no follower counts/sheets, no completion card; Android avatars are identicons (no remote pictures) |
-| 12 | Zaps §3.14 | ◐ both | LNURL dialog complete (tiers/comment/QR/expiry/lightning:); ledger page + LUD-21 verify poll + 9734 relays-tag policy missing; NWC absent |
-| 13 | Bookmarks §3.15 | ◐ both | Toggle + kind-30003 publish live; saved-list page missing (More tile disabled) |
-| 14 | Communities §3.16 | ☐ both | Nothing (legacy Flutter also never wired NIP-29 — see 9.5) |
-| 15 | More/You hub §3.17 | ◐ both | Hub live (hero, QR, switcher, tiles, honest coming-soon); wallet tile + communities/sounds tiles pend their surfaces |
-| 16 | Settings §3.18 | ✅ both | All 12 sections live; field-level application gaps in 9.3 |
-| 17 | Studio §3.19 | ◐ both | **Capture pipeline coded but unreachable** (see 9.4-2); editor absent |
-| 18 | Trending sounds §3.21 | ☐ both | Nothing (web is the only legacy source) |
-| 19 | Static pages §3.20 | ☐ both | About exists as a settings section only; privacy-policy/terms pages missing; More "About/Privacy" rows just deep-link settings-about |
-| 20 | `/pulse` | rejected | Correctly absent |
-| — | Deep links (`nostr:`/`lightning:` inbound) | ☐ both | No Android VIEW intent-filters; no iOS `CFBundleURLTypes`/`onOpenURL` |
+| #   | Destination (spec §)                       | Status   | Gap summary                                                                                                                                                                                                                                                                                                              |
+| :-- | :----------------------------------------- | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Auth gate §3.1                             | ◐ both   | Browse-first; create/import + npub confirm live. Missing: dedicated backup-reveal flow post-generate (warning card, nsec/npub copy rows, identity QR), branded switcher overlay, guest entry as first-class action                                                                                                       |
+| 2   | Onboarding §3.2                            | ☐ both   | No carousel, no `hasOnboarded` gate                                                                                                                                                                                                                                                                                      |
+| 3   | Shell §3.3                                 | ◐ both   | 5 visible tabs — **Discover is filtered out of the nav bar** (Android `BitOSApp.kt:106` `filterNot`, iOS 5-case enum + Discover as sheet). See drift finding 9.4-1                                                                                                                                                       |
+| 4   | Home notes feed §3.4                       | ✅ both  | W2 items only (banners, hashtag chips, ZapLiveStrip, rank chips)                                                                                                                                                                                                                                                         |
+| 5   | Bitz §3.7                                  | ◐ both   | Snap player + rail live; explore grid, glass top bar/mode pills, search overlay, comments sheet, video controls (scrubber/±10 s/mute memory) missing                                                                                                                                                                     |
+| 6   | Composer §3.8                              | ✅ both  | poll voting render-only (decision pending); Meme Studio button awaits studio phase                                                                                                                                                                                                                                       |
+| 7   | Thread §3.9                                | ◐ both   | Sheet-based; tree assembled by shared `ThreadAssembly` but **iOS renders the flat list**; root action row, live deltas, reply-bar options missing                                                                                                                                                                        |
+| 8   | Discover §3.10                             | ◐ both   | NIP-50 search + chips + npub resolve live; results tabs (Posts/People/Hashtags), trending mosaic, fullscreen image viewer missing. Reached via Home search icon + hub only                                                                                                                                               |
+| 9   | Messages/DMs §3.11                         | ◐ both   | NIP-17 gift-wrap live both platforms: conversation list with generic previews + unread dots + message requests, secure chat (encryption banner, delivery ticks via relay OK), new-chat by npub, chat ⚡ zap chip, Chats shell badge. Missing: search/tabs, attachments, reactions, calls (V1.x), groups, NIP-04 fallback |
+| 10  | Notifications §3.12                        | ✅ both  | No push delivery (FCM/APNs) — later wave                                                                                                                                                                                                                                                                                 |
+| 11  | Profile §3.13                              | ◐ both   | Own page + author sheet live; stats/tabs derive from the **live feed window only** (no dedicated author REQ); no banner/picture editing, no follower counts/sheets, no completion card; Android avatars are identicons (no remote pictures)                                                                              |
+| 12  | Zaps §3.14                                 | ◐ both   | LNURL dialog complete (tiers/comment/QR/expiry/lightning:); ledger page + LUD-21 verify poll + 9734 relays-tag policy missing; NWC absent                                                                                                                                                                                |
+| 13  | Bookmarks §3.15                            | ◐ both   | Toggle + kind-30003 publish live; saved-list page missing (More tile disabled)                                                                                                                                                                                                                                           |
+| 14  | Communities §3.16                          | ☐ both   | Nothing (legacy Flutter also never wired NIP-29 — see 9.5)                                                                                                                                                                                                                                                               |
+| 15  | More/You hub §3.17                         | ◐ both   | Hub live (hero, QR, switcher, tiles, honest coming-soon); wallet tile + communities/sounds tiles pend their surfaces                                                                                                                                                                                                     |
+| 16  | Settings §3.18                             | ✅ both  | All 12 sections live; field-level application gaps in 9.3                                                                                                                                                                                                                                                                |
+| 17  | Studio §3.19                               | ◐ both   | **Capture pipeline coded but unreachable** (see 9.4-2); editor absent                                                                                                                                                                                                                                                    |
+| 18  | Trending sounds §3.21                      | ☐ both   | Nothing (web is the only legacy source)                                                                                                                                                                                                                                                                                  |
+| 19  | Static pages §3.20                         | ☐ both   | About exists as a settings section only; privacy-policy/terms pages missing; More "About/Privacy" rows just deep-link settings-about                                                                                                                                                                                     |
+| 20  | `/pulse`                                   | rejected | Correctly absent                                                                                                                                                                                                                                                                                                         |
+| —   | Deep links (`nostr:`/`lightning:` inbound) | ☐ both   | No Android VIEW intent-filters; no iOS `CFBundleURLTypes`/`onOpenURL`                                                                                                                                                                                                                                                    |
 
 ### 9.2 Per-surface progress (audit view; tracker remains the ledger)
 
-| ID | Surface | Audit status | Corrections vs tracker |
-|:--|:--|:--|:--|
-| APP-001 | Boot/Auth/Identity | ◐ | as tracked; backup-reveal + overlay remain |
-| APP-002 | Onboarding | ☐ | as tracked |
-| APP-003 | Shell | ◐ | **iOS re-tap-to-top dormant** — `HomeView.retapTick` never passed by `RootView` (tracker says shipped) |
-| APP-004 | Home feed | ✅ | confirmed |
-| APP-005 | NoteCard | ◐ | polls render-only; compact variant missing — as tracked |
-| APP-006 | Stories | ☐ | confirmed absent |
-| APP-007 | Bitz | ◐ | confirmed; add **no-op Share button** on the video rail (both) |
-| APP-008 | Composer | ✅ | confirmed; GIF picker absent as tracked |
-| APP-009 | Thread | ◐ | **iOS assembles the tree (`ThreadDisplayItem`) but renders flat** — ship the render pass |
-| APP-010 | Discover | ◐ | confirmed |
-| APP-011 | DMs | ☐ | confirmed placeholder |
-| APP-012 | Notifications | ✅ | confirmed; no push (legacy also local-only) |
-| APP-013 | Profile | ◐ | new gaps: no website field, no banner/picture pickers, no follower counts, **Android edit sheet never prefills nip05/lud16** |
-| APP-014 | Zaps | ◐ | confirmed (dialog ✅, ledger/NWC ☐) |
-| APP-015 | Bookmarks | ◐ | confirmed (page ☐) |
-| APP-016 | Communities | ☐ | confirmed |
-| APP-017 | More hub | ◐ | hub complete for live surfaces |
-| APP-018 | Settings | ✅ | sections confirmed; consumption gaps in 9.3 |
-| APP-019 | Studio | ◐ | **camera/trim/publish unreachable** — `CreateScreen` orphaned on both platforms by the composer-FAB rework (tracker said "live" from W0) |
-| APP-020 | Static pages | ☐ | confirmed |
-| APP-021 | Sounds | ☐ | confirmed |
-| APP-022 | Components | ◐ | AppMenu/PowCard/hex/QR live; several components exist inline (MediaRow/Lightbox) but aren't factored as the shared library |
-| APP-023 | Theming | ✅ | theme (light/dark/system), accent, font scale and compact apply app-wide live from the persisted settings; launch chain stays dark-branded; reduced-motion/high-contrast remain |
-| APP-024 | i18n | ☐ | en hard-coded; lo picker exists but no strings |
+| ID      | Surface            | Audit status | Corrections vs tracker                                                                                                                                                          |
+| :------ | :----------------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| APP-001 | Boot/Auth/Identity | ◐            | as tracked; backup-reveal + overlay remain                                                                                                                                      |
+| APP-002 | Onboarding         | ☐            | as tracked                                                                                                                                                                      |
+| APP-003 | Shell              | ◐            | **iOS re-tap-to-top dormant** — `HomeView.retapTick` never passed by `RootView` (tracker says shipped)                                                                          |
+| APP-004 | Home feed          | ✅           | confirmed                                                                                                                                                                       |
+| APP-005 | NoteCard           | ◐            | polls render-only; compact variant missing — as tracked                                                                                                                         |
+| APP-006 | Stories            | ☐            | confirmed absent                                                                                                                                                                |
+| APP-007 | Bitz               | ◐            | confirmed; add **no-op Share button** on the video rail (both)                                                                                                                  |
+| APP-008 | Composer           | ✅           | confirmed; GIF picker absent as tracked                                                                                                                                         |
+| APP-009 | Thread             | ◐            | **iOS assembles the tree (`ThreadDisplayItem`) but renders flat** — ship the render pass                                                                                        |
+| APP-010 | Discover           | ◐            | confirmed                                                                                                                                                                       |
+| APP-011 | DMs                | ☐            | confirmed placeholder                                                                                                                                                           |
+| APP-012 | Notifications      | ✅           | confirmed; no push (legacy also local-only)                                                                                                                                     |
+| APP-013 | Profile            | ◐            | new gaps: no website field, no banner/picture pickers, no follower counts, **Android edit sheet never prefills nip05/lud16**                                                    |
+| APP-014 | Zaps               | ◐            | confirmed (dialog ✅, ledger/NWC ☐)                                                                                                                                             |
+| APP-015 | Bookmarks          | ◐            | confirmed (page ☐)                                                                                                                                                              |
+| APP-016 | Communities        | ☐            | confirmed                                                                                                                                                                       |
+| APP-017 | More hub           | ◐            | hub complete for live surfaces                                                                                                                                                  |
+| APP-018 | Settings           | ✅           | sections confirmed; consumption gaps in 9.3                                                                                                                                     |
+| APP-019 | Studio             | ◐            | **camera/trim/publish unreachable** — `CreateScreen` orphaned on both platforms by the composer-FAB rework (tracker said "live" from W0)                                        |
+| APP-020 | Static pages       | ☐            | confirmed                                                                                                                                                                       |
+| APP-021 | Sounds             | ☐            | confirmed                                                                                                                                                                       |
+| APP-022 | Components         | ◐            | AppMenu/PowCard/hex/QR live; several components exist inline (MediaRow/Lightbox) but aren't factored as the shared library                                                      |
+| APP-023 | Theming            | ✅           | theme (light/dark/system), accent, font scale and compact apply app-wide live from the persisted settings; launch chain stays dark-branded; reduced-motion/high-contrast remain |
+| APP-024 | i18n               | ☐            | en hard-coded; lo picker exists but no strings                                                                                                                                  |
 
 ### 9.3 Settings field-level audit (legacy union vs native)
 
-Native has all 12 hub sections; the gaps are fields and *application*
+Native has all 12 hub sections; the gaps are fields and _application_
 (fields persisted but never consumed). "F"/"W" = legacy source.
 
-| # | Field / behavior | Legacy | Native today | Action |
-|:--|:--|:--|:--|:--|
-| 1 | Profile picture picker → crop → upload → kind-0 | F+W | text URLs only (iOS picture field read-only) | APP-018a row 3 — reuse Blossom path |
-| 2 | Banner picker | F+W | gradient placeholder only | with row 3 |
-| 3 | Website field in profile editor | F+W | missing | trivial add, both platforms |
-| 4 | Profile editor prefill | — | Android callers pass `initialNip05=""/initialLud16=""` — never prefills | bug fix |
-| 5 | Default zap presets 1/5/21/100/500/1000 | F | ✅ Android chips; iOS stepper only | cosmetic: iOS preset chips |
-| 6 | Zap prefs: non-zap reactions, anonymous-by-default, auto-zap-on-follow + amount | W | missing | APP-014 wave |
-| 7 | Wallet connect (NWC NIP-47: balance, deposit/withdraw invoices) | W | none (WebLN rejected natively per parity audit) | APP-014 W4 |
-| 8 | Theme / accent / font size / compact applied | F+W | live on both platforms (light/dark/system + accent palette + font scale + compact) | APP-023 |
-| 9 | Reduced-motion + high-contrast toggles | W | missing (only OS-level respect targeted) | with APP-023 (§2.6) |
-| 10 | Algorithm: relay-discovery toggles ×3, smooth ranking, clear learned interests, WoT refresh | F+W | missing (presets/freshness/signals/diversity/reset ✅) | W2 queue |
-| 11 | Interaction-profile reset | F | missing | W2 queue |
-| 12 | Encrypted settings sync backup/restore | W (NIP-04 app-data) | missing (native plan = kind 30078) | W2 queue |
-| 13 | Relay latency + checked-at + "Test all" | W | live status dots + primary ⭐ + suggestions ✅ | add latency/test |
-| 14 | Video quality Auto/High/Low | F+W | picker persists; **no pipeline consumer** | wire to player or annotate |
-| 15 | Timezone picker (Auto/UTC/PST/EST/JST) | F | read-only "Automatic" row | low: add picker |
-| 16 | Date format MDY/DMY/YMD | F+W | persisted; feed timestamps don't consume it | wire into time-ago/format |
-| 17 | Sound / haptics toggles | F | persisted; no consumer (haptic exists on like only) | wire with notification service |
-| 18 | Language: Lao strings actually applied | F | picker only (Flutter's picker was **dead** — locale pinned en) | APP-024 — must apply, not repeat legacy bug |
-| 19 | Media providers Cloudinary/S3 config | W | honest Blossom-only row | deferred [W] — correct per spec |
-| 20 | Push notifications (FCM/APNs) | neither legacy had it | none | later wave (APP-012) |
-| 21 | Multi-account branded switch overlay | F | sheets (functional) | polish with APP-001 |
-| 22 | Clear cache wipes real data | F (web's was a **toast stub**) | Android wipes event cache ✅; iOS EventStore wipe pending | finish iOS |
-| 23 | Help cards (4 cards + articles) | F+W (both **snackbar/toast stubs**) | FAQ + support/donate live (ahead) | skip — do not port stubs |
+| #   | Field / behavior                                                                            | Legacy                              | Native today                                                                       | Action                                      |
+| :-- | :------------------------------------------------------------------------------------------ | :---------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------------------ |
+| 1   | Profile picture picker → crop → upload → kind-0                                             | F+W                                 | text URLs only (iOS picture field read-only)                                       | APP-018a row 3 — reuse Blossom path         |
+| 2   | Banner picker                                                                               | F+W                                 | gradient placeholder only                                                          | with row 3                                  |
+| 3   | Website field in profile editor                                                             | F+W                                 | missing                                                                            | trivial add, both platforms                 |
+| 4   | Profile editor prefill                                                                      | —                                   | Android callers pass `initialNip05=""/initialLud16=""` — never prefills            | bug fix                                     |
+| 5   | Default zap presets 1/5/21/100/500/1000                                                     | F                                   | ✅ Android chips; iOS stepper only                                                 | cosmetic: iOS preset chips                  |
+| 6   | Zap prefs: non-zap reactions, anonymous-by-default, auto-zap-on-follow + amount             | W                                   | missing                                                                            | APP-014 wave                                |
+| 7   | Wallet connect (NWC NIP-47: balance, deposit/withdraw invoices)                             | W                                   | none (WebLN rejected natively per parity audit)                                    | APP-014 W4                                  |
+| 8   | Theme / accent / font size / compact applied                                                | F+W                                 | live on both platforms (light/dark/system + accent palette + font scale + compact) | APP-023                                     |
+| 9   | Reduced-motion + high-contrast toggles                                                      | W                                   | missing (only OS-level respect targeted)                                           | with APP-023 (§2.6)                         |
+| 10  | Algorithm: relay-discovery toggles ×3, smooth ranking, clear learned interests, WoT refresh | F+W                                 | missing (presets/freshness/signals/diversity/reset ✅)                             | W2 queue                                    |
+| 11  | Interaction-profile reset                                                                   | F                                   | missing                                                                            | W2 queue                                    |
+| 12  | Encrypted settings sync backup/restore                                                      | W (NIP-04 app-data)                 | missing (native plan = kind 30078)                                                 | W2 queue                                    |
+| 13  | Relay latency + checked-at + "Test all"                                                     | W                                   | live status dots + primary ⭐ + suggestions ✅                                     | add latency/test                            |
+| 14  | Video quality Auto/High/Low                                                                 | F+W                                 | picker persists; **no pipeline consumer**                                          | wire to player or annotate                  |
+| 15  | Timezone picker (Auto/UTC/PST/EST/JST)                                                      | F                                   | read-only "Automatic" row                                                          | low: add picker                             |
+| 16  | Date format MDY/DMY/YMD                                                                     | F+W                                 | persisted; feed timestamps don't consume it                                        | wire into time-ago/format                   |
+| 17  | Sound / haptics toggles                                                                     | F                                   | persisted; no consumer (haptic exists on like only)                                | wire with notification service              |
+| 18  | Language: Lao strings actually applied                                                      | F                                   | picker only (Flutter's picker was **dead** — locale pinned en)                     | APP-024 — must apply, not repeat legacy bug |
+| 19  | Media providers Cloudinary/S3 config                                                        | W                                   | honest Blossom-only row                                                            | deferred [W] — correct per spec             |
+| 20  | Push notifications (FCM/APNs)                                                               | neither legacy had it               | none                                                                               | later wave (APP-012)                        |
+| 21  | Multi-account branded switch overlay                                                        | F                                   | sheets (functional)                                                                | polish with APP-001                         |
+| 22  | Clear cache wipes real data                                                                 | F (web's was a **toast stub**)      | Android wipes event cache ✅; iOS EventStore wipe pending                          | finish iOS                                  |
+| 23  | Help cards (4 cards + articles)                                                             | F+W (both **snackbar/toast stubs**) | FAQ + support/donate live (ahead)                                                  | skip — do not port stubs                    |
 
 ### 9.4 Integrity findings (dead code, dormant wiring, drift)
 
 1. **Tab-count drift:** spec §1.1 (user decision 2026-08-28) = six tabs incl.
    Discover; both apps render five and hide Discover behind the search icon
-   + hub. Legacy itself disagreed (Flutter 5 tabs without Discover; web
-   mobile bar had Discover). **Decision needed:** restore the sixth tab per
-   §1.1 or amend §1.1 to the 5-tab + search-entry model.
+   - hub. Legacy itself disagreed (Flutter 5 tabs without Discover; web
+     mobile bar had Discover). **Decision needed:** restore the sixth tab per
+     §1.1 or amend §1.1 to the 5-tab + search-entry model.
 2. **Unreachable capture pipeline (both):** `CreateScreen`/`CreateView` is
    never instantiated (Android imports it unused; iOS orphaned), so
    `CameraScreen` + `VideoPreviewScreen` — a complete CameraX/AVCapture
@@ -1131,7 +1144,7 @@ Native has all 12 hub sections; the gaps are fields and *application*
   ui-gap audit overstated gaps (it claimed the wallet was missing — NWC
   exists in web code).
 - Consequences already taken: native Clear-cache actually wipes (9.3-22),
-  native FAQ is real (9.3-23), and APP-024 must *apply* Lao, not just
+  native FAQ is real (9.3-23), and APP-024 must _apply_ Lao, not just
   persist a picker (9.3-18).
 
 ### 9.6 Next-task queue (missing / not complete — build top-down)
@@ -1210,8 +1223,8 @@ quick MEM editor → bitz composer → V2 studio suite · APP-014 NWC wallet.
 
 ---
 
-*Merge sources: the Flutter audit and web audit docs (54 KB / 53 KB,
+_Merge sources: the Flutter audit and web audit docs (54 KB / 53 KB,
 retired from `docs/` after the merge — see git history) and
 `docs/DESIGN_SYSTEM.md` (tokens). Legacy apps remain at
 `../bitos-nostr-flutter` and the web repo for reference reading only —
-never import framework code.*
+never import framework code._

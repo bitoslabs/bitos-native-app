@@ -47,32 +47,32 @@
 
 Wave legend per spec §8. W0 foundation is prior work.
 
-| ID | Surface (spec §) | Wave | iOS | Android | SHARED | Notes / next increment |
-|:--|:--|:--|:--|:--|:--|:--|
-| APP-001 | Boot, Auth & Identity §3.1 | W1 | ◐ | ◐ | ✅ | create/import/backup gate exist; app icon + native launch live; branded boot splash (animated gradient border, no spin) disabled at app entry — native system splash → shell directly for fast access (user decision 2026-08-28), component retained (APP-022); missing: switcher overlay polish, masked key echo, guest entry |
-| APP-002 | Onboarding carousel §3.2 | W1 | ✅ | ✅ | ✅ | 4-page carousel live both platforms over shared `OnboardingContent` (legacy copy verbatim, icon tokens); animated dots + step counter + Next/Get Started/Skip; `hasOnboarded` first-launch gate |
-| APP-003 | App shell §3.3 | W1 | ◐ | ◐ | n/a | tabs+retention done; re-tap-to-top/refresh on Home+Bitz shipped (X pattern: scroll-to-top, at-top → refresh); badges, lazy mount audit remain |
-| APP-004 | Home feed surface §3.4 | W1 | ✅ | ✅ | ✅ | V1 complete: wordmark/apps-grid header, underline tabs (Following note-count label removed 2026-08-30), X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain |
-| APP-005 | NoteCard + rich renderer §3.5 | W1 | ◐ | ◐ | ✅ | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain |
-| APP-006 | Stories §3.6 | W3 | ◐ | ◐ | ✅ | bar + full-screen viewer + seen persistence live BOTH platforms (2026-08-29) over shared kind-30315 rules (TTL/expiration, ≤12/author, d-tag replace; 7 common tests); create card + own-first ordering, composer + mass publish remain |
-| APP-007 | Bitz reels §3.7 | W1-W2 | ◐ | ◐ | ✅ | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share) + delivered: rendition+mirror failover chain, 3-tab set (Explore/Following/For you — legacy Flutter parity; W2 trending/zapped REMOVED by user decision, wires migrate to default), the Flutter-parity load-more walk (fresh-playable budget, duplicate pages auto-continue, per-tab windows) and the legacy-Flutter Explore tab UX (caption+author+likes tile scrim, blurred sensitive tiles, trailing spinner tile, footer buttons REMOVED); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), PoW/remix/sound/split chips, dwell ranking |
-| APP-008 | Note composer §3.8 | W1 | ✅ | ✅ | ✅ | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation, caret-accurate @-autocomplete: cursor-tracking iOS field + focus/query-gated Android panel, bare `@` lists all candidates) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, web-parity Solar toolbar order (image · video · URL · GIF · poll · PoW · CW · hashtag · emoji), tinted error banner and selection-aware Android field; PoW gated while picks pending |
-| APP-009 | Thread §3.9 | W1 | ◐ | ◐ | ✅ | remainder: [W] comment refresh control; zap-live chip on root card rides APP-004 W2 |
-| APP-010 | Discover §3.10 | W1 | ◐ | ◐ | ✅ | search+chips live; results tabs, trending grid, image viewer remain |
-| APP-011 | Messages/DMs §3.11 | W2 | ◐ | ◐ | ✅ | NIP-17/44 E2EE DMs end-to-end BOTH platforms (2026-08-28): conversation list + encrypted chat bubbles + send over shared `Nip44` v2 + `SecureDmComposer` (gift-wrap w/ throwaway key); 2026-08-30 parity wave: mock-complete UX both platforms — generic NIP-17 previews + unread dots, message-requests section (decline-wins), read cursors (bounded 512) + Chats shell badge (unread+requests, "9+"), delivery ticks (relay OK), encryption banner + E2EE header line, new-chat by npub, chat ⚡ zap chip (→ author zap pipeline); attachments/reactions/calls/groups + NIP-04 fallback remain |
-| APP-012 | Notifications §3.12 | W1 | ✅ | ✅ | ✅ | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain |
-| APP-013 | Profile §3.13 | W1 | ◐ | ◐ | ✅ | own-profile page at legacy-Flutter parity (2026-08-29): edge-to-edge hero (gradient + hex pattern + scrims, avatar glow band), glass controls, identity block (cyan verified, npub copy chip, chips), Edit pill + ⋯ menu, completion card w/ progress bar, stats (K/M), about chips, pinned tabs w/ real content (cards/strips/3-col grid/empty states); view+edit live; follower sheets, banner lightbox, other-user action row remain |
-| APP-014 | Zaps wallet §3.14 | W1 | ✅ | ✅ | ✅ | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; 2026-08-29 LNURL wire fix (invoicable again): bare 9734 object in the `nostr` param (was a relay frame servers reject), bech32 `lnurl` param, LUD-16 local-part case preserved + percent-encoded, provider `reason`/`errors` surfaced, weak `nostrPubkey` degrades to plain pay (fixture lnurl-pay-v1.json); LUD-21 verify poll remains; NWC W4 |
-| APP-015 | Bookmarks §3.15 | W1 | ✅ | ✅ | ✅ | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test |
-| APP-016 | Communities §3.16 | W3 | ☐ | ☐ | ☐ | NIP-29 wire + UI |
-| APP-017 | More / You hub §3.17 | W1 | ◐ | ◐ | n/a | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero (npub copy + identity-QR dialog) + multi-account switch row + Following/Relays stat tiles + live tile groups (Discover, Lightning, Profile, Zap wallet APP-014, Settings, Saved APP-015) + About/Privacy/Terms meta rows; remains: Communities/Meme tiles (W3/W4) |
-| APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅ | ✅ | ✅ | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), i18n strings (APP-024) |
-| APP-019 | Studio §3.19 | W4 | ✅ | ✅ | ✅ | **M1 COMPLETE (2026-09-02)**: image editor end-to-end both platforms — editing core (tray/gestures/text+sticker/coalesced undo), wire codec `com.bitos.bitz.meme` v1 (interop gate), 1080 raster export → Photos, kind-20 publish (CW/alt/imeta, verify-before-sign), autosave + ≤6 continuation slots; camera/trim/publish live (CAP/PUB); remain: GIF mode (M2), video mode (M3), V2 suite |
-| APP-020 | Static pages §3.20 | W1 | ✅ | ✅ | ✅ | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens |
-| APP-021 | Trending sounds §3.21 | W3 | ◐ | ◐ | ✅ | **bootstrap shipped 2026-09-08** (MST-050 Wave D): More → Trending sounds rail over the LIVE feed window — shared `MemeSoundTrending.rank` (3-day half-life, url+sha dedup, deterministic) fed by `sound` tags on published memes; "Use in Studio" re-attaches by URL through the Wave C editor path (hash-verified, no re-upload); row play/pause PREVIEW + WAVEFORM shipped 2026-09-08 (streams in-place, one row at a time; peaks via shared `MemeSoundWaveform.peaks`, common-tested). SHARED rules + tests ✅; the kind-30078 licensed library (MST-047) remains |
-| APP-022 | Component library §4 | W1 | ◐ | ◐ | n/a | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain |
-| APP-023 | Tokens & theming §2 | W1 | ✅ | ✅ | n/a | dark + light tokens live; theme (light/dark/system), accent palette, font scale and compact mode now APPLY app-wide from the shared settings contract (Android: `BitOSTheme(darkTheme, accentColorHex)` + dynamic `BitOSColors` palette + system-bar contrast sync; iOS: `SettingsStore` syncs `BitOSTheme.modeOverride`/`accentOverride` live and the shell/sheets drive `preferredColorScheme`); launch chain (system splash + boot splash) stays dark-branded (dark-only art); reduced-motion/high-contrast toggles remain (§2.6) |
-| APP-024 | i18n en/lo §7 | W1 | ☐ | ☐ | n/a | string tables + wiring |
+| ID      | Surface (spec §)              | Wave  | iOS | Android | SHARED | Notes / next increment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| :------ | :---------------------------- | :---- | :-- | :------ | :----- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| APP-001 | Boot, Auth & Identity §3.1    | W1    | ◐   | ◐       | ✅     | create/import/backup gate exist; app icon + native launch live; branded boot splash (animated gradient border, no spin) disabled at app entry — native system splash → shell directly for fast access (user decision 2026-08-28), component retained (APP-022); missing: switcher overlay polish, masked key echo, guest entry                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| APP-002 | Onboarding carousel §3.2      | W1    | ✅  | ✅      | ✅     | 4-page carousel live both platforms over shared `OnboardingContent` (legacy copy verbatim, icon tokens); animated dots + step counter + Next/Get Started/Skip; `hasOnboarded` first-launch gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| APP-003 | App shell §3.3                | W1    | ◐   | ◐       | n/a    | tabs+retention done; re-tap-to-top/refresh on Home+Bitz shipped (X pattern: scroll-to-top, at-top → refresh); badges, lazy mount audit remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| APP-004 | Home feed surface §3.4        | W1    | ✅  | ✅      | ✅     | V1 complete: wordmark/apps-grid header, underline tabs (Following note-count label removed 2026-08-30), X-style reveal pill, infinite-scroll pagination (until-REQ, watchdog exhaust), empty/auto-retry (2 s capped, connectivity-gated), relay-error + retry, filter-mismatch Show-all CTA; W2 banner/chips/ZapLiveStrip remain                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| APP-005 | NoteCard + rich renderer §3.5 | W1    | ◐   | ◐       | ✅     | NIP-27 tokenizer + rich body + media/lightbox + NIP-36 cover shipped on text cards; polls/clamping/compact variant remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| APP-006 | Stories §3.6                  | W3    | ◐   | ◐       | ✅     | bar + full-screen viewer + seen persistence live BOTH platforms (2026-08-29) over shared kind-30315 rules (TTL/expiration, ≤12/author, d-tag replace; 7 common tests); create card + own-first ordering, composer + mass publish remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| APP-007 | Bitz reels §3.7               | W1-W2 | ◐   | ◐       | ✅     | dedicated Bitz surface BOTH platforms (glass bar + persisted mode pills, explore grid, player controls, double-tap like, sensitive gate, search overlay, real Share) + delivered: rendition+mirror failover chain, 3-tab set (Explore/Following/For you — legacy Flutter parity; W2 trending/zapped REMOVED by user decision, wires migrate to default), the Flutter-parity load-more walk (fresh-playable budget, duplicate pages auto-continue, per-tab windows) and the legacy-Flutter Explore tab UX (caption+author+likes tile scrim, blurred sensitive tiles, trailing spinner tile, footer buttons REMOVED); remain: comments-sheet upgrade (iOS tree render = audit T10), record entry (T4), PoW/remix/sound/split chips, dwell ranking      |
+| APP-008 | Note composer §3.8            | W1    | ✅  | ✅      | ✅     | legacy-parity full-page composer on BOTH platforms over shared `ComposerRules` (counter/inserts/mention+rewrite/tag derivation, caret-accurate @-autocomplete: cursor-tracking iOS field + focus/query-gated Android panel, bare `@` lists all candidates) + POLL sheet (shared `PollContract`: kind-1 + `poll_option` tags, 2–6/280/80; compose + tolerant parse + card display; voting/bars await a vote-format decision) + GIF picker (shared `GifPickerContract`: Giphy trending/350 ms search/Recent ≤12/24 h cache/Load more) with real media thumbnails, web-parity Solar toolbar order (image · video · URL · GIF · poll · PoW · CW · hashtag · emoji), tinted error banner and selection-aware Android field; PoW gated while picks pending |
+| APP-009 | Thread §3.9                   | W1    | ◐   | ◐       | ✅     | remainder: [W] comment refresh control; zap-live chip on root card rides APP-004 W2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| APP-010 | Discover §3.10                | W1    | ◐   | ◐       | ✅     | search+chips live; results tabs, trending grid, image viewer remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| APP-011 | Messages/DMs §3.11            | W2    | ◐   | ◐       | ✅     | NIP-17/44 E2EE DMs end-to-end BOTH platforms (2026-08-28): conversation list + encrypted chat bubbles + send over shared `Nip44` v2 + `SecureDmComposer` (gift-wrap w/ throwaway key); 2026-08-30 parity wave: mock-complete UX both platforms — generic NIP-17 previews + unread dots, message-requests section (decline-wins), read cursors (bounded 512) + Chats shell badge (unread+requests, "9+"), delivery ticks (relay OK), encryption banner + E2EE header line, new-chat by npub, chat ⚡ zap chip (→ author zap pipeline); attachments/reactions/calls/groups + NIP-04 fallback remain                                                                                                                                                    |
+| APP-012 | Notifications §3.12           | W1    | ✅  | ✅      | ✅     | full surface incl. zap sats+sender, deep links, visible-mark-read, per-type mutes, shell badge, media strips + NIP-36 cover, search row, read cursor + blocked-author filtering (both); [W] video-mention deep-links + zap privacy gate remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| APP-013 | Profile §3.13                 | W1    | ◐   | ◐       | ✅     | own-profile page at legacy-Flutter parity (2026-08-29): edge-to-edge hero (gradient + hex pattern + scrims, avatar glow band), glass controls, identity block (cyan verified, npub copy chip, chips), Edit pill + ⋯ menu, completion card w/ progress bar, stats (K/M), about chips, pinned tabs w/ real content (cards/strips/3-col grid/empty states); view+edit live; follower sheets, banner lightbox, other-user action row remain                                                                                                                                                                                                                                                                                                              |
+| APP-014 | Zaps wallet §3.14             | W1    | ✅  | ✅      | ✅     | full zap flow on both platforms: legacy-parity sheet (emoji tiers, custom+comment+anonymous, QR invoice w/ live countdown + open-wallet, paid auto-close) + EXACT request-id paid matching (embedded 9734 canonical id through the client gate) + sent-zap ledger page (local records, merge w/ verified received, stat tiles + tabs) on both platforms; 2026-08-29 LNURL wire fix (invoicable again): bare 9734 object in the `nostr` param (was a relay frame servers reject), bech32 `lnurl` param, LUD-16 local-part case preserved + percent-encoded, provider `reason`/`errors` surfaced, weak `nostrPubkey` degrades to plain pay (fixture lnurl-pay-v1.json); LUD-21 verify poll remains; NWC W4                                             |
+| APP-015 | Bookmarks §3.15               | W1    | ✅  | ✅      | ✅     | toggle + page live both platforms (More → Library → Saved); follow-up: by-id fill repo test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| APP-016 | Communities §3.16             | W3    | ☐   | ☐       | ☐      | NIP-29 wire + UI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| APP-017 | More / You hub §3.17          | W1    | ◐   | ◐       | n/a    | V1 hub shipped both platforms, opened from the feed apps-grid: profile hero (npub copy + identity-QR dialog) + multi-account switch row + Following/Relays stat tiles + live tile groups (Discover, Lightning, Profile, Zap wallet APP-014, Settings, Saved APP-015) + About/Privacy/Terms meta rows; remains: Communities/Meme tiles (W3/W4)                                                                                                                                                                                                                                                                                                                                                                                                        |
+| APP-018 | Settings hub + sections §3.18 | W1-W2 | ✅  | ✅      | ✅     | shared settings contract v2 + algorithm contract + native stores; all 12 catalog sections live both platforms incl. full relays manager (CRUD, roles, status dots, NIP-65 publish) and the ranking algorithm (presets/freshness/signal weights driving the live For-You order); remains in later waves: privacy gates + blocked manage (W2/APP-012), i18n strings (APP-024)                                                                                                                                                                                                                                                                                                                                                                          |
+| APP-019 | Studio §3.19                  | W4    | ✅  | ✅      | ✅     | **M1 COMPLETE (2026-09-02)**: image editor end-to-end both platforms — editing core (tray/gestures/text+sticker/coalesced undo), wire codec `com.bitos.bitz.meme` v1 (interop gate), 1080 raster export → Photos, kind-20 publish (CW/alt/imeta, verify-before-sign), autosave + ≤6 continuation slots; camera/trim/publish live (CAP/PUB); remain: GIF mode (M2), video mode (M3), V2 suite                                                                                                                                                                                                                                                                                                                                                         |
+| APP-020 | Static pages §3.20            | W1    | ✅  | ✅      | ✅     | About/Privacy(11§)/Terms(10§) live both platforms — full legacy copy in shared `StaticPagesContent` (4 common tests lock it verbatim); More hub meta rows route to the overlay screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| APP-021 | Trending sounds §3.21         | W3    | ◐   | ◐       | ✅     | **bootstrap shipped 2026-09-08** (MST-050 Wave D): More → Trending sounds rail over the LIVE feed window — shared `MemeSoundTrending.rank` (3-day half-life, url+sha dedup, deterministic) fed by `sound` tags on published memes; "Use in Studio" re-attaches by URL through the Wave C editor path (hash-verified, no re-upload); row play/pause PREVIEW + WAVEFORM shipped 2026-09-08 (streams in-place, one row at a time; peaks via shared `MemeSoundWaveform.peaks`, common-tested). SHARED rules + tests ✅; the kind-30078 licensed library (MST-047) remains                                                                                                                                                                                |
+| APP-022 | Component library §4          | W1    | ◐   | ◐       | n/a    | avatar/menu/zap sheet + hex geometry (web .hex-clip parity) + BootSplashScreen component retained (not mounted at entry — fast-access decision 2026-08-28); GIF/poll/pickers, PowCard remain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| APP-023 | Tokens & theming §2           | W1    | ✅  | ✅      | n/a    | dark + light tokens live; theme (light/dark/system), accent palette, font scale and compact mode now APPLY app-wide from the shared settings contract (Android: `BitOSTheme(darkTheme, accentColorHex)` + dynamic `BitOSColors` palette + system-bar contrast sync; iOS: `SettingsStore` syncs `BitOSTheme.modeOverride`/`accentOverride` live and the shell/sheets drive `preferredColorScheme`); launch chain (system splash + boot splash) stays dark-branded (dark-only art); reduced-motion/high-contrast toggles remain (§2.6)                                                                                                                                                                                                                 |
+| APP-024 | i18n en/lo §7                 | W1    | ☐   | ☐       | n/a    | string tables + wiring                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -306,20 +306,20 @@ shippable increment. **Native is AHEAD on: NIP-65 relay-list publish (Flutter
 relays have no 10002), kind-based notification mutes (6 kinds vs Flutter's 5
 push toggles), relays live status dots, zap sats display.**
 
-| # | Old-app feature (source) | Native now | Gap → plan |
-|:--|:--|:--|:--|
-| 1 | ✅ **Account switcher** (2026-08-28) — SHIPPED: shared `AccountRegistry` (bounded ≤8, secret-free wire) + Android `AccountRegistryStore`/`SecureKeyStore` pubkey-keyed slots + `IdentityViewModel.switchTo/signOut(deactivate)/removeRegisteredAccount` + iOS `IdentityStore` registry + `IdentityKeychain` slots; switcher card in Settings-account (hex avatar, name/npub, active check, Remove w/ confirm); sign-out now deactivates (slots survive) both platforms. Branded switch OVERLAY still pending (V1 swaps state directly) | done | registry + slots + switcher + branded switch OVERLAY shipped (MoreScreen/MoreView AND the Settings account switcher both platforms — every switch rides the brand beat); auth-screen one-tap rows remain |
-| 2 | ✅ **Privacy store** (2026-08-28) — SHIPPED: shared `PrivacyPrefsContract` (8 gate fields, per-field tolerant, enums validated; sensitive media stays the settings-contract key, push toggles stay the kind mutes — no duplication) + native stores + Account-privacy card (6 toggles) + Interactions card (message/comment permission pickers) both platforms; enforcement footnotes honest (W2 DMs) | done | — |
-| 3 | **Profile editor fields** — picture + banner (image_picker → crop → upload w/ progress + local preview), website URL field; optimistic metadata cache + kind-0 publish | name/display/about/nip05/lud16 only | extend ProfileEditSheet both platforms: website field (trivial), picture/banner pickers (needs CAP media path reuse: pick → Blossom upload → URL into kind-0) |
-| 4 | ✅ (2026-08-28) — SHIPPED: `RelayListContract` schema 2 `primary` flag (≤1, write-only, first in fan-out) + ⭐ toggle + add-dialog suggestion chips (primal/damus/nos) both platforms | done | — |
-| 5 | ✅ (2026-08-28, Android) `EventCache.clearAllCache` + `FeedRepository.clearEventCache`; clear-cache row wipes both. iOS (2026-08-29): `FeedStore.clearDerivedState()` — profiles/thread views/tallies/bookmark+block projections wiped on clear-cache (live subs re-fetch); persisted cache arrives with DAT-003 | done | persisted iOS cache = DAT-003 |
-| 6 | ✅ (2026-08-28, Android) presets 1/5/21/100/500/1000. iOS uses a stepper (equivalent). Ledger link → APP-014 | done | — |
-| 7 | ✅ (2026-08-28) — SHIPPED: `diversityEnabled` per surface (AlgorithmContract schema 2) + `FeedRanking.applyDiversity` (author-clustering requeue, ≤2 consecutive, guarded drain, never drops — origin diversity.ts parity, deterministic, tested) + Diverse-authors toggle + Reset-to-preset both platforms; stat tiles + preset icons remain cosmetic | done | cosmetic extras only |
-| 8 | **Appearance live preview** — sample widget rendering with the picked accent/theme | honest pending rows | ship with APP-023 theming (preview needs real token application to be meaningful) |
-| 9 | **Help cards** — Help center / Contact / Report a problem / Feature request (4 cards) + 4 popular articles | FAQ (7) + support/donate + links | static content, needs real destinations — fold into APP-020 static pages (links currently snackbar-only in old app → do NOT fake) |
-| 10 | **AboutPage sections** — hero CTAs (Get Started), feature-cards grid, open-source card, legal footer (Terms/Privacy links) | brand card + NIP chips + schema ✓ | APP-020 static pages (about/privacy/terms full text already specced §3.20) |
-| 11 | **Media provider picker** — None / Blossom / Cloudinary tiles + config | Blossom (default) read-only row ✓ | [W] per spec; Cloudinary needs server config UI — keep honest row until provider exists |
-| 12 | **Security** — same as native (npub/nsec reveal + danger zone; NO biometric in old app either) | parity ✓ | nothing missing vs old app; app-lock stays spec-[W] |
+| #   | Old-app feature (source)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Native now                          | Gap → plan                                                                                                                                                                                               |
+| :-- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | ✅ **Account switcher** (2026-08-28) — SHIPPED: shared `AccountRegistry` (bounded ≤8, secret-free wire) + Android `AccountRegistryStore`/`SecureKeyStore` pubkey-keyed slots + `IdentityViewModel.switchTo/signOut(deactivate)/removeRegisteredAccount` + iOS `IdentityStore` registry + `IdentityKeychain` slots; switcher card in Settings-account (hex avatar, name/npub, active check, Remove w/ confirm); sign-out now deactivates (slots survive) both platforms. Branded switch OVERLAY still pending (V1 swaps state directly) | done                                | registry + slots + switcher + branded switch OVERLAY shipped (MoreScreen/MoreView AND the Settings account switcher both platforms — every switch rides the brand beat); auth-screen one-tap rows remain |
+| 2   | ✅ **Privacy store** (2026-08-28) — SHIPPED: shared `PrivacyPrefsContract` (8 gate fields, per-field tolerant, enums validated; sensitive media stays the settings-contract key, push toggles stay the kind mutes — no duplication) + native stores + Account-privacy card (6 toggles) + Interactions card (message/comment permission pickers) both platforms; enforcement footnotes honest (W2 DMs)                                                                                                                                  | done                                | —                                                                                                                                                                                                        |
+| 3   | **Profile editor fields** — picture + banner (image_picker → crop → upload w/ progress + local preview), website URL field; optimistic metadata cache + kind-0 publish                                                                                                                                                                                                                                                                                                                                                                 | name/display/about/nip05/lud16 only | extend ProfileEditSheet both platforms: website field (trivial), picture/banner pickers (needs CAP media path reuse: pick → Blossom upload → URL into kind-0)                                            |
+| 4   | ✅ (2026-08-28) — SHIPPED: `RelayListContract` schema 2 `primary` flag (≤1, write-only, first in fan-out) + ⭐ toggle + add-dialog suggestion chips (primal/damus/nos) both platforms                                                                                                                                                                                                                                                                                                                                                  | done                                | —                                                                                                                                                                                                        |
+| 5   | ✅ (2026-08-28, Android) `EventCache.clearAllCache` + `FeedRepository.clearEventCache`; clear-cache row wipes both. iOS (2026-08-29): `FeedStore.clearDerivedState()` — profiles/thread views/tallies/bookmark+block projections wiped on clear-cache (live subs re-fetch); persisted cache arrives with DAT-003                                                                                                                                                                                                                       | done                                | persisted iOS cache = DAT-003                                                                                                                                                                            |
+| 6   | ✅ (2026-08-28, Android) presets 1/5/21/100/500/1000. iOS uses a stepper (equivalent). Ledger link → APP-014                                                                                                                                                                                                                                                                                                                                                                                                                           | done                                | —                                                                                                                                                                                                        |
+| 7   | ✅ (2026-08-28) — SHIPPED: `diversityEnabled` per surface (AlgorithmContract schema 2) + `FeedRanking.applyDiversity` (author-clustering requeue, ≤2 consecutive, guarded drain, never drops — origin diversity.ts parity, deterministic, tested) + Diverse-authors toggle + Reset-to-preset both platforms; stat tiles + preset icons remain cosmetic                                                                                                                                                                                 | done                                | cosmetic extras only                                                                                                                                                                                     |
+| 8   | **Appearance live preview** — sample widget rendering with the picked accent/theme                                                                                                                                                                                                                                                                                                                                                                                                                                                     | honest pending rows                 | ship with APP-023 theming (preview needs real token application to be meaningful)                                                                                                                        |
+| 9   | **Help cards** — Help center / Contact / Report a problem / Feature request (4 cards) + 4 popular articles                                                                                                                                                                                                                                                                                                                                                                                                                             | FAQ (7) + support/donate + links    | static content, needs real destinations — fold into APP-020 static pages (links currently snackbar-only in old app → do NOT fake)                                                                        |
+| 10  | **AboutPage sections** — hero CTAs (Get Started), feature-cards grid, open-source card, legal footer (Terms/Privacy links)                                                                                                                                                                                                                                                                                                                                                                                                             | brand card + NIP chips + schema ✓   | APP-020 static pages (about/privacy/terms full text already specced §3.20)                                                                                                                               |
+| 11  | **Media provider picker** — None / Blossom / Cloudinary tiles + config                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Blossom (default) read-only row ✓   | [W] per spec; Cloudinary needs server config UI — keep honest row until provider exists                                                                                                                  |
+| 12  | **Security** — same as native (npub/nsec reveal + danger zone; NO biometric in old app either)                                                                                                                                                                                                                                                                                                                                                                                                                                         | parity ✓                            | nothing missing vs old app; app-lock stays spec-[W]                                                                                                                                                      |
 
 ### APP-019 — Studio (spec §3.19) — W4 quick, V2 full
 
@@ -530,7 +530,7 @@ fixed, what's next.
   Bitz rail **Sound** action (video notes, ♪ amber) → `MemeSoundSeed` →
   full-screen editor handoff; `seedSoundSession` downloads bounded
   (64 MiB, remix parity) → store `attachSoundtrack(data:source:author:
-  label:)` (provenance-aware refactor; the picker path delegates) →
+label:)` (provenance-aware refactor; the picker path delegates) →
   VIDEO mode with the sound attached and no clip; ♪ chip in the
   identity row. Drive-by compile fixes for the concurrent session's
   committed-unverified camera work: CameraScreen body split (type-
@@ -554,8 +554,8 @@ fixed, what's next.
   (unloadable URL, no audio track, undecodable), session-guarded so a
   re-run never double-attaches. Notes carrying a `sound` tag render a
   ♪ chip in the Bitz meta row. NEXT: iOS Wave C (BitzView Sound action
-  + seeding via the Wave B store ops), then Wave D rail UI over the
-  landed rank rule.
+  - seeding via the Wave B store ops), then Wave D rail UI over the
+    landed rank rule.
 
 - 2026-09-08 (later) — **MST-050 Wave B on iOS — parity closed** (the
   TikTok sound loop now runs on BOTH platforms; left UNCOMMITTED for
@@ -638,12 +638,12 @@ fixed, what's next.
   degrades to no-soundtrack — never a failed decode), `MemeSoundRules`
   (normalize bounds: ≤ 60 s / volume 0–2 / 64-hex sha / url ≤ 2048;
   `tagsFor` → `["sound", url, sha256, sourceEventId?]` + `["p", author]`
-  + `["attribution", "sound of …"]`, stamping NOTHING until the
-  hash-verified upload exists; `sourceOf` read seam for the feed chip /
-  re-attach / trending) + bridge `memeSoundTagsFor`. Tests: round-trip,
-  hostile wire, bounds battery, tag battery, bridge seam (incl.
-  pre-upload → ""). Waves B–D (editor attach + mixdown, bitz "Use this
-  sound", trending rail) planned in the doc. NEXT: Wave B.
+  - `["attribution", "sound of …"]`, stamping NOTHING until the
+    hash-verified upload exists; `sourceOf` read seam for the feed chip /
+    re-attach / trending) + bridge `memeSoundTagsFor`. Tests: round-trip,
+    hostile wire, bounds battery, tag battery, bridge seam (incl.
+    pre-upload → ""). Waves B–D (editor attach + mixdown, bitz "Use this
+    sound", trending rail) planned in the doc. NEXT: Wave B.
 
 - 2026-09-07 — Android feed quick-import parity (follow-up to the studio
   import unification; closes the 2026-08-29 "unreachable `showImportMedia`
@@ -851,47 +851,47 @@ fixed, what's next.
 
 - 2026-09-03 — Studio V2-suite wave (APP-019, pulls forward the first
   `scr-suite` slice of plan V2/EDT-005..009): **video-mode source insert
-  + expert timeline dock, both platforms.** Shared core (common-tested):
-  `MemeOverlayKind.IMAGE` with an `assetId` reference riding the LOCAL
-  project wire only (`"kind":"image"` + `"asset"`; `localToWire` drops
-  layers — web `image-overlay.ts` parity, they persist via slots and burn
-  into exports); `MemeProjectContract.maxAssets(VIDEO)` 1 → 7 (1 clip +
-  `MAX_IMAGE_LAYERS = 6` imported sources); `MemeRules` IMAGE defaults
-  (size 192 ≈ 18% stage height, square hit box); `MemeExportRules` plan
-  items carry `image`/`asset` geometry (fontSizePx = target height,
-  aspect kept by the rasterizer) and the bridge envelope gains
-  `"image":true`/`"asset"` rows. Tests: +4 batteries (rules defaults,
-  contract round-trip + video cap, wire drops layers but the local store
-  keeps them, export plan/envelope geometry). Android: `layerPicker`
-  insert (image/GIF → asset + IMAGE overlay; GIFs paint their first
-  frame — V1 semantics, labeled in the sheet), `VideoSourceTray` (clip
-  tile → replace via trim handoff, layer thumbs, insert tile),
-  `OverlayNode` IMAGE branch (AsyncImage, aspect-kept, WYSIWYG with the
-  raster), `MemeRaster.drawImageItem` + `MemeVideoExport` asset resolver
-  (all three export/publish call sites), layers resume from slots, and
-  **`SuiteDock`** (scr-suite): video/overlays/audio/sfx track lanes with
-  real data (overlay visibility windows, cue ticks), scrubbable playhead
-  via a registered `VideoTransport`, mono time + `cue N/16` readout,
-  tool chips (Layers/Looks/SFX live; Draw/Trim/Sound/Speed honest
-  "soon"), undo + **redo** (`MemeEditorState` redo branch, symmetric
-  snapshots, cleared by any new edit — test), Preview/Export. ALSO
-  FIXED: the video stage never passed `MemeFxRules.transformAt` into
-  `OverlayNode` (fx was wired but inert on Android) and the video publish
-  guard early-returned on `activeAsset == null` (video mode has no
-  tray asset — publish button was a no-op). iOS: same feature set —
-  store redo history + `addImageOverlay`/`select(id:)`/`layerImages`,
-  mode switches drop IMAGE layers (their sources are session-bound),
-  video asset cap 6 with `activeAsset` untouched (Looks stays
-  image-mode), `OverlayUiView` IMAGE branch, `MemeRaster.paintImage`,
-  `MemeVideoExportIos.export(images:)`, `VideoStageIos`
-  `layerImages`/`showScrub`/`VideoTransportIos`, `SuiteDockView` +
-  `LayersSheetView`, tray insert + layer resume. Known V1 bounds
-  (documented in code): video-in-video PiP and animated GIF layers ride
-  later waves; layer timing windows render on the timeline but exports
-  still burn the full-frame overlay (pre-existing V1 export semantic).
-  Android compile + unit tests (state 10/10) + aapt2 green; shared
-  common tests green (rules 12 / contract 8 / wire 21 / export 7); iOS
-  syntax-parse green (type-check still gated on a simulator runtime).
+  - expert timeline dock, both platforms.** Shared core (common-tested):
+    `MemeOverlayKind.IMAGE` with an `assetId` reference riding the LOCAL
+    project wire only (`"kind":"image"` + `"asset"`; `localToWire` drops
+    layers — web `image-overlay.ts` parity, they persist via slots and burn
+    into exports); `MemeProjectContract.maxAssets(VIDEO)` 1 → 7 (1 clip +
+    `MAX_IMAGE_LAYERS = 6` imported sources); `MemeRules` IMAGE defaults
+    (size 192 ≈ 18% stage height, square hit box); `MemeExportRules` plan
+    items carry `image`/`asset` geometry (fontSizePx = target height,
+    aspect kept by the rasterizer) and the bridge envelope gains
+    `"image":true`/`"asset"` rows. Tests: +4 batteries (rules defaults,
+    contract round-trip + video cap, wire drops layers but the local store
+    keeps them, export plan/envelope geometry). Android: `layerPicker`
+    insert (image/GIF → asset + IMAGE overlay; GIFs paint their first
+    frame — V1 semantics, labeled in the sheet), `VideoSourceTray` (clip
+    tile → replace via trim handoff, layer thumbs, insert tile),
+    `OverlayNode` IMAGE branch (AsyncImage, aspect-kept, WYSIWYG with the
+    raster), `MemeRaster.drawImageItem` + `MemeVideoExport` asset resolver
+    (all three export/publish call sites), layers resume from slots, and
+    **`SuiteDock`** (scr-suite): video/overlays/audio/sfx track lanes with
+    real data (overlay visibility windows, cue ticks), scrubbable playhead
+    via a registered `VideoTransport`, mono time + `cue N/16` readout,
+    tool chips (Layers/Looks/SFX live; Draw/Trim/Sound/Speed honest
+    "soon"), undo + **redo** (`MemeEditorState` redo branch, symmetric
+    snapshots, cleared by any new edit — test), Preview/Export. ALSO
+    FIXED: the video stage never passed `MemeFxRules.transformAt` into
+    `OverlayNode` (fx was wired but inert on Android) and the video publish
+    guard early-returned on `activeAsset == null` (video mode has no
+    tray asset — publish button was a no-op). iOS: same feature set —
+    store redo history + `addImageOverlay`/`select(id:)`/`layerImages`,
+    mode switches drop IMAGE layers (their sources are session-bound),
+    video asset cap 6 with `activeAsset` untouched (Looks stays
+    image-mode), `OverlayUiView` IMAGE branch, `MemeRaster.paintImage`,
+    `MemeVideoExportIos.export(images:)`, `VideoStageIos`
+    `layerImages`/`showScrub`/`VideoTransportIos`, `SuiteDockView` +
+    `LayersSheetView`, tray insert + layer resume. Known V1 bounds
+    (documented in code): video-in-video PiP and animated GIF layers ride
+    later waves; layer timing windows render on the timeline but exports
+    still burn the full-frame overlay (pre-existing V1 export semantic).
+    Android compile + unit tests (state 10/10) + aapt2 green; shared
+    common tests green (rules 12 / contract 8 / wire 21 / export 7); iOS
+    syntax-parse green (type-check still gated on a simulator runtime).
 
 - 2026-09-03 — CAP→MEM handoff (user follow-up: "MEM drops the takes").
   The record screen's MEM button previously opened the editor empty and
@@ -958,10 +958,10 @@ fixed, what's next.
   `SolarSoundwaveLinear`, `SolarUndoLeftRoundLinear`,
   `SolarDangerTriangleLinear`, `SolarMusicNoteLinear`; Android drawables
   `solar_text/soundwave/undo_left_round/danger_triangle/palette/music_
-  note/magic_wand_linear` (palette + magic wand port the exact in-repo
+note/magic_wand_linear` (palette + magic wand port the exact in-repo
   iOS SVGs so both platforms paint identical glyphs). New token
   surfaces: iOS AppIcons gained `textStyle/sticker/looks/sfx/musicNote/
-  warningTriangle` (+ `undo` now resolves to Solar instead of SF);
+warningTriangle` (+ `undo` now resolves to Solar instead of SF);
   Android gained `SolarStudioIcons.kt` (Settings/Gallery/VideoCamera/
   Bolt/Text/Sticker/Palette/Soundwave/UndoLeft/DangerTriangle/MusicNote/
   MagicWand) mirroring iOS one-for-one. Call-site swaps both platforms:
@@ -973,7 +973,7 @@ fixed, what's next.
   (recipe 🔒, "image ✓ (replace)", review "!", "published ✓" → icons),
   quick actions music/remix. Mockup-parity additions: template rails now
   render the scr-home gradient covers (honeycomb.css `grad-lightning/
-  mine/node` + a story violet — stable by rail position, same ladder on
+mine/node` + a story violet — stable by rail position, same ladder on
   both platforms) with the zap-priced sats chip (bolt icon + amber,
   "⚡" text glyph dropped). Sticker-grid emoji and template pack emoji
   stay by design (content, not chrome — the mockup itself uses emoji
@@ -1000,7 +1000,7 @@ fixed, what's next.
   COMPOSERS: `composeMemePictureNote`/`composeMemeVideoNote` grew
   `extraTags`, spliced BEFORE `alt` per web `postBitz` order. (3)
   BRIDGE: `memeRemixTagsFor(projectJson, sourceEventId, sourcePubkey,
-  relaysJson, license, attribution)` — project wire → localToWire →
+relaysJson, license, attribution)` — project wire → localToWire →
   ladder → `["remix", id, ≤3 relays]` + `["meme", payload?]` +
   `["p", author]` (+ license/attribution when valid) as TagsCodec JSON
   (+ bridge test: relay cap, all tag shapes, corrupt → ""). (4)
@@ -1036,7 +1036,7 @@ fixed, what's next.
   cues drop (no library slot), look carries. Notes without loadable
   media fall back to the seeded note composer. (4) PUBLISH: lineage
   now rides `memeRemixTagsFor(project, id, pubkey, relays, license,
-  attribution)` — relay hints + license + "remix of <label>" credit
+attribution)` — relay hints + license + "remix of <label>" credit
   (≤140); the draft's own license row drops when lineage supplies it
   (no duplicate `license` tag); a remix defaults the license chips to
   CC-BY-4.0 (web studio default). iOS additionally persists the MERGED
@@ -1114,17 +1114,17 @@ fixed, what's next.
   (add-only, video resource); Publish rides the unchanged
   hash-verify-before-sign machine as video/mp4 →
   `NotePublisher.publishMemeVideoNote` (kind 22 portrait / 21 landscape
-  + duration imeta, through the M3a bridge pair). (4) SLOTS: the clip
-  persists as a raw data asset (`v1`/asset-v1.mp4 — the store's manifest
-  grew a dataAssets lane) and resume re-probes it back into the session.
-  Fixed during wiring: stale framework slice (bridge pair landed after
-  the last relink), and the stage's overlay/delete views needed internal
-  visibility from the editor file. Verified: full shared lane green,
-  full Android suite green, whole-app Swift 6 typecheck clean
-  (relinked), tests parse clean. REMAINS (wave M3c): MST-032 cover-frame
-  capture with the separate poster upload (imeta `thumb` — needs a
-  `thumb` slot on UploadedMedia + fixture), MST-035 QA matrix
-  (long-clip, interruption, low storage, process-kill mid-export).
+  - duration imeta, through the M3a bridge pair). (4) SLOTS: the clip
+    persists as a raw data asset (`v1`/asset-v1.mp4 — the store's manifest
+    grew a dataAssets lane) and resume re-probes it back into the session.
+    Fixed during wiring: stale framework slice (bridge pair landed after
+    the last relink), and the stage's overlay/delete views needed internal
+    visibility from the editor file. Verified: full shared lane green,
+    full Android suite green, whole-app Swift 6 typecheck clean
+    (relinked), tests parse clean. REMAINS (wave M3c): MST-032 cover-frame
+    capture with the separate poster upload (imeta `thumb` — needs a
+    `thumb` slot on UploadedMedia + fixture), MST-035 QA matrix
+    (long-clip, interruption, low storage, process-kill mid-export).
 
 - 2026-09-02 — Meme Studio M3 wave a: shared video rules + Android video
   mode (APP-019 MST-030/031/033/034 on Android; both-platform kind
@@ -1232,50 +1232,50 @@ fixed, what's next.
   accident from scripted editing (caught by compile, repaired cleanly).
   Verified: full shared lane green (16 new GIF tests), full Android
   suite green. REMAINS (wave M2b): iOS GIF mode — CGImageSource decode
-  + CGImageDestination encode (per plan §4.2 the iOS encoder is
-  platform; the shared planner still drives timing) + the same tray/
-  preview/publish UI; `image/gif` kind-20 fixture; on-device QA of
-  reorder gestures + ladder behavior.
+  - CGImageDestination encode (per plan §4.2 the iOS encoder is
+    platform; the shared planner still drives timing) + the same tray/
+    preview/publish UI; `image/gif` kind-20 fixture; on-device QA of
+    reorder gestures + ladder behavior.
 
 - 2026-09-02 — Meme Studio M1 wave 5: autosave + continuation slots —
   **M1 COMPLETE** (APP-019 MST-018, both platforms; the Quick MEM image
   editor is now durable end to end: import → edit → save/publish, crash
   safe). (1) SHARED `core/studio/MemeSlots.kt`: the slot wire (`slot.json`
   = `{v,id,updatedAt,assets[{id,file,aspect}],project<MemeProject wire>}`)
-  + the hub index wire, both lenient (corrupt/oversized → empty; absolute
-  paths and `..` traversal refs rejected — a broken store never blocks
-  creating); `MemeSlotRules` owns the policy: most-recent-first, re-save
-  bumps, LRU eviction past 6 RETURNS the evicted ids so stores delete
-  their files, hub label (first overlay text ≤40), relative time —
-  5 common tests. (2) ANDROID `MemeProjectStore`: `filesDir/studio/
-  slots/<id>/` with copied-in assets (CAP-005 — transient picker URIs
-  never persist; the copy is idempotent by stable file name), poster.jpg
-  (~256 px JPEG, ≤192 KB per the web constants), index.json; bitmap +
-  resolver edges are injected interfaces so the whole store round-trips
-  on plain JVM against a temp dir — 5 tests: relaunch-restore of the
-  exact project, copy idempotency, 7-saves-evict-the-oldest, explicit
-  delete, corrupt-degrade + fresh-save-after-corruption. Editor wiring:
-  debounced 500 ms autosave after every committed edit/asset change
-  (EDT-002), resume seeds the project + tray from slot files, publish
-  DONE and discard-confirm clear the slot, hub "Continue creating" rows
-  (poster/label/time/Resume/✕, ≤6 badge). (3) FIXED a wave-1 latent
-  UI bug: `MemeEditorState` was plain Kotlin — drags, adds and undo
-  mutated state nothing observed, so the stage would never have
-  redrawn; it now carries a Compose `revision` bumped at every mutation
-  point (commit/gesture/undo/selection) — unit tests unchanged + green.
-  (4) IOS `MemeProjectStore` (Application Support/studio — same layout
-  and semantics, poster via scaled UIGraphicsImageRenderer; pbxproj
-  registered) + the same editor lifecycle (`restore()` seeds the wire;
-  `.task(id:)` autosave keyed on the @Observable revision; onAppear
-  seeds the tray from slot files; publish/discard clear the slot) +
-  `SlotRow` hub section. Honest gate: process-kill recovery is proven
-  at the store level (fresh store over the same dir restores the exact
-  project); on-device kill/relaunch QA rides the manual matrix with the
-  rest of MST-035. Verified: full shared lane green, full Android suite
-  green (95 tests in the meme packages), whole-app Swift 6 typecheck
-  clean. M1 closed: waves 1–5 (editing core, wire codec interop gate,
-  export, kind-20 publish, durability) all shipped. Next: M2 GIF mode
-  (MST-020..023) or M3 video per the plan order.
+  - the hub index wire, both lenient (corrupt/oversized → empty; absolute
+    paths and `..` traversal refs rejected — a broken store never blocks
+    creating); `MemeSlotRules` owns the policy: most-recent-first, re-save
+    bumps, LRU eviction past 6 RETURNS the evicted ids so stores delete
+    their files, hub label (first overlay text ≤40), relative time —
+    5 common tests. (2) ANDROID `MemeProjectStore`: `filesDir/studio/
+slots/<id>/` with copied-in assets (CAP-005 — transient picker URIs
+    never persist; the copy is idempotent by stable file name), poster.jpg
+    (~256 px JPEG, ≤192 KB per the web constants), index.json; bitmap +
+    resolver edges are injected interfaces so the whole store round-trips
+    on plain JVM against a temp dir — 5 tests: relaunch-restore of the
+    exact project, copy idempotency, 7-saves-evict-the-oldest, explicit
+    delete, corrupt-degrade + fresh-save-after-corruption. Editor wiring:
+    debounced 500 ms autosave after every committed edit/asset change
+    (EDT-002), resume seeds the project + tray from slot files, publish
+    DONE and discard-confirm clear the slot, hub "Continue creating" rows
+    (poster/label/time/Resume/✕, ≤6 badge). (3) FIXED a wave-1 latent
+    UI bug: `MemeEditorState` was plain Kotlin — drags, adds and undo
+    mutated state nothing observed, so the stage would never have
+    redrawn; it now carries a Compose `revision` bumped at every mutation
+    point (commit/gesture/undo/selection) — unit tests unchanged + green.
+    (4) IOS `MemeProjectStore` (Application Support/studio — same layout
+    and semantics, poster via scaled UIGraphicsImageRenderer; pbxproj
+    registered) + the same editor lifecycle (`restore()` seeds the wire;
+    `.task(id:)` autosave keyed on the @Observable revision; onAppear
+    seeds the tray from slot files; publish/discard clear the slot) +
+    `SlotRow` hub section. Honest gate: process-kill recovery is proven
+    at the store level (fresh store over the same dir restores the exact
+    project); on-device kill/relaunch QA rides the manual matrix with the
+    rest of MST-035. Verified: full shared lane green, full Android suite
+    green (95 tests in the meme packages), whole-app Swift 6 typecheck
+    clean. M1 closed: waves 1–5 (editing core, wire codec interop gate,
+    export, kind-20 publish, durability) all shipped. Next: M2 GIF mode
+    (MST-020..023) or M3 video per the plan order.
 
 - 2026-09-02 — Meme Studio M1 wave 4: kind-20 publish (APP-019 MST-017,
   both platforms; import → caption → **Post** now works end to end).
@@ -1322,7 +1322,7 @@ fixed, what's next.
   evened dims ≥ 2, degenerate source → 1080×1920 portrait) and
   `exportPlan` produces pure target-px draw commands — applying the web
   `displayText` caps transform (default uppercase), the `max(10, size ×
-  referenceHeight)` font floor, outline at the ×2 stroke scale and the
+referenceHeight)` font floor, outline at the ×2 stroke scale and the
   local pinch `scale` so exports match the edited stage; 5 common golden
   tests pin exact pixel values (the geometry half of the golden contract;
   bitmap hashing needs a device rasterizer — none in this repo's JVM or
@@ -1440,7 +1440,7 @@ fixed, what's next.
   encode/decode with hostile-clamp battery; `MemeRules` — 16-color web
   palette, font slots, deterministic overlay CRUD/hit-test (top-most,
   rotation-ignored estimate), `MemeCommand` undo model with drag
-  coalescing (EDT-004); `MemeCommandCodec` JSON wire; 
+  coalescing (EDT-004); `MemeCommandCodec` JSON wire;
   `StudioPublishContract` render→upload→verify→sign→publish machine where
   signing is structurally unreachable without a verified upload (safety
   rule enforced by the state machine, not by caller discipline).
@@ -1461,29 +1461,29 @@ fixed, what's next.
   typecheck clean.
 
 - 2026-09-02 — Comment reply bar: Solar tokens unified with the composer
-  + text-insert parity (user request; SOC-002/APP-008, both platforms).
-  (1) ICONS: the reply bar's action row used different icons than the
-  composer toolbar for identical actions — Android painted Material
-  glyphs (PhotoLibrary/Gif/Public/QrCode2) where the composer paints
-  Solar assets, and iOS used `globe` for the URL action and `qrCode` for
-  PoW where the composer uses `link`/`shieldCheck`. New `SolarFeedIcon`
-  entries (Gallery/VideoCamera/LinkCircle/Film/Chart/ShieldCheck/
-  EyeClosed/Hashtag/Emoji) now back BOTH the Android composer toolbar
-  (was raw `painterResource(R.drawable.solar_*)` — bypassed the token
-  layer) and the reply bar; iOS reply bar moved onto the composer's
-  `link`/`shieldCheck` tokens. PoW audited: present and gated to the
-  kind-1 reply path on both platforms — no functional gap. (2) MISSING
-  FEATURES vs the composer: hashtag + quick-emoji inserts were
-  composer-only; the reply bar gained both (shared `ComposerRules
-  insertHashtag/insertEmoji` / bridge `composerInsert*`; iOS reuses the
-  composer's `composerEmojis()` grid sheet). Inserts land at the end of
-  the reply — the pill field has no cursor tracking. (3) TEST
-  HARDENING: `FakeRelayTransport.sent` (FeedRepository/NotePublisher
-  tests) was a plain ArrayList appended by repository coroutines while
-  tests iterated it — intermittent ConcurrentModificationException
-  observed once in the full suite; now a CopyOnWriteArrayList
-  (snapshot iterators). Verified: full Android suite green twice
-  consecutively; whole-app Swift 6 typecheck clean.
+  - text-insert parity (user request; SOC-002/APP-008, both platforms).
+    (1) ICONS: the reply bar's action row used different icons than the
+    composer toolbar for identical actions — Android painted Material
+    glyphs (PhotoLibrary/Gif/Public/QrCode2) where the composer paints
+    Solar assets, and iOS used `globe` for the URL action and `qrCode` for
+    PoW where the composer uses `link`/`shieldCheck`. New `SolarFeedIcon`
+    entries (Gallery/VideoCamera/LinkCircle/Film/Chart/ShieldCheck/
+    EyeClosed/Hashtag/Emoji) now back BOTH the Android composer toolbar
+    (was raw `painterResource(R.drawable.solar_*)` — bypassed the token
+    layer) and the reply bar; iOS reply bar moved onto the composer's
+    `link`/`shieldCheck` tokens. PoW audited: present and gated to the
+    kind-1 reply path on both platforms — no functional gap. (2) MISSING
+    FEATURES vs the composer: hashtag + quick-emoji inserts were
+    composer-only; the reply bar gained both (shared `ComposerRules
+insertHashtag/insertEmoji` / bridge `composerInsert*`; iOS reuses the
+    composer's `composerEmojis()` grid sheet). Inserts land at the end of
+    the reply — the pill field has no cursor tracking. (3) TEST
+    HARDENING: `FakeRelayTransport.sent` (FeedRepository/NotePublisher
+    tests) was a plain ArrayList appended by repository coroutines while
+    tests iterated it — intermittent ConcurrentModificationException
+    observed once in the full suite; now a CopyOnWriteArrayList
+    (snapshot iterators). Verified: full Android suite green twice
+    consecutively; whole-app Swift 6 typecheck clean.
 
 - 2026-09-02 — Comment thread sheet: rich bodies + media + icon tokens
   (user request; SOC-002/APP-009, both platforms). (1) FUNCTIONAL: the
@@ -1507,7 +1507,7 @@ fixed, what's next.
   moderation actions (user request; APP-005/APP-013, both platforms).
   (1) ICON TOKENS: the sheet bypassed the `AppIcons` facade with raw
   platform icons — Android used `Icons.Rounded.CheckCircle/ContentCopy/
-  Language/Photo/PlayCircle` directly and iOS rendered raw SF Symbols
+Language/Photo/PlayCircle` directly and iOS rendered raw SF Symbols
   (`bolt.fill` via `Image(systemName:)`, `globe`, `play.circle.fill`,
   `photo`), skipping the bundled Solar assets. All routed through the
   token layer now: new `CheckCircle`/`PlayCircle`/`Link` tokens on
@@ -1900,19 +1900,19 @@ fixed, what's next.
   EMBEDS (og:image cards / YouTube players) remain web-only (iframe-based
   in the legacy client — not portable without a WebView media pipeline;
   tracked as V1.x candidate). (2) ACTION ORDER (user decision): feed card
-  + Bitz rail now [like · comment · repost · zap · bookmark] (Remix/Chain
-  first on Bitz); both surfaces, both platforms. (3) AUTHOR SHEET CHECK:
-  wiring verified functional (open→fetch→follow→notes; iOS onAppear/
-  onDisappear lifecycle correct); removed a dead no-op LaunchedEffect in
-  Android AuthorProfileContent (comparison result discarded — follow state
-  already reads feedState directly). (4) BITZ CLEAN CHROME (user decision
-  2026-08-29): "New note" FAB REMOVED (creation = header record + feed
-  FAB); the black scrim behind captions REMOVED; the compact controls'
-  black strip REMOVED; the top bar background REMOVED (icons float);
-  (5) MODE PILLS → BARE TEXT tabs (legacy Flutter TikTok parity): active
-  bold opaque white, inactive 70%, no capsule/background/border.
-  Verified: Android compile + 55/55, iOS typecheck 0 errors in all
-  touched files (concurrent session's DMs/profile-editor still in flight).
+  - Bitz rail now [like · comment · repost · zap · bookmark] (Remix/Chain
+    first on Bitz); both surfaces, both platforms. (3) AUTHOR SHEET CHECK:
+    wiring verified functional (open→fetch→follow→notes; iOS onAppear/
+    onDisappear lifecycle correct); removed a dead no-op LaunchedEffect in
+    Android AuthorProfileContent (comparison result discarded — follow state
+    already reads feedState directly). (4) BITZ CLEAN CHROME (user decision
+    2026-08-29): "New note" FAB REMOVED (creation = header record + feed
+    FAB); the black scrim behind captions REMOVED; the compact controls'
+    black strip REMOVED; the top bar background REMOVED (icons float);
+    (5) MODE PILLS → BARE TEXT tabs (legacy Flutter TikTok parity): active
+    bold opaque white, inactive 70%, no capsule/background/border.
+    Verified: Android compile + 55/55, iOS typecheck 0 errors in all
+    touched files (concurrent session's DMs/profile-editor still in flight).
 
 - 2026-08-29 — ⋯ overflow menus → legacy-parity bottom sheets (user
   request; APP-005/APP-007). LEGACY AUDIT (web PostCard/Bitz popovers +
@@ -1948,21 +1948,21 @@ fixed, what's next.
   bounded ≤2 KB); bridge `deepLinkJson` seam; DeepLinkTest (5) green on
   both lanes. ANDROID: manifest gained `nostr` + `lightning`
   BROWSABLE/DEFAULT VIEW intent-filters; MainActivity captures cold-start
-  + onNewIntent URIs into a pending state; BitOSApp routes — Author →
-  author sheet (AuthorProfileContent over the shell), Note → Discover tab
-  with the reference as ref-search (existing head-fetch + thread-sheet
-  path reused wholesale), Lightning → display-only branded-QR dialog with
-  copy + an honest "BitOS never sees the payment" note. iOS: Info.plist
-  CFBundleURLTypes for both schemes; BitOSApp.onOpenURL classifies via the
-  bridge; RootView routes identically (AuthorProfileSheet / DiscoverView
-  ref-search / new LightningInvoiceSheet with CoreImage QR); pbxproj
-  13G/23G registered. Verified: shared androidHost + macosArm64 green at
-  my changes, Android compile + 55/55, full-app Swift 6 typecheck 0
-  errors. NOTE: the concurrent session landed T12 static pages (iOS
-  StaticPagesScreen) in parallel mid-verification and is now adding NIP-44
-  crypto (Nip44.kt in flight) — the only Kotlin errors at session close
-  are theirs, mid-edit. REMAIN from audit §9.6: T6 tab decision (user),
-  T9/T10 thread+discover polish; concurrent session owns T12 + DMs (W2).
+  - onNewIntent URIs into a pending state; BitOSApp routes — Author →
+    author sheet (AuthorProfileContent over the shell), Note → Discover tab
+    with the reference as ref-search (existing head-fetch + thread-sheet
+    path reused wholesale), Lightning → display-only branded-QR dialog with
+    copy + an honest "BitOS never sees the payment" note. iOS: Info.plist
+    CFBundleURLTypes for both schemes; BitOSApp.onOpenURL classifies via the
+    bridge; RootView routes identically (AuthorProfileSheet / DiscoverView
+    ref-search / new LightningInvoiceSheet with CoreImage QR); pbxproj
+    13G/23G registered. Verified: shared androidHost + macosArm64 green at
+    my changes, Android compile + 55/55, full-app Swift 6 typecheck 0
+    errors. NOTE: the concurrent session landed T12 static pages (iOS
+    StaticPagesScreen) in parallel mid-verification and is now adding NIP-44
+    crypto (Nip44.kt in flight) — the only Kotlin errors at session close
+    are theirs, mid-edit. REMAIN from audit §9.6: T6 tab decision (user),
+    T9/T10 thread+discover polish; concurrent session owns T12 + DMs (W2).
 
 - 2026-08-29 — APP-007 ease-of-use pass (legacy Flutter Bitz UX audit →
   gap pack; spec §3.7 + legacy parity). SHARED: `BitzFormat` in Bitz.kt —
@@ -2233,33 +2233,33 @@ fixed, what's next.
   errors, structure check.
 
 - 2026-09-04 — APP-010 Android Discover prototype-parity pass (idle home
-  + Posts-tab chrome, no shared-core change). The idle page now follows
-  the prototype `#/discover` home instead of the static topic list:
-  recent-search chips (query recorded after a 600 ms settle so keystroke
-  prefixes never pollute the row, deduped, cap 6, red Clear), Trending on
-  Nostr as ONE card with hairline-divided rows (flame icon for the hot
-  head, hash for the rest, chevron affordance; ranked by the shared
-  `SearchResults.hashtags` fan-in over the live feed window, row tap →
-  the same NIP-50 pipeline), a Creators-to-follow rail (people fan-in
-  minus self and already-followed; 150 dp tiles, orange Follow/Following
-  chip through the feed VM's contact list) and the Explore Bitz 3×3
-  mosaic (standard NIP-68/71 media already riding the shared Home+Bitz
-  window, content-warning tiles excluded unless revealed by setting,
-  explore poster loader + "▶ tally" scrim badge, tile → shared reels
-  player in author mode via a new `onOpenBitzPlayer` shell hop).
-  Sections hide while their window slice is empty — connecting plate
-  until the first verified event, footnote after (no seed data).
-  Posts tab: home-parity list chrome — full-bleed shared `FeedNoteCard`s
-  with hairline dividers between (not after the last), creator/empty
-  chrome keeps its inset. Seam fix: `sensitiveShowByDefault` /
-  `defaultZapSats` / `onOpenExternalLink` were declared by
-  DiscoverScreen but dropped at the SearchResults call — result cards
-  now honor the shell's sensitive default, zap preset and link-confirm
-  host. Hashtags tab picks re-run the search (was a no-op `/* router
-  hop next */`) and the escaped `"#${'$'}{hit.tag}"` literal (rendered
-  as text) is real interpolation again. Icons: `AppIcons.Flame` /
-  `Hash` / `ChevronRight` added (material extended). Verified: Android
-  compileDebugKotlin + testDebugUnitTest green.
+  - Posts-tab chrome, no shared-core change). The idle page now follows
+    the prototype `#/discover` home instead of the static topic list:
+    recent-search chips (query recorded after a 600 ms settle so keystroke
+    prefixes never pollute the row, deduped, cap 6, red Clear), Trending on
+    Nostr as ONE card with hairline-divided rows (flame icon for the hot
+    head, hash for the rest, chevron affordance; ranked by the shared
+    `SearchResults.hashtags` fan-in over the live feed window, row tap →
+    the same NIP-50 pipeline), a Creators-to-follow rail (people fan-in
+    minus self and already-followed; 150 dp tiles, orange Follow/Following
+    chip through the feed VM's contact list) and the Explore Bitz 3×3
+    mosaic (standard NIP-68/71 media already riding the shared Home+Bitz
+    window, content-warning tiles excluded unless revealed by setting,
+    explore poster loader + "▶ tally" scrim badge, tile → shared reels
+    player in author mode via a new `onOpenBitzPlayer` shell hop).
+    Sections hide while their window slice is empty — connecting plate
+    until the first verified event, footnote after (no seed data).
+    Posts tab: home-parity list chrome — full-bleed shared `FeedNoteCard`s
+    with hairline dividers between (not after the last), creator/empty
+    chrome keeps its inset. Seam fix: `sensitiveShowByDefault` /
+    `defaultZapSats` / `onOpenExternalLink` were declared by
+    DiscoverScreen but dropped at the SearchResults call — result cards
+    now honor the shell's sensitive default, zap preset and link-confirm
+    host. Hashtags tab picks re-run the search (was a no-op `/* router
+hop next */`) and the escaped `"#${'$'}{hit.tag}"` literal (rendered
+    as text) is real interpolation again. Icons: `AppIcons.Flame` /
+    `Hash` / `ChevronRight` added (material extended). Verified: Android
+    compileDebugKotlin + testDebugUnitTest green.
 
 - 2026-08-28 — APP-009 reply-row deltas (closes the live-deltas item
   end-to-end). Both repos now resolve the tally target through ANY
@@ -2288,7 +2288,7 @@ fixed, what's next.
   thread-sheet plumbing moved into PostsTab (cleaned a smart-cast trap).
   iOS: DiscoverView mirror — same tab row, PeopleTab rows, HashtagsTab
   (tap re-searches); JSON assembly fixed from a bad `.map { "[$0]" } ??
-  "[]"` pattern to explicit array join. Verified: shared androidHost +
+"[]"` pattern to explicit array join. Verified: shared androidHost +
   native 296/296, Android compile + 55/55, iOS Swift 6 typecheck
   0 errors, structure check.
 
@@ -2432,7 +2432,7 @@ fixed, what's next.
   (ephemeral URIs; the draft keeps remote URLs only). Bridge:
   `composerDraftEncode`/`composerDraftDecode` (XCFramework rebuilt).
   Android: `ComposerDraftStore` (SharedPreferences `bitos_composer_
-  draft`) wired through MainActivity → BitOSApp → CreateNoteScreen —
+draft`) wired through MainActivity → BitOSApp → CreateNoteScreen —
   restore once on open, autosave on every field change, clear on
   publish/new post, and both close paths (back + ✕) confirm
   "Discard draft?" when content exists (BackHandler). iOS: same via
@@ -2451,17 +2451,17 @@ fixed, what's next.
   Shared: `PollContract` (tolerant parse — kind check, ≥2 usable options,
   dedupe-by-index first-wins, sorted, hostile display bound ≤16, label
   trim; `pollTags` validates the compose bounds) + `NoteComposer
-  .composePoll` (poll tags + hashtag t-tags via ComposerRules) +
+.composePoll` (poll tags + hashtag t-tags via ComposerRules) +
   `FeedNote.poll` projection + bridge (`Note.pollOptions`, iOS
   `composePollTags`) — 5 common tests (parse/sort/dedupe/bound/invalid
-  + composer round-trip; FeedNote now carries polls as cards). Both
-  platforms: poll button in the composer toolbar → PollComposerSheet
-  (question + 2–6 choice fields with live counters, add/remove) →
-  publishes through the tags path (`publishNoteWith`/`publishNote`); feed
-  cards render the poll (option rows, "Poll · N options" caption —
-  honest V1 display, no fake votes). Verified: shared androidHost +
-  native 246/246, Android compile + 55/55, iOS Swift 6 typecheck 0
-  errors, structure check.
+  - composer round-trip; FeedNote now carries polls as cards). Both
+    platforms: poll button in the composer toolbar → PollComposerSheet
+    (question + 2–6 choice fields with live counters, add/remove) →
+    publishes through the tags path (`publishNoteWith`/`publishNote`); feed
+    cards render the poll (option rows, "Poll · N options" caption —
+    honest V1 display, no fake votes). Verified: shared androidHost +
+    native 246/246, Android compile + 55/55, iOS Swift 6 typecheck 0
+    errors, structure check.
 
 - NEXT SESSION (pick either; both scoped in this tracker):
   - **APP-018a audit rows 1–2** (user-named gaps): multi-account switcher
@@ -2469,7 +2469,7 @@ fixed, what's next.
     14-field privacy store port (unify hideSensitiveMedia on one key).
   - APP-018a rows 4–7 quick pack: relays primary ⭐ + suggestions,
     event-cache wipe on clear-cache, zap presets 1/5, algorithm diversity
-    + reset.
+    - reset.
   - APP-009 threading remainder: naddr/nevent root resolution, X-style
     flattened descendants, live deltas on replies.
   - APP-010 results tabs (Posts/People/Hashtags) + trending mosaic.
@@ -2533,7 +2533,7 @@ fixed, what's next.
   lenient decode → null on corrupt) — 9 common tests + 1 bridge contract
   test (URL shapes, parse fallback/hostile, pagination, merge dedup/cap,
   wire round-trip/clamp, TTL window). Bridge grew `gifPickerUrl/Parse/
-  Pagination/MergeRecent/DebounceMs` + `gifCacheEncode/Decode/Fresh`
+Pagination/MergeRecent/DebounceMs` + `gifCacheEncode/Decode/Fresh`
   (stable item JSON `{"id","url","preview","w","h"}`). Both platforms:
   GIF toolbar button in the legacy order (image · URL · GIF · poll · PoW
   · CW · hashtag · emoji — Meme Studio awaits the studio phase) opening
@@ -2728,20 +2728,20 @@ fixed, what's next.
   sweep-gradient stops per frame shifted by the animated angle (hex
   outline stays STATIC, the bright arc orbits inside it — exact legacy
   `_OrbitHexPainter` behavior; earlier the canvas transform rotated shape
-  + shader together and read as static), iOS drives the angle from
-  `TimelineView(.animation)` wall-clock (withAnimation repeatForever was
-  transaction-fragile under the staged state changes). Sheet auto-close:
-  tapping a switcher row now closes the bottom sheet immediately (Android
-  `showSwitcher=false` at tap; iOS dismisses the switcher sheet then the
-  fullScreenCover overlay takes over) — the overlay alone owns the screen
-  during the switch. Also unblocked the user's concurrent edits: BitosTextField
-  (M3-1.4 compat: prefix/suffix + contentPadding overloads), BitzScreen
-  (onRemix arg, remixSeedTags typing, BitzMoreMenu), BitOSApp long-press
-  refresh imports, FeedNote bridgeNote remix fields + XCFramework rebuilt
-  with the user's remix/poll bridge Note params. Verified: Android compile
-  + 55 tests ✅; iOS — my files parse/typecheck clean (overlay 0 parse
-  errors; full-app typecheck blocked only by the user's in-flight
-  BitzView expression-timeout, theirs to finish).
+  - shader together and read as static), iOS drives the angle from
+    `TimelineView(.animation)` wall-clock (withAnimation repeatForever was
+    transaction-fragile under the staged state changes). Sheet auto-close:
+    tapping a switcher row now closes the bottom sheet immediately (Android
+    `showSwitcher=false` at tap; iOS dismisses the switcher sheet then the
+    fullScreenCover overlay takes over) — the overlay alone owns the screen
+    during the switch. Also unblocked the user's concurrent edits: BitosTextField
+    (M3-1.4 compat: prefix/suffix + contentPadding overloads), BitzScreen
+    (onRemix arg, remixSeedTags typing, BitzMoreMenu), BitOSApp long-press
+    refresh imports, FeedNote bridgeNote remix fields + XCFramework rebuilt
+    with the user's remix/poll bridge Note params. Verified: Android compile
+  - 55 tests ✅; iOS — my files parse/typecheck clean (overlay 0 parse
+    errors; full-app typecheck blocked only by the user's in-flight
+    BitzView expression-timeout, theirs to finish).
 
 - 2026-08-28 — Branded full-page account-switch overlay (user-named;
   legacy `AccountSwitcherOverlay` 1:1). Both platforms:
@@ -2791,18 +2791,18 @@ fixed, what's next.
 - 2026-08-28 — Switch-account sheet UX-UI parity (user-named; legacy
   `AccountSwitcherSheet`/`_AccountRow` 1:1). Both platforms: rounded CARD
   rows (active = 6% primary tint + 25% primary border; inactive = surface
-  + hairline border), 40px hex avatar with the ⚡ lud16 chip overlay
-  (bottom-end, orange circle, hairline ring), bold name + ✓ NIP-05 badge
-  + identifier line + monospace short-npub subtitle — all from the
-  account's kind-0 when the feed has seen it (honest: hex avatar +
-  npub-only for unknown profiles); trailing states exactly like the old
-  app: 18px spinner WHILE SWITCHING (busy && !active) / ✓ check when
-  active / chevron otherwise; header count chip; footer Add + Manage.
-  iOS sheet body split into sub-views after the monolithic VStack timed
-  out the Swift 6 type-checker. The one pre-existing flake
-  (readCursor… under full-suite parallel load) passed isolated again.
-  Verified: shared 267/267 ×2 ✅, Android 55/55 (isolated re-run) ✅,
-  iOS typecheck 0 errors ✅, pbxproj lint ✅, structure ✅.
+  - hairline border), 40px hex avatar with the ⚡ lud16 chip overlay
+    (bottom-end, orange circle, hairline ring), bold name + ✓ NIP-05 badge
+  - identifier line + monospace short-npub subtitle — all from the
+    account's kind-0 when the feed has seen it (honest: hex avatar +
+    npub-only for unknown profiles); trailing states exactly like the old
+    app: 18px spinner WHILE SWITCHING (busy && !active) / ✓ check when
+    active / chevron otherwise; header count chip; footer Add + Manage.
+    iOS sheet body split into sub-views after the monolithic VStack timed
+    out the Swift 6 type-checker. The one pre-existing flake
+    (readCursor… under full-suite parallel load) passed isolated again.
+    Verified: shared 267/267 ×2 ✅, Android 55/55 (isolated re-run) ✅,
+    iOS typecheck 0 errors ✅, pbxproj lint ✅, structure ✅.
 
 - 2026-08-31 — Add-account nsec UX unified (dialog-vs-sheet audit). The
   More-hub add-account surface was an AlertDialog on Android vs a bottom
@@ -2905,11 +2905,11 @@ fixed, what's next.
   Settings actions, Notes/Replies/Bitz/Reposts tabs fed from the live feed
   window filtered to the active pubkey (window-limited — honest footnote);
   the old single-account panel is gone (switching/removal lives in Settings
-  + the hub). Folded in concurrent user edits (DiscoverScreen thread sheet,
-  bridge Note thread fields — Swift arg order completed). Verified:
-  Android compile + 55 tests ✅, shared 239 androidHost ✅, iOS full-app
-  Swift 6 typecheck 0 errors ✅, pbxproj lint ✅ (MoreView registered),
-  structure ✅.
+  - the hub). Folded in concurrent user edits (DiscoverScreen thread sheet,
+    bridge Note thread fields — Swift arg order completed). Verified:
+    Android compile + 55 tests ✅, shared 239 androidHost ✅, iOS full-app
+    Swift 6 typecheck 0 errors ✅, pbxproj lint ✅ (MoreView registered),
+    structure ✅.
 
 - 2026-08-28 — APP-018a rows 1+2+5+6 implemented (the user-named
   account-switch + privacy gaps). SHARED (+7 common tests, 230/230 both
@@ -3033,20 +3033,20 @@ fixed, what's next.
   chip rows + schema rows; `help` gained the Support-the-project card
   (contribute copy, donate tiers gated on the address constant) + links
   rows opening the system browser (Link on iOS / ACTION_VIEW on Android)
-  + FAQ now reads the shared source (was duplicated platform copies);
-  `notifications` gained per-type toggles for all six kinds wired to the
-  SAME muted-kinds store as the inbox header mutes (inbox/badge eviction
-  shared, no second source of truth); `media` gained the honest Uploads
-  card (Blossom default, [W] fallbacks noted). Icons per icon-system.md:
-  existing tokens only (zap/widget), no new glyphs vendored. Also folded
-  in the user's concurrent edits (7-entry FAQ texts, BlockList shared
-  model + tests, HexIconTile drawable migration). Found+fixed:
-  `HexIconTile` call with the old ImageVector arg after the user's
-  drawable migration; NotificationKind Swift mirror needed CaseIterable
-  for the per-type list. Verified: shared 197/197 both lanes ✅ (macos
-  result dir was stale — forced re-run for true parity), Android compile
-  + 47 unit tests ✅, iOS full-app Swift 6 typecheck 0 errors ✅ (rebuilt
-  XCFramework), pbxproj lint ✅, structure ✅.
+  - FAQ now reads the shared source (was duplicated platform copies);
+    `notifications` gained per-type toggles for all six kinds wired to the
+    SAME muted-kinds store as the inbox header mutes (inbox/badge eviction
+    shared, no second source of truth); `media` gained the honest Uploads
+    card (Blossom default, [W] fallbacks noted). Icons per icon-system.md:
+    existing tokens only (zap/widget), no new glyphs vendored. Also folded
+    in the user's concurrent edits (7-entry FAQ texts, BlockList shared
+    model + tests, HexIconTile drawable migration). Found+fixed:
+    `HexIconTile` call with the old ImageVector arg after the user's
+    drawable migration; NotificationKind Swift mirror needed CaseIterable
+    for the per-type list. Verified: shared 197/197 both lanes ✅ (macos
+    result dir was stale — forced re-run for true parity), Android compile
+  - 47 unit tests ✅, iOS full-app Swift 6 typecheck 0 errors ✅ (rebuilt
+    XCFramework), pbxproj lint ✅, structure ✅.
 
 - 2026-08-28 — APP-018 relays manager shipped (the tracked `relays`
   remainder) + Solar icon system adopted + build repairs. Icon system (user
@@ -3443,16 +3443,16 @@ fixed, what's next.
   UTF-16 length (Kotlin parity); candidate panel gains the 20 % outline.
   Android: fixed the always-visible suggestion panel (`mentionQuery ?: ""`
   returned all profiles when not composing) — candidates now gate on focus
-  + active query; same outline parity. Both platforms: copy aligned to the
-  legacy locale (`Create Post`, `Post`, `Post a note…`, `Posting as you —
-  notes are signed with your key`, `Published!`, CW hint `e.g. NSFW,
-  Spoiler...`, `Uploaded X of Y`, URL dialog title + invalid-URL message).
-  Repaired pre-existing pbxproj corruption that made xcodebuild unable to
-  read the project at all (duplicate PBXBuildFile/PBXFileReference IDs for
-  DmStore/DmScreen/BitzView/BookmarksView, PBXBuildFile defs squatting on
-  the tests target's phase IDs 905/906, malformed stories fileRefs, and
-  three build files missing from the app sources phase); audit script
-  confirms zero duplicate/dangling IDs and `xcodebuild -list` opens again.
+  - active query; same outline parity. Both platforms: copy aligned to the
+    legacy locale (`Create Post`, `Post`, `Post a note…`, `Posting as you —
+notes are signed with your key`, `Published!`, CW hint `e.g. NSFW,
+Spoiler...`, `Uploaded X of Y`, URL dialog title + invalid-URL message).
+    Repaired pre-existing pbxproj corruption that made xcodebuild unable to
+    read the project at all (duplicate PBXBuildFile/PBXFileReference IDs for
+    DmStore/DmScreen/BitzView/BookmarksView, PBXBuildFile defs squatting on
+    the tests target's phase IDs 905/906, malformed stories fileRefs, and
+    three build files missing from the app sources phase); audit script
+    confirms zero duplicate/dangling IDs and `xcodebuild -list` opens again.
 
 - 2026-08-30 — Dropdown popover rows full web-MenuItem parity (user ask:
   rounded option items like the web version). Web source of truth

@@ -24,10 +24,7 @@ const { finalizeEvent, serializeEvent } = await import(
 );
 const { schnorr } = await import(path.join(web, '@noble/curves/secp256k1.js'));
 
-const sk = Buffer.from(
-  'd2ad3c3c9e7b0f4f6a1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718',
-  'hex',
-);
+const sk = Buffer.from('d2ad3c3c9e7b0f4f6a1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f60718', 'hex');
 const pubkey = Buffer.from(schnorr.getPublicKey(sk)).toString('hex');
 
 const vectors = [];
@@ -37,7 +34,7 @@ function record(name, event, valid) {
     valid,
     id: event.id,
     sig: event.sig,
-    message: JSON.stringify(['EVENT', 'sub1', event]),
+    message: JSON.stringify(['EVENT', 'sub1', event])
   });
 }
 
@@ -64,7 +61,7 @@ const v1 = deterministicallySigned({
   kind: 1,
   created_at: 1710000000,
   tags: [['t', 'bitcoin']],
-  content: 'gm from BitOS',
+  content: 'gm from BitOS'
 });
 record('valid-text-note', v1, true);
 
@@ -75,8 +72,8 @@ const v2 = deterministicallySigned({
   content: JSON.stringify({
     name: 'satoshi',
     display_name: 'Satoshi ₿',
-    about: 'test vector',
-  }),
+    about: 'test vector'
+  })
 });
 record('valid-profile-metadata', v2, true);
 
@@ -85,9 +82,9 @@ const v3 = deterministicallySigned({
   created_at: 1710000200,
   tags: [
     ['e', 'b'.repeat(32)],
-    ['p', 'c'.repeat(32)],
+    ['p', 'c'.repeat(32)]
   ],
-  content: 'line1\nline2 "quoted" ₿\u0007end',
+  content: 'line1\nline2 "quoted" ₿\u0007end'
 });
 record('valid-escaped-content', v3, true);
 
@@ -97,16 +94,13 @@ tampered.id = createHash('sha256').update(serializeEvent(tampered)).digest('hex'
 record('valid-id-wrong-signature', tampered, false);
 
 // Valid event from a SECOND key: proves verification is per-pubkey.
-const sk2 = Buffer.from(
-  '4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d',
-  'hex',
-);
+const sk2 = Buffer.from('4b1aa1a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d', 'hex');
 const pubkey2 = Buffer.from(schnorr.getPublicKey(sk2)).toString('hex');
 const v4 = deterministicallySignedWith(sk2, pubkey2, {
   kind: 1,
   created_at: 1710000300,
   tags: [],
-  content: 'second author note',
+  content: 'second author note'
 });
 record('valid-second-key', v4, true);
 
@@ -115,8 +109,11 @@ const gPub = 'f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9';
 const v5 = deterministicallySigned({
   kind: 3,
   created_at: 1710000400,
-  tags: [['p', pubkey2], ['p', gPub]],
-  content: '',
+  tags: [
+    ['p', pubkey2],
+    ['p', gPub]
+  ],
+  content: ''
 });
 record('valid-contact-list', v5, true);
 
@@ -128,8 +125,7 @@ flippedSig.sig = sigBytes.toString('hex');
 record('tampered-signature-byte', flippedSig, false);
 
 // s := n (the group order): out of range for a valid signature.
-const N_HEX =
-  'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141';
+const N_HEX = 'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141';
 const sigSEqualsN = { ...v1, sig: v1.sig.slice(0, 64) + N_HEX };
 record('signature-s-equals-n', sigSEqualsN, false);
 
@@ -177,15 +173,19 @@ const v22 = deterministicallySigned({
     ['imeta', 'url https://cdn.example/poster.jpg', 'm image/jpeg', 'dim 1080x1920'],
     ['imeta', 'fallback https://mirror.example/v.mp4'],
     ['imeta', 'fallbackrendition variant https://cdn.example/v-720.mp4 720x1280 2500000'],
-    ['imeta', 'fallbackrendition variant https://cdn.example/v-480.mp4 480x854 1200000'],
+    ['imeta', 'fallbackrendition variant https://cdn.example/v-480.mp4 480x854 1200000']
   ],
-  content: 'first bitz #bitcoin',
+  content: 'first bitz #bitcoin'
 });
 record('valid-kind22-rendition-ladder', v22, true);
 
 const out = path.resolve(here, '../contracts/nostr/fixtures/verification-vectors.json');
 await mkdir(path.dirname(out), { recursive: true });
-await writeFile(out, JSON.stringify({ generator: 'nostr-tools 2.24.1 (@noble/curves)', pubkey, vectors }, null, 2) + '\n');
+await writeFile(
+  out,
+  JSON.stringify({ generator: 'nostr-tools 2.24.1 (@noble/curves)', pubkey, vectors }, null, 2) +
+    '\n'
+);
 
 console.log(`pubkey: ${pubkey}`);
 for (const x of vectors) {

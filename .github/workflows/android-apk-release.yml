@@ -3,11 +3,11 @@ name: Android APK Release
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Version tag to publish (for example, v0.1.0)"
+        description: 'Version tag to publish (for example, v0.1.0)'
         required: true
         type: string
 

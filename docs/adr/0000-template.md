@@ -23,4 +23,3 @@ Record benefits, costs, risks, and follow-up work.
 ## Rollout and rollback
 
 Describe compatibility, migration, observability, and reversal.
-

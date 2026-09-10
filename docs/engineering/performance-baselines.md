@@ -11,11 +11,11 @@ a **physical device**. Simulator/emulator captures are diagnostic only.
 Both platforms emit the same three interval names, so one capture vocabulary
 maps to both:
 
-| Interval | What it covers | Owner |
-|---|---|---|
-| `relay.decode` | One relay frame through decode + SHA-256 ID + BIP-340 verify (ingest stage) | iOS `Perf` signpost in `FeedStore.ingest`; Android `PerfTrace` section in `FeedRepository`/`NotificationRepository` collectors |
-| `feed.publish` | One coalesced UI projection (window snapshot → filter → rank → thread assembly) | iOS `FeedStore.publishState`; Android `FeedRepository.publishState` |
-| `poster.decode` | One poster download+decode at rendered size (cache misses) | iOS `PosterImagePipeline`; Android observes via Coil worker threads (decode is internal to Coil) |
+| Interval        | What it covers                                                                  | Owner                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `relay.decode`  | One relay frame through decode + SHA-256 ID + BIP-340 verify (ingest stage)     | iOS `Perf` signpost in `FeedStore.ingest`; Android `PerfTrace` section in `FeedRepository`/`NotificationRepository` collectors |
+| `feed.publish`  | One coalesced UI projection (window snapshot → filter → rank → thread assembly) | iOS `FeedStore.publishState`; Android `FeedRepository.publishState`                                                            |
+| `poster.decode` | One poster download+decode at rendered size (cache misses)                      | iOS `PosterImagePipeline`; Android observes via Coil worker threads (decode is internal to Coil)                               |
 
 iOS subsystem: `space.bitos.app`, category `perf` (`PerfSignposts.swift`).
 Android sections are `android.os.Trace` atrace sections (`PerfTrace.kt`).
@@ -33,14 +33,14 @@ Record these next to each table row; a number without them is not a baseline:
 
 ## 3. Baseline table (fill on first Phase 0 run)
 
-| # | Journey / budget (from native-performance.md §2) | iOS low | iOS median | Android low | Android median |
-|---|---|---|---|---|---|
-| 1 | Warm top-level tab switch to first complete frame — p95 ≤ 100 ms | | | | |
-| 2 | Cached cold launch to interactive shell — median ≤ 1.5 s / p95 ≤ 2.5 s | | | | |
-| 3 | Cached Home content visible after shell mounts — median ≤ 500 ms | | | | |
-| 4 | Home/Bitz scroll or pager janky frames < 5%, zero frozen | | | | |
-| 5 | Main-thread stall during steady scrolling — no task ≥ 100 ms | | | | |
-| 6 | Verified event accepted → visible UI state — p95 ≤ 100 ms excl. network (`relay.decode` + `feed.publish` chain) | | | | |
+| #   | Journey / budget (from native-performance.md §2)                                                                | iOS low | iOS median | Android low | Android median |
+| --- | --------------------------------------------------------------------------------------------------------------- | ------- | ---------- | ----------- | -------------- |
+| 1   | Warm top-level tab switch to first complete frame — p95 ≤ 100 ms                                                |         |            |             |                |
+| 2   | Cached cold launch to interactive shell — median ≤ 1.5 s / p95 ≤ 2.5 s                                          |         |            |             |                |
+| 3   | Cached Home content visible after shell mounts — median ≤ 500 ms                                                |         |            |             |                |
+| 4   | Home/Bitz scroll or pager janky frames < 5%, zero frozen                                                        |         |            |             |                |
+| 5   | Main-thread stall during steady scrolling — no task ≥ 100 ms                                                    |         |            |             |                |
+| 6   | Verified event accepted → visible UI state — p95 ≤ 100 ms excl. network (`relay.decode` + `feed.publish` chain) |         |            |             |                |
 
 Store filled rows as PR updates to this file.
 

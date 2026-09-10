@@ -24,7 +24,17 @@
     "reason": "FAILED_RETRYABLE"
   },
   "amountFailures": [
-    { "minMillisats": 1500, "maxMillisats": 100000, "amountMillisats": 1000, "message": "Minimum amount is 2 sats." },
-    { "minMillisats": 1000, "maxMillisats": 100000, "amountMillisats": 150000, "message": "Maximum amount is 100 sats." }
+    {
+      "minMillisats": 1500,
+      "maxMillisats": 100000,
+      "amountMillisats": 1000,
+      "message": "Minimum amount is 2 sats."
+    },
+    {
+      "minMillisats": 1000,
+      "maxMillisats": 100000,
+      "amountMillisats": 150000,
+      "message": "Maximum amount is 100 sats."
+    }
   ]
 }

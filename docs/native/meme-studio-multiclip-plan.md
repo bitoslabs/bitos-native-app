@@ -56,6 +56,7 @@ queue).
 ## 1. Problem analysis (what exists today and why it blocks the ask)
 
 ### 1.1 Camera takes are merged away before the editor ever sees them
+
 `CameraScreen` records takes 1..N into a session strip
 (`MAX_PENDING_TAKES`). On "open in Studio", `openMemeWithAllTakes()`
 calls `TakeMerger.merge()` (Media3 Transformer concat) and hands the
@@ -70,6 +71,7 @@ editor **one merged ByteArray**. Consequences:
   user only wanted take 2 trimmed.
 
 ### 1.2 The editor's video model is single-clip by construction
+
 - `MemeProject` (shared wire) has **whole-project** `trimStartMs` /
   `trimEndMs` / `speed` / `lookId`; `maxAssets(VIDEO) = 1 + 6` where the
   clip is always `assets[0]` with id `v1`.
@@ -79,6 +81,7 @@ editor **one merged ByteArray**. Consequences:
   reorder, no per-clip anything, no insert-between-clips.
 
 ### 1.3 Layer insert is image-only and GIFs freeze
+
 The V2 layer picker accepts images only; a picked GIF paints its **first
 frame** (V1 semantics, disclosed in the Layers sheet). Video insert is
 not supported at all. "Layer add via picker" therefore means three
@@ -87,6 +90,7 @@ different things that all need first-class handling: IMAGE overlay
 insert** (becomes a timeline clip, not an overlay).
 
 ### 1.4 What must NOT change (repo invariants that shape the design)
+
 - Nostr events and hashes stay canonical; the export bytes are still
   rendered once, then uploaded and hash-verified before any signing.
 - Business rules live in `shared/business-core`, media pipelines in the
@@ -107,7 +111,7 @@ are list ops.
 passes the take list; each take becomes one clip (pre-trimmed to the
 first-60-s window by the existing cut rules, flagged in the timeline).
 `TakeMerger` leaves the CAP→MEM happy path entirely — retained only as a
-"merge into one clip" *explicit* action inside the editor if wanted at
+"merge into one clip" _explicit_ action inside the editor if wanted at
 all (default: not offered in V1).
 
 **F3 — Picker-layer expansion.** The insert picker accepts image / GIF /
@@ -145,16 +149,17 @@ when there IS only one clip — M5 must not complicate the 1-take path.
 
 ## 3. Placement (architecture rules)
 
-| Concern | Home |
-| --- | --- |
+| Concern                                                                                       | Home                                                                                          |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Clip list validation, caps, duration math, split/reorder rules, wire v2 + migration, fixtures | `shared/business-core` `studio/MemeTimelineRules.kt` + `MemeProject.kt` (pure, common-tested) |
-| Bridge seams (`memeTimeline*`) + versioned contract | `BusinessCoreBridge` + native adapter-contract tests |
-| Transcode/concat/mix, stage playback (playlist), GIF frame animation | Native per platform (Media3 / AVFoundation); no shared UI |
-| Timeline UI, clip sheet, picker expansion, autosave plumbing | Native screens |
+| Bridge seams (`memeTimeline*`) + versioned contract                                           | `BusinessCoreBridge` + native adapter-contract tests                                          |
+| Transcode/concat/mix, stage playback (playlist), GIF frame animation                          | Native per platform (Media3 / AVFoundation); no shared UI                                     |
+| Timeline UI, clip sheet, picker expansion, autosave plumbing                                  | Native screens                                                                                |
 
 ## 4. Task breakdown (implementation order)
 
 Wave M5-A — shared foundation (no UI)
+
 1. **MST-050** `MemeClip` model + `MemeTimelineRules` (caps, window/speed
    math, split-at-ms, reorder validity, duplicate id minting). Common
    tests: caps, degenerate windows, reorder identity, split boundary.
@@ -163,53 +168,42 @@ Wave M5-A — shared foundation (no UI)
    v2 round-trip, hostile clip fields clamped). Repo rule: protocol
    change ships fixtures in the same change.
 3. **MST-052** Bridge seams (`memeTimelineValidate`, `memeTimelineWire`)
-   + Android `BusinessCoreClient` / iOS `BusinessCoreClient` adapter
-   contract tests.
+   - Android `BusinessCoreClient` / iOS `BusinessCoreClient` adapter
+     contract tests.
 
-Wave M5-B — camera & session (Android first)
-4. **MST-053** Camera handoff rework: `onOpenMeme` takes
-   `List<Pair<ByteArray, mime>>`; strip copy; per-take probe + first-60-s
-   cut flag; delete `TakeMerger` from the happy path. Tests: handoff
-   preserves order; over-cap take refused with reason.
-5. **MST-054** Editor session: `clips` list replaces `videoBytes` scalar
-   (single-clip projects compile to the exact old behavior); stage
-   playback becomes an ExoPlayer playlist of clip windows; probe cache
-   per source. iOS: `AVComposition` equivalent.
-6. **MST-055** Autosave/slots multi-source (`v1..vN` asset refs, per-clip
-   posters) + resume. Tests: kill/resume mid-edit restores clip list.
+Wave M5-B — camera & session (Android first) 4. **MST-053** Camera handoff rework: `onOpenMeme` takes
+`List<Pair<ByteArray, mime>>`; strip copy; per-take probe + first-60-s
+cut flag; delete `TakeMerger` from the happy path. Tests: handoff
+preserves order; over-cap take refused with reason. 5. **MST-054** Editor session: `clips` list replaces `videoBytes` scalar
+(single-clip projects compile to the exact old behavior); stage
+playback becomes an ExoPlayer playlist of clip windows; probe cache
+per source. iOS: `AVComposition` equivalent. 6. **MST-055** Autosave/slots multi-source (`v1..vN` asset refs, per-clip
+posters) + resume. Tests: kill/resume mid-edit restores clip list.
 
-Wave M5-C — timeline UX
-7. **MST-056** Suite dock clip lane: segments from `clips[]`, widths =
-   window share, playhead over concatenated time; tap-select; drag
-   reorder (with validity feedback); insert "+" between clips.
-8. **MST-057** Clip sheet: per-clip Trim / Speed / Look / Volume+Mute /
-   Duplicate / Delete as undoable commands through `MemeEditorState`
-   (command pattern already there). Split-at-playhead on the selected
-   clip.
-9. **MST-058** Picker expansion (F3): video insert → clip at playhead;
-   animated GIF overlay preview + export path (frame schedule reuses
-   `GifFrameSource` decode ladder); honest fallbacks for unsupported
-   codecs.
+Wave M5-C — timeline UX 7. **MST-056** Suite dock clip lane: segments from `clips[]`, widths =
+window share, playhead over concatenated time; tap-select; drag
+reorder (with validity feedback); insert "+" between clips. 8. **MST-057** Clip sheet: per-clip Trim / Speed / Look / Volume+Mute /
+Duplicate / Delete as undoable commands through `MemeEditorState`
+(command pattern already there). Split-at-playhead on the selected
+clip. 9. **MST-058** Picker expansion (F3): video insert → clip at playhead;
+animated GIF overlay preview + export path (frame schedule reuses
+`GifFrameSource` decode ladder); honest fallbacks for unsupported
+codecs.
 
-Wave M5-D — export & publish
-10. **MST-059** Export pipeline F5: per-clip Transformer passes → concat
-    → overlay burn → audio mix; progress phases surfaced in the
-    full-screen export experience; idempotent temp-file hygiene.
-11. **MST-060** Multi-clip size ladder: `MemeVideoCutRules` extension —
-    over-cap exports trim the **tail clip's window** first, then drop
-    tail clips (user-visible reason each step); publish duration =
-    Σ(window ÷ speed); cover capture across the concatenated timeline.
-12. **MST-061** Publish page preflight shows clip count + per-clip
-    warnings (muted, cut, look-applied) so what-you-review =
-    what-signs.
+Wave M5-D — export & publish 10. **MST-059** Export pipeline F5: per-clip Transformer passes → concat
+→ overlay burn → audio mix; progress phases surfaced in the
+full-screen export experience; idempotent temp-file hygiene. 11. **MST-060** Multi-clip size ladder: `MemeVideoCutRules` extension —
+over-cap exports trim the **tail clip's window** first, then drop
+tail clips (user-visible reason each step); publish duration =
+Σ(window ÷ speed); cover capture across the concatenated timeline. 12. **MST-061** Publish page preflight shows clip count + per-clip
+warnings (muted, cut, look-applied) so what-you-review =
+what-signs.
 
-Wave M5-E — parity & closeout
-13. **MST-062** iOS parity for every M5-B/C/D surface (same seams, same
-    fixtures; SwiftUI timeline UI matching the Android one).
-14. **MST-063** Docs: update `meme-studio-plan.md` index, this file's
-    status, `app-unified-feature-spec.md` video-mode section, tracker;
-    perf pass on the stage playlist (no per-frame allocation) + golden
-    export tests per platform.
+Wave M5-E — parity & closeout 13. **MST-062** iOS parity for every M5-B/C/D surface (same seams, same
+fixtures; SwiftUI timeline UI matching the Android one). 14. **MST-063** Docs: update `meme-studio-plan.md` index, this file's
+status, `app-unified-feature-spec.md` video-mode section, tracker;
+perf pass on the stage playlist (no per-frame allocation) + golden
+export tests per platform.
 
 ## 5. Acceptance gates (summary)
 
