@@ -57,13 +57,13 @@ android {
     }
 
     if (releaseSigningValues.all { it != null }) {
-        signingConfigs.getByName("release") {
+        val releaseSigningConfig = signingConfigs.create("release") {
             storeFile = file(checkNotNull(releaseStoreFile))
             storePassword = checkNotNull(releaseStorePassword)
             keyAlias = checkNotNull(releaseKeyAlias)
             keyPassword = checkNotNull(releaseKeyPassword)
         }
-        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
+        buildTypes.getByName("release").signingConfig = releaseSigningConfig
     }
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
