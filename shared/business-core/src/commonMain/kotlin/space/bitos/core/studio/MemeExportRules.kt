@@ -85,6 +85,8 @@ object MemeExportRules {
         /** Outline stroke width (px, 0 = none — stickers/images). */
         val outlinePx: Float,
         val shadow: Boolean,
+        /** Classic background bar (web parity): dark band behind the text. */
+        val bar: Boolean,
         val rotationDeg: Float,
         val sticker: Boolean,
         /** Multiline rows, pre-split (paint top-down, centered). */
@@ -120,6 +122,7 @@ object MemeExportRules {
                     fontSizePx = overlay.size * scale * heightScale,
                     outlinePx = 0f,
                     shadow = overlay.shadow,
+                    bar = false,
                     rotationDeg = overlay.rotationDeg,
                     sticker = false,
                     lines = emptyList(),
@@ -150,6 +153,7 @@ object MemeExportRules {
                     overlay.outline * OUTLINE_STROKE_SCALE * scale * heightScale
                 },
                 shadow = overlay.shadow,
+                bar = overlay.bar == true,
                 rotationDeg = overlay.rotationDeg,
                 sticker = overlay.kind == MemeOverlayKind.STICKER,
                 lines = display.split("\n"),
@@ -259,6 +263,7 @@ object MemeExportRules {
                         put("fontSize", item.fontSizePx)
                         put("outline", item.outlinePx)
                         put("shadow", item.shadow)
+                        put("bar", item.bar)
                         put("rot", item.rotationDeg)
                         put("sticker", item.sticker)
                         put("lines", buildJsonArray { item.lines.forEach { add(it) } })

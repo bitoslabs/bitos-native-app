@@ -23,12 +23,14 @@ class MemeExportRulesTest {
         outline: Int = 2,
         caps: Boolean? = null,
         shadow: Boolean = false,
+        bar: Boolean? = null,
         rot: Float = 0f,
         kind: MemeOverlayKind = MemeOverlayKind.TEXT,
     ) = MemeOverlay(
         id = "o1", kind = kind, text = text, font = MemeFontSlot.IMPACT,
         size = size, colorIndex = 0, outline = outline, shadow = shadow,
         x = 0.5f, y = 0.5f, scale = 1f, rotationDeg = rot, caps = caps,
+        bar = bar,
     )
 
     // ── targetSize parity (web render.ts) ────────────────────────────────
@@ -59,6 +61,19 @@ class MemeExportRulesTest {
         assertEquals(97f, item.fontSizePx, 0.001f)
         assertEquals(4f, item.outlinePx, "outline scales with the same reference (2 px × 2)")
         assertEquals("GM", item.text, "caps default true → display uppercase")
+    }
+
+    @Test
+    fun planCarriesTheBackgroundBarAndEnvelopeExposesIt() {
+        val project = MemeProject(
+            mode = MemeMode.IMAGE,
+            overlays = listOf(overlay(bar = true), overlay()),
+        )
+        val plan = MemeExportRules.exportPlan(project, canvasWidth = 608, canvasHeight = 1080)
+        assertEquals(true, plan[0].bar)
+        assertEquals(false, plan[1].bar, "null stays off")
+        val envelope = MemeExportRules.exportEnvelope(project, 608, 1080)
+        assertTrue("\"bar\":true" in envelope, "rasterizers read the flag from the envelope JSON")
     }
 
     @Test

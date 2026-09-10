@@ -40,6 +40,8 @@ struct MemeOverlayUi: Identifiable, Equatable {
     let colorIndex: Int
     let outline: Int
     let shadow: Bool
+    /// Classic background bar (web parity): dark band behind the text.
+    var barFlag: Bool = false
     let x: Float
     let y: Float
     let scale: Float
@@ -774,6 +776,7 @@ final class MemeEditorStore {
                 colorIndex: (row["color"] as? NSNumber)?.intValue ?? 0,
                 outline: (row["outline"] as? NSNumber)?.intValue ?? 0,
                 shadow: (row["shadow"] as? NSNumber)?.boolValue ?? false,
+                barFlag: (row["bar"] as? NSNumber)?.boolValue ?? false,
                 x: (row["x"] as? NSNumber)?.floatValue ?? 0.5,
                 y: (row["y"] as? NSNumber)?.floatValue ?? 0.5,
                 scale: (row["scale"] as? NSNumber)?.floatValue ?? 1,
@@ -2849,7 +2852,13 @@ struct MemeEditorView: View {
     @State private var store: MemeEditorStore
     @State private var stageSize: CGSize = .zero
     @State private var showDiscard = false
+    /// IG-style compose mode: the overlay being typed on the canvas (nil =
+    /// not composing). The quick Text tool, the rail "Edit text" action and
+    /// tapping the overlay all drive this one state.
     @State private var editingOverlayId: String?
+    /// Advanced sheet over compose mode (fx, timing, delete) — opened from
+    /// the compose bar's More control.
+    @State private var showAdvancedText = false
     /** Precision sheet (selection rail ▸ Move): nudge/zoom/rotate cluster. */
     @State private var showPrecision = false
     /** Inline tool panel (prototype `create-edit` panels open under the
@@ -3165,14 +3174,17 @@ struct MemeEditorView: View {
     /// half so expression type-checking stays linear).
     private var sheetedLayer: some View {
         lifecycleLayer
-        .sheet(isPresented: Binding(
-            get: { editingOverlayId != nil },
-            set: { if !$0 { editingOverlayId = nil } }
-        )) {
+        // Advanced text styles over compose mode: fx, the video visibility
+        // window and delete. Leaving it (Done or swipe) also finishes
+        // compose mode, mirroring the Android bar's More sheet.
+        .sheet(isPresented: $showAdvancedText) {
             if let id = editingOverlayId {
                 TextSheet(store: store, overlayId: id)
                     .presentationDetents([.medium, .large])
             }
+        }
+        .onChange(of: showAdvancedText) { _, shown in
+            if !shown { finishTextEditing() }
         }
         .sheet(isPresented: $showLooks) {
             LooksSheet(store: store)
@@ -3572,10 +3584,23 @@ struct MemeEditorView: View {
     }
 
     /// Prototype `#/create-edit` layout: scrolling canvas → mode pills +
-    /// undo → quick tools → tray → timeline, with the per-mode bar +
-    /// status line pinned below. Tool panels open as native bottom sheets.
+    /// quick tools → tray → timeline, with the per-mode bar + status line
+    /// pinned below. Tool panels open as native bottom sheets.
     private var editorLayout: some View {
         VStack(spacing: 0) {
+            if editingOverlayId != nil {
+                // IG-style compose mode: the canvas flexes above the
+                // keyboard and the typing controls own the bottom — the
+                // on-canvas field and Done stay reachable (MUX-03 rule).
+                stageCardCompose
+                if let overlay = store.overlays.first(where: { $0.id == editingOverlayId }) {
+                    TextComposeBarIos(store: store, overlay: overlay) {
+                        showAdvancedText = true
+                    } onDone: {
+                        finishTextEditing()
+                    }
+                }
+            } else {
             GeometryReader { available in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: BitOSTheme.Spacing.sm) {
@@ -3584,8 +3609,8 @@ struct MemeEditorView: View {
                     quickTools
                     if drawMode { penControlsRow }
                     // The prototype timeline is already the compact clip
-                    // strip. Video source insertion lives in Timeline so
-                    // the basic editor does not show a duplicate strip.
+                    // strip. Video source insertion lives in Timeline so the
+                    // basic editor does not show a duplicate strip.
                     if !store.isVideoMode { tray }
                     if store.isVideoMode && !store.clips.isEmpty {
                         timelineSection
@@ -3598,6 +3623,7 @@ struct MemeEditorView: View {
             }
             perModeBar
             statusLine
+            }
         }
         .sheet(item: $activePanel) { panel in
             editorPanel(panel)
@@ -3848,6 +3874,8 @@ struct MemeEditorView: View {
                         onPositionChange: { videoPositionSec = $0 },
                         layerImages: store.layerImages,
                         showScrub: !suiteMode,
+                        editingId: editingOverlayId,
+                        onEditSelectedText: { editingOverlayId = $0 },
                         transport: videoTransport,
                         soundtrack: store.soundtrackRow,
                         soundtrackUrl: store.soundtrackUrl
@@ -3870,19 +3898,24 @@ struct MemeEditorView: View {
                                     selected: overlay.id == store.selectedId,
                                     paletteHex: store.paletteHex,
                                     fx: fx,
-                                    layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
+                                    layerImage: overlay.assetId.flatMap { store.layerImages[$0] },
+                                    editing: overlay.id == editingOverlayId,
+                                    onEditText: { store.updateStyle(overlay.id, fields: ["text": $0]) }
                                 )
                             }
                         }
+                        // While typing, the keyboard owns the stage: the drag
+                        // layer would swallow the field's touches.
                         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
-                           let bounds = store.boundsFraction(for: selected.id) {
+                           let bounds = store.boundsFraction(for: selected.id),
+                           editingOverlayId == nil {
                             DeleteHandleView(
                                 overlay: selected,
                                 stageSize: fitted,
                                 bounds: bounds
                             )
                         }
-                        if store.selectedId != nil {
+                        if store.selectedId != nil && editingOverlayId == nil {
                             VStack {}
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                 .overlay(alignment: .topLeading) {
@@ -3897,7 +3930,7 @@ struct MemeEditorView: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
-                    .stageGestures(store: store, stageSize: fitted)
+                    .modifier(ConditionalStageGestures(store: store, stageSize: fitted, enabled: editingOverlayId == nil, onEditSelectedText: { editingOverlayId = $0 }))
                     .task {
                         let stepMs = Int64(1000 / max(1, store.blankGifFps))
                         let loopMs = max(stepMs, store.blankGifSecMs)
@@ -3923,18 +3956,21 @@ struct MemeEditorView: View {
                                 stageSize: fitted,
                                 selected: overlay.id == store.selectedId,
                                 paletteHex: store.paletteHex,
-                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
+                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] },
+                                editing: overlay.id == editingOverlayId,
+                                onEditText: { store.updateStyle(overlay.id, fields: ["text": $0]) }
                             )
                         }
                         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
-                           let bounds = store.boundsFraction(for: selected.id) {
+                           let bounds = store.boundsFraction(for: selected.id),
+                           editingOverlayId == nil {
                             DeleteHandleView(
                                 overlay: selected,
                                 stageSize: fitted,
                                 bounds: bounds
                             )
                         }
-                        if store.selectedId != nil {
+                        if store.selectedId != nil && editingOverlayId == nil {
                             VStack {}
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                 .overlay(alignment: .topLeading) {
@@ -3949,7 +3985,7 @@ struct MemeEditorView: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
-                    .stageGestures(store: store, stageSize: fitted)
+                    .modifier(ConditionalStageGestures(store: store, stageSize: fitted, enabled: editingOverlayId == nil, onEditSelectedText: { editingOverlayId = $0 }))
                 } else if store.activeAsset != nil || store.canvasAspect != nil {
                     // Blank design: a pinned canvas with no pick keeps the
                     // full overlay/gesture surface over the background fill.
@@ -3973,18 +4009,21 @@ struct MemeEditorView: View {
                                 stageSize: fitted,
                                 selected: overlay.id == store.selectedId,
                                 paletteHex: store.paletteHex,
-                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] }
+                                layerImage: overlay.assetId.flatMap { store.layerImages[$0] },
+                                editing: overlay.id == editingOverlayId,
+                                onEditText: { store.updateStyle(overlay.id, fields: ["text": $0]) }
                             )
                         }
                         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
-                           let bounds = store.boundsFraction(for: selected.id) {
+                           let bounds = store.boundsFraction(for: selected.id),
+                           editingOverlayId == nil {
                             DeleteHandleView(
                                 overlay: selected,
                                 stageSize: fitted,
                                 bounds: bounds
                             )
                         }
-                        if store.selectedId != nil {
+                        if store.selectedId != nil && editingOverlayId == nil {
                             VStack {}
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                 .overlay(alignment: .topLeading) {
@@ -3999,7 +4038,7 @@ struct MemeEditorView: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
-                    .stageGestures(store: store, stageSize: fitted)
+                    .modifier(ConditionalStageGestures(store: store, stageSize: fitted, enabled: editingOverlayId == nil, onEditSelectedText: { editingOverlayId = $0 }))
                 } else {
                     emptyCta(container: container)
                 }
@@ -4269,6 +4308,32 @@ struct MemeEditorView: View {
         }
     }
 
+    /// Compose-mode stage card (IG type mode): the canvas flexes to fill
+    /// the space above the keyboard; the size slider rides its left edge.
+    private var stageCardCompose: some View {
+        stage
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                store.canvasBackgroundHex.flatMap { MemeEditorStore.colorHex($0) }
+                    ?? BitOSTheme.surface
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+            .padding(.top, BitOSTheme.Spacing.xs)
+            .overlay(alignment: .leading) {
+                if let overlay = store.overlays.first(where: { $0.id == editingOverlayId }),
+                   !overlay.isSticker, !overlay.isImage {
+                    VerticalSizeSliderIos(size: overlay.size) { size in
+                        store.updateStyle(overlay.id, fields: ["size": size])
+                    }
+                    .padding(.leading, 6)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if !stageMetaChips.isEmpty { stageMetaChipRow }
+            }
+    }
+
     /** Quick tool chips (prototype: Meme · Text · Stickers · Sound ·
      * Effects; Draw/Save stay as native extras). Chip taps toggle the
      * matching inline panel. */
@@ -4284,10 +4349,10 @@ struct MemeEditorView: View {
                 }
                 QuickToolChip(
                     symbol: AppIcons.textStyle, label: "Text",
-                    active: activePanel == .text,
+                    active: false,
                     enabled: store.canAddOverlay
                 ) {
-                    togglePanel(.text)
+                    startTextCompose()
                 }
                 QuickToolChip(
                     symbol: AppIcons.sticker, label: "Stickers",
@@ -4337,6 +4402,30 @@ struct MemeEditorView: View {
         activePanel = activePanel == panel ? nil : panel
     }
 
+    /// Enters IG-style compose mode: an empty centered text overlay goes on
+    /// the canvas with the keyboard up — the canvas IS the editor.
+    private func startTextCompose() {
+        drawMode = false
+        activePanel = nil
+        guard store.canAddOverlay else {
+            store.setNotice("Overlay limit reached — remove a layer first")
+            return
+        }
+        store.addOverlay(kind: "text", text: "")
+        editingOverlayId = store.selectedId
+    }
+
+    /// Exits compose mode. An overlay left with no text is removed (the
+    /// contract the old text sheet's Done enforced).
+    private func finishTextEditing() {
+        guard let id = editingOverlayId else { return }
+        if let overlay = store.overlays.first(where: { $0.id == id }),
+           overlay.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            store.removeOverlay(id)
+        }
+        editingOverlayId = nil
+    }
+
     /** The tool panel as a bottom sheet: title row + the panel content. */
     @ViewBuilder
     private func editorPanel(_ panel: EditorPanel) -> some View {
@@ -4363,8 +4452,6 @@ struct MemeEditorView: View {
             switch panel {
             case .meme:
                 MemePanelContent(store: store)
-            case .text:
-                TextPanelContent(store: store)
             case .stickers:
                 StickerPanelContent(store: store)
             case .sound:
@@ -4684,10 +4771,10 @@ struct MemeEditorView: View {
                     store.setNotice("GIFs loop forever — nothing to set")
                 }
                 ClipTool(icon: "camera.filters", label: "Filter") { togglePanel(.fx) }
-                ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
+                ClipTool(icon: "textformat", label: "Text") { startTextCompose() }
             } else {
                 ClipTool(icon: "rectangle.on.rectangle", label: "Canvas") { showCanvas = true }
-                ClipTool(icon: "textformat", label: "Text") { togglePanel(.text) }
+                ClipTool(icon: "textformat", label: "Text") { startTextCompose() }
                 ClipTool(icon: "square.3.layers.3d", label: "Layers") {
                     activePanel = nil
                     showLayers = true
@@ -4736,7 +4823,7 @@ struct MemeEditorView: View {
                     Text("Add text, stickers, layers, sound or a soundtrack to export & publish")
                         .font(.caption2)
                         .foregroundStyle(BitOSTheme.textSecondary)
-                } else if store.selectedId != nil {
+                } else if store.selectedId != nil && editingOverlayId == nil {
                     Text("drag · scale · rotate")
                         .font(.caption2)
                         .foregroundStyle(BitOSTheme.textSecondary)
@@ -5010,6 +5097,11 @@ struct OverlayUiView: View {
     var fx: FxTransformUi? = nil
     /// IMAGE layers: the resolved source image (nil = nothing paints).
     var layerImage: UIImage? = nil
+    /// Compose mode (IG-style type-on-canvas): this overlay renders as a
+    /// live, focused field in place of the static text.
+    var editing: Bool = false
+    /// Compose-mode text sink (update command; bursts coalesce).
+    var onEditText: (@MainActor (String) -> Void)? = nil
 
     var body: some View {
         let center = CGPoint(
@@ -5032,13 +5124,25 @@ struct OverlayUiView: View {
                         height: fontPx
                     )
                     .clipped()
+            } else if editing, let onEditText {
+                // IG-style compose mode: type directly on the canvas with
+                // the overlay's exact font/color — the canvas is the preview.
+                EditingStageTextView(
+                    text: overlay.text,
+                    font: Self.slotFont(overlay.font, size: fontPx),
+                    color: Self.paletteColor(overlay.colorIndex, paletteHex: paletteHex),
+                    onText: onEditText
+                )
+                .modifier(ComposeBarBackground(bar: overlay.barFlag && !overlay.isSticker, em: fontPx))
+                .frame(maxWidth: stageSize.width * 0.86)
             } else {
                 OutlinedTextView(
                     text: overlay.text,
                     font: Self.slotFont(overlay.font, size: fontPx),
                     color: Self.paletteColor(overlay.colorIndex, paletteHex: paletteHex),
                     outlinePx: overlay.isSticker ? 0 : outlinePx,
-                    shadow: overlay.shadow
+                    shadow: overlay.shadow,
+                    bar: overlay.barFlag && !overlay.isSticker
                 )
             }
             if selected {
@@ -5068,7 +5172,7 @@ struct OverlayUiView: View {
         .scaleEffect(CGFloat(overlay.scale) * CGFloat(fx?.scale ?? 1))
         .rotationEffect(.degrees(Double(overlay.rot) + Double((fx?.rotateRad ?? 0) * 180 / .pi)))
         .opacity(Double(fx?.alpha ?? 1))
-        .allowsHitTesting(false)
+        .allowsHitTesting(editing)
     }
 
     nonisolated static func paletteColor(_ index: Int, paletteHex: [String]) -> UIColor {
@@ -5100,43 +5204,133 @@ struct OverlayUiView: View {
     }
 }
 
+/// IG-style compose field on the canvas: a focused multiline field styled
+/// with the overlay's exact font/color — typing IS the live preview.
+private struct EditingStageTextView: View {
+    let text: String
+    let font: UIFont
+    let color: UIColor
+    let onText: @MainActor (String) -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(
+            "Type…",
+            text: Binding(get: { text }, set: onText),
+            axis: .vertical
+        )
+        .font(Font(font))
+        .foregroundStyle(Color(uiColor: color))
+        .multilineTextAlignment(.center)
+        .tint(BitOSTheme.accent)
+        .focused($focused)
+        .onAppear { focused = true }
+        .frame(minHeight: font.lineHeight)
+    }
+}
+
+/// The compose-mode field's background band: the same em-fraction dark
+/// rounded bar the static preview and the rasterizer paint.
+private struct ComposeBarBackground: ViewModifier {
+    let bar: Bool
+    let em: CGFloat
+
+    func body(content: Content) -> some View {
+        if bar {
+            content
+                .padding(.horizontal, em * 0.35)
+                .padding(.vertical, em * 0.30)
+                .background(
+                    RoundedRectangle(cornerRadius: em * 0.22)
+                        .fill(Color.black.opacity(0.55))
+                )
+                .padding(.horizontal, -em * 0.35)
+                .padding(.vertical, -em * 0.30)
+        } else {
+            content
+        }
+    }
+}
+
 /// Classic meme outline + shadow via NSAttributedString (negative stroke
-/// width paints stroke under fill — the exact web `stroke` look).
+/// width paints stroke under fill — the exact web `stroke` look). With
+/// [bar] the label sits on a dark rounded band padded by the same
+/// font-size fractions the rasterizer paints.
 private struct OutlinedTextView: UIViewRepresentable {
     let text: String
     let font: UIFont
     let color: UIColor
     let outlinePx: CGFloat
     let shadow: Bool
+    var bar: Bool = false
 
-    func makeUIView(context: Context) -> UILabel {
-        let label = UILabel()
+    func makeCoordinator() -> Coordinator {
+        Coordinator(label: UILabel())
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.layer.masksToBounds = true
+        let label = context.coordinator.label
         label.numberOfLines = 4
         label.lineBreakMode = .byWordWrapping
         label.textAlignment = .center
-        return label
+        label.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(label)
+        let leading = label.leadingAnchor.constraint(equalTo: container.leadingAnchor)
+        let trailing = label.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        let top = label.topAnchor.constraint(equalTo: container.topAnchor)
+        let bottom = label.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        NSLayoutConstraint.activate([leading, trailing, top, bottom])
+        context.coordinator.insets = (leading, trailing, top, bottom)
+        return container
     }
 
-    func updateUIView(_ label: UILabel, context: Context) {
-        let attributes: NSMutableAttributedString = {
-            let attributed = NSMutableAttributedString(string: text)
-            let full = NSRange(location: 0, length: (text as NSString).length)
-            attributed.addAttribute(.font, value: font, range: full)
-            attributed.addAttribute(.foregroundColor, value: color, range: full)
-            if outlinePx > 0 {
-                attributed.addAttribute(.strokeWidth, value: -outlinePx * 2, range: full)
-                attributed.addAttribute(.strokeColor, value: UIColor.black, range: full)
-            }
-            if shadow {
-                let nsShadow = NSShadow()
-                nsShadow.shadowColor = UIColor.black
-                nsShadow.shadowOffset = CGSize(width: 3, height: 3)
-                nsShadow.shadowBlurRadius = 3
-                attributed.addAttribute(.shadow, value: nsShadow, range: full)
-            }
-            return attributed
-        }()
-        label.attributedText = attributes
+    func updateUIView(_ container: UIView, context: Context) {
+        let attributed = NSMutableAttributedString(string: text)
+        let full = NSRange(location: 0, length: (text as NSString).length)
+        attributed.addAttribute(.font, value: font, range: full)
+        attributed.addAttribute(.foregroundColor, value: color, range: full)
+        if outlinePx > 0 {
+            attributed.addAttribute(.strokeWidth, value: -outlinePx * 2, range: full)
+            attributed.addAttribute(.strokeColor, value: UIColor.black, range: full)
+        }
+        if shadow {
+            let nsShadow = NSShadow()
+            nsShadow.shadowColor = UIColor.black
+            nsShadow.shadowOffset = CGSize(width: 3, height: 3)
+            nsShadow.shadowBlurRadius = 3
+            attributed.addAttribute(.shadow, value: nsShadow, range: full)
+        }
+        context.coordinator.label.attributedText = attributed
+        // Background bar: the same 0.35/0.30/0.22 em geometry + 55% black
+        // the export rasterizer paints — preview ⇄ export stay WYSIWYG.
+        let em = font.pointSize
+        if bar {
+            container.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            container.layer.cornerRadius = em * 0.22
+            context.coordinator.insets?.leading.constant = em * 0.35
+            context.coordinator.insets?.trailing.constant = -em * 0.35
+            context.coordinator.insets?.top.constant = em * 0.30
+            context.coordinator.insets?.bottom.constant = -em * 0.30
+        } else {
+            container.backgroundColor = nil
+            container.layer.cornerRadius = 0
+            context.coordinator.insets?.leading.constant = 0
+            context.coordinator.insets?.trailing.constant = 0
+            context.coordinator.insets?.top.constant = 0
+            context.coordinator.insets?.bottom.constant = 0
+        }
+    }
+
+    @MainActor
+    final class Coordinator {
+        let label: UILabel
+        var insets: (leading: NSLayoutConstraint, trailing: NSLayoutConstraint, top: NSLayoutConstraint, bottom: NSLayoutConstraint)?
+
+        init(label: UILabel) {
+            self.label = label
+        }
     }
 }
 
@@ -5178,6 +5372,9 @@ struct DeleteHandleView: View {
 private struct StageGestures: ViewModifier {
     let store: MemeEditorStore
     let stageSize: CGSize
+    /// Tap-again-on-selected-text affordance (IG type mode): re-tapping
+    /// the already-selected text overlay reopens the on-canvas field.
+    var onEditSelectedText: (String) -> Void = { _ in }
     @State private var began = false
     @State private var moved = false
     @State private var startLocation: CGPoint = .zero
@@ -5254,6 +5451,7 @@ private struct StageGestures: ViewModifier {
     }
 
     private func handleTap(at point: CGPoint) {
+        let preTapSelection = store.selectedId
         // Delete handle first (top-end of the selection bounds).
         if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
            let bounds = store.boundsFraction(for: selected.id) {
@@ -5272,13 +5470,47 @@ private struct StageGestures: ViewModifier {
             x: Float(point.x / max(stageSize.width, 1)),
             y: Float(point.y / max(stageSize.height, 1))
         )
-        if !hit { store.clearSelection() }
+        if !hit {
+            store.clearSelection()
+        } else if let before = preTapSelection,
+                  before == store.selectedId,
+                  let overlay = store.overlays.first(where: { $0.id == before }),
+                  !overlay.isSticker, !overlay.isImage {
+            // The tap re-selected the overlay that was ALREADY selected —
+            // for text that means "edit this" (IG tap-again-to-type).
+            onEditSelectedText(before)
+        }
     }
 }
 
 private extension View {
-    func stageGestures(store: MemeEditorStore, stageSize: CGSize) -> some View {
-        modifier(StageGestures(store: store, stageSize: stageSize))
+    func stageGestures(
+        store: MemeEditorStore,
+        stageSize: CGSize,
+        onEditSelectedText: @escaping (String) -> Void = { _ in }
+    ) -> some View {
+        modifier(StageGestures(store: store, stageSize: stageSize, onEditSelectedText: onEditSelectedText))
+    }
+}
+
+/// Applies the drag/pinch/twist layer only outside compose mode — the
+/// editing field owns the stage touches while the keyboard is up.
+private struct ConditionalStageGestures: ViewModifier {
+    let store: MemeEditorStore
+    let stageSize: CGSize
+    let enabled: Bool
+    var onEditSelectedText: (String) -> Void = { _ in }
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.stageGestures(
+                store: store,
+                stageSize: stageSize,
+                onEditSelectedText: onEditSelectedText
+            )
+        } else {
+            content
+        }
     }
 }
 
@@ -5842,7 +6074,6 @@ struct ExportSettingsSheet: View {
 /// native bottom sheets — platform idiom, canvas stays visible above).
 enum EditorPanel: String, CaseIterable, Identifiable {
     case meme
-    case text
     case stickers
     case sound
     case fx
@@ -5852,7 +6083,6 @@ enum EditorPanel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .meme: return "Meme generator"
-        case .text: return "Text"
         case .stickers: return "Stickers"
         case .sound: return "Sound"
         case .fx: return "Look"
@@ -5912,48 +6142,212 @@ private struct MemePanelContent: View {
     }
 }
 
-/// Quick-text panel (prototype text panel): type once, pick a font slot,
-/// add — tapping the overlay on the stage opens the full style editor.
-private struct TextPanelContent: View {
-    let store: MemeEditorStore
-    @State private var text = ""
-    @State private var fontSlot = "sans"
+/// IG-style compose bar (type-on-canvas): font-style pills with a live
+/// preview word, the palette as dots, outline/shadow toggles, More (the
+/// advanced sheet) and a ✓ that finishes editing. Every control applies
+/// one coalesced update command.
+private struct TextComposeBarIos: View {
+    @Bindable var store: MemeEditorStore
+    let overlay: MemeOverlayUi
+    let onMore: () -> Void
+    let onDone: () -> Void
 
     private let slots: [(id: String, label: String)] = [
-        ("sans", "Modern"), ("impact", "Impact"), ("serif", "Comic"),
+        ("impact", "Impact"), ("sans", "Sans"), ("serif", "Serif"), ("mono", "Mono"),
     ]
 
+    private var previewWord: String {
+        overlay.text.isEmpty ? "Meme" : String(overlay.text.prefix(12))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
-            BitosField("Type something…", text: $text)
-                
-                .onSubmit(addText)
-            HStack(spacing: BitOSTheme.Spacing.xs) {
-                ForEach(slots, id: \.id) { slot in
-                    ChipButton(label: slot.label, active: fontSlot == slot.id) {
-                        fontSlot = slot.id
+        VStack(spacing: BitOSTheme.Spacing.xs) {
+            // Font-style tabs — each pill previews in its own family/weight
+            // (IG type-mode tabs).
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    ForEach(slots, id: \.id) { slot in
+                        let active = overlay.font == slot.id
+                        Button {
+                            store.updateStyle(overlay.id, fields: ["font": slot.id])
+                        } label: {
+                            Text(previewWord)
+                                .font(.system(size: 17, weight: slotWeight(slot.id), design: slotDesign(slot.id)))
+                                .foregroundStyle(active ? BitOSTheme.accent : BitOSTheme.textPrimary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 9)
+                                .background(
+                                    Capsule().fill(
+                                        active ? BitOSTheme.accent.opacity(0.16) : BitOSTheme.surface.opacity(0.6)
+                                    )
+                                )
+                                .overlay(
+                                    Capsule().strokeBorder(
+                                        active ? BitOSTheme.accent : BitOSTheme.border,
+                                        lineWidth: active ? 1.5 : 1
+                                    )
+                                )
+                        }
+                        .accessibilityLabel("Font \(slot.label)")
                     }
                 }
+                .padding(.horizontal, BitOSTheme.Spacing.base)
             }
-            Button(action: addText) {
-                Text("Add text")
-                    .frame(maxWidth: .infinity)
+            // Format row: palette dots · outline · shadow · More · Done.
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(store.paletteHex.enumerated()), id: \.offset) { index, _ in
+                            let active = overlay.colorIndex == index
+                            Button {
+                                store.updateStyle(overlay.id, fields: ["color": index])
+                            } label: {
+                                Circle()
+                                    .fill(Color(uiColor: OverlayUiView.paletteColor(index, paletteHex: store.paletteHex)))
+                                    .frame(width: active ? 26 : 22, height: active ? 26 : 22)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            active ? BitOSTheme.accent : BitOSTheme.border,
+                                            lineWidth: active ? 3 : 1
+                                        )
+                                    )
+                            }
+                            .accessibilityLabel("Text color \(index + 1)")
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                // Outline toggle: an "A" drawn with the real stroke style
+                // stands for the classic meme outline; flips 0 ↔ 3.
+                Button {
+                    store.updateStyle(overlay.id, fields: ["outline": overlay.outline > 0 ? 0 : 3])
+                } label: {
+                    OutlinedTextView(
+                        text: "A",
+                        font: .systemFont(ofSize: 18, weight: .bold),
+                        color: UIColor(overlay.outline > 0 ? BitOSTheme.accent : BitOSTheme.textPrimary),
+                        outlinePx: overlay.outline > 0 ? 2 : 0,
+                        shadow: false
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                }
+                .accessibilityLabel(overlay.outline > 0 ? "Outline on" : "Outline off")
+                // Background-bar toggle (IG highlight): an "A" sitting on a
+                // dark rounded band — the exact thing it paints on the canvas.
+                Button {
+                    store.updateStyle(overlay.id, fields: ["bar": !overlay.barFlag])
+                } label: {
+                    Text("A")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(overlay.barFlag ? .white : BitOSTheme.textPrimary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(overlay.barFlag ? Color.black.opacity(0.62) : BitOSTheme.surface.opacity(0.6))
+                        )
+                }
+                .accessibilityLabel(overlay.barFlag ? "Background on" : "Background off")
+                // Shadow toggle: an "A" carrying the actual drop shadow.
+                Button {
+                    store.updateStyle(overlay.id, fields: ["shadow": !overlay.shadow])
+                } label: {
+                    OutlinedTextView(
+                        text: "A",
+                        font: .systemFont(ofSize: 18, weight: .bold),
+                        color: UIColor(overlay.shadow ? BitOSTheme.accent : BitOSTheme.textPrimary),
+                        outlinePx: 0,
+                        shadow: true
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                }
+                .accessibilityLabel(overlay.shadow ? "Shadow on" : "Shadow off")
+                Button(action: onMore) {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                }
+                .accessibilityLabel("More text styles")
+                Button(action: onDone) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(BitOSTheme.accent))
+                }
+                .accessibilityLabel("Done editing text")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(BitOSTheme.accent)
-            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+            .padding(.horizontal, BitOSTheme.Spacing.base)
+        }
+        .padding(.vertical, BitOSTheme.Spacing.xs)
+        .background(BitOSTheme.background)
+    }
+
+    private func slotDesign(_ slot: String) -> Font.Design {
+        switch slot {
+        case "serif": return .serif
+        case "mono": return .monospaced
+        default: return .default
         }
     }
 
-    private func addText() {
-        let value = text.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty else { return }
-        store.addOverlay(kind: "text", text: value)
-        if let id = store.selectedId, fontSlot != "sans" {
-            store.updateStyle(id, fields: ["font": fontSlot])
+    /// Preview weight per semantic slot (mirrors the rasterizer's mapping).
+    private func slotWeight(_ slot: String) -> Font.Weight {
+        switch slot {
+        case "impact": return .black
+        case "mono": return .medium
+        default: return .bold
         }
-        text = ""
-        store.setNotice("Text added — tap it on the canvas for the full style editor")
+    }
+}
+
+/// IG-style left-edge size slider for compose mode: drag up enlarges,
+/// drag down shrinks; the fill level is the current size fraction.
+private struct VerticalSizeSliderIos: View {
+    let size: Int
+    let onSize: (Int) -> Void
+    @State private var dragStartSize: Int?
+
+    private var fraction: CGFloat {
+        CGFloat(size - 12) / CGFloat(240 - 12)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let height = proxy.size.height
+            Capsule()
+                .fill(Color.black.opacity(0.35))
+                .overlay(alignment: .bottom) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.9))
+                        .frame(width: 4, height: max(4, (height - 8) * fraction))
+                        .padding(.bottom, 4)
+                }
+                .overlay(alignment: .bottom) {
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: 18, height: 3)
+                        .offset(y: -4 - fraction * (height - 12))
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            if dragStartSize == nil { dragStartSize = size }
+                            let start = dragStartSize ?? size
+                            // ~1.2 pt of drag per size unit — one swipe
+                            // spans the whole 12–240 range.
+                            let delta = Int(-value.translation.height / 1.2)
+                            onSize(min(240, max(12, start + delta)))
+                        }
+                        .onEnded { _ in dragStartSize = nil }
+                )
+        }
+        .frame(width: 32, height: 184)
+        .accessibilityLabel("Text size")
+        .accessibilityValue("\(size)")
     }
 }
 
@@ -6432,6 +6826,7 @@ enum MemeRaster {
         let rotation = (paintRow["rot"] as? NSNumber)?.doubleValue ?? 0
         let outline = (paintRow["outline"] as? NSNumber)?.doubleValue ?? 0
         let shadow = (paintRow["shadow"] as? NSNumber)?.boolValue ?? false
+        let bar = (paintRow["bar"] as? NSNumber)?.boolValue ?? false
         guard !lines.isEmpty else { return }
 
         // Timed-plan fx (MST-077): absent keys = identity (static rows).
@@ -6454,6 +6849,24 @@ enum MemeRaster {
         let lineHeight = CGFloat(fontSize) * 1.2
         let totalHeight = lineHeight * CGFloat(lines.count)
         let paragraph = NSAttributedString(string: "\n", attributes: [.font: UIFont.systemFont(ofSize: CGFloat(fontSize))])
+        if bar {
+            // Classic background bar (web `bar` parity): one dark rounded
+            // band behind the whole text block — the same em fractions the
+            // stage previews paint. The fx alpha on the context applies.
+            let em = CGFloat(fontSize)
+            let maxWidth = lines.map { line -> CGFloat in
+                let attributes = textAttributes(paintRow, fontSize: CGFloat(fontSize), outline: CGFloat(outline), shadow: shadow)
+                return NSAttributedString(string: line, attributes: attributes).size().width
+            }.max() ?? 0
+            let rect = CGRect(
+                x: -maxWidth / 2 - em * 0.35,
+                y: -totalHeight / 2 - em * 0.30,
+                width: maxWidth + em * 0.70,
+                height: totalHeight + em * 0.60
+            )
+            UIColor.black.withAlphaComponent(0.55).setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: em * 0.22).fill()
+        }
         for (index, line) in lines.enumerated() {
             let attributes = textAttributes(paintRow, fontSize: CGFloat(fontSize), outline: CGFloat(outline), shadow: shadow)
             let attributed = NSMutableAttributedString(string: line, attributes: attributes)

@@ -53,6 +53,7 @@ object MemeCommandCodec {
                 command.colorIndex?.let { put("color", it) }
                 command.outline?.let { put("outline", it) }
                 command.shadow?.let { put("shadow", it) }
+                command.bar?.let { put("bar", it) }
                 command.fx?.let { put("fx", it.name.lowercase()) }
                 if (command.clearFx) put("clearFx", true)
                 command.startMs?.let { put("startMs", it) }
@@ -175,6 +176,7 @@ object MemeCommandCodec {
                         colorIndex = intOf(obj, "color"),
                         outline = intOf(obj, "outline"),
                         shadow = obj["shadow"]?.jsonPrimitive?.content?.toBooleanStrictOrNull(),
+                        bar = obj["bar"]?.jsonPrimitive?.content?.toBooleanStrictOrNull(),
                         fx = obj["fx"]?.jsonPrimitive?.content?.let { raw ->
                             MemeOverlayFx.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
                         },

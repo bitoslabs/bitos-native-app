@@ -434,6 +434,53 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-10 (MemeEditor text UX — IG-style compose mode) —
+  **Type-on-canvas editing replaces the modal text sheet as the primary
+  text flow, BOTH platforms.** Quick-tool "Text" (and the per-mode bar /
+  GIF+image variants) now drops an empty centered overlay straight onto
+  the canvas and focuses a live field rendered IN the overlay slot
+  (Android `OverlayNode` editing branch = `BasicTextField`; iOS
+  `OverlayUiView` editing branch = `EditingStageTextView`), styled with
+  the overlay's exact font/size/color so the canvas IS the preview; the
+  drag layer (`StageGestures`), delete handle and hint chip stand down
+  while composing so the keyboard owns the stage (video stages included —
+  `VideoStage`/`VideoStageIos` take an `editingId`). Bottom dock
+  (Android `TextComposeBar` + `imePadding`, iOS `TextComposeBarIos` +
+  keyboard-safe layout): scrollable font-style pills showing a live
+  preview word per semantic slot, 16-swatch palette row, outline +
+  shadow glyph toggles, More, ✓ Done; a slim left-edge vertical size
+  slider rides the stage (drag up = larger). The old full sheet is
+  demoted to "More styles" (outline strength, motion fx, video timing,
+  delete) and its Done/swipe now exits compose mode; rail "Edit text"
+  and tapping a selected overlay enter compose mode directly. Contract
+  kept: finishing with blank text removes the overlay. Every control
+  still emits one coalesced `UpdateOverlay` (undo = one step per burst).
+  `MemeEditorPanel.TEXT` / `EditorPanel.text` + their quick-add panels
+  removed (dead paths). Verified: Android `:apps:android:compileDebugKotlin`
+  + `testDebugUnitTest` green; iOS via `scripts/ios-build.sh`.
+  Same day, second pass (screenshot review): **(a)** fixed the dead gap
+  between the compose bar and the keyboard (Android double-pad: parent
+  `imePadding` + bar `navigationBarsPadding` both padded the region the
+  IME already covers → now one consumed chain `imePadding()` THEN
+  `navigationBarsPadding()` on the container). **(b)** Font pills
+  enlarged to IG type-tab size (17 sp preview, 40 dp min height, filled
+  unselected state) on both platforms. **(c)** Shipped the missing IG
+  BACKGROUND option end-to-end: `UpdateOverlay.bar` through
+  apply/coalesce/codec (`"bar"` wire key) + `MemeExportItem.bar` in the
+  export envelope — the classic dark rounded band behind the text,
+  painted with ONE shared geometry rule (0.35/0.30/0.22 em, 55% black,
+  fades with fx) in all four raster paths (Android stage `OverlayNode`
+  + `MemeRaster.drawItem`; iOS `OutlinedTextView`/`ComposeBarBackground`
+  + `MemeRaster.paint`); toggle = an "A"-on-a-band button in both
+  compose bars; `caps` now defaults FALSE on editor-added text overlays
+  so preview ⇄ export stay WYSIWYG (web default true kept for projects
+  that set it). Shared tests: `MemeRulesTest.updateBarAppliesAndRound-
+  TripsTheCodec`, `coalesceMergesBarWithEarlierStyleFields`,
+  `nativeTextOverlaysDefaultCapsOffForWysiwyg`,
+  `MemeExportRulesTest.planCarriesTheBackgroundBarAndEnvelopeExposesIt`
+  — 108 suites, 0 failures. No wire-document change needed (`bar` was
+  already a documented overlay field — MST-019 parity finally has UI).
+
 - 2026-09-08 (flake investigation — dossier; NO code change) —
   **FeedRepositoryTest class flake** (owner: user; expiry: next release
   gate). Victims (same shape — `first { followingResolved }` times out

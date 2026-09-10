@@ -244,6 +244,29 @@ object MemeRaster {
         }
         val lineHeight = item.fontSizePx * MemeExportRules.LINE_HEIGHT
         val base = textPaint(item, alpha255)
+        if (item.bar && item.lines.isNotEmpty()) {
+            // Classic background bar (web `bar` parity): one dark rounded
+            // band behind the whole text block, padded by font-size
+            // fractions — the same geometry the stage preview draws.
+            val maxWidth = item.lines.maxOf { base.measureText(it) }
+            val em = item.fontSizePx
+            val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                // Fades with the fx window like the text above it.
+                color = Color.argb((alpha255 * 0.55f).toInt(), 0, 0, 0)
+            }
+            val totalHeight = lineHeight * item.lines.size
+            canvas.drawRoundRect(
+                android.graphics.RectF(
+                    item.centerX - maxWidth / 2f - em * 0.35f,
+                    item.centerY - totalHeight / 2f - em * 0.30f,
+                    item.centerX + maxWidth / 2f + em * 0.35f,
+                    item.centerY + totalHeight / 2f + em * 0.30f,
+                ),
+                em * 0.22f,
+                em * 0.22f,
+                barPaint,
+            )
+        }
         item.lines.forEachIndexed { index, line ->
             // Vertical centering around the overlay point + a ~1/3-em lift
             // so the baseline sits where drawText wants it.

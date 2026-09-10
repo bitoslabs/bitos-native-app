@@ -24,12 +24,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -50,6 +53,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -1116,6 +1121,9 @@ fun MemeEditorScreen(
     var stagePx by remember { mutableStateOf(IntSize.Zero) }
     var showDiscard by remember { mutableStateOf(false) }
     var editingOverlayId by remember { mutableStateOf<String?>(null) }
+    // Advanced sheet over compose mode (outline strength, fx, timing,
+    // delete) — opened from the compose bar's More button.
+    var showAdvancedText by remember { mutableStateOf(false) }
     var showLooks by remember { mutableStateOf(false) }
     /** Classic meme generator (prototype "Meme" hot tool). */
     var showSfx by remember { mutableStateOf(false) }
@@ -1830,6 +1838,29 @@ fun MemeEditorScreen(
         }
     }
 
+    /** Exits IG-style compose mode. An overlay left with no text is removed
+     *  (same contract the old text sheet's Done enforced). */
+    fun finishTextEditing() {
+        val id = editingOverlayId ?: return
+        val overlay = state.project.overlays.firstOrNull { it.id == id }
+        if (overlay != null && overlay.text.isBlank()) state.removeOverlay(id)
+        editingOverlayId = null
+    }
+
+    /** Enters IG-style compose mode: an empty centered text overlay goes on
+     *  the canvas with the keyboard up — the toolbar chips (and rail "Edit
+     *  text") reuse it for existing overlays. */
+    fun startTextCompose() {
+        drawMode = false
+        activePanel = null
+        val id = state.addOverlay(MemeOverlayKind.TEXT, "")
+        if (id == null) {
+            exportStatus = "Overlay limit reached (${MemeProjectContract.MAX_OVERLAYS})"
+        } else {
+            editingOverlayId = id
+        }
+    }
+
     // Back follows the ✕ contract; a mid-air gesture is cancelled first.
     BackHandler(enabled = true) {
         when {
@@ -1838,7 +1869,7 @@ fun MemeEditorScreen(
                 exportStatus = null
             }
             state.gestureActive -> state.cancelGesture()
-            editingOverlayId != null -> editingOverlayId = null
+            editingOverlayId != null -> finishTextEditing()
             else -> requestClose()
         }
     }
@@ -1956,6 +1987,8 @@ fun MemeEditorScreen(
                     imageAssets = imageAssetMap,
                     // The basic dock owns transport and the single canonical playhead.
                     showScrub = false,
+                    editingId = editingOverlayId,
+                    onEditSelectedText = { editingOverlayId = it },
                     transport = videoTransport,
                     onSetCover = { timelineMs ->
                         val mapped = timelineToMedia(timelineMs) ?: return@VideoStage
@@ -2036,23 +2069,32 @@ fun MemeEditorScreen(
                                 selected = overlay.id == state.selectedOverlayId,
                                 imageAssets = imageAssetMap,
                                 fx = space.bitos.core.studio.MemeFxRules.transformAt(overlay, blankGifTickMs),
+                                editing = overlay.id == editingOverlayId,
+                                onEditText = { state.updateStyle(overlay.id, text = it) },
                             )
                         }
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
-                    if (selected != null) {
+                    // While typing, the keyboard owns the stage: the drag
+                    // layer would swallow the field's touches.
+                    if (selected != null && editingOverlayId == null) {
                         DeleteHandle(
                             overlay = selected,
                             stageWidthPx = stageWidth,
                             stageHeightPx = stageHeight,
                         )
                     }
-                    StageHintChip(hasSelection = state.selectedOverlayId != null)
-                    StageGestures(
-                        stageWidthPx = stageWidth,
-                        stageHeightPx = stageHeight,
-                        state = state,
-                    )
+                    if (editingOverlayId == null) {
+                        StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    }
+                    if (editingOverlayId == null) {
+                        StageGestures(
+                            stageWidthPx = stageWidth,
+                            stageHeightPx = stageHeight,
+                            state = state,
+                            onEditSelectedText = { editingOverlayId = it },
+                        )
+                    }
                 }
             } else if (gifMode && gifFrames.isEmpty()) {
                 EmptyCanvasCta(
@@ -2122,26 +2164,33 @@ fun MemeEditorScreen(
                                 selected = overlay.id == state.selectedOverlayId,
                                 imageAssets = imageAssetMap,
                                 fx = space.bitos.core.studio.MemeFxRules.transformAt(overlay, frameStartMs),
+                                editing = overlay.id == editingOverlayId,
+                                onEditText = { state.updateStyle(overlay.id, text = it) },
                             )
                         }
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
-                    if (selected != null) {
+                    if (selected != null && editingOverlayId == null) {
                         DeleteHandle(
                             overlay = selected,
                             stageWidthPx = stageWidth,
                             stageHeightPx = stageHeight,
                         )
                     }
-                    StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    if (editingOverlayId == null) {
+                        StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    }
                     // Gesture layer INSIDE the fitted box: tap positions map
                     // 1:1 onto the overlay/delete-handle math. A sibling over
                     // the letterboxed container offsets every hit.
-                    StageGestures(
-                        stageWidthPx = stageWidth,
-                        stageHeightPx = stageHeight,
-                        state = state,
-                    )
+                    if (editingOverlayId == null) {
+                        StageGestures(
+                            stageWidthPx = stageWidth,
+                            stageHeightPx = stageHeight,
+                            state = state,
+                            onEditSelectedText = { editingOverlayId = it },
+                        )
+                    }
                 }
             } else if (current != null || pinnedCanvasTerms != null) {
                 // Blank design: no pick, a pinned canvas — the stage keeps
@@ -2187,23 +2236,30 @@ fun MemeEditorScreen(
                             stageHeightPx = stageHeight,
                             selected = overlay.id == state.selectedOverlayId,
                             imageAssets = imageAssetMap,
+                            editing = overlay.id == editingOverlayId,
+                            onEditText = { state.updateStyle(overlay.id, text = it) },
                         )
                     }
                     val selected = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
-                    if (selected != null) {
+                    if (selected != null && editingOverlayId == null) {
                         DeleteHandle(
                             overlay = selected,
                             stageWidthPx = stageWidth,
                             stageHeightPx = stageHeight,
                         )
                     }
-                    StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    if (editingOverlayId == null) {
+                        StageHintChip(hasSelection = state.selectedOverlayId != null)
+                    }
                     // Gesture layer INSIDE the fitted box (see GIF branch).
-                    StageGestures(
-                        stageWidthPx = stageWidth,
-                        stageHeightPx = stageHeight,
-                        state = state,
-                    )
+                    if (editingOverlayId == null) {
+                        StageGestures(
+                            stageWidthPx = stageWidth,
+                            stageHeightPx = stageHeight,
+                            state = state,
+                            onEditSelectedText = { editingOverlayId = it },
+                        )
+                    }
                 }
             }
             // Draw mode captures pen strokes ON the media rect (above all
@@ -2247,6 +2303,21 @@ fun MemeEditorScreen(
                     }
                 }
             }
+            // IG-style compose slider: a slim left-edge size control while
+            // typing — the canvas-native alternative to a size stepper.
+            if (editingOverlayId != null) {
+                state.project.overlays.firstOrNull { it.id == editingOverlayId }?.let { editing ->
+                    if (editing.kind == MemeOverlayKind.TEXT) {
+                        VerticalSizeSlider(
+                            size = editing.size,
+                            onSize = { state.updateStyle(editing.id, size = it) },
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = 6.dp),
+                        )
+                    }
+                }
+            }
         }
             // Selection action rail — a LAYOUT sibling in the trailing
             // gutter (animated width): per-ELEMENT actions live beside
@@ -2259,7 +2330,8 @@ fun MemeEditorScreen(
             // stacking another panel over the canvas.
             if (!suiteActive) {
                 AnimatedVisibility(
-                    visible = state.project.overlays.any { it.id == state.selectedOverlayId },
+                    visible = editingOverlayId == null &&
+                        state.project.overlays.any { it.id == state.selectedOverlayId },
                     enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
                     exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut(),
                 ) {
@@ -2338,7 +2410,7 @@ fun MemeEditorScreen(
                     .padding(horizontal = BitOSSpacing.base),
             )
 
-                state.selectedOverlayId != null -> Text(
+                state.selectedOverlayId != null && editingOverlayId == null -> Text(
                 "drag · scale · rotate",
                 style = MaterialTheme.typography.labelSmall,
                 color = BitOSColors.textTertiary,
@@ -2395,6 +2467,40 @@ fun MemeEditorScreen(
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f)) {
             val previewHeight = (maxHeight - 240.dp).coerceAtLeast(180.dp)
             val imagePreviewHeight = (maxHeight - 190.dp).coerceAtLeast(180.dp)
+            if (editingOverlayId != null) {
+                // IG-style compose mode: the canvas flexes above the IME and
+                // the typing controls own the bottom — no scrolling, so the
+                // on-canvas field and Done stay reachable (MUX-03 rule).
+                // imePadding THEN navigationBarsPadding: consumed insets
+                // chain, so the bar never double-pads the region the
+                // keyboard already covers (the gap bug).
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .imePadding()
+                        .navigationBarsPadding(),
+                ) {
+                    stageArea(
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = BitOSSpacing.base)
+                            .clip(RoundedCornerShape(16.dp)),
+                    )
+                    state.project.overlays.firstOrNull { it.id == editingOverlayId }?.let { editing ->
+                        TextComposeBar(
+                            overlay = editing,
+                            onFont = { state.updateStyle(editing.id, font = it) },
+                            onColor = { state.updateStyle(editing.id, colorIndex = it) },
+                            onOutline = { state.updateStyle(editing.id, outline = it) },
+                            onBar = { state.updateStyle(editing.id, bar = it) },
+                            onShadow = { state.updateStyle(editing.id, shadow = it) },
+                            onMore = { showAdvancedText = true },
+                            onDone = ::finishTextEditing,
+                        )
+                    }
+                }
+            } else {
             Column(
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.Bottom,
@@ -2459,6 +2565,7 @@ fun MemeEditorScreen(
                         drawMode = false
                         activePanel = if (activePanel == panel) null else panel
                     },
+                    onAddText = ::startTextCompose,
                     onDraw = {
                         activePanel = null
                         drawMode = !drawMode
@@ -2583,46 +2690,49 @@ fun MemeEditorScreen(
                 Spacer(Modifier.height(BitOSSpacing.sm))
             }
             }
-            PerModeBar(
-                videoMode = videoMode,
-                gifMode = gifMode,
-                onNotice = { exportStatus = it },
-                onOpenClips = { showClipSheet = true },
-                onOpenTrim = { showTrim = true },
-                onOpenFx = {
-                    drawMode = false
-                    activePanel = MemeEditorPanel.FX
-                },
-                onOpenText = {
-                    drawMode = false
-                    activePanel = MemeEditorPanel.TEXT
-                },
-                onOpenLayers = {
-                    activePanel = null
-                    showLayers = true
-                },
-                onOpenSuite = {
-                    activePanel = null
-                    suiteMode = true
-                },
-                onCycleGifSpeed = {
-                    val next = if (gifUniformDelayMs >= 200) 50 else gifUniformDelayMs + 50
-                    gifUniformDelayMs = next
-                    exportStatus = "Frame hold $next ms"
-                },
-                onOpenCanvas = { showCanvas = true },
-                showCanvasChip = blankVideoActive,
-                gifDurationChip = blankGifActive,
-                onOpenGifDuration = {
-                    activePanel = null
-                    showBlankGifCreate = true
-                },
-                onOpenGifBrowse = {
-                    activePanel = null
-                    showGifBrowse = true
-                },
-            )
-            statusLine()
+            }
+            // While composing, the typing dock owns the bottom — the
+            // per-mode chips (Canvas/Text/Clips…) and status line would
+            // squeeze between it and the keyboard.
+            if (editingOverlayId == null) {
+                PerModeBar(
+                    videoMode = videoMode,
+                    gifMode = gifMode,
+                    onNotice = { exportStatus = it },
+                    onOpenClips = { showClipSheet = true },
+                    onOpenTrim = { showTrim = true },
+                    onOpenFx = {
+                        drawMode = false
+                        activePanel = MemeEditorPanel.FX
+                    },
+                    onOpenText = ::startTextCompose,
+                    onOpenLayers = {
+                        activePanel = null
+                        showLayers = true
+                    },
+                    onOpenSuite = {
+                        activePanel = null
+                        suiteMode = true
+                    },
+                    onCycleGifSpeed = {
+                        val next = if (gifUniformDelayMs >= 200) 50 else gifUniformDelayMs + 50
+                        gifUniformDelayMs = next
+                        exportStatus = "Frame hold $next ms"
+                    },
+                    onOpenCanvas = { showCanvas = true },
+                    showCanvasChip = blankVideoActive,
+                    gifDurationChip = blankGifActive,
+                    onOpenGifDuration = {
+                        activePanel = null
+                        showBlankGifCreate = true
+                    },
+                    onOpenGifBrowse = {
+                        activePanel = null
+                        showGifBrowse = true
+                    },
+                )
+                statusLine()
+            }
         }
 
         if (showExportSheet) {
@@ -2718,7 +2828,6 @@ fun MemeEditorScreen(
                     Text(
                         when (panel) {
                             MemeEditorPanel.MEME -> "Meme generator"
-                            MemeEditorPanel.TEXT -> "Text"
                             MemeEditorPanel.STICKERS -> "Stickers"
                             MemeEditorPanel.SOUND -> "Sound"
                             MemeEditorPanel.FX -> "Look"
@@ -2733,15 +2842,6 @@ fun MemeEditorScreen(
                                 onAdd = { top, bottom, slot ->
                                     state.addMemeCaptions(top, bottom, slot)
                                     exportStatus = "Captions added — drag to fine-tune"
-                                },
-                            )
-                            MemeEditorPanel.TEXT -> TextPanelContent(
-                                onAdd = { text, slot ->
-                                    val id = state.addOverlay(MemeOverlayKind.TEXT, text)
-                                    if (id != null && slot != MemeFontSlot.SANS) {
-                                        state.updateStyle(id, font = slot)
-                                    }
-                                    exportStatus = "Text added — tap it for the style editor"
                                 },
                             )
                             MemeEditorPanel.STICKERS -> StickerSheetContent(
@@ -2820,8 +2920,9 @@ fun MemeEditorScreen(
                 it == space.bitos.app.ui.feed.MemePublishPhase.PUBLISHING
         }
         // Bottom keeps a slim disabled-state notice only; the action itself
-        // is the header Next button.
-        if (!hasMedia || publishBusy) {
+        // is the header Next button. Hidden while composing (the typing
+        // dock owns the bottom edge above the keyboard).
+        if (editingOverlayId == null && (!hasMedia || publishBusy)) {
             Text(
                 if (hasMedia) "publishing…" else "pick a clip, image or frames first",
                 style = MaterialTheme.typography.labelSmall,
@@ -2895,9 +2996,14 @@ fun MemeEditorScreen(
         )
     }
 
-    editingOverlayId?.let { id ->
+    // Advanced text sheet over compose mode: outline strength, motion fx,
+    // the video visibility window and delete. The on-canvas field and the
+    // compose bar keep working underneath; Done commits and exits compose.
+    if (showAdvancedText && editingOverlayId != null) {
+        val id = editingOverlayId!!
         val overlay = state.project.overlays.firstOrNull { it.id == id }
         if (overlay == null) {
+            showAdvancedText = false
             editingOverlayId = null
         } else {
             TextSheet(
@@ -2922,11 +3028,12 @@ fun MemeEditorScreen(
                 showTiming = videoMode,
                 onDelete = {
                     state.removeOverlay(id)
+                    showAdvancedText = false
                     editingOverlayId = null
                 },
                 onDismiss = {
-                    if (overlay.text.isBlank()) state.removeOverlay(id)
-                    editingOverlayId = null
+                    showAdvancedText = false
+                    finishTextEditing()
                 },
             )
         }
@@ -3605,7 +3712,7 @@ sealed interface ExportOutcome {
 }
 
 /** Inline editor panels (prototype create-edit tool panels). */
-private enum class MemeEditorPanel { MEME, TEXT, STICKERS, SOUND, FX }
+private enum class MemeEditorPanel { MEME, STICKERS, SOUND, FX }
 
 /** Prototype mode switcher: uppercase pills + the undo button. */
 @Composable
@@ -3755,7 +3862,8 @@ private fun QuickToolChipVector(
 }
 
 /** Quick tool chips (prototype: Meme · Text · Stickers · Sound · Effects;
- *  Draw/Save stay as native extras). */
+ *  Draw/Save stay as native extras). Text skips the panel entirely — it
+ *  enters IG-style compose mode (type on the canvas) via [onAddText]. */
 @Composable
 private fun QuickToolsRow(
     canAddOverlay: Boolean,
@@ -3765,6 +3873,7 @@ private fun QuickToolsRow(
     activePanel: MemeEditorPanel?,
     drawActive: Boolean,
     onPanel: (MemeEditorPanel) -> Unit,
+    onAddText: () -> Unit,
     onDraw: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -3785,9 +3894,9 @@ private fun QuickToolsRow(
         QuickToolChip(
             icon = SolarStudioIcon.Text,
             label = "Text",
-            active = activePanel == MemeEditorPanel.TEXT,
+            active = false,
             enabled = canAddOverlay,
-        ) { onPanel(MemeEditorPanel.TEXT) }
+        ) { onAddText() }
         QuickToolChip(
             icon = SolarStudioIcon.Sticker,
             label = "Stickers",
@@ -3822,49 +3931,239 @@ private fun QuickToolsRow(
 }
 
 
-/** Quick-text panel (prototype text panel): type once, pick a font slot. */
+/** IG-style compose bar (type-on-canvas): font-style pills with a live
+ *  preview word, the shared palette as dots, outline/background/shadow
+ *  toggles, More (the advanced sheet) and a ✓ that finishes editing.
+ *  Docked flush above the keyboard by the caller's ime/nav padding; every
+ *  control applies one coalesced update. */
 @Composable
-private fun TextPanelContent(onAdd: (String, MemeFontSlot) -> Unit) {
-    var text by remember { mutableStateOf("") }
-    var slot by remember { mutableStateOf(MemeFontSlot.SANS) }
-    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-        space.bitos.app.ui.components.BitosTextField(
-            value = text,
-            onValueChange = { text = it },
-            placeholder = "Type something…",
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
-            listOf(
-                MemeFontSlot.SANS to "Modern",
-                MemeFontSlot.IMPACT to "Impact",
-                MemeFontSlot.SERIF to "Comic",
-            ).forEach { (candidate, label) ->
-                FilterChip(
-                    selected = slot == candidate,
-                    onClick = { slot = candidate },
-                    label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                )
+private fun TextComposeBar(
+    overlay: MemeOverlay,
+    onFont: (MemeFontSlot) -> Unit,
+    onColor: (Int) -> Unit,
+    onOutline: (Int) -> Unit,
+    onBar: (Boolean) -> Unit,
+    onShadow: (Boolean) -> Unit,
+    onMore: () -> Unit,
+    onDone: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BitOSColors.background),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+    ) {
+        // Font-style tabs — IG-sized pills, each previewing in its own
+        // family/weight, labelled by the text being edited.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = BitOSSpacing.base),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MemeFontSlot.entries.forEach { slot ->
+                val selected = overlay.font == slot
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (selected) {
+                        BitOSColors.primary.copy(alpha = 0.16f)
+                    } else {
+                        BitOSColors.surface.copy(alpha = 0.6f)
+                    },
+                    border = BorderStroke(
+                        width = if (selected) 1.5.dp else 1.dp,
+                        color = if (selected) BitOSColors.primary else BitOSColors.border,
+                    ),
+                    onClick = { onFont(slot) },
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .semantics { contentDescription = "Font ${slot.label}" },
+                ) {
+                    Text(
+                        text = overlay.text.ifBlank { "Meme" }.take(12),
+                        fontFamily = fontSlotFamily(slot),
+                        fontWeight = fontSlotWeight(slot),
+                        fontSize = 17.sp,
+                        maxLines = 1,
+                        color = if (selected) BitOSColors.primary else BitOSColors.textPrimary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp),
+                    )
+                }
             }
         }
-        Button(
-            onClick = {
-                val value = text.trim()
-                if (value.isNotEmpty()) {
-                    onAdd(value, slot)
-                    text = ""
-                }
-            },
-            enabled = text.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = BitOSColors.primary,
-                contentColor = androidx.compose.ui.graphics.Color.White,
-            ),
-            modifier = Modifier.fillMaxWidth(),
+        // Format row: palette dots · outline · background · shadow · More · Done.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = BitOSSpacing.base, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
         ) {
-            Text("Add text")
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                rowItems(MemeRules.PALETTE) { argb ->
+                    val index = MemeRules.PALETTE.indexOf(argb)
+                    val selected = overlay.colorIndex == index
+                    val dot = if (selected) 26.dp else 22.dp
+                    Box(
+                        modifier = Modifier
+                            .size(dot)
+                            .clip(CircleShape)
+                            .background(Color(argb))
+                            .border(
+                                width = if (selected) 3.dp else 1.dp,
+                                color = if (selected) BitOSColors.primary else BitOSColors.border,
+                                shape = CircleShape,
+                            )
+                            .clickable { onColor(index) }
+                            .semantics { contentDescription = "Text color $index" },
+                    )
+                }
+            }
+            // Outline toggle: an "A" drawn as a stroke stands for the classic
+            // meme outline; tapping flips 0 ↔ the working width (3).
+            val outlineOn = overlay.outline > 0
+            Text(
+                "A",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (outlineOn) BitOSColors.primary else BitOSColors.textPrimary,
+                style = TextStyle.Default.copy(
+                    drawStyle = Stroke(width = if (outlineOn) 2.5f else 1.5f),
+                ),
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable { onOutline(if (outlineOn) 0 else 3) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .semantics {
+                        contentDescription = if (outlineOn) "Outline on" else "Outline off"
+                    },
+            )
+            // Background-bar toggle (IG highlight): an "A" sitting on a dark
+            // rounded band — the exact thing it paints on the canvas.
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (overlay.bar == true) {
+                            Color.Black.copy(alpha = 0.62f)
+                        } else {
+                            BitOSColors.surface.copy(alpha = 0.6f)
+                        },
+                    )
+                    .clickable { onBar(!(overlay.bar == true)) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .semantics {
+                        contentDescription = if (overlay.bar == true) "Background on" else "Background off"
+                    },
+            ) {
+                Text(
+                    "A",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (overlay.bar == true) Color.White else BitOSColors.textPrimary,
+                )
+            }
+            // Shadow toggle: an "A" carrying the actual drop shadow.
+            Text(
+                "A",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (overlay.shadow) BitOSColors.primary else BitOSColors.textPrimary,
+                style = TextStyle.Default.copy(
+                    shadow = Shadow(Color.Black, Offset(2f, 2f), blurRadius = 3f),
+                ),
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable { onShadow(!overlay.shadow) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .semantics {
+                        contentDescription = if (overlay.shadow) "Shadow on" else "Shadow off"
+                    },
+            )
+            IconButton(
+                onClick = onMore,
+                modifier = Modifier.semantics { contentDescription = "More text styles" },
+            ) {
+                Icon(AppIcons.Filter, contentDescription = null, tint = BitOSColors.textPrimary)
+            }
+            Surface(
+                shape = CircleShape,
+                color = BitOSColors.primary,
+                onClick = onDone,
+                modifier = Modifier
+                    .size(42.dp)
+                    .semantics { contentDescription = "Done editing text" },
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        AppIcons.Check,
+                        contentDescription = null,
+                        tint = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
+    }
+}
+
+/** IG-style left-edge size slider for compose mode: drag up enlarges,
+ *  drag down shrinks; the fill level is the current size fraction. */
+@Composable
+private fun VerticalSizeSlider(
+    size: Int,
+    onSize: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val fraction = ((size - MemeRules.MIN_SIZE).toFloat() /
+        (MemeRules.MAX_SIZE - MemeRules.MIN_SIZE)).coerceIn(0f, 1f)
+    val trackHeightPx = with(density) { 176.dp.toPx() }
+    Box(
+        modifier = modifier
+            .height(184.dp)
+            .width(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.35f))
+            .draggable(
+                orientation = Orientation.Vertical,
+                state = rememberDraggableState { delta ->
+                    // ~1.2 dp of drag per size unit keeps the full range a
+                    // single comfortable swipe.
+                    val deltaSize = -delta / density.density / 1.2f
+                    onSize(
+                        (size + deltaSize)
+                            .roundToInt()
+                            .coerceIn(MemeRules.MIN_SIZE, MemeRules.MAX_SIZE),
+                    )
+                },
+            )
+            .semantics { contentDescription = "Text size" },
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(bottom = 4.dp)
+                .fillMaxWidth(0.16f)
+                .fillMaxHeight(fraction)
+                .clip(RoundedCornerShape(3.dp))
+                .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f)),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .offset { androidx.compose.ui.unit.IntOffset(0, -(4.dp.roundToPx() + (fraction * (trackHeightPx - 8.dp.toPx())).roundToInt())) }
+                .width(18.dp)
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(androidx.compose.ui.graphics.Color.White),
+        )
     }
 }
 
@@ -5126,6 +5425,11 @@ internal fun OverlayNode(
     /** Animated GIF layer frame (MST-053): bitmap active at the stage
      *  clock — null = still image, keep the AsyncImage path. */
     gifFrameAt: ((assetId: String) -> android.graphics.Bitmap?)? = null,
+    /** Compose mode (IG-style type-on-canvas): this overlay is the one
+     *  being edited — render a live field in place of the static text. */
+    editing: Boolean = false,
+    /** Compose-mode text sink (update command; bursts coalesce). */
+    onEditText: ((String) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     // Font/outline px live on the 1080-HIGH reference (web `paintOverlay`:
@@ -5165,6 +5469,24 @@ internal fun OverlayNode(
         Box(
             modifier = Modifier
                 .drawBehind {
+                    // Classic background bar (web `bar` parity): one dark
+                    // rounded band behind the whole text block — fractions
+                    // of the font size so preview ⇄ export stay WYSIWYG.
+                    if (overlay.bar == true && !isSticker && imageAsset == null) {
+                        val em = fontSize.toPx()
+                        drawRoundRect(
+                            color = Color.Black.copy(alpha = 0.55f),
+                            topLeft = Offset(
+                                -em * BAR_PAD_X,
+                                -em * BAR_PAD_Y,
+                            ),
+                            size = androidx.compose.ui.geometry.Size(
+                                size.width + em * BAR_PAD_X * 2f,
+                                size.height + em * BAR_PAD_Y * 2f,
+                            ),
+                            cornerRadius = CornerRadius(em * BAR_RADIUS),
+                        )
+                    }
                     if (selected) {
                         drawRoundRect(
                             color = accent,
@@ -5219,6 +5541,53 @@ internal fun OverlayNode(
                         .aspectRatio(imageAsset.second.coerceIn(0.2f, 5f)),
                 )
                 }
+            } else if (!isSticker && editing && onEditText != null) {
+                // IG-style compose mode: type directly on the canvas. The
+                // field keeps the overlay's exact font/size/color so the
+                // canvas is the live preview (no separate sheet round trip).
+                val focus = androidx.compose.ui.focus.FocusRequester()
+                LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+                val maxFieldWidth = with(density) { (stageWidthPx * 0.86f).toDp() }
+                BasicTextField(
+                    value = overlay.text,
+                    onValueChange = onEditText,
+                    textStyle = TextStyle(
+                        color = color,
+                        fontSize = fontSize,
+                        fontFamily = fontSlotFamily(overlay.font),
+                        fontWeight = fontSlotWeight(overlay.font),
+                        textAlign = TextAlign.Center,
+                        shadow = if (overlay.shadow) {
+                            Shadow(Color.Black, Offset(3f, 3f), blurRadius = 6f)
+                        } else {
+                            null
+                        },
+                    ),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(BitOSColors.primary),
+                    decorationBox = { inner ->
+                        if (overlay.text.isEmpty()) {
+                            Box(
+                                modifier = Modifier.widthIn(max = maxFieldWidth),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "Type…",
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    fontSize = fontSize,
+                                    fontFamily = fontSlotFamily(overlay.font),
+                                    fontWeight = fontSlotWeight(overlay.font),
+                                    textAlign = TextAlign.Center,
+                                )
+                                inner()
+                            }
+                        } else {
+                            Box(contentAlignment = Alignment.Center) { inner() }
+                        }
+                    },
+                    modifier = Modifier
+                        .widthIn(max = maxFieldWidth)
+                        .focusRequester(focus),
+                )
             } else if (!isSticker && outlinePx > 0f) {
                 // Classic meme outline: stroke copy behind the fill copy.
                 Box {
@@ -5338,6 +5707,7 @@ private fun Modifier.stageGestures(
     stageWidthPx: () -> Int,
     stageHeightPx: () -> Int,
     deleteTapRadiusPx: () -> Float,
+    onEditSelectedText: (String) -> Unit = {},
 ): Modifier = pointerInput(state) {
     awaitEachGesture {
         val down = awaitFirstDown()
@@ -5382,11 +5752,23 @@ private fun Modifier.stageGestures(
                         }
                     }
                     if (tappedDeleteId == null) {
+                        val preTapSelection = selected?.id
                         val hit = state.selectAt(
                             downPos.x / stageWidthPx(),
                             downPos.y / stageHeightPx(),
                         )
-                        if (!hit) state.clearSelection()
+                        if (!hit) {
+                            state.clearSelection()
+                        } else if (preTapSelection != null &&
+                            preTapSelection == state.selectedOverlayId &&
+                            state.project.overlays
+                                .firstOrNull { it.id == preTapSelection }
+                                ?.kind == MemeOverlayKind.TEXT
+                        ) {
+                            // Re-tap on the already-selected TEXT overlay —
+                            // IG tap-again-to-type opens compose mode.
+                            onEditSelectedText(preTapSelection)
+                        }
                     }
                 }
                 break
@@ -5402,12 +5784,16 @@ internal fun StageGestures(
     stageWidthPx: Int,
     stageHeightPx: Int,
     state: MemeEditorState,
+    onEditSelectedText: (String) -> Unit = {},
 ) {
     val density = LocalDensity.current
     val tapRadius = with(density) { 22.dp.toPx() }
     val w = rememberUpdatedState(stageWidthPx)
     val h = rememberUpdatedState(stageHeightPx)
     val r = rememberUpdatedState(tapRadius)
+    // pointerInput keys on state; the callback stays fresh across
+    // recompositions without restarting the gesture coroutine.
+    val editCallback = rememberUpdatedState(onEditSelectedText)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -5416,6 +5802,7 @@ internal fun StageGestures(
                 stageWidthPx = { w.value },
                 stageHeightPx = { h.value },
                 deleteTapRadiusPx = { r.value },
+                onEditSelectedText = { editCallback.value(it) },
             ),
     )
 }
@@ -5433,6 +5820,13 @@ private fun fontSlotWeight(slot: MemeFontSlot): FontWeight = when (slot) {
     MemeFontSlot.SERIF -> FontWeight.Bold
     MemeFontSlot.MONO -> FontWeight.Medium
 }
+
+/** Background-bar geometry as fractions of the font size (web `bar` look):
+ *  one shared rule so the stage preview and the rasterizers agree. */
+const val BAR_PAD_X = 0.35f
+const val BAR_PAD_Y = 0.30f
+const val BAR_RADIUS = 0.22f
+const val BAR_ALPHA = 0.55f
 
 /** Text sheet (mockup "Text style" card): field, font slots, palette,
  * size + outline sliders, shadow toggle — all live via update commands

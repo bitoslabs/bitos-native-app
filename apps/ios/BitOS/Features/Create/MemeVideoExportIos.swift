@@ -1100,6 +1100,12 @@ struct VideoStageIos: View {
     var layerImages: [String: UIImage] = [:]
     /// Suite mode hides the scrub row — the timeline dock owns transport.
     var showScrub: Bool = true
+    /// Compose mode (IG-style type-on-canvas): the overlay being edited
+    /// renders as a live field; the tap layer stands down for the keyboard.
+    var editingId: String? = nil
+    /// Tap-again-on-selected-text affordance: re-tapping the already-
+    /// selected text overlay reopens the on-canvas field.
+    var onEditSelectedText: (String) -> Void = { _ in }
     /// Player control surface for the suite dock (registered, not owned).
     var transport: VideoTransportIos? = nil
     /// "Use this sound" (MST-050 Wave B): the borrowed track + its session
@@ -1206,24 +1212,37 @@ struct VideoStageIos: View {
                                 layerImage: overlay.isImage
                                     ? (overlay.assetId.flatMap { gifFrameAt?($0, positionSeconds) }
                                         ?? overlay.assetId.flatMap { layerImages[$0] })
-                                    : nil
+                                    : nil,
+                                editing: overlay.id == editingId,
+                                onEditText: { store.updateStyle(overlay.id, fields: ["text": $0]) }
                             )
                         }
                     }
-                    if let selected = store.overlays.first(where: { $0.id == store.selectedId }),
+                    if let selected = store.overlays.first(where: { $0.id == store.selectedId && $0.id != editingId }),
                        let bounds = store.boundsFraction(for: selected.id) {
                         DeleteHandleView(overlay: selected, stageSize: fitted, bounds: bounds)
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .contentShape(Rectangle())
-                // Tap-through selection on the stage surface.
+                // Tap-through selection on the stage surface — stood down
+                // while the compose-mode field owns the stage touches.
                 .onTapGesture { location in
+                    guard editingId == nil else { return }
+                    let preTapSelection = store.selectedId
                     let hit = store.selectAt(
                         x: Float(location.x / max(1, fitted.width)),
                         y: Float(location.y / max(1, fitted.height))
                     )
-                    if !hit { store.clearSelection() }
+                    if !hit {
+                        store.clearSelection()
+                    } else if let before = preTapSelection,
+                              before == store.selectedId,
+                              let overlay = store.overlays.first(where: { $0.id == before }),
+                              !overlay.isSticker, !overlay.isImage {
+                        // Re-tap on the already-selected text overlay = edit.
+                        onEditSelectedText(before)
+                    }
                 }
             }
             if showScrub {
