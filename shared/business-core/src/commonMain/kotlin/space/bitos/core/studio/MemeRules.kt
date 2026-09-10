@@ -28,6 +28,8 @@ sealed interface MemeCommand {
         val colorIndex: Int? = null,
         val outline: Int? = null,
         val shadow: Boolean? = null,
+        /** Classic background bar (web parity): dark band behind the text. */
+        val bar: Boolean? = null,
         /** Motion fx (MST-044); null keeps, "none"-style null clears via wire. */
         val fx: MemeOverlayFx? = null,
         /** Clear-the-fx flag (fx null means "leave unchanged"). */
@@ -152,6 +154,12 @@ object MemeRules {
             colorIndex = if (textish) 0 else 0,
             outline = if (textish) 2 else 0,
             shadow = false,
+            // Native previews paint text as typed; caps defaults TRUE on
+            // the wire, so an explicit false keeps preview ⇄ export
+            // WYSIWYG for editor-added overlays (web parity kept for
+            // projects that set caps explicitly).
+            caps = if (textish) false else null,
+            bar = false,
             x = 0.5f + ((index % 3) - 1) * 0.08f,
             y = 0.35f + (index % 5) * 0.08f,
             scale = 1f,
@@ -313,6 +321,7 @@ object MemeRules {
                 colorIndex = later.colorIndex ?: earlier.colorIndex,
                 outline = later.outline ?: earlier.outline,
                 shadow = later.shadow ?: earlier.shadow,
+                bar = later.bar ?: earlier.bar,
                 fx = later.fx ?: earlier.fx,
                 clearFx = later.clearFx || earlier.clearFx,
                 startMs = later.startMs ?: earlier.startMs,
@@ -346,6 +355,7 @@ object MemeRules {
                             ?: overlay.colorIndex,
                         outline = command.outline?.let(::clampOutline) ?: overlay.outline,
                         shadow = command.shadow ?: overlay.shadow,
+                        bar = command.bar ?: overlay.bar,
                         fx = if (command.clearFx) null else command.fx ?: overlay.fx,
                         startMs = command.startMs ?: overlay.startMs,
                         endMs = if (command.clearEndMs) null else command.endMs ?: overlay.endMs,

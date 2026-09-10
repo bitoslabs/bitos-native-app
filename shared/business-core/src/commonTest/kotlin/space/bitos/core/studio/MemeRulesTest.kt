@@ -92,6 +92,35 @@ class MemeRulesTest {
     }
 
     @Test
+    fun updateBarAppliesAndRoundTripsTheCodec() {
+        val project = MemeRules.apply(empty, MemeCommand.AddOverlay(textOverlay("o1")))
+        val on = MemeRules.apply(project, MemeCommand.UpdateOverlay(id = "o1", bar = true))
+        assertEquals(true, on.overlays.single().bar)
+        val decoded = MemeCommandCodec.decode(
+            MemeCommandCodec.encode(MemeCommand.UpdateOverlay(id = "o1", bar = false)),
+        )
+        assertTrue(decoded is MemeCommand.UpdateOverlay && decoded.bar == false)
+        val off = MemeRules.apply(on, decoded as MemeCommand.UpdateOverlay)
+        assertEquals(false, off.overlays.single().bar)
+    }
+
+    @Test
+    fun coalesceMergesBarWithEarlierStyleFields() {
+        val earlier = MemeCommand.UpdateOverlay(id = "o1", shadow = true)
+        val later = MemeCommand.UpdateOverlay(id = "o1", bar = true)
+        val merged = MemeRules.coalesce(earlier, later) as MemeCommand.UpdateOverlay
+        assertEquals(true, merged.shadow)
+        assertEquals(true, merged.bar)
+    }
+
+    @Test
+    fun nativeTextOverlaysDefaultCapsOffForWysiwyg() {
+        val overlay = MemeRules.defaultOverlay(empty, MemeOverlayKind.TEXT, "gm")
+        assertEquals(false, overlay.caps, "previews paint text as typed — export must match")
+        assertEquals(false, overlay.bar, "the background bar starts off")
+    }
+
+    @Test
     fun removeDropsOnlyTheTarget() {
         val seeded = MemeRules.apply(
             MemeRules.apply(empty, MemeCommand.AddOverlay(textOverlay("o1"))),

@@ -90,6 +90,13 @@ internal fun VideoStage(
     gifFrameAt: ((assetId: String, atMs: Long) -> android.graphics.Bitmap?)? = null,
     /** Suite mode hides the scrub row — the timeline dock owns transport. */
     showScrub: Boolean = true,
+    /** Compose mode (IG-style type-on-canvas): the overlay being edited
+     *  renders as a live field; the drag layer stands down for the
+     *  keyboard while it is set. */
+    editingId: String? = null,
+    /** Tap-again-on-selected-text affordance: re-tapping the already-
+     *  selected text overlay reopens the on-canvas field. */
+    onEditSelectedText: (String) -> Unit = {},
     /** Player control surface for the suite dock (registered, not owned). */
     transport: VideoTransport? = null,
     /** "Use this sound" (MST-050 Wave B): the borrowed track + its m4a
@@ -355,9 +362,11 @@ internal fun VideoStage(
                         } else {
                             null
                         },
+                        editing = overlay.id == editingId,
+                        onEditText = { state.updateStyle(overlay.id, text = it) },
                     )
                 }
-                overlays.firstOrNull { it.id == selectedId }?.let { selected ->
+                overlays.firstOrNull { it.id == selectedId && it.id != editingId }?.let { selected ->
                     DeleteHandle(
                         overlay = selected,
                         stageWidthPx = stageWidthPx,
@@ -365,12 +374,16 @@ internal fun VideoStage(
                     )
                 }
                 // Gesture layer INSIDE the fitted box: tap positions map 1:1
-                // onto the overlay/delete-handle math.
-                StageGestures(
-                    stageWidthPx = stageWidthPx,
-                    stageHeightPx = stageHeightPx,
-                    state = state,
-                )
+                // onto the overlay/delete-handle math. It stands down while
+                // the compose-mode field owns the stage touches.
+                if (editingId == null) {
+                    StageGestures(
+                        stageWidthPx = stageWidthPx,
+                        stageHeightPx = stageHeightPx,
+                        state = state,
+                        onEditSelectedText = onEditSelectedText,
+                    )
+                }
             }
         }
         if (showScrub) {
