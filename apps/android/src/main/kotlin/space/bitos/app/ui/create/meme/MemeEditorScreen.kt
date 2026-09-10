@@ -5543,11 +5543,15 @@ internal fun OverlayNode(
                 }
             } else if (!isSticker && editing && onEditText != null) {
                 // IG-style compose mode: type directly on the canvas. The
-                // field keeps the overlay's exact font/size/color so the
-                // canvas is the live preview (no separate sheet round trip).
+                // field lays out EXACTLY like the static overlay — intrinsic
+                // width (one line per newline, no soft wrap; the rasterizer
+                // paints the same). The outline stroke copy lives INSIDE the
+                // decorationBox: it is measured against the field's own text
+                // content, so it stays pixel-locked behind it (a sibling
+                // outside the field drifts side-by-side — the field reserves
+                // extra width for the cursor and centers its text).
                 val focus = androidx.compose.ui.focus.FocusRequester()
                 LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-                val maxFieldWidth = with(density) { (stageWidthPx * 0.86f).toDp() }
                 BasicTextField(
                     value = overlay.text,
                     onValueChange = onEditText,
@@ -5565,11 +5569,23 @@ internal fun OverlayNode(
                     ),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(BitOSColors.primary),
                     decorationBox = { inner ->
-                        if (overlay.text.isEmpty()) {
-                            Box(
-                                modifier = Modifier.widthIn(max = maxFieldWidth),
-                                contentAlignment = Alignment.Center,
-                            ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (outlinePx > 0f && overlay.text.isNotEmpty()) {
+                                // Same stroke copy the static branch paints,
+                                // tracked to the field's live text.
+                                Text(
+                                    text = overlay.text,
+                                    color = Color.Black,
+                                    fontSize = fontSize,
+                                    fontFamily = fontSlotFamily(overlay.font),
+                                    fontWeight = fontSlotWeight(overlay.font),
+                                    textAlign = TextAlign.Center,
+                                    style = TextStyle.Default.copy(
+                                        drawStyle = Stroke(width = outlinePx * 2f, miter = 4f),
+                                    ),
+                                )
+                            }
+                            if (overlay.text.isEmpty()) {
                                 Text(
                                     "Type…",
                                     color = Color.White.copy(alpha = 0.65f),
@@ -5578,15 +5594,11 @@ internal fun OverlayNode(
                                     fontWeight = fontSlotWeight(overlay.font),
                                     textAlign = TextAlign.Center,
                                 )
-                                inner()
                             }
-                        } else {
-                            Box(contentAlignment = Alignment.Center) { inner() }
+                            inner()
                         }
                     },
-                    modifier = Modifier
-                        .widthIn(max = maxFieldWidth)
-                        .focusRequester(focus),
+                    modifier = Modifier.focusRequester(focus),
                 )
             } else if (!isSticker && outlinePx > 0f) {
                 // Classic meme outline: stroke copy behind the fill copy.

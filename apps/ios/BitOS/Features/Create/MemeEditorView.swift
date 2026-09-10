@@ -5127,6 +5127,9 @@ struct OverlayUiView: View {
             } else if editing, let onEditText {
                 // IG-style compose mode: type directly on the canvas with
                 // the overlay's exact font/color — the canvas is the preview.
+                // No width cap: the field lays out like the final label
+                // (one line per newline, no soft wrap — the rasterizer
+                // paints the same), so Done never reflows the text.
                 EditingStageTextView(
                     text: overlay.text,
                     font: Self.slotFont(overlay.font, size: fontPx),
@@ -5134,7 +5137,7 @@ struct OverlayUiView: View {
                     onText: onEditText
                 )
                 .modifier(ComposeBarBackground(bar: overlay.barFlag && !overlay.isSticker, em: fontPx))
-                .frame(maxWidth: stageSize.width * 0.86)
+                .fixedSize()
             } else {
                 OutlinedTextView(
                     text: overlay.text,
