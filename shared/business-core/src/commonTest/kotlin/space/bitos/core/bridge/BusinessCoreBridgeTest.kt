@@ -894,15 +894,16 @@ class BusinessCoreBridgeTest {
     fun memeAudioBedSeamMixesCuesAndSoundtrackIntoOneWav() {
         val sha = "a".repeat(64)
         fun pcmB64(vararg values: Float): String {
-            val bytes = java.io.ByteArrayOutputStream()
-            values.forEach { value ->
+            val bytes = ByteArray(values.size * Float.SIZE_BYTES)
+            values.forEachIndexed { index, value ->
                 val bits = value.toRawBits()
-                bytes.write(bits and 0xFF)
-                bytes.write((bits ushr 8) and 0xFF)
-                bytes.write((bits ushr 16) and 0xFF)
-                bytes.write((bits ushr 24) and 0xFF)
+                val offset = index * Float.SIZE_BYTES
+                bytes[offset] = (bits and 0xFF).toByte()
+                bytes[offset + 1] = ((bits ushr 8) and 0xFF).toByte()
+                bytes[offset + 2] = ((bits ushr 16) and 0xFF).toByte()
+                bytes[offset + 3] = ((bits ushr 24) and 0xFF).toByte()
             }
-            return java.util.Base64.getEncoder().encodeToString(bytes.toByteArray())
+            return kotlin.io.encoding.Base64.Default.encode(bytes)
         }
         val sound = space.bitos.core.studio.MemeSoundtrack(
             url = "",
@@ -927,9 +928,9 @@ class BusinessCoreBridgeTest {
             soundRate = 44_100,
         )
         assertTrue(bed.isNotEmpty())
-        val wav = java.util.Base64.getDecoder().decode(bed)
+        val wav = kotlin.io.encoding.Base64.Default.decode(bed)
         assertTrue(wav.size > 44, "a real WAV header + body")
-        assertEquals("RIFF", String(wav, 0, 4, Charsets.US_ASCII))
+        assertEquals("RIFF", wav.copyOfRange(0, 4).decodeToString())
         // Neither alone: soundtrack PCM junk → cue-only bed still builds.
         val cuesOnly = bridge.memeAudioBedWavBase64(projectJson, 2_000, soundPcmBase64 = "zz", soundRate = 0)
         assertTrue(cuesOnly.isNotEmpty())

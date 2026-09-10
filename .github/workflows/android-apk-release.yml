@@ -1,0 +1,136 @@
+name: Android APK Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Version tag to publish (for example, v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate release tag and app version
+        id: release
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use v<major>.<minor>.<patch>: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          release_version="${RELEASE_TAG#v}"
+          android_version=$(sed -nE 's/^BITOS_APP_VERSION_NAME=(.+)/\1/p' gradle.properties)
+          android_code=$(sed -nE 's/^BITOS_APP_VERSION_CODE=([0-9]+)/\1/p' gradle.properties)
+          if [ "$android_version" != "$release_version" ]; then
+            echo "Release tag version $release_version does not match Android versionName $android_version." >&2
+            exit 1
+          fi
+          if [ -z "$android_code" ] || [ "$android_code" -lt 1 ]; then
+            echo "Android versionCode must be a positive integer." >&2
+            exit 1
+          fi
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize signing key
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in \
+            ANDROID_RELEASE_KEYSTORE_BASE64 \
+            ANDROID_RELEASE_KEYSTORE_PASSWORD \
+            ANDROID_RELEASE_KEY_ALIAS \
+            ANDROID_RELEASE_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Required Android release signing secret is missing: $name" >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bitos-release.keystore"
+
+      - name: Build signed release APK
+        env:
+          ORG_GRADLE_PROJECT_BITOS_RELEASE_STORE_FILE: ${{ runner.temp }}/bitos-release.keystore
+          ORG_GRADLE_PROJECT_BITOS_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_BITOS_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_BITOS_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :apps:android:assembleRelease
+
+      - name: Create checksum
+        id: apk
+        run: |
+          set -euo pipefail
+          apk_path=apps/android/build/outputs/apk/release/android-release.apk
+          test -f "$apk_path"
+          sha256sum "$apk_path" > "$apk_path.sha256"
+          echo "path=$apk_path" >> "$GITHUB_OUTPUT"
+          echo "checksum=$apk_path.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BitOS-Android-${{ steps.release.outputs.version }}
+          path: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+          CHECKSUM_PATH: ${{ steps.apk.outputs.checksum }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          apk_name="BitOS-${RELEASE_VERSION}.apk"
+          checksum_name="${apk_name}.sha256"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "$APK_PATH#$apk_name" \
+              "$CHECKSUM_PATH#$checksum_name" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "$APK_PATH#$apk_name" \
+              "$CHECKSUM_PATH#$checksum_name" \
+              --target "$GITHUB_SHA" \
+              --title "BitOS $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/bitos-release.keystore"

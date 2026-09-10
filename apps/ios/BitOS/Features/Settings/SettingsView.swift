@@ -1,6 +1,12 @@
 import BusinessCore
 import SwiftUI
 
+private func installedAppVersion() -> String {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    return "\(version) (\(build))"
+}
+
 /**
  * APP-018 Settings hub (unified feature spec §3.18, legacy Flutter
  * `SettingsView`/`settings_section_page` parity): account hero + the shared
@@ -54,7 +60,7 @@ struct SettingsView: View {
                     .frame(height: 16)
                     .frame(maxWidth: .infinity)
                     .accessibilityHidden(true)
-                Text("BitOS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") · settings v\(settingsSchemaVersion)")
+                Text("BitOS \(installedAppVersion()) · settings v\(settingsSchemaVersion)")
                     .font(.system(size: 11))
                     .foregroundStyle(BitOSTheme.textTertiary)
                     .frame(maxWidth: .infinity)
@@ -1436,7 +1442,7 @@ private struct AboutSection: View {
 
     var body: some View {
         let facts = bridge.appFacts()
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let version = installedAppVersion()
         List {
             Section {
                 VStack(spacing: 8) {

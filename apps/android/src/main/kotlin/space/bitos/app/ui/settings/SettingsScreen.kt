@@ -130,6 +130,7 @@ fun SettingsScreen(
     val identity by identityViewModel.state.collectAsStateWithLifecycle()
     val account = identity.account
     var confirmSignOut by remember { mutableStateOf(false) }
+    val appVersion = installedAppVersion(androidx.compose.ui.platform.LocalContext.current)
 
     Column(
         Modifier
@@ -233,7 +234,7 @@ fun SettingsScreen(
                 .padding(top = 16.dp),
         )
         Text(
-            "BitOS 1.0 · settings shared-contract parity",
+            "BitOS $appVersion · settings shared-contract parity",
             fontSize = 11.sp, color = BitOSColors.textTertiary,
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 16.dp),
         )
@@ -880,12 +881,7 @@ private fun AccountDetail(
 @Composable
 private fun AboutDetail(store: SettingsStore) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val version = try {
-        @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
-    } catch (_: Exception) {
-        "1.0"
-    }
+    val version = installedAppVersion(context)
     val facts = space.bitos.core.settings.AppFacts
 
     // Brand card (legacy About hero parity).
@@ -941,6 +937,13 @@ private fun AboutDetail(store: SettingsStore) {
         InfoLine("Contract keys", "${space.bitos.core.settings.SettingsContract.SECTIONS.size} sections")
     }
     Footnote("Notes are canonical signed events; this app is a projection of them.")
+}
+
+private fun installedAppVersion(context: android.content.Context): String = try {
+    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+    "${packageInfo.versionName} (${packageInfo.longVersionCode})"
+} catch (_: Exception) {
+    "${space.bitos.app.BuildConfig.VERSION_NAME} (${space.bitos.app.BuildConfig.VERSION_CODE})"
 }
 
 @Composable

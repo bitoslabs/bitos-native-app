@@ -94,6 +94,32 @@ command. `make build-android-apk` writes the APK to:
 apps/android/build/outputs/apk/debug/android-debug.apk
 ```
 
+### Android GitHub releases
+
+Android's current app version is `0.1.0` (`versionName`) with install/build
+number `1` (`versionCode`), both in
+[`gradle.properties`](../../gradle.properties). The
+iOS project currently mirrors these as marketing version `0.1.0` and build
+number `1`.
+
+Pushing a version tag in the form `v<version>` (for example, `v0.1.0`) runs
+the **Android APK Release** workflow. It refuses a tag whose version differs
+from Android's `versionName`, builds a minified signed release APK, publishes
+the APK and SHA-256 file as workflow artifacts, and attaches both to the
+GitHub Release. Increment `versionCode` for every installable Android release;
+keep `versionName` and the release tag aligned.
+
+Before the first release, configure these repository Actions secrets. They are
+read only by the release job and are never committed:
+
+- `ANDROID_RELEASE_KEYSTORE_BASE64` — base64 encoding of the upload keystore.
+- `ANDROID_RELEASE_KEYSTORE_PASSWORD`
+- `ANDROID_RELEASE_KEY_ALIAS`
+- `ANDROID_RELEASE_KEY_PASSWORD`
+
+The workflow deliberately fails if any signing secret is missing, so it can
+never publish an unsigned APK as a release.
+
 Debug builds emit native lifecycle diagnostics without logging user content,
 keys, Nostr events, or deep-link values. View them with:
 
