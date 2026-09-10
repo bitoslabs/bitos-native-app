@@ -2,12 +2,15 @@ package space.bitos.core.bridge
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Bridge contract tests driven by `contracts/nostr/fixtures/verification-vectors.json`,
@@ -255,20 +258,23 @@ class BusinessCoreBridgeTest {
         assertTrue(request.contains(""""kinds":[1],"limit":48"""), request)
         val gapRequest = bridge.feedRequestSince("feed-gap", 600)
         assertTrue(gapRequest.contains(""""kinds":[1],"limit":48,"since":600"""), gapRequest)
-        // Bitz NIP-50 search: media kinds only — never kind-1.
-        val bitzSearch = bridge.bitzSearchRequest("bs1", "lightning", 50)!!
-        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"search":"lightning","limit":50"""), bitzSearch)
+        // Web-parity search REQ: NIP-50 `search` + `#t` + recent-sample
+        // fallback filters in one REQ; Bitz passes media kinds only —
+        // never kind-1.
+        val bitzSearch = bridge.searchRelayRequest(
+            "bs1", "lightning", space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS,
+        )!!
+        assertTrue(bitzSearch.startsWith("""["REQ","bs1","""), bitzSearch)
+        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"search":"lightning","limit":180"""), bitzSearch)
+        assertTrue(bitzSearch.contains(""""#t":["lightning"],"limit":180"""), bitzSearch)
+        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"limit":240"""), bitzSearch)
         assertTrue(!bitzSearch.contains(""""kinds":[1]"""), bitzSearch)
+        assertEquals(null, bridge.searchRelayRequest("bs2", "   ", listOf(1)))
         assertEquals("""["CLOSE","feed1"]""", bridge.close("feed1"))
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)
         assertTrue(profileRequest.contains(""""authors":[""" + "\"" + "a".repeat(64)), profileRequest)
         assertTrue(profileRequest.contains(""""limit":1"""), profileRequest)
-        // NIP-01 hashtag recall: `#tag` queries classify into a bounded `#t`
-        // filter (NIP-50 leaves `#` undefined in search strings).
-        val tagRequest = bridge.searchTagRequest("tag1", "#LaoStr", listOf(1, 21, 22), 50)!!
-        assertEquals("""["REQ","tag1",{"kinds":[1,21,22],"#t":["laostr"],"limit":50}]""", tagRequest)
-        assertEquals(null, bridge.searchTagRequest("tag2", "two words", listOf(1), 50))
     }
 
     @Test
@@ -1309,6 +1315,74 @@ class BusinessCoreBridgeTest {
         assertEquals(-1L, reply["amountMsat"])
     }
 
+
+    @Test
+    fun memeSharedSoundSummaryFeedsTheRailAndRejectsForeignShapes() {
+        // Verbatim shape from contracts/meme/sound-event-v1.json (repo
+        // rule: protocol changes pin fixtures).
+        val tagsJson = """[["d","com.bitos.bitz:sound:raid-shadow-meme"],["url","https://blossom.example/b/9f2c.webm"],["x","9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a"],["license","CC-BY-4.0"],["attribution","sound of dj satsoshi"],["t","meme"],["p","0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]]"""
+        val content = "{\"schema\":\"com.bitos.bitz.sound\",\"version\":1,\"label\":\"Raid Shadow Meme\",\"durationSec\":12}"
+        val summary = Json.parseToJsonElement(bridge.memeSharedSoundSummary(tagsJson, content)).jsonObject
+        assertEquals("raid-shadow-meme", summary["id"]!!.jsonPrimitive.content)
+        assertEquals("Raid Shadow Meme", summary["label"]!!.jsonPrimitive.content)
+        assertEquals("CC-BY-4.0", summary["license"]!!.jsonPrimitive.content)
+        assertEquals(12_000L, summary["durationMs"]!!.jsonPrimitive.content.toLong())
+        assertEquals(1, summary["topics"]!!.jsonArray.size)
+
+        // Foreign namespace / non-ingestable license → "" (never a row).
+        assertEquals("", bridge.memeSharedSoundSummary(tagsJson.replace(":sound:", ":template:"), content))
+        assertEquals("", bridge.memeSharedSoundSummary(tagsJson.replace("CC-BY-4.0", "bitz/all-reserved"), content))
+        assertEquals("", bridge.memeSharedSoundSummary(tagsJson, "not json"))
+    }
+
+    @Test
+    fun memeSharedSoundIngestCheckMirrorsTheContractGate() {
+        assertTrue(bridge.memeSharedSoundIngestCheck(12_000L, 1_000L))
+        assertFalse(bridge.memeSharedSoundIngestCheck(16_000L, 1_000L))
+        assertFalse(bridge.memeSharedSoundIngestCheck(1_000L, 9_000_000L))
+    }
+
+    @Test
+    fun memeSharedSoundEventIdAndPublishMessageStayInLockstep() {
+        val author = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        val sha = "9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a"
+        val url = "https://blossom.example/b/$sha.webm"
+        val id = bridge.memeSharedSoundEventId(
+            authorPubkey = author, soundId = "raid", label = "Raid", url = url,
+            sha256Hex = sha, license = "CC0-1.0", durationSec = 9,
+            mime = "audio/webm", topicsCsv = "meme, gaming", nowSeconds = 1_700_000_000L,
+        )
+        assertTrue(id != null && id.length == 64)
+        val frame = bridge.memeSharedSoundPublishMessage(
+            authorPubkey = author, soundId = "raid", label = "Raid", url = url,
+            sha256Hex = sha, license = "CC0-1.0", durationSec = 9,
+            mime = "audio/webm", topicsCsv = "meme, gaming",
+            createdAtSeconds = 1_700_000_000L, signatureHex = "ab".repeat(64),
+        )!!
+        assertTrue(frame.contains("\"kind\":30078"), frame)
+        assertTrue(frame.contains("\"id\":\"$id\""), frame)
+        // Contract violation → no id, no frame (never sign junk).
+        assertNull(
+            bridge.memeSharedSoundEventId(
+                authorPubkey = author, soundId = "raid", label = "Raid", url = url,
+                sha256Hex = sha, license = "bitz/all-reserved", durationSec = 9,
+                mime = "audio/webm", nowSeconds = 1_700_000_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun memeSharedSoundLibrarySeamsRoundTripAndEvict() {
+        val sha = "9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a"
+        val entryJson = """{"id":"s1","label":"S","url":"","sha256":"$sha","license":"CC0-1.0","durationMs":9000,"savedAtMs":1,"src":"","author":""}"""
+        val added = bridge.memeSharedSoundLibraryAdd("", entryJson)
+        val roundTrip = bridge.memeSharedSoundLibraryEncode(added)
+        assertEquals(added, roundTrip)
+        assertTrue(bridge.memeSharedSoundLibraryDecode(added).contains("\"id\":\"s1\""))
+        assertEquals("", bridge.memeSharedSoundLibraryDecode("junk"))
+        // Junk entry → index unchanged.
+        assertEquals(added, bridge.memeSharedSoundLibraryAdd(added, "not json"))
+    }
 
     private companion object {
         // Verbatim relay frames from contracts/nostr/fixtures/verification-vectors.json.

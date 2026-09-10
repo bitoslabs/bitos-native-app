@@ -30,14 +30,17 @@ data class SearchUiState(
 
 /** Local Discover scopes; Bitz remains restricted to standard media kinds. */
 enum class SearchScope(val kinds: List<Int>) {
-    GENERAL(listOf(NostrKinds.SHORT_TEXT_NOTE, NostrKinds.NORMAL_VIDEO, NostrKinds.SHORT_VIDEO)),
+    /** Web `DISCOVER_CONTENT_KINDS` parity: text + all four media kinds. */
+    GENERAL(NostrKinds.feedKinds),
     BITZ_MEDIA(space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS),
 }
 
 /**
- * Local Discover search over the normal verified relay stream. It intentionally
- * does not create a NIP-50 REQ: relay search support varies and every result
- * must come from content the app has already received and verified.
+ * Discover search over the verified relay stream. Each debounced query
+ * broadcasts one multi-filter REQ (NIP-50 `search` + NIP-01 `#t` + bounded
+ * recent-sample fallback — web discover parity), so relays without NIP-50
+ * still deliver matchable events; every result must still pass
+ * [SearchResults.matches] on content the app has received and verified.
  */
 class SearchRepository(
     private val scope: CoroutineScope,
@@ -139,21 +142,19 @@ class SearchRepository(
         activeQuery = query
         activeScope = searchScope
 
-        // NIP-01 hashtag recall: `#` has no defined meaning in a NIP-50
-        // search string, so `#tag` queries broadcast the standard `#t`
-        // filter instead — single-letter tag filters are indexed by every
-        // conforming relay. Results still flow through the verified stream
-        // and `SearchResults.matches` (local search stays verify-first);
-        // free-text recall remains local-only (NIP-50 support varies).
-        SearchResults.queryTag(query)?.let { tag ->
-            subscriptionCounter += 1
-            SearchResults.tagRequest(
-                subscriptionId = "bitos-search-$subscriptionCounter",
-                tag = tag,
-                kinds = searchScope.kinds,
-                limit = 50,
-            )?.let(pool::broadcast)
-        }
+        // Web discover parity: one multi-filter REQ — the NIP-50 `search`
+        // filter for relays that support it, the NIP-01 `#t` filter for
+        // indexed hashtag recall (the only filter for `#tag` queries, since
+        // NIP-50 leaves `#` undefined in search strings), and a bounded
+        // recent sample so relays without NIP-50 still deliver matchable
+        // events. Results flow through the verified stream and
+        // `SearchResults.matches` — local search stays verify-first.
+        subscriptionCounter += 1
+        SearchResults.relaySearchRequest(
+            subscriptionId = "bitos-search-$subscriptionCounter",
+            query = query,
+            kinds = searchScope.kinds,
+        )?.let(pool::broadcast)
 
         // Resolve the search-in-progress state after a settling window.
         settleJob = scope.launch {

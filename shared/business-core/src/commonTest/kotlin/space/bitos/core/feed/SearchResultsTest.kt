@@ -101,4 +101,58 @@ class SearchResultsTest {
         assertEquals(null, SearchResults.tagRequest("sub4", "a b", listOf(1), 50))
         assertEquals(null, SearchResults.tagRequest("sub5", "tag", emptyList(), 50))
     }
+
+    @Test
+    fun relaySearchRequestBuildsWebParityFilters() {
+        // Free text: NIP-50 `search` (query as typed) + `#t` (lowercased
+        // term doubles as the tag) + recent-sample fallback, OR'd in one REQ.
+        val kinds = listOf(1, 20, 21, 22, 34235, 34236)
+        assertEquals(
+            """["REQ","s1",""" +
+                """{"kinds":[1,20,21,22,34235,34236],"search":"LaoStr","limit":180},""" +
+                """{"kinds":[1,20,21,22,34235,34236],"#t":["laostr"],"limit":180},""" +
+                """{"kinds":[1,20,21,22,34235,34236],"limit":240}]""",
+            SearchResults.relaySearchRequest("s1", "LaoStr", kinds),
+        )
+    }
+
+    @Test
+    fun relaySearchRequestSkipsNip50ForHashtagQueries() {
+        // `#` is undefined in NIP-50 search strings: hashtag queries carry
+        // only the indexed `#t` filter plus the fallback sample.
+        assertEquals(
+            """["REQ","s2",""" +
+                """{"kinds":[1],"#t":["laostr"],"limit":180},""" +
+                """{"kinds":[1],"limit":240}]""",
+            SearchResults.relaySearchRequest("s2", " #LaoStr ", listOf(1)),
+        )
+    }
+
+    @Test
+    fun relaySearchRequestDropsTagFilterForMultiWordQueries() {
+        // Multi-word terms cannot index as a single `t` tag; recall rides on
+        // the NIP-50 filter plus the fallback sample.
+        assertEquals(
+            """["REQ","s3",""" +
+                """{"kinds":[1],"search":"two words","limit":180},""" +
+                """{"kinds":[1],"limit":240}]""",
+            SearchResults.relaySearchRequest("s3", "two words", listOf(1)),
+        )
+    }
+
+    @Test
+    fun relaySearchRequestBoundsInputs() {
+        assertEquals(null, SearchResults.relaySearchRequest("s4", "   ", listOf(1)))
+        assertEquals(null, SearchResults.relaySearchRequest("s5", "q".repeat(SearchResults.MAX_QUERY_LENGTH + 1), listOf(1)))
+        assertEquals(null, SearchResults.relaySearchRequest("s6", "laostr", emptyList()))
+        assertEquals(null, SearchResults.relaySearchRequest("s7", "laostr", listOf(99_999)))
+        // Invalid 16-bit kinds are dropped, not fatal.
+        assertEquals(
+            """["REQ","s8",""" +
+                """{"kinds":[1],"search":"laostr","limit":180},""" +
+                """{"kinds":[1],"#t":["laostr"],"limit":180},""" +
+                """{"kinds":[1],"limit":240}]""",
+            SearchResults.relaySearchRequest("s8", "laostr", listOf(1, 99_999)),
+        )
+    }
 }

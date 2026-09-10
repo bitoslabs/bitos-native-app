@@ -261,6 +261,10 @@ final class MemeEditorStore {
         var label: String
         /// Loop to fill the timeline when shorter (TikTok semantics).
         var loop: Bool = false
+        /// Borrowed-sound provenance (`src`/`author` on the wire) — kept
+        /// through re-applies so tweaks never drop credit.
+        var sourceEventId: String = ""
+        var authorPubkey: String = ""
     }
 
     private(set) var soundtrackRow: SoundtrackRow?
@@ -325,6 +329,7 @@ final class MemeEditorStore {
                 sourceEventId: sourceEventId,
                 author: author
             )
+            persistSoundToLibrary()
             setNotice(nil)
         }
     }
@@ -344,6 +349,7 @@ final class MemeEditorStore {
         soundtrackData = data
         soundtrackPcm = pcm
         soundtrackUrl = url
+        persistSoundToLibrary()
     }
 
     /// Wave D re-attach (trending rail): the artifact is ALREADY uploaded —
@@ -373,6 +379,7 @@ final class MemeEditorStore {
         if !sourceEventId.isEmpty { row["src"] = sourceEventId }
         if !author.isEmpty { row["author"] = author }
         apply(commandJson: Self.encode(row))
+        persistSoundToLibrary()
     }
 
     func setSoundtrackVolume(_ volume: Float) {
@@ -387,8 +394,297 @@ final class MemeEditorStore {
             offsetMs: row.offsetMs,
             url: row.url,
             label: row.label,
+            sourceEventId: row.sourceEventId.isEmpty ? nil : row.sourceEventId,
+            author: row.authorPubkey.isEmpty ? nil : row.authorPubkey,
             loop: row.loop
         )
+    }
+
+    // MARK: - Shared-sound library + publish-your-own (MST-047 W4b)
+
+    /// Publish-your-own outcome (busy/message/url).
+    struct SharedSoundPublishUiState: Equatable {
+        var busy = false
+        var message: String?
+        var url: String?
+        init(busy: Bool = false, message: String? = nil, url: String? = nil) {
+            self.busy = busy
+            self.message = message
+            self.url = url
+        }
+    }
+
+    private let soundLibrary = SharedSoundLibraryStore()
+    private var lastSavedLibrarySha: String?
+    private(set) var soundPublishState = SharedSoundPublishUiState()
+
+    /// Library rows for the Sound tool (offline re-attach).
+    var soundLibraryEntries: [SharedSoundLibraryStore.Entry] { soundLibrary.entries }
+
+    /// Auto-saves the attached soundtrack (dedup by sha id; ingest-gated
+    /// ≤ 15 s / ≤ 8 MB — junk never reaches disk). Called from the attach
+    /// choke points, not per tweak.
+    private func persistSoundToLibrary() {
+        guard let row = soundtrackRow, let data = soundtrackData,
+              row.sha256 != lastSavedLibrarySha else { return }
+        if soundLibrary.save(
+            id: String(row.sha256.prefix(16)),
+            label: row.label.isEmpty ? "Original sound" : row.label,
+            url: row.url,
+            sha256: row.sha256,
+            license: "",
+            durationMs: row.durationMs,
+            sourceEventId: row.sourceEventId,
+            authorPubkey: row.authorPubkey,
+            audio: data
+        ) {
+            lastSavedLibrarySha = row.sha256
+        }
+    }
+
+    /// URL re-attach (trending / shared-sheet "Use"): the URL IS the
+    /// artifact — bounded download, hash-verify, decode, attach with the
+    /// URL pre-filled so publish stamps it WITHOUT re-uploading (Wave D
+    /// semantics). Named failures surface as a notice/export failure.
+    func attachAudioFromUrl(
+        mediaUrl: String,
+        sha256: String,
+        label: String,
+        sourceEventId: String,
+        author: String
+    ) {
+        guard let url = URL(string: mediaUrl),
+              url.scheme == "https" || url.host == "localhost" || url.host == "127.0.0.1" else {
+            setNotice("Sound source URL is not loadable")
+            return
+        }
+        let expected = sha256.lowercased()
+        guard expected.count == 64 else {
+            setNotice("That sound row is missing its content hash")
+            return
+        }
+        if soundtrackRow != nil {
+            setNotice("Remove the current soundtrack first")
+            return
+        }
+        setNotice("Loading sound…")
+        Task { @MainActor in
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard data.count <= 64 * 1024 * 1024 else {
+                    throw RemixSourceError(message: "source over 64 MiB")
+                }
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                guard digest == expected else {
+                    setNotice(nil)
+                    setExportFailure("Soundtrack hash mismatch — nothing was loaded")
+                    return
+                }
+                guard let pcm = MemeVideoSoundIos.decodePcm(data: data) else {
+                    setNotice(nil)
+                    setExportFailure("That sound could not be decoded on this device")
+                    return
+                }
+                let rate = max(1, MemeSoundMix.shared.BED_RATE)
+                let durationMs = Int64(Double(pcm.count) / Double(rate) * 1000)
+                let sessionUrl = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("meme-sound-session-\(UUID().uuidString).m4a")
+                try? data.write(to: sessionUrl)
+                switchModeToVideo()
+                restoreReattachedSoundtrack(
+                    data: data, pcm: pcm, url: sessionUrl,
+                    mediaUrl: mediaUrl, sha256: expected, durationMs: durationMs,
+                    sourceEventId: sourceEventId, author: author,
+                    label: label.isEmpty ? "Original sound" : "Original sound · \(label)"
+                )
+                setNotice(nil)
+            } catch {
+                setNotice(nil)
+                setExportFailure("Sound source could not be loaded")
+            }
+        }
+    }
+
+    /// Re-attaches from the local library: local bytes, sha-verified, no
+    /// network. Entry provenance (if any) rides the wire for the publish
+    /// tags; a URL-carrying entry re-attaches without re-upload.
+    func attachLibrarySound(_ entry: SharedSoundLibraryStore.Entry) {
+        guard isVideoMode else { return }
+        guard let bytes = soundLibrary.bytes(id: entry.id) else {
+            setNotice("That saved sound's audio is missing")
+            return
+        }
+        extractingSound = true
+        Task { @MainActor in
+            defer { extractingSound = false }
+            let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            guard digest == entry.sha256 else {
+                setNotice("Saved sound failed its hash check — nothing was loaded")
+                return
+            }
+            guard let pcm = MemeVideoSoundIos.decodePcm(data: bytes) else {
+                setNotice("That saved sound could not be decoded on this device")
+                return
+            }
+            let rate = max(1, MemeSoundMix.shared.BED_RATE)
+            let durationMs = Int64(Double(pcm.count) / Double(rate) * 1000)
+            let sessionUrl = FileManager.default.temporaryDirectory
+                .appendingPathComponent("meme-sound-session-\(UUID().uuidString).m4a")
+            try? bytes.write(to: sessionUrl)
+            restoreReattachedSoundtrack(
+                data: bytes, pcm: pcm, url: sessionUrl,
+                mediaUrl: entry.url, sha256: entry.sha256, durationMs: durationMs,
+                sourceEventId: entry.sourceEventId,
+                author: entry.authorPubkey,
+                label: entry.label.isEmpty ? "Original sound" : entry.label
+            )
+            persistSoundToLibrary()
+            setNotice(nil)
+        }
+    }
+
+    /// Publish-your-own shared sound: audio uploads hash-verified FIRST,
+    /// then the kind-30078 event composes and signs with the real URL
+    /// (never sign before upload). Named failures surface in state.
+    func publishSharedSound(
+        label: String,
+        license: String,
+        description: String,
+        identity: IdentityStore,
+        publisher: NotePublisher,
+        bridge: BusinessCoreBridge
+    ) {
+        guard !soundPublishState.busy,
+              let row = soundtrackRow, let data = soundtrackData else { return }
+        guard row.durationMs > 0, row.durationMs <= 15_000 else {
+            soundPublishState = SharedSoundPublishUiState(
+                message: "Only sounds ≤ 15 s publish — this one is \(row.durationMs / 1_000)s."
+            )
+            return
+        }
+        publisher.dismiss()
+        soundPublishState = SharedSoundPublishUiState(busy: true)
+        Task { @MainActor in
+            do {
+                let uploaded = try await BlossomUploader(bridge: bridge).upload(
+                    bytes: data, mimeType: "audio/mp4", identity: identity,
+                    serverUrl: "https://blossom.primal.net"
+                )
+                let slug = label.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
+                    .reduce(into: "") { result, character in
+                        if !(result.isEmpty && character == "-") { result.append(character) }
+                    }
+                    .prefix(40)
+                let soundId = (slug.isEmpty ? "sound" : String(slug)) + "-" + uploaded.hash.prefix(6)
+                await publisher.publishSharedSoundNote(
+                    soundId: soundId,
+                    label: label,
+                    url: uploaded.url,
+                    hash: uploaded.hash,
+                    license: license,
+                    durationSec: Int(row.durationMs / 1_000),
+                    mime: "audio/mp4",
+                    description: description.isEmpty ? nil : description
+                )
+                switch publisher.result {
+                case .published:
+                    soundPublishState = SharedSoundPublishUiState(
+                        message: "Shared — the sound is live on the rail", url: uploaded.url
+                    )
+                    // The published artifact now has a URL — refresh the
+                    // library entry so the next re-attach skips upload.
+                    lastSavedLibrarySha = nil
+                    persistSoundToLibrary()
+                case .signingRefused:
+                    soundPublishState = SharedSoundPublishUiState(message: "Signing was refused")
+                case .invalid:
+                    soundPublishState = SharedSoundPublishUiState(
+                        message: "Those sound details were rejected — check the license, label and length"
+                    )
+                default:
+                    soundPublishState = SharedSoundPublishUiState(message: "No relay accepted the sound event")
+                }
+            } catch let failure as BlossomUploader.UploadFailure {
+                soundPublishState = SharedSoundPublishUiState(message: failure.message)
+            } catch {
+                soundPublishState = SharedSoundPublishUiState(message: "The sound could not be published")
+            }
+        }
+    }
+
+    func dismissSharedSoundPublish() {
+        soundPublishState = SharedSoundPublishUiState()
+    }
+
+    /// Publish-your-own template outcome (busy/message).
+    struct SharedTemplatePublishUiState: Equatable {
+        var busy = false
+        var message: String?
+        init(busy: Bool = false, message: String? = nil) {
+            self.busy = busy
+            self.message = message
+        }
+    }
+
+    private(set) var templatePublishState = SharedTemplatePublishUiState()
+
+    /// True when at least one non-image caption overlay exists — the
+    /// publish-your-own template gate (MST-045 write path).
+    var hasPublishableCaption: Bool {
+        overlays.contains { !$0.text.isEmpty }
+    }
+
+    /// Publish-your-own shared template (MST-045 write path): PURE DATA —
+    /// no upload, no media. The current overlays ride the project wire;
+    /// the shared composer converts them and the rail's parse
+    /// round-trips what this signs.
+    func publishSharedTemplate(
+        label: String,
+        icon: String,
+        priceSats: Int64,
+        category: String,
+        identity: IdentityStore,
+        publisher: NotePublisher,
+        bridge: BusinessCoreBridge
+    ) {
+        guard !templatePublishState.busy else { return }
+        publisher.dismiss()
+        templatePublishState = SharedTemplatePublishUiState(busy: true)
+        Task { @MainActor in
+            let slug = label.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
+                .reduce(into: "") { result, character in
+                    if !(result.isEmpty && character == "-") { result.append(character) }
+                }
+                .prefix(40)
+            let templateId = (slug.isEmpty ? "template" : String(slug))
+                + "-\(Int64(Date.now.timeIntervalSince1970) % 100_000)"
+            await publisher.publishSharedTemplateNote(
+                templateId: templateId,
+                label: label,
+                icon: icon,
+                priceSats: priceSats,
+                category: category,
+                projectJson: projectJson
+            )
+            switch publisher.result {
+            case .published:
+                templatePublishState = SharedTemplatePublishUiState(
+                    message: "Shared — the template is live on the rail"
+                )
+            case .signingRefused:
+                templatePublishState = SharedTemplatePublishUiState(message: "Signing was refused")
+            case .invalid:
+                templatePublishState = SharedTemplatePublishUiState(
+                    message: "Those template details were rejected — check the label, icon and price"
+                )
+            default:
+                templatePublishState = SharedTemplatePublishUiState(message: "No relay accepted the template event")
+            }
+        }
+    }
+
+    func dismissSharedTemplatePublish() {
+        templatePublishState = SharedTemplatePublishUiState()
     }
 
     func removeSoundtrack() {
@@ -429,6 +725,8 @@ final class MemeEditorStore {
             offsetMs: row.offsetMs,
             url: row.url,
             label: row.label,
+            sourceEventId: row.sourceEventId.isEmpty ? nil : row.sourceEventId,
+            author: row.authorPubkey.isEmpty ? nil : row.authorPubkey,
             loop: loop
         )
     }
@@ -449,7 +747,9 @@ final class MemeEditorStore {
             offsetMs: (sound["offset"] as? NSNumber)?.int64Value ?? 0,
             volume: (sound["vol"] as? NSNumber)?.floatValue ?? 1,
             label: (sound["label"] as? String) ?? "",
-            loop: (sound["loop"] as? Bool) ?? false
+            loop: (sound["loop"] as? Bool) ?? false,
+            sourceEventId: (sound["src"] as? String) ?? "",
+            authorPubkey: (sound["author"] as? String) ?? ""
         )
     }
 
@@ -3012,7 +3312,14 @@ struct MemeEditorView: View {
             guard !Task.isCancelled else { return }
             store.advanceGifPreview()
         }
-        .onAppear { seedEditorSession() }
+        .onAppear {
+            seedEditorSession()
+            if editorSoundStore == nil {
+                let store = SharedSoundStore(pool: environment.relayPool)
+                store.start()
+                editorSoundStore = store
+            }
+        }
         // M4b: fetch the remix source media off-thread, import it as the
         // session's media, then clone the source layout onto the project.
         .task(id: "remix-seed") { await seedRemixSession() }
@@ -3242,6 +3549,196 @@ struct MemeEditorView: View {
         }
         .sheet(isPresented: $showGifStickerPicker) { gifStickerContent }
         .sheet(isPresented: $showGifBrowse) { gifBrowseContent }
+        .sheet(isPresented: $showPublishSoundDialog) { publishSoundDialog }
+        .sheet(isPresented: $showPublishTemplateDialog) { publishTemplateDialog }
+        .fullScreenCover(isPresented: $showTrendingInEditor) {
+            TrendingSoundsView(
+                notes: environment.feedStore.notes,
+                onClose: { showTrendingInEditor = false },
+                onUseSound: { row in
+                    showTrendingInEditor = false
+                    store.attachAudioFromUrl(
+                        mediaUrl: row.url,
+                        sha256: row.sha256,
+                        label: "Trending",
+                        sourceEventId: row.sourceEventId ?? "",
+                        author: ""
+                    )
+                }
+            )
+        }
+    }
+
+    /// MST-045 publish-as-template dialog: pure data — no upload. Icon =
+    /// the 8-id allowlist, price = the tier set only.
+    private var publishTemplateDialog: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Label", text: $publishTemplateLabel)
+                        .onChange(of: publishTemplateLabel) { _, value in
+                            publishTemplateLabel = String(value.prefix(40))
+                        }
+                } header: {
+                    Text("Label")
+                }
+                Section {
+                    Picker("Icon", selection: $publishTemplateIcon) {
+                        ForEach(
+                            ["zap", "mine", "laugh", "fire", "rocket", "brain", "ghost", "coin"],
+                            id: \.self
+                        ) { icon in
+                            Text(templateEmoji(icon)).tag(icon)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Price", selection: $publishTemplatePrice) {
+                        Text("Free").tag(Int64(0))
+                        Text("21 sats").tag(Int64(21))
+                        Text("100 sats").tag(Int64(100))
+                        Text("500 sats").tag(Int64(500))
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("Category", selection: $publishTemplateCategory) {
+                        ForEach(
+                            ["trending", "meme", "lao", "thai", "developer", "bitcoin",
+                             "gaming", "reaction", "cinematic", "new"],
+                            id: \.self
+                        ) { category in
+                            Text(category.capitalized).tag(category)
+                        }
+                    }
+                } header: {
+                    Text("Icon · price · category")
+                }
+                if let message = store.templatePublishState.message {
+                    Section {
+                        Text(message).font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+            }
+            .navigationTitle("Publish as template")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        store.dismissSharedTemplatePublish()
+                        showPublishTemplateDialog = false
+                    }
+                    .disabled(store.templatePublishState.busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(store.templatePublishState.busy ? "Publishing…" : "Publish") {
+                        store.publishSharedTemplate(
+                            label: publishTemplateLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+                            icon: publishTemplateIcon,
+                            priceSats: publishTemplatePrice,
+                            category: publishTemplateCategory,
+                            identity: environment.identityStore,
+                            publisher: environment.notePublisher,
+                            bridge: BusinessCoreBridge()
+                        )
+                    }
+                    .disabled(
+                        store.templatePublishState.busy ||
+                            publishTemplateLabel.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
+                }
+            }
+            .onChange(of: store.templatePublishState.message) { _, message in
+                if message?.hasPrefix("Shared") == true {
+                    showPublishTemplateDialog = false
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func templateEmoji(_ id: String) -> String {
+        ["zap": "⚡", "mine": "⛏", "laugh": "😂", "fire": "🔥",
+         "rocket": "🚀", "brain": "🧠", "ghost": "👻", "coin": "🪙"][id] ?? "⚡"
+    }
+
+    /// MST-047 W4b publish-your-own dialog: license is a HARD picker —
+    /// only the three CC codes the shared contract will ingest. Upload
+    /// happens hash-verified before anything signs.
+    private var publishSoundDialog: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Label", text: $publishSoundLabel)
+                        .onChange(of: publishSoundLabel) { _, value in
+                            publishSoundLabel = String(value.prefix(40))
+                        }
+                } header: {
+                    Text("Label")
+                }
+                Section {
+                    Picker("License", selection: $publishSoundLicense) {
+                        Text("CC0 1.0 (no credit needed)").tag("CC0-1.0")
+                        Text("CC BY 4.0 (credit required)").tag("CC-BY-4.0")
+                        Text("CC BY-NC 4.0 (non-commercial)").tag("CC-BY-NC-4.0")
+                    }
+                    .pickerStyle(.inline)
+                } header: {
+                    Text("License (only open licenses ingest)")
+                }
+                Section {
+                    TextField("What is this sound?", text: $publishSoundDescription, axis: .vertical)
+                        .lineLimit(2...4)
+                        .onChange(of: publishSoundDescription) { _, value in
+                            publishSoundDescription = String(value.prefix(500))
+                        }
+                } header: {
+                    Text("Description (optional)")
+                }
+                if let row = store.soundtrackRow, row.durationMs > 15_000 {
+                    Section {
+                        Text("Only sounds ≤ 15 s publish — this one is \(row.durationMs / 1_000)s.")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.error)
+                    }
+                }
+                if let message = store.soundPublishState.message {
+                    Section {
+                        Text(message).font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+            }
+            .navigationTitle("Publish this sound")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        store.dismissSharedSoundPublish()
+                        showPublishSoundDialog = false
+                    }
+                    .disabled(store.soundPublishState.busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(store.soundPublishState.busy ? "Publishing…" : "Publish") {
+                        store.publishSharedSound(
+                            label: publishSoundLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+                            license: publishSoundLicense,
+                            description: publishSoundDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+                            identity: environment.identityStore,
+                            publisher: environment.notePublisher,
+                            bridge: BusinessCoreBridge()
+                        )
+                    }
+                    .disabled(
+                        store.soundPublishState.busy || publishSoundLabel.trimmingCharacters(in: .whitespaces).isEmpty ||
+                            (store.soundtrackRow?.durationMs ?? 0) > 15_000
+                    )
+                }
+            }
+            .onChange(of: store.soundPublishState.url) { _, url in
+                if url != nil { showPublishSoundDialog = false }
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 
     /// Pickers, observers and the trim cover (split out of the sheet chain
@@ -3523,35 +4020,15 @@ struct MemeEditorView: View {
             }
             store.switchModeToVideo()
             if soundSeed.isAudioOnly {
-                // Wave D re-attach: the URL IS the artifact — hash-verify the
-                // download, decode directly, pre-fill the URL (publish then
-                // stamps it without re-uploading).
-                guard let expected = soundSeed.sha256?.lowercased(), expected.count == 64 else {
-                    store.setNotice(nil)
-                    store.setExportFailure("That sound row is missing its content hash")
-                    return
-                }
-                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                guard digest == expected else {
-                    store.setNotice(nil)
-                    store.setExportFailure("Soundtrack hash mismatch — nothing was loaded")
-                    return
-                }
-                guard let pcm = MemeVideoSoundIos.decodePcm(data: data) else {
-                    store.setNotice(nil)
-                    store.setExportFailure("That sound could not be decoded on this device")
-                    return
-                }
-                let rate = max(1, MemeSoundMix.shared.BED_RATE)
-                let durationMs = Int64(Double(pcm.count) / Double(rate) * 1000)
-                let sessionUrl = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("meme-sound-session-\(UUID().uuidString).m4a")
-                try? data.write(to: sessionUrl)
-                store.restoreReattachedSoundtrack(
-                    data: data, pcm: pcm, url: sessionUrl,
-                    mediaUrl: soundSeed.mediaUrl, sha256: expected, durationMs: durationMs,
-                    sourceEventId: soundSeed.eventId, author: soundSeed.authorPubkey,
-                    label: soundSeed.label.isEmpty ? "Original sound" : "Original sound · \(soundSeed.label)"
+                // Wave D re-attach: the shared attach path (bounded
+                // download, hash-verify, decode, URL pre-filled).
+                store.setNotice(nil)
+                store.attachAudioFromUrl(
+                    mediaUrl: soundSeed.mediaUrl,
+                    sha256: soundSeed.sha256 ?? "",
+                    label: soundSeed.label,
+                    sourceEventId: soundSeed.eventId,
+                    author: soundSeed.authorPubkey
                 )
             } else {
                 store.attachSoundtrack(
@@ -4195,6 +4672,21 @@ struct MemeEditorView: View {
     /// "Use this sound" (MST-050 Wave B): video picker → audio extraction.
     @State private var isPickingSound = false
     @State private var soundPickItem: PhotosPickerItem?
+    // ── MST-047 W4b: publish-your-own sound dialog state ──
+    @State private var showPublishSoundDialog = false
+    @State private var publishSoundLabel = ""
+    @State private var publishSoundLicense = "CC0-1.0"
+    @State private var publishSoundDescription = ""
+    // ── MST-045 write path: publish-your-own template dialog state ──
+    @State private var showPublishTemplateDialog = false
+    @State private var publishTemplateLabel = ""
+    @State private var publishTemplateIcon = "zap"
+    @State private var publishTemplatePrice: Int64 = 0
+    @State private var publishTemplateCategory = "meme"
+    // ── Sound sheet UX (MST-047): online rail + NIP-50 search + trending ──
+    @State private var editorSoundStore: SharedSoundStore?
+    @State private var soundQuery = ""
+    @State private var showTrendingInEditor = false
 
     // ── Tray ────────────────────────────────────────────────────────────
 
@@ -4451,17 +4943,54 @@ struct MemeEditorView: View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             switch panel {
             case .meme:
-                MemePanelContent(store: store)
+                MemePanelContent(
+                    store: store,
+                    onPublishTemplate: {
+                        store.dismissSharedTemplatePublish()
+                        publishTemplateLabel = "My template"
+                        publishTemplateIcon = "zap"
+                        publishTemplatePrice = 0
+                        publishTemplateCategory = "meme"
+                        showPublishTemplateDialog = true
+                    }
+                )
             case .stickers:
                 StickerPanelContent(store: store)
             case .sound:
                 SoundPanelContent(
                     store: store,
                     hasSourceAudio: !store.isBlankVideo,
+                    online: editorSoundStore?.rows ?? [],
+                    query: soundQuery,
+                    hasTrending: environment.feedStore.notes.contains(where: { $0.soundUrl != nil }),
+                    onQueryChange: { value in
+                        soundQuery = String(value.prefix(80))
+                        editorSoundStore?.search(soundQuery)
+                    },
+                    onOpenTrending: { showTrendingInEditor = true },
+                    onUseOnlineSound: { row in
+                        store.attachAudioFromUrl(
+                            mediaUrl: row.url,
+                            sha256: row.sha256,
+                            label: row.label,
+                            sourceEventId: row.eventId,
+                            author: row.authorPubkey
+                        )
+                    },
                     onPickSound: { isPickingSound = true },
                     onOpenStudio: {
                         activePanel = nil
                         showSfx = true
+                    },
+                    onPublishSound: {
+                        publishSoundLabel = store.soundtrackRow?.label
+                            .replacingOccurrences(of: "Original sound · ", with: "") ?? "My sound"
+                        if publishSoundLabel.isEmpty || publishSoundLabel == "Original sound" {
+                            publishSoundLabel = "My sound"
+                        }
+                        publishSoundLicense = "CC0-1.0"
+                        publishSoundDescription = ""
+                        showPublishSoundDialog = true
                     }
                 )
             case .fx:
@@ -6098,6 +6627,7 @@ enum EditorPanel: String, CaseIterable, Identifiable {
 /// — one undo step for the pair, then drag/scale on the stage.
 private struct MemePanelContent: View {
     let store: MemeEditorStore
+    var onPublishTemplate: () -> Void = {}
     @State private var top = ""
     @State private var bottom = ""
     @State private var fontSlot = "impact"
@@ -6141,6 +6671,29 @@ private struct MemePanelContent: View {
             .buttonStyle(.borderedProminent)
             .tint(BitOSTheme.accent)
             .disabled(!canAdd)
+
+            // ── MST-045 write path: share the current captions as a template.
+            if store.hasPublishableCaption {
+                Button(action: onPublishTemplate) {
+                    Text(store.templatePublishState.busy
+                        ? "Publishing template…"
+                        : "Publish as template…")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                                .stroke(BitOSTheme.border, lineWidth: 1)
+                        )
+                }
+                .foregroundStyle(BitOSTheme.textPrimary)
+                .disabled(store.templatePublishState.busy)
+                if let message = store.templatePublishState.message {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+            }
         }
     }
 }
@@ -6404,8 +6957,175 @@ private struct StickerPanelContent: View {
 private struct SoundPanelContent: View {
     @Bindable var store: MemeEditorStore
     var hasSourceAudio = true
+    var online: [SharedSoundStore.Row] = []
+    var query = ""
+    var hasTrending = false
+    var onQueryChange: (String) -> Void = { _ in }
+    var onOpenTrending: () -> Void = {}
+    var onUseOnlineSound: (SharedSoundStore.Row) -> Void = { _ in }
     var onPickSound: () -> Void = {}
     var onOpenStudio: () -> Void
+    var onPublishSound: () -> Void = {}
+
+    @State private var localQuery = ""
+
+    @ViewBuilder private var searchSection: some View {
+        TextField("Search sounds", text: $localQuery)
+            .textFieldStyle(.roundedBorder)
+            .onChange(of: localQuery) { _, value in onQueryChange(value) }
+            .onChange(of: query) { _, value in localQuery = value }
+            .submitLabel(.search)
+    }
+
+    @ViewBuilder private var trendingSection: some View {
+        // ── Trending (§3.21): the ranked rail over the live feed.
+        if hasTrending {
+            Button(action: onOpenTrending) {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    Text("🔥").font(.title3)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Trending sounds")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(BitOSTheme.textPrimary)
+                        Text("Most-borrowed ♪ in your feed — 3-day half-life")
+                            .font(.caption2)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                    Spacer()
+                    Text("Open")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.accent)
+                }
+                .padding(BitOSTheme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                        .fill(BitOSTheme.accent.opacity(0.15))
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder private var onlineSection: some View {
+        // ── Shared sounds (kind-30078 online rail; query-filtered) ──
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let rows = online.filter { row in
+            needle.isEmpty ||
+                row.label.lowercased().contains(needle) ||
+                row.license.lowercased().contains(needle)
+        }.prefix(8)
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                Text("Shared sounds")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textSecondary)
+                ForEach(Array(rows)) { row in
+                    Button {
+                        onUseOnlineSound(row)
+                    } label: {
+                        HStack(spacing: BitOSTheme.Spacing.sm) {
+                            Text("♪").font(.title3)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(row.label)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                    .foregroundStyle(BitOSTheme.textPrimary)
+                                Text(row.durationMs > 0
+                                     ? "\(row.durationMs / 1000)s · \(row.license)"
+                                     : row.license)
+                                    .font(.caption2)
+                                    .foregroundStyle(BitOSTheme.textSecondary)
+                            }
+                            Spacer()
+                            Text("Use")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BitOSTheme.accent)
+                        }
+                        .padding(BitOSTheme.Spacing.sm)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                                .fill(BitOSTheme.surface)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var librarySection: some View {
+        // ── MST-047 W4b: the local library (offline re-attach) ──
+        if store.soundtrackRow == nil && !store.extractingSound {
+            let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+            let entries = store.soundLibraryEntries.filter { entry in
+                needle.isEmpty || entry.label.lowercased().contains(needle)
+            }.prefix(8)
+            if !entries.isEmpty {
+                VStack(alignment: .leading, spacing: BitOSTheme.Spacing.xs) {
+                    Text("From my library")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    ForEach(Array(entries)) { entry in
+                        libraryRow(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    private func libraryRow(_ entry: SharedSoundLibraryStore.Entry) -> some View {
+        Button {
+            store.attachLibrarySound(entry)
+        } label: {
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Text("♪").font(.title3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.label)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text("\(entry.durationMs / 1000)s · saved for offline use")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                Spacer()
+                Text("Attach")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+            .padding(BitOSTheme.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                    .fill(BitOSTheme.surface)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var publishSection: some View {
+        // ── MST-047 W4b: publish-your-own (sound attached → share) ──
+        if store.soundtrackRow != nil && !store.extractingSound {
+            Button(action: onPublishSound) {
+                Text(store.soundPublishState.busy
+                    ? "Publishing the sound…"
+                    : "Publish this sound…")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                            .stroke(BitOSTheme.border, lineWidth: 1)
+                    )
+            }
+            .foregroundStyle(BitOSTheme.textPrimary)
+            .disabled(store.soundPublishState.busy)
+            if let message = store.soundPublishState.message {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
@@ -6513,7 +7233,12 @@ private struct SoundPanelContent: View {
                         )
                 }
                 .foregroundStyle(BitOSTheme.textPrimary)
+                searchSection
+                trendingSection
+                onlineSection
+                librarySection
             }
+            publishSection
         }
     }
 }

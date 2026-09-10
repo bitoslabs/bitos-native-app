@@ -1,0 +1,15 @@
+{
+  "kind": 30078,
+  "tags": [
+    ["d", "com.bitos.bitz:sound:raid-shadow-meme"],
+    ["url", "https://blossom.example/b/9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a.webm"],
+    ["x", "9f2c4a1b7e5d3a6f8c0b2d4e6f8a0c2b4d6e8f0a2c4b6d8e0f2a4c6b8d0e2f4a"],
+    ["license", "CC-BY-4.0"],
+    ["attribution", "sound of dj satsoshi"],
+    ["t", "meme"],
+    ["t", "gaming"],
+    ["image", "https://blossom.example/b/cover.jpg"],
+    ["p", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
+  ],
+  "content": "{\"schema\":\"com.bitos.bitz.sound\",\"version\":1,\"label\":\"Raid Shadow Meme\",\"durationSec\":12,\"mime\":\"audio/webm\",\"description\":\"The one sound every gaming meme needs\"}"
+}

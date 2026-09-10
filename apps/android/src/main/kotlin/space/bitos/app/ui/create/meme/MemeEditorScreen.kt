@@ -889,6 +889,433 @@ fun MemeEditorScreen(
             exportStatus = null
         }
     }
+
+    // ── MST-047 W4b: local library + publish-your-own ───────────────
+    val soundLibrary = remember { SharedSoundLibraryStore(java.io.File(context.filesDir, "studio")) }
+    var soundLibraryRevision by remember { mutableStateOf(0) }
+    val libraryEntries = remember(soundLibraryRevision) { soundLibrary.list() }
+    var showPublishSound by remember { mutableStateOf(false) }
+    var publishSoundLabel by remember { mutableStateOf("") }
+    var publishSoundLicense by remember { mutableStateOf("CC0-1.0") }
+    var publishSoundDescription by remember { mutableStateOf("") }
+    val sharedSoundPublishState = mediaPublishViewModel?.sharedSoundPublish
+        ?.collectAsStateWithLifecycle()?.value
+
+    // ── Sound sheet UX (MST-047): online rail + NIP-50 search + the
+    // trending overlay — one sheet, every sound source.
+    val editorSoundStore = androidx.compose.runtime.remember(context) {
+        val app = context.applicationContext as space.bitos.app.BitOsApplication
+        space.bitos.app.data.feed.SharedSoundStore(app.applicationScope, app.memeTemplatePool)
+    }
+    val onlineSoundRows by editorSoundStore.rows.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { editorSoundStore.subscribe() }
+    var soundQuery by remember { mutableStateOf("") }
+    androidx.compose.runtime.LaunchedEffect(soundQuery) { editorSoundStore.search(soundQuery) }
+    var showTrendingSounds by remember { mutableStateOf(false) }
+    val feedNotes by remember(context) {
+        (context.applicationContext as space.bitos.app.BitOsApplication).feedRepository.state
+    }.collectAsStateWithLifecycle()
+
+    // ── MST-045 write path: publish-your-own template state ──
+    var showPublishTemplate by remember { mutableStateOf(false) }
+    var publishTemplateLabel by remember { mutableStateOf("") }
+    var publishTemplateIcon by remember { mutableStateOf("zap") }
+    var publishTemplatePrice by remember { mutableStateOf(0L) }
+    var publishTemplateCategory by remember { mutableStateOf("meme") }
+    val sharedTemplatePublishState = mediaPublishViewModel?.sharedTemplatePublish
+        ?.collectAsStateWithLifecycle()?.value
+
+    // Auto-save every attached soundtrack to the local library (dedup by
+    // sha id, ingest-gated ≤ 15 s / ≤ 8 MB — junk never reaches disk).
+    LaunchedEffect(state.project.soundtrack?.sha256, soundtrackM4a) {
+        val sound = state.project.soundtrack ?: return@LaunchedEffect
+        val bytes = soundtrackM4a ?: return@LaunchedEffect
+        if (!space.bitos.core.studio.SharedSoundContract.ingestCheck(
+                sound.durationMs, bytes.size.toLong(),
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        if (soundLibrary.save(
+                space.bitos.core.studio.SharedSoundLibrary.Entry(
+                    id = sound.sha256.take(16),
+                    label = sound.label.takeIf { it.isNotBlank() } ?: "Original sound",
+                    url = sound.url,
+                    sha256 = sound.sha256,
+                    license = "",
+                    durationMs = sound.durationMs,
+                    savedAtMs = System.currentTimeMillis(),
+                    sourceEventId = sound.sourceNoteId ?: "",
+                    authorPubkey = sound.sourceAuthorPubkey ?: "",
+                ),
+                audioBytes = bytes,
+            )
+        ) {
+            soundLibraryRevision += 1
+        }
+    }
+
+    /** Re-attach from the library: local bytes, sha-verified, no network. */
+    fun attachFromLibrary(entry: space.bitos.core.studio.SharedSoundLibrary.Entry) {
+        val bytes = soundLibrary.bytes(entry.id)
+        if (bytes == null) {
+            exportStatus = "That saved sound's audio is missing"
+            return
+        }
+        extractingSound = true
+        scope.launch {
+            val digest = withContext(Dispatchers.IO) {
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+            }
+            if (digest != entry.sha256) {
+                extractingSound = false
+                exportStatus = "Saved sound failed its hash check — nothing was loaded"
+                return@launch
+            }
+            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, bytes) }
+            extractingSound = false
+            if (decoded == null) {
+                exportStatus = "That saved sound could not be decoded here"
+                return@launch
+            }
+            soundtrackM4a = bytes
+            soundtrackPcm = decoded
+            val rate = decoded.second.coerceAtLeast(1)
+            state.setSoundtrack(
+                space.bitos.core.studio.MemeSoundtrack(
+                    url = entry.url,
+                    sha256 = entry.sha256,
+                    durationMs = decoded.first.size.toLong() * 1_000L / rate,
+                    sourceNoteId = entry.sourceEventId.takeIf { it.isNotBlank() },
+                    sourceAuthorPubkey = entry.authorPubkey.takeIf { it.isNotBlank() },
+                    label = entry.label,
+                ),
+            )
+            exportStatus = null
+        }
+    }
+
+    /**
+     * Trending/shared-sheet re-attach: the URL IS the artifact — bounded
+     * download, hash-verify, decode, attach with the URL pre-filled so
+     * publish stamps it WITHOUT re-uploading (Wave D semantics).
+     */
+    fun attachSoundFromUrl(
+        mediaUrl: String,
+        expectedSha256: String,
+        label: String,
+        eventId: String,
+        authorPubkey: String,
+    ) {
+        val expected = expectedSha256.lowercase()
+        if (expected.length != 64) {
+            exportStatus = "That sound row is missing its content hash"
+            return
+        }
+        val url = runCatching { java.net.URI(mediaUrl).toURL() }.getOrNull()
+        if (url == null || (url.protocol != "https" && url.host != "localhost" && url.host != "127.0.0.1")) {
+            exportStatus = "Sound source URL is not loadable"
+            return
+        }
+        if (state.project.soundtrack != null) {
+            exportStatus = "Remove the current soundtrack first"
+            return
+        }
+        seedingProgress = 0 to 1
+        scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    try {
+                        connection.connectTimeout = 15_000
+                        connection.readTimeout = 30_000
+                        check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                        connection.inputStream.use { input ->
+                            val out = java.io.ByteArrayOutputStream()
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                out.write(buffer, 0, read)
+                                check(out.size() <= space.bitos.core.model.Blossom.MAX_FILE_BYTES) { "source too large" }
+                            }
+                            out.toByteArray()
+                        }
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+                val digest = withContext(Dispatchers.IO) {
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                        .joinToString("") { "%02x".format(it) }
+                }
+                if (digest != expected) {
+                    exportStatus = "Soundtrack hash mismatch — nothing was loaded"
+                    return@launch
+                }
+                val decodedAudio = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, bytes) }
+                if (decodedAudio == null) {
+                    exportStatus = "That sound could not be decoded here"
+                    return@launch
+                }
+                val rate = decodedAudio.second.coerceAtLeast(1)
+                state.switchMode(MemeMode.VIDEO)
+                soundtrackM4a = bytes
+                soundtrackPcm = decodedAudio
+                state.setSoundtrack(
+                    space.bitos.core.studio.MemeSoundRules.normalize(
+                        space.bitos.core.studio.MemeSoundtrack(
+                            url = mediaUrl,
+                            sha256 = expected,
+                            durationMs = decodedAudio.first.size.toLong() * 1_000L / rate,
+                            sourceNoteId = eventId.takeIf { it.isNotBlank() },
+                            sourceAuthorPubkey = authorPubkey.takeIf { it.isNotBlank() },
+                            label = label.takeIf { it.isNotBlank() }?.let { "Original sound · $it" } ?: "Original sound",
+                        ),
+                    ),
+                )
+                exportStatus = null
+            } catch (error: IllegalStateException) {
+                exportStatus = "Sound source could not be loaded (${error.message})"
+            } finally {
+                seedingProgress = null
+            }
+        }
+    }
+    // Publish-your-own dialog (MST-047 W4b): license is a HARD picker —
+    // only the three CC codes the shared contract will ingest.
+    if (showPublishSound) {
+        val soundtrackNow = state.project.soundtrack
+        AlertDialog(
+            onDismissRequest = { if (sharedSoundPublishState?.busy != true) showPublishSound = false },
+            title = { Text("Publish this sound") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    OutlinedTextField(
+                        value = publishSoundLabel,
+                        onValueChange = { publishSoundLabel = it.take(40) },
+                        label = { Text("Label") },
+                        singleLine = true,
+                    )
+                    Text("License (only open licenses ingest)", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        listOf("CC0-1.0", "CC-BY-4.0", "CC-BY-NC-4.0").forEach { code ->
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (publishSoundLicense == code) BitOSColors.primary else BitOSColors.surface,
+                                modifier = Modifier.clickable(onClickLabel = code) { publishSoundLicense = code },
+                            ) {
+                                Text(
+                                    code,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (publishSoundLicense == code) androidx.compose.ui.graphics.Color.White else BitOSColors.textPrimary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = publishSoundDescription,
+                        onValueChange = { publishSoundDescription = it.take(500) },
+                        label = { Text("Description (optional)") },
+                        minLines = 2,
+                    )
+                    Text(
+                        "Uploads hash-verified, then the sound event signs — the rail credits you as the author.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                    if (soundtrackNow != null && soundtrackNow.durationMs > 15_000L) {
+                        Text(
+                            "Only sounds ≤ 15 s publish — this one is ${soundtrackNow.durationMs / 1000}s.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BitOSColors.error,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = sharedSoundPublishState?.busy != true &&
+                        publishSoundLabel.isNotBlank() &&
+                        (soundtrackNow == null || soundtrackNow.durationMs <= 15_000L),
+                    onClick = {
+                        val bytes = soundtrackM4a
+                        val sound = state.project.soundtrack
+                        if (bytes == null || sound == null) {
+                            showPublishSound = false
+                            exportStatus = "Attach a soundtrack first"
+                            return@TextButton
+                        }
+                        mediaPublishViewModel?.publishSharedSound(
+                            bytes = bytes,
+                            label = publishSoundLabel.trim(),
+                            license = publishSoundLicense,
+                            description = publishSoundDescription.trim(),
+                            durationMs = sound.durationMs,
+                        )
+                    },
+                ) {
+                    Text(
+                        if (sharedSoundPublishState?.busy == true) "Publishing…" else "Publish",
+                        color = BitOSColors.primary,
+                        fontWeight = FontWeight.W600,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = sharedSoundPublishState?.busy != true,
+                    onClick = {
+                        mediaPublishViewModel?.dismissSharedSoundPublish()
+                        showPublishSound = false
+                    },
+                ) { Text("Close") }
+            },
+        )
+    }
+    // Publish-your-own success closes the dialog once the message lands.
+    LaunchedEffect(sharedSoundPublishState?.url) {
+        if (sharedSoundPublishState?.url != null) {
+            showPublishSound = false
+        }
+    }
+
+    // Publish-as-template dialog (MST-045 write path): pure data — no
+    // upload. Icon = the 8-id allowlist; price = the tier set only.
+    if (showPublishTemplate) {
+        AlertDialog(
+            onDismissRequest = { if (sharedTemplatePublishState?.busy != true) showPublishTemplate = false },
+            title = { Text("Publish as template") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                    OutlinedTextField(
+                        value = publishTemplateLabel,
+                        onValueChange = { publishTemplateLabel = it.take(40) },
+                        label = { Text("Label") },
+                        singleLine = true,
+                    )
+                    Text("Icon", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        space.bitos.core.studio.MemeTemplateContract.ICONS.entries.forEach { (id, emoji) ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (publishTemplateIcon == id) BitOSColors.primary else BitOSColors.surface,
+                                modifier = Modifier.clickable(onClickLabel = emoji) { publishTemplateIcon = id },
+                            ) {
+                                Text(
+                                    emoji,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                    Text("Price", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                        listOf(0L, 21L, 100L, 500L).forEach { sats ->
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (publishTemplatePrice == sats) BitOSColors.primary else BitOSColors.surface,
+                                modifier = Modifier.clickable(onClickLabel = "$sats sats") { publishTemplatePrice = sats },
+                            ) {
+                                Text(
+                                    if (sats == 0L) "Free" else "$sats ⚡",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (publishTemplatePrice == sats) androidx.compose.ui.graphics.Color.White else BitOSColors.textPrimary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                    Text("Category", style = MaterialTheme.typography.labelSmall)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        space.bitos.core.studio.MemeTemplateContract.CATEGORIES.forEach { category ->
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (publishTemplateCategory == category) BitOSColors.primary else BitOSColors.surface,
+                                modifier = Modifier.clickable(onClickLabel = category) { publishTemplateCategory = category },
+                            ) {
+                                Text(
+                                    category,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (publishTemplateCategory == category) androidx.compose.ui.graphics.Color.White else BitOSColors.textPrimary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "Pure data — no upload. The current captions ride the template; the shared rail parses what this signs.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                    sharedTemplatePublishState?.message?.let { message ->
+                        Text(message, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = sharedTemplatePublishState?.busy != true && publishTemplateLabel.isNotBlank(),
+                    onClick = {
+                        mediaPublishViewModel?.publishSharedTemplate(
+                            label = publishTemplateLabel.trim(),
+                            icon = publishTemplateIcon,
+                            overlays = state.project.overlays,
+                            priceSats = publishTemplatePrice,
+                            category = publishTemplateCategory,
+                        )
+                    },
+                ) {
+                    Text(
+                        if (sharedTemplatePublishState?.busy == true) "Publishing…" else "Publish",
+                        color = BitOSColors.primary,
+                        fontWeight = FontWeight.W600,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = sharedTemplatePublishState?.busy != true,
+                    onClick = {
+                        mediaPublishViewModel?.dismissSharedTemplatePublish()
+                        showPublishTemplate = false
+                    },
+                ) { Text("Close") }
+            },
+        )
+    }
+    // Template publish success closes the dialog once the message lands.
+    LaunchedEffect(sharedTemplatePublishState?.message) {
+        if (sharedTemplatePublishState?.message?.startsWith("Shared") == true) {
+            showPublishTemplate = false
+        }
+    }
+
+    // Trending overlay (§3.21): the ranked rail over the live feed
+    // window, reusing the More-hub screen — "Use" attaches to THIS
+    // project through the hash-verified URL path (no re-upload).
+    if (showTrendingSounds) {
+        space.bitos.app.ui.more.TrendingSoundsScreen(
+            notes = feedNotes.notes,
+            onClose = { showTrendingSounds = false },
+            onUseSound = { row ->
+                showTrendingSounds = false
+                attachSoundFromUrl(
+                    mediaUrl = row.url,
+                    expectedSha256 = row.sha256,
+                    label = "Trending",
+                    eventId = row.sourceEventId ?: "",
+                    authorPubkey = "",
+                )
+            },
+        )
+    }
     // Resume: the slot's `sound` asset rehydrates the session audio. A
     // sound the session cannot hear would export SILENT while the wire
     // promises it — strip the row and say so instead (consistency over
@@ -2839,6 +3266,18 @@ fun MemeEditorScreen(
                         when (panel) {
                             MemeEditorPanel.MEME -> MemeCaptionSheetContent(
                                 enabled = state.canAddOverlay,
+                                canPublishTemplate = state.project.overlays.any {
+                                    it.kind != space.bitos.core.studio.MemeOverlayKind.IMAGE && it.text.isNotBlank()
+                                },
+                                templatePublishBusy = sharedTemplatePublishState?.busy == true,
+                                templatePublishMessage = sharedTemplatePublishState?.message,
+                                onPublishTemplate = {
+                                    publishTemplateLabel = "My template"
+                                    publishTemplateIcon = "zap"
+                                    publishTemplatePrice = 0L
+                                    publishTemplateCategory = "meme"
+                                    showPublishTemplate = true
+                                },
                                 onAdd = { top, bottom, slot ->
                                     state.addMemeCaptions(top, bottom, slot)
                                     exportStatus = "Captions added — drag to fine-tune"
@@ -2862,6 +3301,32 @@ fun MemeEditorScreen(
                                 hasSourceAudio = !blankVideoActive,
                                 soundtrack = state.project.soundtrack,
                                 extracting = extractingSound,
+                                library = libraryEntries,
+                                online = onlineSoundRows,
+                                query = soundQuery,
+                                onQueryChange = { soundQuery = it.take(80) },
+                                hasTrending = feedNotes.notes.any { it.soundOf != null },
+                                onOpenTrending = { showTrendingSounds = true },
+                                onUseOnlineSound = { row ->
+                                    attachSoundFromUrl(
+                                        mediaUrl = row.url,
+                                        expectedSha256 = row.sha256,
+                                        label = row.label,
+                                        eventId = row.eventId,
+                                        authorPubkey = row.authorPubkey,
+                                    )
+                                },
+                                publishBusy = sharedSoundPublishState?.busy == true,
+                                publishMessage = sharedSoundPublishState?.message,
+                                onPickLibrarySound = { attachFromLibrary(it) },
+                                onPublishSound = {
+                                    publishSoundLabel = state.project.soundtrack?.label
+                                        ?.removePrefix("Original sound · ")
+                                        ?.takeIf { it.isNotBlank() } ?: "My sound"
+                                    publishSoundLicense = "CC0-1.0"
+                                    publishSoundDescription = ""
+                                    showPublishSound = true
+                                },
                                 onPickSound = {
                                     soundtrackPicker.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
@@ -4174,6 +4639,17 @@ private fun SoundPanelContent(
     hasSourceAudio: Boolean = true,
     soundtrack: space.bitos.core.studio.MemeSoundtrack? = null,
     extracting: Boolean = false,
+    library: List<space.bitos.core.studio.SharedSoundLibrary.Entry> = emptyList(),
+    online: List<space.bitos.app.data.feed.SharedSoundStore.Row> = emptyList(),
+    query: String = "",
+    hasTrending: Boolean = false,
+    publishBusy: Boolean = false,
+    publishMessage: String? = null,
+    onQueryChange: (String) -> Unit = {},
+    onOpenTrending: () -> Unit = {},
+    onUseOnlineSound: (space.bitos.app.data.feed.SharedSoundStore.Row) -> Unit = {},
+    onPickLibrarySound: (space.bitos.core.studio.SharedSoundLibrary.Entry) -> Unit = {},
+    onPublishSound: () -> Unit = {},
     onPickSound: () -> Unit = {},
     onSoundVolume: (Float) -> Unit = {},
     onSoundLoop: (Boolean) -> Unit = {},
@@ -4291,12 +4767,182 @@ private fun SoundPanelContent(
             }
         }
         if (soundtrack == null && !extracting) {
+            // ── Search (MST-047 sheet UX): client-side filter first; the
+            // editor also fires a bounded NIP-50 relay REQ for more.
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                label = { Text("Search sounds") },
+                singleLine = true,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val needle = query.trim().lowercase()
+            fun matches(vararg fields: String) =
+                needle.isEmpty() || fields.any { it.lowercase().contains(needle) }
+
+            // ── Trending (§3.21): the ranked rail over the live feed.
+            if (hasTrending) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = BitOSColors.primaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClickLabel = "Trending sounds") { onOpenTrending() },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                    ) {
+                        Text("🔥", style = MaterialTheme.typography.titleSmall)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Trending sounds",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.W600,
+                            )
+                            Text(
+                                "Most-borrowed ♪ in your feed — 3-day half-life",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                        Text(
+                            "Open",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = BitOSColors.primary,
+                        )
+                    }
+                }
+            }
+
             OutlinedButton(
                 onClick = onPickSound,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(50),
             ) {
                 Text("♪ Pick sound from a video…")
+            }
+
+            // ── Shared sounds (kind-30078 online rail; query-filtered) ──
+            val onlineRows = online.filter { matches(it.label, it.license) }.take(8)
+            if (onlineRows.isNotEmpty()) {
+                Text(
+                    "Shared sounds",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.W600,
+                    color = BitOSColors.textSecondary,
+                )
+                onlineRows.forEach { row ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = BitOSColors.surface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClickLabel = "Use ${row.label}") { onUseOnlineSound(row) },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                        ) {
+                            Text("♪", style = MaterialTheme.typography.titleSmall)
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    row.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.W600,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                )
+                            }
+                            Text(
+                                "Use",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.W600,
+                                color = BitOSColors.primary,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── MST-047 W4b: the local library (offline re-attach) ──
+            val libraryRows = library.filter { matches(it.label, it.license) }.take(8)
+            if (libraryRows.isNotEmpty()) {
+                Text(
+                    "From my library",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.W600,
+                    color = BitOSColors.textSecondary,
+                )
+                libraryRows.forEach { entry ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = BitOSColors.surface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClickLabel = "Use ${entry.label}") { onPickLibrarySound(entry) },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                        ) {
+                            Text("♪", style = MaterialTheme.typography.titleSmall)
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    entry.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.W600,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "${entry.durationMs / 1000}s · saved for offline use",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                )
+                            }
+                            Text(
+                                "Attach",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.W600,
+                                color = BitOSColors.primary,
+                            )
+                        }
+                    }
+                }
+            }
+            if (needle.isNotEmpty() && onlineRows.isEmpty() && libraryRows.isEmpty()) {
+                Text(
+                    "No saved or shared sound matches “$needle” — relays with NIP-50 search may still return results.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                )
+            }
+        }
+        // ── MST-047 W4b: publish-your-own (sound attached → share it) ──
+        if (soundtrack != null && !extracting) {
+            OutlinedButton(
+                onClick = onPublishSound,
+                enabled = !publishBusy,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(50),
+            ) {
+                Text(if (publishBusy) "Publishing the sound…" else "Publish this sound…")
+            }
+            publishMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                )
             }
         }
     }
@@ -7573,6 +8219,10 @@ private fun AdjustSliderRow(
 @Composable
 private fun MemeCaptionSheetContent(
     enabled: Boolean,
+    canPublishTemplate: Boolean = false,
+    templatePublishBusy: Boolean = false,
+    templatePublishMessage: String? = null,
+    onPublishTemplate: () -> Unit = {},
     onAdd: (top: String, bottom: String, slot: MemeFontSlot) -> Unit,
 ) {
     var top by remember { mutableStateOf("") }
@@ -7621,6 +8271,25 @@ private fun MemeCaptionSheetContent(
             enabled = enabled && (top.isNotBlank() || bottom.isNotBlank()),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Add to canvas") }
+
+        // ── MST-045 write path: share the current captions as a template.
+        if (canPublishTemplate) {
+            OutlinedButton(
+                onClick = onPublishTemplate,
+                enabled = !templatePublishBusy,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(50),
+            ) {
+                Text(if (templatePublishBusy) "Publishing template…" else "Publish as template…")
+            }
+            templatePublishMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                )
+            }
+        }
     }
 }
 

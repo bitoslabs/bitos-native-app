@@ -933,6 +933,96 @@ final class NotePublisher {
         onStage?(.relayed(eventId))
     }
 
+    /// MST-045 publish-your-own: the kind-30078 shared-template event —
+    /// PURE DATA (no upload). Overlays ride the local project wire and
+    /// convert inside the shared composer (rail parse round-trips).
+    func publishSharedTemplateNote(
+        templateId: String,
+        label: String,
+        icon: String,
+        priceSats: Int64,
+        category: String,
+        projectJson: String,
+        onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        guard let eventId = bridge.memeSharedTemplateEventId(
+                  authorPubkey: account.pubkeyHex, templateId: templateId, label: label,
+                  icon: icon, priceSats: priceSats, category: category,
+                  projectJson: projectJson, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.memeSharedTemplatePublishMessage(
+                  authorPubkey: account.pubkeyHex, templateId: templateId, label: label,
+                  icon: icon, priceSats: priceSats, category: category,
+                  projectJson: projectJson, createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        onStage?(.built(eventId))
+        onStage?(.signed(eventId))
+        await send(eventId: eventId, frame: frame)
+        onStage?(.relayed(eventId))
+    }
+
+    /// MST-047 publish-your-own: the kind-30078 shared-sound event. The
+    /// audio must ALREADY be Blossom-uploaded and hash-verified —
+    /// url/hash are the real artifact (never sign before upload); the
+    /// bridge contract gate rejects junk with `invalid`.
+    func publishSharedSoundNote(
+        soundId: String,
+        label: String,
+        url: String,
+        hash: String,
+        license: String,
+        durationSec: Int,
+        mime: String,
+        description: String? = nil,
+        topics: [String] = [],
+        onStage: (@MainActor (MemeNoteStage) -> Void)? = nil
+    ) async {
+        guard result == nil, inFlightId == nil, !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let account = identity.account else {
+            result = .signingRefused
+            return
+        }
+        let now = Int64(Date.now.timeIntervalSince1970)
+        let topicsCsv = topics.joined(separator: ",")
+        guard let eventId = bridge.memeSharedSoundEventId(
+                  authorPubkey: account.pubkeyHex, soundId: soundId, label: label,
+                  url: url, sha256Hex: hash, license: license,
+                  durationSec: Int32(durationSec), mime: mime,
+                  attribution: nil, description: description,
+                  topicsCsv: topicsCsv, imageUrl: nil, nowSeconds: now
+              ),
+              let signature = await identity.signLocally(eventId),
+              let frame = bridge.memeSharedSoundPublishMessage(
+                  authorPubkey: account.pubkeyHex, soundId: soundId, label: label,
+                  url: url, sha256Hex: hash, license: license,
+                  durationSec: Int32(durationSec), mime: mime,
+                  attribution: nil, description: description,
+                  topicsCsv: topicsCsv, imageUrl: nil,
+                  createdAtSeconds: now, signatureHex: signature
+              ) else {
+            result = .invalid
+            return
+        }
+        onStage?(.built(eventId))
+        onStage?(.signed(eventId))
+        await send(eventId: eventId, frame: frame)
+        onStage?(.relayed(eventId))
+    }
+
     /// Bounded chunked mining over the exact kind-22/21 template (PowCard
     /// bounds: 20k per window, 5M hard cap), off the main actor. nil = the
     /// window was exhausted. The mined template pins one timestamp — the

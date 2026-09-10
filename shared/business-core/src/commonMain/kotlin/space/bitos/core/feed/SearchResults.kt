@@ -29,6 +29,17 @@ object SearchResults {
     /** Hashtag queries are single `#tag` tokens; tags stay bounded. */
     const val MAX_TAG_LENGTH = 64
 
+    /** Relay search queries stay bounded (NIP-50 `search` is a single string). */
+    const val MAX_QUERY_LENGTH = 128
+
+    /** Web discover parity: per-filter result cap for the NIP-50 `search` and
+     *  `#t` filters (`DISCOVER_SEARCH_EVENT_LIMIT`). */
+    const val RELAY_SEARCH_EVENT_LIMIT = 180
+
+    /** Web discover parity: recent-sample cap that keeps search working on
+     *  relays without NIP-50 (`DISCOVER_TEXT_FALLBACK_LIMIT`). */
+    const val RELAY_TEXT_FALLBACK_LIMIT = 240
+
     /**
      * Classifies a query as a hashtag search: exactly one `#token` after
      * trimming, `[a-zA-Z0-9_]+`, bounded — returns the lowercase tag, or
@@ -66,6 +77,43 @@ object SearchResults {
             subscriptionId,
             """{"kinds":[${boundedKinds.joinToString(",")}],"#t":["$escaped"],"limit":$boundedLimit}""",
         )
+    }
+
+    /**
+     * One multi-filter search REQ, web discover parity (`searchDiscoverRelays`):
+     * NIP-01 OR's the filters of a single REQ, so search-capable relays answer
+     * the NIP-50 `search` filter while every conforming relay still answers
+     * the others.
+     *
+     * 1. NIP-50 `{"search": query}` full-text filter — free text only; NIP-50
+     *    leaves `#` undefined in search strings, so `#tag` queries skip it.
+     * 2. NIP-01 `#t` filter — exact hashtag recall; free-text queries double
+     *    the lowercased term as the tag when it is a bounded single token
+     *    (searching `bitcoin` also finds tagged-but-uncaptioned events).
+     * 3. Bounded recent sample of the same kinds — relays without NIP-50
+     *    still deliver matchable events; stores re-match locally via
+     *    [matches] so search stays verify-first.
+     *
+     * Null when the query or kind set is outside bounds.
+     */
+    fun relaySearchRequest(subscriptionId: String, query: String, kinds: List<Int>): String? {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty() || trimmed.length > MAX_QUERY_LENGTH) return null
+        val boundedKinds = kinds.filter { it in 0..65_535 }.take(8)
+        if (boundedKinds.isEmpty()) return null
+        val kindsJson = boundedKinds.joinToString(",")
+        val filters = mutableListOf<String>()
+        if (!trimmed.startsWith("#")) {
+            val escaped = NostrEventCodec.escape(trimmed)
+            filters += """{"kinds":[$kindsJson],"search":"$escaped","limit":$RELAY_SEARCH_EVENT_LIMIT}"""
+        }
+        val tag = queryTag(trimmed) ?: normalizeTag(trimmed.lowercase())
+        if (tag != null) {
+            val escaped = NostrEventCodec.escape(tag)
+            filters += """{"kinds":[$kindsJson],"#t":["$escaped"],"limit":$RELAY_SEARCH_EVENT_LIMIT}"""
+        }
+        filters += """{"kinds":[$kindsJson],"limit":$RELAY_TEXT_FALLBACK_LIMIT}"""
+        return NostrEventCodec.encodeRequest(subscriptionId, filters)
     }
 
     /**

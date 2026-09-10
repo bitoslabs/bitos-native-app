@@ -1114,12 +1114,12 @@ class BusinessCoreBridge {
     fun matchesSearch(event: Event, query: String): Boolean =
         space.bitos.core.feed.SearchResults.matches(FeedNote.from(event.toCore()), query)
 
-    /** NIP-01 hashtag REQ for `#tag` queries (NIP-50 leaves `#` undefined in
-     *  search strings); null when the query is not a bounded single token. */
-    fun searchTagRequest(subscriptionId: String, query: String, kinds: List<Int>, limit: Int): String? {
-        val tag = space.bitos.core.feed.SearchResults.queryTag(query) ?: return null
-        return space.bitos.core.feed.SearchResults.tagRequest(subscriptionId, tag, kinds, limit)
-    }
+    /** Multi-filter search REQ (web discover parity): NIP-50 `search` for
+     *  free text + NIP-01 `#t` hashtag recall + a bounded recent-sample
+     *  fallback for relays without NIP-50. Null when the query/kind set is
+     *  outside bounds. */
+    fun searchRelayRequest(subscriptionId: String, query: String, kinds: List<Int>): String? =
+        space.bitos.core.feed.SearchResults.relaySearchRequest(subscriptionId, query, kinds)
 
     /**
      * Identity onboarding content (spec §4, docs/ui/app-01): shared copy for
@@ -2965,6 +2965,175 @@ class BusinessCoreBridge {
         return space.bitos.core.studio.MemeTemplateContract.parse(tags, content)
     }
 
+    /** Kind-30078 shared-sound summary row; "" when the shape is
+     *  foreign or the license is not ingestable (MST-047). */
+    fun memeSharedSoundSummary(tagsJson: String, content: String): String {
+        val sound = decodeSharedSound(tagsJson, content) ?: return ""
+        return buildJsonObject {
+            put("id", sound.id)
+            put("label", sound.label)
+            put("url", sound.url)
+            put("sha256", sound.sha256)
+            put("license", sound.license)
+            put("attribution", sound.attribution)
+            put("durationMs", sound.durationMs)
+            put("mime", sound.mime)
+            put("imageUrl", sound.imageUrl)
+            put("authorPubkey", sound.authorPubkey)
+            put("topics", buildJsonArray { sound.topics.forEach { add(it) } })
+        }.toString()
+    }
+
+    /** Pure download-side ingest gate for the "Use sound" handoff:
+     *  decoded duration 1..15 s and bytes ≤ 8 MB (MST-047). */
+    fun memeSharedSoundIngestCheck(decodedDurationMs: Long, byteCount: Long): Boolean =
+        space.bitos.core.studio.SharedSoundContract.ingestCheck(decodedDurationMs, byteCount)
+
+    /** Publish-your-own (MST-045 write path): the kind-30078 template
+     *  event id for signing — PURE DATA (no upload); overlays ride the
+     *  local project wire and convert inside the shared composer.
+     *  [nowSeconds] pins the id (signing parity). */
+    fun memeSharedTemplateEventId(
+        authorPubkey: String,
+        templateId: String,
+        label: String,
+        icon: String,
+        priceSats: Long,
+        category: String,
+        projectJson: String,
+        nowSeconds: Long,
+    ): String? {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeSharedTemplate(
+            authorPubkey, templateId, label, icon, project.overlays, priceSats, category, nowSeconds,
+        )?.idHex
+    }
+
+    /** The `["EVENT", …]` frame for the signed shared template; null when
+     *  the shape violates the contract (fields must byte-match the
+     *  [memeSharedTemplateEventId] call that produced [signatureHex]). */
+    fun memeSharedTemplatePublishMessage(
+        authorPubkey: String,
+        templateId: String,
+        label: String,
+        icon: String,
+        priceSats: Long,
+        category: String,
+        projectJson: String,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return null
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeSharedTemplate(
+            authorPubkey, templateId, label, icon, project.overlays, priceSats, category, createdAtSeconds,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** Publish-your-own (MST-047 W4): the kind-30078 event id for signing
+     *  — built only after the audio upload hash-verifies; null on any
+     *  contract violation. [nowSeconds] pins the id (signing parity). */
+    fun memeSharedSoundEventId(
+        authorPubkey: String,
+        soundId: String,
+        label: String,
+        url: String,
+        sha256Hex: String,
+        license: String,
+        durationSec: Int,
+        mime: String,
+        attribution: String? = null,
+        description: String? = null,
+        topicsCsv: String = "",
+        imageUrl: String? = null,
+        nowSeconds: Long,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { nowSeconds })
+        return composer.composeSharedSound(
+            authorPubkey, soundId, label, url, sha256Hex, license, durationSec,
+            mime.ifBlank { space.bitos.core.studio.SharedSoundContract.DEFAULT_MIME },
+            attribution, description,
+            topicsCsv.split(',').map(String::trim).filter(String::isNotEmpty),
+            imageUrl, nowSeconds,
+        )?.idHex
+    }
+
+    /** The `["EVENT", …]` frame for the signed shared sound; null when
+     *  the shape violates the contract (fields must byte-match the
+     *  [memeSharedSoundEventId] call that produced [signatureHex]). */
+    fun memeSharedSoundPublishMessage(
+        authorPubkey: String,
+        soundId: String,
+        label: String,
+        url: String,
+        sha256Hex: String,
+        license: String,
+        durationSec: Int,
+        mime: String,
+        attribution: String? = null,
+        description: String? = null,
+        topicsCsv: String = "",
+        imageUrl: String? = null,
+        createdAtSeconds: Long,
+        signatureHex: String,
+    ): String? {
+        val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
+        val unsigned = composer.composeSharedSound(
+            authorPubkey, soundId, label, url, sha256Hex, license, durationSec,
+            mime.ifBlank { space.bitos.core.studio.SharedSoundContract.DEFAULT_MIME },
+            attribution, description,
+            topicsCsv.split(',').map(String::trim).filter(String::isNotEmpty),
+            imageUrl, createdAtSeconds,
+        ) ?: return null
+        return composer.publishMessage(unsigned, signatureHex)
+    }
+
+    /** Local library index decode (tolerant) re-encoded canonically;
+     *  "" when the wire is junk (caller keeps an empty library). */
+    fun memeSharedSoundLibraryDecode(json: String): String {
+        val library = space.bitos.core.studio.SharedSoundLibrary.decode(json)
+        if (library.entries.isEmpty()) return ""
+        return space.bitos.core.studio.SharedSoundLibrary.encode(library)
+    }
+
+    /** Local library index encode from a canonical decode output. */
+    fun memeSharedSoundLibraryEncode(json: String): String {
+        val library = space.bitos.core.studio.SharedSoundLibrary.decode(json)
+        return space.bitos.core.studio.SharedSoundLibrary.encode(library)
+    }
+
+    /** Add one entry (entry JSON: id/label/url/sha256/license/durationMs/
+     *  savedAtMs/src/author) with LRU eviction; returns the new canonical
+     *  index. Junk entries leave the index unchanged. */
+    fun memeSharedSoundLibraryAdd(json: String, entryJson: String): String {
+        val library = space.bitos.core.studio.SharedSoundLibrary.decode(json)
+        val entry = runCatching {
+            val root = Json.parseToJsonElement(entryJson).jsonObject
+            fun str(key: String) = (root[key] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: ""
+            space.bitos.core.studio.SharedSoundLibrary.Entry(
+                id = str("id"),
+                label = str("label"),
+                url = str("url"),
+                sha256 = str("sha256"),
+                license = str("license"),
+                durationMs = str("durationMs").toLongOrNull() ?: 0L,
+                savedAtMs = str("savedAtMs").toLongOrNull() ?: 0L,
+                sourceEventId = str("src"),
+                authorPubkey = str("author"),
+            )
+        }.getOrNull() ?: return space.bitos.core.studio.SharedSoundLibrary.encode(library)
+        return space.bitos.core.studio.SharedSoundLibrary.encode(
+            space.bitos.core.studio.SharedSoundLibrary.add(library, entry),
+        )
+    }
+
+    private fun decodeSharedSound(tagsJson: String, content: String): space.bitos.core.studio.SharedSoundContract.SharedSound? {
+        val tags = space.bitos.core.store.TagsCodec.decode(tagsJson) ?: return null
+        return space.bitos.core.studio.SharedSoundContract.parse(tags, content)
+    }
+
     /** Apply a template onto a project wire (fresh-id clone); "" corrupt. */
     fun memeApplyTemplate(projectJson: String, templateId: String): String {
         val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson) ?: return ""
@@ -4743,25 +4912,6 @@ class BusinessCoreBridge {
             })
         }.toString()
     }
-
-    /** NIP-50 search REQ (full-text search over kinds, relay support varies). */
-    fun searchRequest(subscriptionId: String, query: String, kinds: List<Int>, limit: Int): String? {
-        val trimmed = query.trim()
-        if (trimmed.isEmpty() || trimmed.length > 128) return null
-        val boundedKinds = kinds.filter { it in 0..65_535 }.take(8)
-        if (boundedKinds.isEmpty()) return null
-        val boundedLimit = limit.coerceIn(1..100)
-        val escaped = NostrEventCodec.escape(trimmed)
-        return NostrEventCodec.encodeRequest(
-            subscriptionId,
-            """{"kinds":[${boundedKinds.joinToString(",")}],"search":"$escaped","limit":$boundedLimit}""",
-        )
-    }
-
-    /** NIP-50 Bitz search REQ: standard NIP-68/NIP-71 media kinds only
-     *  (Bitz discovery/query standard — Bitz never discovers via kind-1). */
-    fun bitzSearchRequest(subscriptionId: String, query: String, limit: Int): String? =
-        searchRequest(subscriptionId, query, space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS, limit)
 
     /** npub → hex pubkey, when the query is an exact npub (creator search). */
     fun resolveNpub(query: String): String? {

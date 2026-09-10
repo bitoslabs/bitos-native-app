@@ -339,6 +339,19 @@ protocol BusinessCoreClient: Sendable {
     // APP-019 synth SFX (plan MST-041): catalog + base64 WAV previews.
     /// Kind-30078 shared-template summary row; "" when the shape is foreign.
     func memeSharedTemplateSummary(tagsJson: String, content: String) -> String
+    /// Kind-30078 shared-sound summary row; "" when foreign or the
+    /// license is not ingestable (MST-047).
+    func memeSharedSoundSummary(tagsJson: String, content: String) -> String
+    /// Pure download-side ingest gate: decoded 1–15 s and bytes ≤ 8 MB.
+    func memeSharedSoundIngestCheck(decodedDurationMs: Int64, byteCount: Int64) -> Bool
+    /// Local library index: tolerant decode re-encoded canonically;
+    /// "" when the wire is junk (caller keeps an empty library).
+    func memeSharedSoundLibraryDecode(json: String) -> String
+    /// Local library index canonical re-encode (round-trip parity).
+    func memeSharedSoundLibraryEncode(json: String) -> String
+    /// Local library add-one-entry (LRU eviction inside); junk entries
+    /// leave the index unchanged. Returns the new canonical index.
+    func memeSharedSoundLibraryAdd(json: String, entryJson: String) -> String
     /// Apply a shared template onto a project wire (fresh-id clone).
     func memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String) -> String
     /// MST-042 remix lineage tags (TagsCodec JSON) from the project wire:
@@ -830,6 +843,26 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeSharedTemplateSummary(tagsJson: tagsJson, content: content)
     }
 
+    func memeSharedSoundSummary(tagsJson: String, content: String) -> String {
+        bridge.memeSharedSoundSummary(tagsJson: tagsJson, content: content)
+    }
+
+    func memeSharedSoundIngestCheck(decodedDurationMs: Int64, byteCount: Int64) -> Bool {
+        bridge.memeSharedSoundIngestCheck(decodedDurationMs: decodedDurationMs, byteCount: byteCount)
+    }
+
+    func memeSharedSoundLibraryDecode(json: String) -> String {
+        bridge.memeSharedSoundLibraryDecode(json: json)
+    }
+
+    func memeSharedSoundLibraryEncode(json: String) -> String {
+        bridge.memeSharedSoundLibraryEncode(json: json)
+    }
+
+    func memeSharedSoundLibraryAdd(json: String, entryJson: String) -> String {
+        bridge.memeSharedSoundLibraryAdd(json: json, entryJson: entryJson)
+    }
+
     func memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String) -> String {
         bridge.memeApplySharedTemplate(projectJson: projectJson, tagsJson: tagsJson, content: content)
     }
@@ -1293,6 +1326,22 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeTemplates() -> String { FrameworkBusinessCoreClient().memeTemplates() }
     func memeSharedTemplateSummary(tagsJson: String, content: String) -> String {
         FrameworkBusinessCoreClient().memeSharedTemplateSummary(tagsJson: tagsJson, content: content)
+    }
+    func memeSharedSoundSummary(tagsJson: String, content: String) -> String {
+        FrameworkBusinessCoreClient().memeSharedSoundSummary(tagsJson: tagsJson, content: content)
+    }
+    func memeSharedSoundIngestCheck(decodedDurationMs: Int64, byteCount: Int64) -> Bool {
+        FrameworkBusinessCoreClient().memeSharedSoundIngestCheck(
+            decodedDurationMs: decodedDurationMs, byteCount: byteCount)
+    }
+    func memeSharedSoundLibraryDecode(json: String) -> String {
+        FrameworkBusinessCoreClient().memeSharedSoundLibraryDecode(json: json)
+    }
+    func memeSharedSoundLibraryEncode(json: String) -> String {
+        FrameworkBusinessCoreClient().memeSharedSoundLibraryEncode(json: json)
+    }
+    func memeSharedSoundLibraryAdd(json: String, entryJson: String) -> String {
+        FrameworkBusinessCoreClient().memeSharedSoundLibraryAdd(json: json, entryJson: entryJson)
     }
     func memeApplySharedTemplate(projectJson: String, tagsJson: String, content: String) -> String {
         FrameworkBusinessCoreClient().memeApplySharedTemplate(projectJson: projectJson, tagsJson: tagsJson, content: content)
