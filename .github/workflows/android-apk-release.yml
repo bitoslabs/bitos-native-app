@@ -70,20 +70,37 @@ jobs:
           for name in \
             ANDROID_RELEASE_KEYSTORE_BASE64 \
             ANDROID_RELEASE_KEYSTORE_PASSWORD \
-            ANDROID_RELEASE_KEY_ALIAS \
             ANDROID_RELEASE_KEY_PASSWORD; do
             if [ -z "${!name}" ]; then
               echo "Required Android release signing secret is missing: $name" >&2
               exit 1
             fi
           done
-          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bitos-release.keystore"
+          keystore_path="$RUNNER_TEMP/bitos-release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+
+          resolved_alias="$ANDROID_RELEASE_KEY_ALIAS"
+          if [ -n "$resolved_alias" ] && ! keytool -list -keystore "$keystore_path" -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" -alias "$resolved_alias" >/dev/null 2>&1; then
+            echo "Configured Android release key alias was not found in keystore; attempting auto-detection." >&2
+            resolved_alias=""
+          fi
+
+          if [ -z "$resolved_alias" ]; then
+            detected_aliases=$(keytool -list -keystore "$keystore_path" -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" | sed -nE 's/^([^,]+),.*/\1/p')
+            alias_count=$(printf '%s\n' "$detected_aliases" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$alias_count" -ne 1 ]; then
+              echo "Unable to determine Android signing alias automatically. Set ANDROID_RELEASE_KEY_ALIAS to a valid alias." >&2
+              exit 1
+            fi
+            resolved_alias=$(printf '%s\n' "$detected_aliases" | sed -n '1p')
+          fi
+
+          echo "ORG_GRADLE_PROJECT_BITOS_RELEASE_KEY_ALIAS=$resolved_alias" >> "$GITHUB_ENV"
 
       - name: Build signed release APK
         env:
           ORG_GRADLE_PROJECT_BITOS_RELEASE_STORE_FILE: ${{ runner.temp }}/bitos-release.keystore
           ORG_GRADLE_PROJECT_BITOS_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
-          ORG_GRADLE_PROJECT_BITOS_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           ORG_GRADLE_PROJECT_BITOS_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :apps:android:assembleRelease
 
