@@ -65,17 +65,17 @@
   the shared core (66-test suite incl. @noble-locked signing and bech32
   vectors on JVM + native macOS); `IdentitySigner` port with secrets
   confined to function arguments; Android Keystore-sealed `SecureKeyStore`
-  + Keychain on iOS; create/import flows with visible-npub confirmation
-  and replace warnings on both apps. Found+fixed an infinite loop in mod-n
-  reduction (carry limb never cleared) exposed by the signing tests.
+  - Keychain on iOS; create/import flows with visible-npub confirmation
+    and replace warnings on both apps. Found+fixed an infinite loop in mod-n
+    reduction (carry limb never cleared) exposed by the signing tests.
 
 - 2026-08-27 — ID-001–ID-004 foundation: BIP-340 signing + NIP-19 codecs in
   the shared core (66-test suite incl. @noble-locked signing and bech32
   vectors on JVM + native macOS); `IdentitySigner` port with secrets
   confined to function arguments; Android Keystore-sealed `SecureKeyStore`
-  + Keychain on iOS; create/import flows with visible-npub confirmation
-  and replace warnings on both apps. Found+fixed an infinite loop in mod-n
-  reduction (carry limb never cleared) exposed by the signing tests.
+  - Keychain on iOS; create/import flows with visible-npub confirmation
+    and replace warnings on both apps. Found+fixed an infinite loop in mod-n
+    reduction (carry limb never cleared) exposed by the signing tests.
 - 2026-08-27 — PUB-001/007/008 note path: shared `NoteComposer` + client
   EVENT-frame decode in the codec (own frames pass the verified gate);
   Android `NotePublisher` + composer sheet, iOS `NotePublisher` + sheet;

@@ -30,4 +30,3 @@ Fixtures are synthetic or anonymized. Never commit production keys, DMs, private
 ## Flake policy
 
 A flaky test is a defect. Quarantine requires an owner, issue, expiry and preserved signal. Do not hide it behind unconditional retries.
-

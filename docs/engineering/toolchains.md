@@ -2,19 +2,19 @@
 
 ## Pinned build window
 
-| Target | Required | Repository pin |
-|---|---|---|
-| Kotlin/KMP | Kotlin Multiplatform plugin | 2.4.10 |
-| Gradle | Compatible with Kotlin 2.4.10 | 9.5.0 |
-| Android | AGP with built-in Kotlin and Android-KMP plugin | 9.1.0 |
-| Android UI | Compose BOM (latest API 36-compatible line) | 2026.06.00 |
-| Android SDK | compile/target SDK | 36 |
-| Java | Gradle/AGP runtime | JDK 17 or newer supported by AGP |
-| Apple | KMP 2.4.10 compatibility | Xcode 26.4 |
-| Swift app | Swift language mode | Swift 6 |
-| C++ | MediaCore language level | C++20 |
-| Node | Service development | Node 24 or later |
-| Container | Local infrastructure | Docker Compose v2 |
+| Target      | Required                                        | Repository pin                   |
+| ----------- | ----------------------------------------------- | -------------------------------- |
+| Kotlin/KMP  | Kotlin Multiplatform plugin                     | 2.4.10                           |
+| Gradle      | Compatible with Kotlin 2.4.10                   | 9.5.0                            |
+| Android     | AGP with built-in Kotlin and Android-KMP plugin | 9.1.0                            |
+| Android UI  | Compose BOM (latest API 36-compatible line)     | 2026.06.00                       |
+| Android SDK | compile/target SDK                              | 36                               |
+| Java        | Gradle/AGP runtime                              | JDK 17 or newer supported by AGP |
+| Apple       | KMP 2.4.10 compatibility                        | Xcode 26.4                       |
+| Swift app   | Swift language mode                             | Swift 6                          |
+| C++         | MediaCore language level                        | C++20                            |
+| Node        | Service development                             | Node 24 or later                 |
+| Container   | Local infrastructure                            | Docker Compose v2                |
 
 The Kotlin compatibility table, not “latest wins,” controls the Kotlin/Gradle/AGP/Xcode combination. Upgrade these four together in one dedicated pull request with a release-build matrix.
 

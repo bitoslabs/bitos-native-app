@@ -23,14 +23,14 @@ BusinessCore and MediaCore do not depend on application UI or each other.
 
 ## 2. Ownership boundaries
 
-| Layer | Owns | Does not own |
-|---|---|---|
-| Native presentation | Layout, navigation, focus, gestures, accessibility, permission UI, transient state | Protocol rules, signing order, ranking formulas |
-| Native adapter/application | Task/scope lifetime, repositories, database transactions, OS effects, BusinessCore/MediaCore bridging | Cross-platform rule duplication |
-| BusinessCore | Value types, Nostr codecs, reducers, validation, ranking, moderation, Studio semantics, publish decisions | UI, OS objects, secrets, decoded media, sockets/database implementations |
-| MediaCore | Timeline math, scene/audio/render graph, deterministic media evaluation | Nostr, keys, wallet, network, product navigation |
-| Backend | Rebuildable projection, search, candidate generation, jobs, moderation operations | Canonical identity/post ownership or private keys |
-| Contracts | Schemas, event fixtures, API descriptions, render goldens | Runtime side effects |
+| Layer                      | Owns                                                                                                      | Does not own                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Native presentation        | Layout, navigation, focus, gestures, accessibility, permission UI, transient state                        | Protocol rules, signing order, ranking formulas                          |
+| Native adapter/application | Task/scope lifetime, repositories, database transactions, OS effects, BusinessCore/MediaCore bridging     | Cross-platform rule duplication                                          |
+| BusinessCore               | Value types, Nostr codecs, reducers, validation, ranking, moderation, Studio semantics, publish decisions | UI, OS objects, secrets, decoded media, sockets/database implementations |
+| MediaCore                  | Timeline math, scene/audio/render graph, deterministic media evaluation                                   | Nostr, keys, wallet, network, product navigation                         |
+| Backend                    | Rebuildable projection, search, candidate generation, jobs, moderation operations                         | Canonical identity/post ownership or private keys                        |
+| Contracts                  | Schemas, event fixtures, API descriptions, render goldens                                                 | Runtime side effects                                                     |
 
 ## 3. Dependency rules
 
@@ -220,7 +220,7 @@ window, now explicitly bounded by the registry pointer.
   never drops parsed follows.
 - REQ filters are ALWAYS built by the shared bridge/codec — never
   hand-concatenated JSON. Android once assembled `{"kinds":[3],
-  "authors":[<pubkey>]}` with unquoted string values (and double-opened the
+"authors":[<pubkey>]}` with unquoted string values (and double-opened the
   following filter's author array): the frame is invalid JSON, relays drop
   it SILENTLY, and the You Following count froze at zero while
   profile/notes/follower REQs (built correctly) kept working. The

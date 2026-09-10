@@ -53,16 +53,16 @@ Required review ownership:
 
 Run `make check`. If a target is unavailable, run every available lane and state the omitted lane explicitly. CI remains authoritative.
 
-| Change | Required check |
-|---|---|
-| Business rule | Common test and affected native adapter contract |
-| Nostr | Golden fixtures and external-shaped fixture |
-| iOS UI | Build/test and VoiceOver/Dynamic Type state |
-| Android UI | Unit/instrumented test and TalkBack/font scale state |
-| Media | C++ tests and both-platform preview/export conformance |
-| Service | Typecheck/unit/integration and telemetry/error contract |
-| Infrastructure | Format/validate/plan and security/cost review |
-| Migration | Upgrade from every supported version and rollback/forward recovery |
+| Change         | Required check                                                     |
+| -------------- | ------------------------------------------------------------------ |
+| Business rule  | Common test and affected native adapter contract                   |
+| Nostr          | Golden fixtures and external-shaped fixture                        |
+| iOS UI         | Build/test and VoiceOver/Dynamic Type state                        |
+| Android UI     | Unit/instrumented test and TalkBack/font scale state               |
+| Media          | C++ tests and both-platform preview/export conformance             |
+| Service        | Typecheck/unit/integration and telemetry/error contract            |
+| Infrastructure | Format/validate/plan and security/cost review                      |
+| Migration      | Upgrade from every supported version and rollback/forward recovery |
 
 ## 6. Feature flags
 
@@ -95,4 +95,3 @@ Release candidates pin BusinessCore, MediaCore, schemas, service images and infr
 ## 9. Definition of done
 
 Use the complete definition in `docs/native/delivery-plan.md`. “Works on my device,” mock-only UI, or a happy-path API response is not Done.
-

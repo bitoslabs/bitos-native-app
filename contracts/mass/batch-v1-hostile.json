@@ -15,7 +15,11 @@
     "caption": ""
   },
   "rows": [
-    { "id": "r1", "values": { "name": 42, "sats": "many" }, "assets": { "img": "../../escape.png" } },
+    {
+      "id": "r1",
+      "values": { "name": 42, "sats": "many" },
+      "assets": { "img": "../../escape.png" }
+    },
     { "id": "", "values": {} }
   ],
   "states": {

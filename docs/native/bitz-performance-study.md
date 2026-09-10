@@ -29,23 +29,23 @@ bookkeeping, all I/O is either (a) done before the first pixel, (b) triggered
 early by distance thresholds, or (c) progressive (first relay paints, slow
 relays merge in later). Concretely, eight techniques:
 
-| # | Technique | Where (web) | Effect |
-|---|---|---|---|
-| 1 | **Warm socket pool** — one `SimplePool` for app lifetime, sockets pre-warmed from the layout | `src/lib/nostr/pool.ts` via `ensureConnected()` | Zero handshake cost at page open; queries reuse live sockets |
-| 2 | **Progressive multi-relay fan-out** — parallel query to all relays; primary relays paint first, secondaries dedupe-merge in the background | `queryParallelProgressive()` | First content paints at the *fastest* relay's EOSE, not the slowest |
-| 3 | **Hard `maxWait` budget** — `4,000 ms` cap on every pagination batch | `REELS_PAGE_MAX_WAIT_MS` | A dead relay can never stall the backwards walk |
-| 4 | **Split kind filters** — media kinds `[20,21,22,34235,34236]` limit 400 vs kind-1 limit 120, in ONE parallel round trip | `REEL_MEDIA_KINDS` + comment | Nostr `limit` is per-relay-per-filter; deep-querying dedicated video kinds maximizes renderable yield per request |
-| 5 | **Distance-triggered three-layer pipeline** — render window (+5 tiles), relay prefetch (≤6 unrendered buffered), grid reveal (18/page) | `handleReelScroll()` | New content is always requested ~2–3 viewport-heights *before* the user reaches the end |
-| 6 | **Backward `until` walk with fresh-count budget** — `until: oldest - 1`, stop when 18 NEW media items land or cursor stalls; max 6 batches | `loadMoreReels()` | One or two round-trips cover a full page; no gaps, no re-fetch of known ids |
-| 7 | **Instant-paint caches** — in-memory `bitzSession` (survives route switches, 60 s refresh) + localStorage snapshot (10 reels / 15 min TTL) | `bitzSession`, `bitos:reels-cache:v3` | Cold loads render the grid *before* any network; returning to the tab is instant with scroll position restored |
-| 8 | **Renderer discipline** — IntersectionObserver election (thresholds `.25/.5/.6/.75/.9`), only the elected reel plays, DOM windowing (initial 5, batch 5), non-reactive element registries | `createVisibilityObserver`, `reelVideos: Map` | One `play()`, bounded DOM, no reactive churn per visibility tick |
+| #   | Technique                                                                                                                                                                                 | Where (web)                                     | Effect                                                                                                            |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 1   | **Warm socket pool** — one `SimplePool` for app lifetime, sockets pre-warmed from the layout                                                                                              | `src/lib/nostr/pool.ts` via `ensureConnected()` | Zero handshake cost at page open; queries reuse live sockets                                                      |
+| 2   | **Progressive multi-relay fan-out** — parallel query to all relays; primary relays paint first, secondaries dedupe-merge in the background                                                | `queryParallelProgressive()`                    | First content paints at the _fastest_ relay's EOSE, not the slowest                                               |
+| 3   | **Hard `maxWait` budget** — `4,000 ms` cap on every pagination batch                                                                                                                      | `REELS_PAGE_MAX_WAIT_MS`                        | A dead relay can never stall the backwards walk                                                                   |
+| 4   | **Split kind filters** — media kinds `[20,21,22,34235,34236]` limit 400 vs kind-1 limit 120, in ONE parallel round trip                                                                   | `REEL_MEDIA_KINDS` + comment                    | Nostr `limit` is per-relay-per-filter; deep-querying dedicated video kinds maximizes renderable yield per request |
+| 5   | **Distance-triggered three-layer pipeline** — render window (+5 tiles), relay prefetch (≤6 unrendered buffered), grid reveal (18/page)                                                    | `handleReelScroll()`                            | New content is always requested ~2–3 viewport-heights _before_ the user reaches the end                           |
+| 6   | **Backward `until` walk with fresh-count budget** — `until: oldest - 1`, stop when 18 NEW media items land or cursor stalls; max 6 batches                                                | `loadMoreReels()`                               | One or two round-trips cover a full page; no gaps, no re-fetch of known ids                                       |
+| 7   | **Instant-paint caches** — in-memory `bitzSession` (survives route switches, 60 s refresh) + localStorage snapshot (10 reels / 15 min TTL)                                                | `bitzSession`, `bitos:reels-cache:v3`           | Cold loads render the grid _before_ any network; returning to the tab is instant with scroll position restored    |
+| 8   | **Renderer discipline** — IntersectionObserver election (thresholds `.25/.5/.6/.75/.9`), only the elected reel plays, DOM windowing (initial 5, batch 5), non-reactive element registries | `createVisibilityObserver`, `reelVideos: Map`   | One `play()`, bounded DOM, no reactive churn per visibility tick                                                  |
 
 Two things the web deliberately does **not** do (myths to dispel):
 
 - **No media-byte prefetch ahead of the playhead.** Reel videos mount with
   `preload="metadata"` and only the active one plays. There is no
   `createObjectURL` warm-up, no `<link rel=preload>`, no second warming
-  `<video>`. The word "prefetch" only refers to *relay data*. (Native already
+  `<video>`. The word "prefetch" only refers to _relay data_. (Native already
   does better here with the 3-slot player pool.)
 - **No posters.** `imeta thumb` is published but never consumed; the grid tile
   video element is its own thumbnail (`preload="none"` → `metadata` at
@@ -73,7 +73,7 @@ t3   SECOND round trip (queryPrimaryFirst, sequential): engagement counts
 ```
 
 Why it feels fast: (1) the cache/session paints at t−1 (below), (2) the
-first *network* paint happens at the fastest relay's EOSE with rendering
+first _network_ paint happens at the fastest relay's EOSE with rendering
 already possible (engagement numbers arrive later and patch in), (3) the
 tab set is small — derived sorts never fetched extra pages natively.
 
@@ -109,7 +109,7 @@ Key invariants worth porting exactly:
   user never waits for the full 6-batch walk.
 - **Cursor-stall detection** (`!cursorAdvanced && !fresh.length`) terminates
   relays that ignore `until`.
-- Batch sizing comment from the source: the *old* 10-event batches "made
+- Batch sizing comment from the source: the _old_ 10-event batches "made
   pagination feel dead: dozens of sequential requests before anything showed" —
   batches must be large enough that 1–2 round trips cover a page.
 
@@ -140,16 +140,16 @@ IntersectionObserver(root: reelScroller, thresholds: [0.25, 0.5, 0.6, 0.75, 0.9]
 
 - Mute persists in `localStorage 'bitos:reel-muted'`, default muted.
 - Reels resume where paused (loop, never reset); grid hover previews DO reset.
-- Visibility ratios are also folded into ranking as a *dwell proxy*, but from
+- Visibility ratios are also folded into ranking as a _dwell proxy_, but from
   a **snapshotted copy** so re-ranking never fires per visibility tick (that
   would jitter the snap scroll).
 
 ### 2.5 Cold start & tab-return caches
 
-| Layer | Scope | Contents | Bound |
-|---|---|---|---|
-| `bitzSession` (module state, non-reactive) | route switches | reels, mode, `exploreScrollTop`, `activeReelIndex`, `oldestReelEventCreatedAt`, `hasMoreReels`, `lastRefreshedAt` | app-tab lifetime; background refresh only if > 60 s old |
-| `bitos:reels-cache:v3` (localStorage) | cold start | `{ savedAt, reels: newest 10 }` | TTL 15 min, best-effort write, never written in author mode |
+| Layer                                      | Scope          | Contents                                                                                                          | Bound                                                       |
+| ------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `bitzSession` (module state, non-reactive) | route switches | reels, mode, `exploreScrollTop`, `activeReelIndex`, `oldestReelEventCreatedAt`, `hasMoreReels`, `lastRefreshedAt` | app-tab lifetime; background refresh only if > 60 s old     |
+| `bitos:reels-cache:v3` (localStorage)      | cold start     | `{ savedAt, reels: newest 10 }`                                                                                   | TTL 15 min, best-effort write, never written in author mode |
 
 Order on mount: session hydrate → cache hydrate (sets `loading = false`
 synchronously → grid paints **before** network) → background `loadReels()` →
@@ -200,15 +200,15 @@ On a long grid this skips hundreds of off-screen header requests.
 The tab set is the LEGACY FLUTTER set: **Explore · Following · For you**.
 (The web's Trending / Most-zapped tabs were prototyped natively as W2
 view-only sorts and then removed — rankings over a live relay window add
-re-rank churn without new content.) Only the first two tabs change *what
-is fetched*; For-you is the default global window — but EVERY tab owns
+re-rank churn without new content.) Only the first two tabs change _what
+is fetched_; For-you is the default global window — but EVERY tab owns
 its pagination cursor:
 
-| Tab | Data source | Load-more walks |
-|---|---|---|
-| Explore | same window, 3-col grid | global window (grid edge reveals tiles + warms the relay page) |
-| Following | `follows` filter on relays | **the follows window** (never the global cursor) |
-| For you | global media window | global window (settle within 2 pages of the end → walk) |
+| Tab       | Data source                | Load-more walks                                                |
+| --------- | -------------------------- | -------------------------------------------------------------- |
+| Explore   | same window, 3-col grid    | global window (grid edge reveals tiles + warms the relay page) |
+| Following | `follows` filter on relays | **the follows window** (never the global cursor)               |
+| For you   | global media window        | global window (settle within 2 pages of the end → walk)        |
 
 Rules the native port must keep (all delivered):
 
@@ -258,7 +258,7 @@ Already in place natively (verified in code):
 
 - Three-slot player pools keyed by verified id — `PlayerPool.swift`
   (AVQueuePlayer + AVPlayerLooper), `VideoPlayerPool.kt` (Media3 ExoPlayer) —
-  only the settled page plays; this is *ahead* of the web (real adjacent-slot
+  only the settled page plays; this is _ahead_ of the web (real adjacent-slot
   preloading, not just `preload="metadata"`).
 - Snap pagers with visibility-driven election; mute memory persisted
   (`bitos_video_muted`); autoplay policy settings; double-tap like.
@@ -270,17 +270,17 @@ Already in place natively (verified in code):
 
 Native gaps this plan closes (tracked →):
 
-| Gap | Web behavior to port | Tracker |
-|---|---|---|
-| G1 ✅ Query depth & kind coverage | kinds `[20,21,22,34235,34236]` now in `feedKinds`/`reelMediaKinds` + `BitzTimelinePolicy.initialFilters()` | Delivered (shared, tested) |
-| G2 ✅ Multi-batch backward walk policy | `BitzTimelinePolicy` (fresh budget 18, 6 batches, monotonic `until`, stall detect) — repository seam adoption pending | Policy shared+tested; repo walk pending (REL) |
-| G3 ◐ Per-batch `maxWait` 4 s | `PAGE_MAX_WAIT_MS` shared const; relay-layer enforcement pending | REL |
-| G4 ✅ Progressive paint (primary-first, secondary merge) | First relay paints; slow ones merge in — each completed EOSE batch (or its 4 s deadline) publishes the whole batch at once, mid-walk EVENT frames never publish singly | Delivered (REL; `FeedRepository`/`FeedStore`) |
-| G5 ✅ Three-layer distance triggers on the pager | Android pager + iOS `onChange(topId)` now fire load-older at the shared `PREFETCH_BUFFER_THRESHOLD` distance; store-side render batching rides the pools | APP-007 delivered |
-| G6 ○ Cold-start snapshot + tab-session with position restore | 10 reels / 15 min TTL; session index + scroll top; 60 s refresh gate | FED pending |
-| G7 ✅ Rendition selection + mirror failover on the read path | `selectRendition` (screen ×1.25 static pick) + pick→mirrors→renditions chain on item error, BOTH players; imeta parsing bounded | FED-004 delivered |
-| G8 ◐ `imeta` poster/thumbnail use | Grid thumbs honor explicit publisher hints (Flutter `posterUrlFor` parity: top-level `preview`/`image` tags, then `imeta` `preview`/`image` field values) before derived-attachment posters — shared `MediaMetadata`, both UIs consume `posterUrl`; `thumb` key + native frame extraction still pending | FED hint parity delivered; APP-007 polish pending |
-| G9 ◐ Engagement second-pass patch-in | Tallies already patch in place on both platforms; the kinds `[7,6,16,9735,1111,1018]` `#e`-batched second pass is not yet issued per page | FED partial |
+| Gap                                                          | Web behavior to port                                                                                                                                                                                                                                                                                    | Tracker                                           |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| G1 ✅ Query depth & kind coverage                            | kinds `[20,21,22,34235,34236]` now in `feedKinds`/`reelMediaKinds` + `BitzTimelinePolicy.initialFilters()`                                                                                                                                                                                              | Delivered (shared, tested)                        |
+| G2 ✅ Multi-batch backward walk policy                       | `BitzTimelinePolicy` (fresh budget 18, 6 batches, monotonic `until`, stall detect) — repository seam adoption pending                                                                                                                                                                                   | Policy shared+tested; repo walk pending (REL)     |
+| G3 ◐ Per-batch `maxWait` 4 s                                 | `PAGE_MAX_WAIT_MS` shared const; relay-layer enforcement pending                                                                                                                                                                                                                                        | REL                                               |
+| G4 ✅ Progressive paint (primary-first, secondary merge)     | First relay paints; slow ones merge in — each completed EOSE batch (or its 4 s deadline) publishes the whole batch at once, mid-walk EVENT frames never publish singly                                                                                                                                  | Delivered (REL; `FeedRepository`/`FeedStore`)     |
+| G5 ✅ Three-layer distance triggers on the pager             | Android pager + iOS `onChange(topId)` now fire load-older at the shared `PREFETCH_BUFFER_THRESHOLD` distance; store-side render batching rides the pools                                                                                                                                                | APP-007 delivered                                 |
+| G6 ○ Cold-start snapshot + tab-session with position restore | 10 reels / 15 min TTL; session index + scroll top; 60 s refresh gate                                                                                                                                                                                                                                    | FED pending                                       |
+| G7 ✅ Rendition selection + mirror failover on the read path | `selectRendition` (screen ×1.25 static pick) + pick→mirrors→renditions chain on item error, BOTH players; imeta parsing bounded                                                                                                                                                                         | FED-004 delivered                                 |
+| G8 ◐ `imeta` poster/thumbnail use                            | Grid thumbs honor explicit publisher hints (Flutter `posterUrlFor` parity: top-level `preview`/`image` tags, then `imeta` `preview`/`image` field values) before derived-attachment posters — shared `MediaMetadata`, both UIs consume `posterUrl`; `thumb` key + native frame extraction still pending | FED hint parity delivered; APP-007 polish pending |
+| G9 ◐ Engagement second-pass patch-in                         | Tallies already patch in place on both platforms; the kinds `[7,6,16,9735,1111,1018]` `#e`-batched second pass is not yet issued per page                                                                                                                                                               | FED partial                                       |
 
 **Tab-system gap (closed, then revised):** the web's 5-tab cycle was
 ported as W2 view-only sorts (§2.9) and later reduced to the legacy
@@ -381,7 +381,7 @@ remaining pages to end < 3  → if (loaded - renderedVisibleWindow) ≤ 6 → fe
 Two layers, mirroring web intent with native storage:
 
 1. **Cache snapshot** — reuse the existing SQLite event cache
-   (DAT-001..003): on cold start hydrate the newest ≤10 *verified* short-video
+   (DAT-001..003): on cold start hydrate the newest ≤10 _verified_ short-video
    events and paint immediately; then refresh in the background. No new
    storage schema; minutes-freshness bound (web: 15 min TTL) is a read-time
    check, not a persisted clock.
@@ -389,7 +389,7 @@ Two layers, mirroring web intent with native storage:
    store: mode, pager index, grid scroll offset, backward cursor,
    `hasMore`, `lastRefreshedAt`; restore on re-entering the Bitz tab
    (`refresh only if > 60 s`). Surviving app kills beyond the snapshot is
-   explicitly *not* required (web parity).
+   explicitly _not_ required (web parity).
 
 ### 4.5 Rendition selection + mirror failover (FED-004, open in blueprint)
 
@@ -400,8 +400,8 @@ Two layers, mirroring web intent with native storage:
   tallest fitting, smallest-on-overshoot — pure shared function + fixtures.
 - Players consume `primary = rendition pick`, `fallbacks = mirrors`; swap to
   the next candidate **only on item error** (Android: `Player.Listener
-  onPlayerError` → next `MediaItem`; iOS: observe `AVPlayerItem.status ==
-  .failed` → replace item). Rendition choice is a static pick — no ABR in V1.
+onPlayerError` → next `MediaItem`; iOS: observe `AVPlayerItem.status ==
+.failed` → replace item). Rendition choice is a static pick — no ABR in V1.
 - Grid thumbnails: use `imeta thumb` when present (AsyncImage/decoded-size
   rules per `native-performance.md` §8) — an improvement over web.
 
@@ -414,14 +414,14 @@ callback reaches the UI") more strongly than the DOM registry does.
 
 ### 4.7 Performance acceptance gates
 
-| Gate | Target |
-|---|---|
-| Bitz tab cold paint (cache hydrate path) | < 150 ms to first frame of grid |
-| First network page (fastest relay EOSE) | paints incrementally; never blocked by slowest relay |
-| Pagination trigger → tiles appended | no user-visible stall at normal scroll speed (batches land before edge) |
-| Dial-a-dead-relay test | pagination completes ≤ 6 batches × 4 s worst case; UI shows loading state, never deadlock |
-| Player slots | ≤ 3, exactly 1 playing, 0 playing when surface hidden |
-| Monotonic cursor | fixture: repeated walks never re-yield known ids; addressable newest-wins preserved |
+| Gate                                     | Target                                                                                    |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Bitz tab cold paint (cache hydrate path) | < 150 ms to first frame of grid                                                           |
+| First network page (fastest relay EOSE)  | paints incrementally; never blocked by slowest relay                                      |
+| Pagination trigger → tiles appended      | no user-visible stall at normal scroll speed (batches land before edge)                   |
+| Dial-a-dead-relay test                   | pagination completes ≤ 6 batches × 4 s worst case; UI shows loading state, never deadlock |
+| Player slots                             | ≤ 3, exactly 1 playing, 0 playing when surface hidden                                     |
+| Monotonic cursor                         | fixture: repeated walks never re-yield known ids; addressable newest-wins preserved       |
 
 Tests: common `BitzTimelinePolicy` tests (JVM + macOS lanes), relay
 adapter-contract test with a fake transport (slow relay, `until`-ignoring
@@ -433,17 +433,17 @@ status in the same change (AGENTS.md delivery rule).
 
 ## 5. Porting cheat-sheet (web → native mapping)
 
-| Web | Native equivalent (existing or planned) |
-|---|---|
-| `SimplePool` singleton + `ensureConnected` | `RelayPool` actor / OkHttp pool (keep warm; REL) |
-| `queryParallelProgressive` / `queryPrimaryFirst` | repository query modes (G4) |
-| `until` walk + fresh-count + stall detect | `BitzTimelinePolicy` (G1–G3) |
-| `handleReelScroll` thresholds 2×/3× | pager distance triggers (G5) |
-| `bitos:reels-cache:v3` (10/15 min) | SQLite event cache hydrate path (G6) |
-| `bitzSession` + 60 s refresh | feature-store tab session (G6) |
-| `createVisibilityObserver` election | pager settled-page + pool reconciliation |
-| `syncActivePlayback` mute/retry | pool `setMuted` + autoplay policy settings |
-| `selectRendition` ×1.25 + `tryNextCandidate` | shared `selectRendition` + item-error failover (G7) |
-| `lazyVideoMetadata` 300px | grid thumb = `imeta thumb`, lazy compose/async image (G8) |
-| engagement 2nd pass `#e` patch | `NoteTally` merge per page (G9) |
-| `bitzPageActive` kill-switch | structured cancellation in store task |
+| Web                                              | Native equivalent (existing or planned)                   |
+| ------------------------------------------------ | --------------------------------------------------------- |
+| `SimplePool` singleton + `ensureConnected`       | `RelayPool` actor / OkHttp pool (keep warm; REL)          |
+| `queryParallelProgressive` / `queryPrimaryFirst` | repository query modes (G4)                               |
+| `until` walk + fresh-count + stall detect        | `BitzTimelinePolicy` (G1–G3)                              |
+| `handleReelScroll` thresholds 2×/3×              | pager distance triggers (G5)                              |
+| `bitos:reels-cache:v3` (10/15 min)               | SQLite event cache hydrate path (G6)                      |
+| `bitzSession` + 60 s refresh                     | feature-store tab session (G6)                            |
+| `createVisibilityObserver` election              | pager settled-page + pool reconciliation                  |
+| `syncActivePlayback` mute/retry                  | pool `setMuted` + autoplay policy settings                |
+| `selectRendition` ×1.25 + `tryNextCandidate`     | shared `selectRendition` + item-error failover (G7)       |
+| `lazyVideoMetadata` 300px                        | grid thumb = `imeta thumb`, lazy compose/async image (G8) |
+| engagement 2nd pass `#e` patch                   | `NoteTally` merge per page (G9)                           |
+| `bitzPageActive` kill-switch                     | structured cancellation in store task                     |

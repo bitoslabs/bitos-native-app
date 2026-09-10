@@ -8,7 +8,14 @@
     "version": 3,
     "slots": [
       { "id": "name", "name": "name", "type": "short_text", "required": true, "maxLen": 24 },
-      { "id": "sats", "name": "sats", "type": "number", "required": true, "min": 0, "max": 1000000 },
+      {
+        "id": "sats",
+        "name": "sats",
+        "type": "number",
+        "required": true,
+        "min": 0,
+        "max": 1000000
+      },
       { "id": "bg", "name": "bg", "type": "color" },
       { "id": "img", "name": "img", "type": "image_asset", "asset": "a1" }
     ],
@@ -18,14 +25,32 @@
       "assets": [{ "id": "a1", "kind": "image" }],
       "overlays": [
         {
-          "id": "o1", "kind": "text", "text": "zap {name}", "font": "impact",
-          "size": 64, "color": 0, "outline": 3, "shadow": false,
-          "x": 0.5, "y": 0.14, "scale": 1.0, "rot": 0.0
+          "id": "o1",
+          "kind": "text",
+          "text": "zap {name}",
+          "font": "impact",
+          "size": 64,
+          "color": 0,
+          "outline": 3,
+          "shadow": false,
+          "x": 0.5,
+          "y": 0.14,
+          "scale": 1.0,
+          "rot": 0.0
         },
         {
-          "id": "o2", "kind": "text", "text": "{sats} sats", "font": "impact",
-          "size": 64, "color": 0, "outline": 3, "shadow": false,
-          "x": 0.5, "y": 0.86, "scale": 1.0, "rot": 0.0
+          "id": "o2",
+          "kind": "text",
+          "text": "{sats} sats",
+          "font": "impact",
+          "size": 64,
+          "color": 0,
+          "outline": 3,
+          "shadow": false,
+          "x": 0.5,
+          "y": 0.86,
+          "scale": 1.0,
+          "rot": 0.0
         }
       ],
       "cw": "",

@@ -4,14 +4,8 @@
   "kind": 22,
   "content": "A BitOS interoperability fixture https://media.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4",
   "tags": [
-    [
-      "title",
-      "Fixture"
-    ],
-    [
-      "alt",
-      "A test pattern used for protocol verification"
-    ],
+    ["title", "Fixture"],
+    ["alt", "A test pattern used for protocol verification"],
     [
       "imeta",
       "url https://media.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4",

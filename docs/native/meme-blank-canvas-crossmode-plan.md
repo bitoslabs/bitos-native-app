@@ -8,43 +8,43 @@ image-stack export fix are already shipped (see `native-ui-build-tracker.md`
 
 ## 1. User stories
 
-| # | Story | Modes |
-|----|-------|-------|
-| U1 | "I want to make a meme from NOTHING — no photo. Just a colored canvas, my text and stickers." | IMAGE ✅ shipped · GIF · VIDEO |
-| U2 | "I want a blank VIDEO: pick a duration, add text/stickers/images/GIF-layers that animate, add sound (SFX), export MP4." | VIDEO |
-| U3 | "I want a blank GIF: a short kinetic loop made of animated text/stickers over a canvas." | GIF |
-| U4 | "I have a video meme (blank or not) and want to EXPORT IT AS A GIF" for platforms that don't take video. | VIDEO → GIF |
-| U5 | "My blank draft survives kill/relaunch like every other draft." | all |
+| #   | Story                                                                                                                   | Modes                          |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| U1  | "I want to make a meme from NOTHING — no photo. Just a colored canvas, my text and stickers."                           | IMAGE ✅ shipped · GIF · VIDEO |
+| U2  | "I want a blank VIDEO: pick a duration, add text/stickers/images/GIF-layers that animate, add sound (SFX), export MP4." | VIDEO                          |
+| U3  | "I want a blank GIF: a short kinetic loop made of animated text/stickers over a canvas."                                | GIF                            |
+| U4  | "I have a video meme (blank or not) and want to EXPORT IT AS A GIF" for platforms that don't take video.                | VIDEO → GIF                    |
+| U5  | "My blank draft survives kill/relaunch like every other draft."                                                         | all                            |
 
 ## 2. Current-state analysis
 
 ### What already works (reuse inventory)
 
-| Capability | Where | Blank-video ready? |
-|---|---|---|
-| Canvas ratio/bg rules (additive wire `canvas` object) | shared `MemeCanvas` | ✅ wire exists; VIDEO never writes it |
-| Blank IMAGE stage + PNG render/export/publish/variations | `renderBlank` / `renderBlankPngData` | ✅ shipped 2026-09-08 |
-| Per-overlay motion fx + visibility windows | shared `MemeFxRules.transformAt(overlay, atMs)` (pop/fade/wave/spin) | ✅ video stage + video export burn it; **GIF exporter draws IDENTITY** |
-| Animated GIF layers (reels) | `gifReels` decode + per-frame burn in video export; stage `gifFrameAt` | ✅ works wherever a clip timeline exists |
+| Capability                                                              | Where                                                                                    | Blank-video ready?                                                            |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Canvas ratio/bg rules (additive wire `canvas` object)                   | shared `MemeCanvas`                                                                      | ✅ wire exists; VIDEO never writes it                                         |
+| Blank IMAGE stage + PNG render/export/publish/variations                | `renderBlank` / `renderBlankPngData`                                                     | ✅ shipped 2026-09-08                                                         |
+| Per-overlay motion fx + visibility windows                              | shared `MemeFxRules.transformAt(overlay, atMs)` (pop/fade/wave/spin)                     | ✅ video stage + video export burn it; **GIF exporter draws IDENTITY**        |
+| Animated GIF layers (reels)                                             | `gifReels` decode + per-frame burn in video export; stage `gifFrameAt`                   | ✅ works wherever a clip timeline exists                                      |
 | SFX cue timeline (synth buckets: funny/impact/system/money/transitions) | `addSfxCue(sfx, atMs)` + `sfxMixTimeline(project, durationMs)` mixed into the MP4 export | ✅ needs a duration source; chip already appears when `videoMode && hasVideo` |
-| Multi-clip timeline (split/trim/reorder/volume/look/speed) | M5 wave, both platforms | ✅ if the blank source is A REAL CLIP, everything inherits |
-| GIF size ladder (≤3 halving steps, 8 MB cap) | shared `GifExportPlan` + `MemeGifExport` / `MemeGifExportIos` | ✅ |
-| Draft slots (assets copy-in incl. `mem:` clip bytes, wire, poster) | `MemeProjectStore` | ✅ blank-video clip rides `mem:` like camera takes |
-| Mode switch confirm, undo, coalescing | `MemeEditorState` / store | ✅ |
+| Multi-clip timeline (split/trim/reorder/volume/look/speed)              | M5 wave, both platforms                                                                  | ✅ if the blank source is A REAL CLIP, everything inherits                    |
+| GIF size ladder (≤3 halving steps, 8 MB cap)                            | shared `GifExportPlan` + `MemeGifExport` / `MemeGifExportIos`                            | ✅                                                                            |
+| Draft slots (assets copy-in incl. `mem:` clip bytes, wire, poster)      | `MemeProjectStore`                                                                       | ✅ blank-video clip rides `mem:` like camera takes                            |
+| Mode switch confirm, undo, coalescing                                   | `MemeEditorState` / store                                                                | ✅                                                                            |
 
 ### What is missing (the gap list)
 
-| Gap | Impact |
-|---|---|
-| **G1** No creation entry for blank GIF/VIDEO (empty state only offers pick/browse) | U2, U3 blocked |
-| **G2** No blank-timeline source: VIDEO requires ≥1 probed clip | U2 blocked — the core invention |
-| **G3** No duration model for a blank timeline (video duration = clip windows; GIF duration = frames) | U2, U3 |
-| **G4** GIF exporter ignores per-frame fx (`renderFrameRgba`/`encode` paint IDENTITY) | U3 (and any future animated-GIF output) |
-| **G5** GIF stage preview is a static frame — no fx clock | U3 preview honesty |
-| **G6** No video→GIF conversion path or export-format choice | U4 |
-| **G7** Canvas chip hidden in VIDEO mode; bg/ratio re-style for blank video undefined | U2 polish |
-| **G8** Blank-GIF duration/fps have no wire representation → resume loses them | U5 |
-| **G9** Publish path assumes GIF ⇒ gif-mode frames; video→GIF export is save-only in V1 | U4 scope line |
+| Gap                                                                                                  | Impact                                  |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| **G1** No creation entry for blank GIF/VIDEO (empty state only offers pick/browse)                   | U2, U3 blocked                          |
+| **G2** No blank-timeline source: VIDEO requires ≥1 probed clip                                       | U2 blocked — the core invention         |
+| **G3** No duration model for a blank timeline (video duration = clip windows; GIF duration = frames) | U2, U3                                  |
+| **G4** GIF exporter ignores per-frame fx (`renderFrameRgba`/`encode` paint IDENTITY)                 | U3 (and any future animated-GIF output) |
+| **G5** GIF stage preview is a static frame — no fx clock                                             | U3 preview honesty                      |
+| **G6** No video→GIF conversion path or export-format choice                                          | U4                                      |
+| **G7** Canvas chip hidden in VIDEO mode; bg/ratio re-style for blank video undefined                 | U2 polish                               |
+| **G8** Blank-GIF duration/fps have no wire representation → resume loses them                        | U5                                      |
+| **G9** Publish path assumes GIF ⇒ gif-mode frames; video→GIF export is save-only in V1               | U4 scope line                           |
 
 ## 3. UX/UI design
 
@@ -67,13 +67,13 @@ background source differs.
 
 ### 3.2 The "New blank" sheet (shared component, mode-aware)
 
-| Control | VIDEO | GIF |
-|---|---|---|
-| Ratio chips | 1:1 · 4:5 · 9:16 · 16:9 (no "Source") | same |
-| Background swatches | the CanvasSheet palette (incl. custom hex) | same |
-| Duration chips | 3 s · 5 s · 10 s (default 5 s; ladder caps apply) | 1 s · 2 s · 3 s (default 2 s) |
-| Frame rate | n/a (clip is 30 fps) | 10 fps · 15 fps (default 10; ≤ 60-frame cap honored: 3 s × 15 fps clamps to 45) |
-| Create button | "Create blank video" | "Create blank GIF" |
+| Control             | VIDEO                                             | GIF                                                                             |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Ratio chips         | 1:1 · 4:5 · 9:16 · 16:9 (no "Source")             | same                                                                            |
+| Background swatches | the CanvasSheet palette (incl. custom hex)        | same                                                                            |
+| Duration chips      | 3 s · 5 s · 10 s (default 5 s; ladder caps apply) | 1 s · 2 s · 3 s (default 2 s)                                                   |
+| Frame rate          | n/a (clip is 30 fps)                              | 10 fps · 15 fps (default 10; ≤ 60-frame cap honored: 3 s × 15 fps clamps to 45) |
+| Create button       | "Create blank video"                              | "Create blank GIF"                                                              |
 
 Feedback on create: the stage immediately shows the colored canvas; a
 one-time coach chip ("Add text, stickers, layers or sound — the canvas
@@ -182,50 +182,51 @@ exported composition (bounded by the same planner).
 ## 5. Task breakdown (waves, step-by-step)
 
 Wave order is dependency order; each wave ships both platforms + tests
-+ tracker entry. IDs continue the MST space.
+
+- tracker entry. IDs continue the MST space.
 
 ### Wave 1 — Blank VIDEO foundation (U2 core)
 
-| ID | Task | Platform | Notes / acceptance |
-|---|---|---|---|
-| MST-070 | Blank-clip synthesizer: `BlankClipSource.create(ratio, bgHex, ms): File` | A+iOS | MediaCodec/Muxer & AVAssetWriter; deterministic, probe-able, ≤ a few hundred KB; golden test (byte-stable given inputs) |
-| MST-071 | "New blank" sheet component (ratio · bg · duration) + empty-state wiring for VIDEO | A+iOS | Reuses CanvasSheet palette; Create → synth → `appendClip(undoable=false)`; coach chip |
-| MST-072 | Blank-session detection + gating parity | A+iOS | `blankVideoActive` (single `canvas`-labeled clip); Export/Next enable rules per §3.5; timeline chip styling |
-| MST-073 | Extend canvas + bg re-tint + Canvas chip in video mode | A+iOS | Regenerate source; overlays/cues keep positions; confirm on ratio change |
+| ID      | Task                                                                               | Platform | Notes / acceptance                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| MST-070 | Blank-clip synthesizer: `BlankClipSource.create(ratio, bgHex, ms): File`           | A+iOS    | MediaCodec/Muxer & AVAssetWriter; deterministic, probe-able, ≤ a few hundred KB; golden test (byte-stable given inputs) |
+| MST-071 | "New blank" sheet component (ratio · bg · duration) + empty-state wiring for VIDEO | A+iOS    | Reuses CanvasSheet palette; Create → synth → `appendClip(undoable=false)`; coach chip                                   |
+| MST-072 | Blank-session detection + gating parity                                            | A+iOS    | `blankVideoActive` (single `canvas`-labeled clip); Export/Next enable rules per §3.5; timeline chip styling             |
+| MST-073 | Extend canvas + bg re-tint + Canvas chip in video mode                             | A+iOS    | Regenerate source; overlays/cues keep positions; confirm on ratio change                                                |
 
 ### Wave 2 — Sound + layers QA on blank video (U2 completeness)
 
-| ID | Task | Platform | Notes / acceptance |
-|---|---|---|---|
-| MST-074 | SFX on blank video: verify + fix cue-at-playhead defaults, scrub markers, export burn | A+iOS | Contract test: blank clip + 2 cues → mixed MP4 has 2 audible regions (timing test) |
-| MST-075 | Image + animated-GIF layers on blank video: stage/export parity pass | A+iOS | Reel burn per frame at playhead; layers listing; hit-test |
-| MST-076 | Blank-video slots: autosave/resume incl. `mem:` clip + canvas facts | A+iOS | Kill/relaunch restores timeline + canvas label; contract test |
+| ID      | Task                                                                                  | Platform | Notes / acceptance                                                                 |
+| ------- | ------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| MST-074 | SFX on blank video: verify + fix cue-at-playhead defaults, scrub markers, export burn | A+iOS    | Contract test: blank clip + 2 cues → mixed MP4 has 2 audible regions (timing test) |
+| MST-075 | Image + animated-GIF layers on blank video: stage/export parity pass                  | A+iOS    | Reel burn per frame at playhead; layers listing; hit-test                          |
+| MST-076 | Blank-video slots: autosave/resume incl. `mem:` clip + canvas facts                   | A+iOS    | Kill/relaunch restores timeline + canvas label; contract test                      |
 
 ### Wave 3 — Kinetic GIF (U3)
 
-| ID | Task | Platform | Notes / acceptance |
-|---|---|---|---|
-| MST-077 | GIF exporter fx-per-frame: `renderFrameRgba`/`encode` evaluate `MemeFxRules.transformAt(overlay, atMs)` | A+iOS | Golden frames; picked GIFs unaffected (ID entity when no fx) |
-| MST-078 | Blank GIF session: creation sheet (ratio · bg · sec · fps), generated preview loop (stage clock), export | A+iOS | ≤60-frame clamp notice; WYSIWYG stage ⇄ export |
-| MST-079 | Wire `canvas.sec` + shared clamps + fixtures | shared | Common tests both modes; old-wire compatibility fixtures |
-| MST-080 | Blank GIF resume + Duration chip (re-time with confirm) | A+iOS | Windows scale proportionally; undoable |
+| ID      | Task                                                                                                     | Platform | Notes / acceptance                                           |
+| ------- | -------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
+| MST-077 | GIF exporter fx-per-frame: `renderFrameRgba`/`encode` evaluate `MemeFxRules.transformAt(overlay, atMs)`  | A+iOS    | Golden frames; picked GIFs unaffected (ID entity when no fx) |
+| MST-078 | Blank GIF session: creation sheet (ratio · bg · sec · fps), generated preview loop (stage clock), export | A+iOS    | ≤60-frame clamp notice; WYSIWYG stage ⇄ export               |
+| MST-079 | Wire `canvas.sec` + shared clamps + fixtures                                                             | shared   | Common tests both modes; old-wire compatibility fixtures     |
+| MST-080 | Blank GIF resume + Duration chip (re-time with confirm)                                                  | A+iOS    | Windows scale proportionally; undoable                       |
 
 ### Wave 4 — Video → GIF export (U4)
 
-| ID | Task | Platform | Notes / acceptance |
-|---|---|---|---|
-| MST-081 | Compositor frame sampler → existing GIF ladder | A | Frame-callback path; deterministic fps/duration honoring speed+trims |
-| MST-082 | iOS sampler (`AVAssetImageGenerator` on the composition) | iOS | Same planner facts |
-| MST-083 | Export-sheet FORMAT row + durable `gif` job from video mode + outcome copy | A+iOS | Retry reuses artifact; "Saved at a smaller size" ladder outcome reused |
-| MST-084 | (stretch) Publish video meme as kind-20 GIF | A+iOS | Only if product wants it; otherwise documented save-only |
+| ID      | Task                                                                       | Platform | Notes / acceptance                                                     |
+| ------- | -------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
+| MST-081 | Compositor frame sampler → existing GIF ladder                             | A        | Frame-callback path; deterministic fps/duration honoring speed+trims   |
+| MST-082 | iOS sampler (`AVAssetImageGenerator` on the composition)                   | iOS      | Same planner facts                                                     |
+| MST-083 | Export-sheet FORMAT row + durable `gif` job from video mode + outcome copy | A+iOS    | Retry reuses artifact; "Saved at a smaller size" ladder outcome reused |
+| MST-084 | (stretch) Publish video meme as kind-20 GIF                                | A+iOS    | Only if product wants it; otherwise documented save-only               |
 
 ### Wave 5 — Hardening
 
-| ID | Task | Notes |
-|---|---|---|
-| MST-085 | Full QA checklist pass (docs/product/qa-manual-checklist.md): blank×3 modes × export×3 formats × resume × publish | Update checklist |
-| MST-086 | Perf: synth ≤ 300 ms, GIF sampling bounded by planner; memory ceilings on 60-frame sessions | Timing tests (repo rule: media changes need deterministic/timing tests) |
-| MST-087 | Docs sweep: this file, meme-studio-plan.md cross-links, tracker entries per wave | Repo rule |
+| ID      | Task                                                                                                              | Notes                                                                   |
+| ------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| MST-085 | Full QA checklist pass (docs/product/qa-manual-checklist.md): blank×3 modes × export×3 formats × resume × publish | Update checklist                                                        |
+| MST-086 | Perf: synth ≤ 300 ms, GIF sampling bounded by planner; memory ceilings on 60-frame sessions                       | Timing tests (repo rule: media changes need deterministic/timing tests) |
+| MST-087 | Docs sweep: this file, meme-studio-plan.md cross-links, tracker entries per wave                                  | Repo rule                                                               |
 
 ## 6. Non-goals / future
 

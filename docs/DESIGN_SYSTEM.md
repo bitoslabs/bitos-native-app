@@ -6,22 +6,22 @@
 
 ## 0. Native implementation map (single source of truth chain)
 
-Token *values* are owned once by the versioned shared contract
+Token _values_ are owned once by the versioned shared contract
 `shared/business-core/src/commonMain/kotlin/space/bitos/core/design/DesignTokens.kt`
 (SCHEMA_VERSION 1) and mirrored into both platforms — extend, don't fork:
 
-| Layer | File | Owns |
-|:--|:--|:--|
-| Contract | `shared/.../design/DesignTokens.kt` | both palettes (dark default + AA-tuned light), type/spacing/radius/avatar/motion scales, hex geometry fractions, WCAG 2.1 contrast engine |
-| Contract tests | `shared/.../commonTest/.../design/DesignTokensTest.kt` | contrast floors per mode (§2.6 as executable rules), dark-legacy value pins, scale invariants |
-| SwiftUI | `apps/ios/BitOS/DesignSystem/BitOSTheme.swift` | dynamic dark/light `Color`s (trait-resolved + `modeOverride` for APP-023), `BitOSType`, `BitOSMotion`, `BitOSRadius/Spacing/AvatarSize`, glow modifiers |
-| Compose | `apps/android/.../ui/theme/Theme.kt` | `BitOSPalette` (dark + light) via `LocalBitOSColors`, both Material schemes, `BitOSTheme(darkTheme)` |
-| Components | `apps/ios/BitOS/DesignSystem/App{Button,Chip,Skeleton}.swift` · `apps/android/.../ui/designsystem/*.kt` | button (primary/on-surface/ghost/danger + loading + pressed-scale), chip (default/active/brand/removable), card, shimmer skeletons, matched empty state |
+| Layer          | File                                                                                                    | Owns                                                                                                                                                    |
+| :------------- | :------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Contract       | `shared/.../design/DesignTokens.kt`                                                                     | both palettes (dark default + AA-tuned light), type/spacing/radius/avatar/motion scales, hex geometry fractions, WCAG 2.1 contrast engine               |
+| Contract tests | `shared/.../commonTest/.../design/DesignTokensTest.kt`                                                  | contrast floors per mode (§2.6 as executable rules), dark-legacy value pins, scale invariants                                                           |
+| SwiftUI        | `apps/ios/BitOS/DesignSystem/BitOSTheme.swift`                                                          | dynamic dark/light `Color`s (trait-resolved + `modeOverride` for APP-023), `BitOSType`, `BitOSMotion`, `BitOSRadius/Spacing/AvatarSize`, glow modifiers |
+| Compose        | `apps/android/.../ui/theme/Theme.kt`                                                                    | `BitOSPalette` (dark + light) via `LocalBitOSColors`, both Material schemes, `BitOSTheme(darkTheme)`                                                    |
+| Components     | `apps/ios/BitOS/DesignSystem/App{Button,Chip,Skeleton}.swift` · `apps/android/.../ui/designsystem/*.kt` | button (primary/on-surface/ghost/danger + loading + pressed-scale), chip (default/active/brand/removable), card, shimmer skeletons, matched empty state |
 
 Rules of the chain:
 
 1. **Light mode is derived, not guessed.** The dark accent fails AA as
-   text/labels on light surfaces, so light mode ships per-mode *text*
+   text/labels on light surfaces, so light mode ships per-mode _text_
    roles (`textLink`, `errorText`, `successText`, `warningText`,
    `infoText`, `accentText`) at 700-range values; light `textSecondary`
    is `0x4B5563` and tertiary `0x717684` (spec's originals missed the
@@ -50,25 +50,25 @@ Rules of the chain:
 
 ### 1.1 Core Principles
 
-| Principle | Description |
-|:---|:---|
+| Principle             | Description                                                              |
+| :-------------------- | :----------------------------------------------------------------------- |
 | **Decentralized DNA** | UI should communicate sovereignty — key-first identity, relay visibility |
-| **Content First** | Media and text dominate the viewport. UI chrome is minimal |
-| **Familiar Patterns** | Users from TikTok/IG/FB should feel instantly comfortable |
-| **Smooth & Alive** | Micro-animations on every interaction. Nothing feels static |
-| **Dark by Default** | Optimized for OLED. Light mode available but dark is primary |
+| **Content First**     | Media and text dominate the viewport. UI chrome is minimal               |
+| **Familiar Patterns** | Users from TikTok/IG/FB should feel instantly comfortable                |
+| **Smooth & Alive**    | Micro-animations on every interaction. Nothing feels static              |
+| **Dark by Default**   | Optimized for OLED. Light mode available but dark is primary             |
 
 ### 1.2 Platform Inspiration Map
 
-| Feature Area | Inspiration | Our Interpretation |
-|:---|:---|:---|
-| Reels feed | TikTok | Full-screen vertical swipe with overlaid controls |
-| Profile grid | Instagram | 3-column photo grid + list view toggle |
-| Feed cards | Twitter/X | Clean text-focused cards with compact action bar |
-| Stories | Instagram/Snapchat | Circular avatars at top, tap-through progression |
-| DMs | Instagram/iMessage | Bubble chat with encryption indicator |
-| Explore | Instagram Explore | Mosaic grid with trending hashtag chips |
-| Zaps | Cash App | Lightning animation, quick amount picker |
+| Feature Area | Inspiration        | Our Interpretation                                |
+| :----------- | :----------------- | :------------------------------------------------ |
+| Reels feed   | TikTok             | Full-screen vertical swipe with overlaid controls |
+| Profile grid | Instagram          | 3-column photo grid + list view toggle            |
+| Feed cards   | Twitter/X          | Clean text-focused cards with compact action bar  |
+| Stories      | Instagram/Snapchat | Circular avatars at top, tap-through progression  |
+| DMs          | Instagram/iMessage | Bubble chat with encryption indicator             |
+| Explore      | Instagram Explore  | Mosaic grid with trending hashtag chips           |
+| Zaps         | Cash App           | Lightning animation, quick amount picker          |
 
 ---
 
@@ -440,16 +440,16 @@ abstract class AppCurves {
 
 ### 7.3 Required Animations
 
-| Interaction | Animation | Duration | Curve |
-|:---|:---|:---|:---|
-| Like (heart) | Scale up → bounce back + color fill | 300ms | `elasticOut` |
-| Repost | Rotate icon 360° | 400ms | `easeInOutCubic` |
-| Zap | Lightning bolt descend + shake | 500ms | `easeOutBack` |
-| Pull-to-refresh | Custom Lottie indicator | — | — |
-| Page transition | Shared element hero | 300ms | `easeInOutCubic` |
-| Bottom sheet | Slide up with fade | 300ms | `easeOutCubic` |
-| Double-tap heart | Scale in + fade out floating heart | 800ms | `easeOut` |
-| New post FAB | Scale + rotate on appear | 200ms | `easeOutBack` |
+| Interaction      | Animation                           | Duration | Curve            |
+| :--------------- | :---------------------------------- | :------- | :--------------- |
+| Like (heart)     | Scale up → bounce back + color fill | 300ms    | `elasticOut`     |
+| Repost           | Rotate icon 360°                    | 400ms    | `easeInOutCubic` |
+| Zap              | Lightning bolt descend + shake      | 500ms    | `easeOutBack`    |
+| Pull-to-refresh  | Custom Lottie indicator             | —        | —                |
+| Page transition  | Shared element hero                 | 300ms    | `easeInOutCubic` |
+| Bottom sheet     | Slide up with fade                  | 300ms    | `easeOutCubic`   |
+| Double-tap heart | Scale in + fade out floating heart  | 800ms    | `easeOut`        |
+| New post FAB     | Scale + rotate on appear            | 200ms    | `easeOutBack`    |
 
 ### 7.4 Example: Like Animation
 
@@ -619,14 +619,14 @@ class GlassContainer extends StatelessWidget {
 
 ## 10. Accessibility Requirements
 
-| Element | Requirement |
-|:---|:---|
-| **Touch targets** | Minimum 48×48px (Material guidelines) |
-| **Color contrast** | 4.5:1 minimum for body text, 3:1 for large text |
-| **Semantic labels** | All icons and images must have `semanticLabel` |
-| **Screen reader** | All interactive elements must have `Semantics` wrapper |
-| **Motion** | Respect `MediaQuery.disableAnimations` |
-| **Font scaling** | Support system font size up to 200% |
+| Element             | Requirement                                            |
+| :------------------ | :----------------------------------------------------- |
+| **Touch targets**   | Minimum 48×48px (Material guidelines)                  |
+| **Color contrast**  | 4.5:1 minimum for body text, 3:1 for large text        |
+| **Semantic labels** | All icons and images must have `semanticLabel`         |
+| **Screen reader**   | All interactive elements must have `Semantics` wrapper |
+| **Motion**          | Respect `MediaQuery.disableAnimations`                 |
+| **Font scaling**    | Support system font size up to 200%                    |
 
 ```dart
 // ✅ CORRECT — accessible icon button

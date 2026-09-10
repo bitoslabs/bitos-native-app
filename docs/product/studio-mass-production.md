@@ -186,4 +186,3 @@ A mass-production slice is complete only when:
 - accessibility paths cover setup, review, correction, and cancellation;
 - telemetry reports stage timing and stable failures without private content;
 - low-storage, offline, thermal, and partial-relay scenarios are tested.
-

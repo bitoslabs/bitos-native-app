@@ -246,8 +246,6 @@ for d in classes*.dex; do
 done
 ```
 
-
-
 ```bash
 
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"; export PATH="$JAVA_HOME/bin:$PATH"; ./scripts/ios-build.sh > /tmp/ios-build.log 2>&1; echo "final_exit=$?"

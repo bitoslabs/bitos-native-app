@@ -48,7 +48,6 @@ Run `make doctor` to see installed prerequisites and `make check` for every loca
 
 Current toolchain requirements are documented in [toolchains.md](docs/engineering/toolchains.md).
 
-
 ## icon system
 
 [solar](https://icones.js.org/collection/solar)

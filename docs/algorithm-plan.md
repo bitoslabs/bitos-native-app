@@ -59,9 +59,12 @@ UI: `src/lib/components/settings/AlgorithmSettings.svelte`, surfaced as a new
 ```typescript
 export type SurfaceId = 'feed' | 'reels' | 'discover';
 
-export interface SignalState { enabled: boolean; weight: number; }   // 0–1
+export interface SignalState {
+  enabled: boolean;
+  weight: number;
+} // 0–1
 export interface SurfaceConfig {
-  enabled: boolean;                // master switch — off = chronological
+  enabled: boolean; // master switch — off = chronological
   diversityEnabled: boolean;
   signals: Record<string, SignalState>;
 }
@@ -69,24 +72,24 @@ export interface ScoringContext {
   now: number;
   followingSet: Set<string>;
   me?: string;
-  affinity: Map<string, number>;   // pubkey → 0–1
-  wotSet: Set<string>;             // lazily populated, TTL-cached second-hop
-  recentAuthors: Set<string>;      // novelty input
-  dwell?: Map<string, number>;     // reels watch-time proxy
-  recencyHalfLifeSeconds: number;  // global freshness control
+  affinity: Map<string, number>; // pubkey → 0–1
+  wotSet: Set<string>; // lazily populated, TTL-cached second-hop
+  recentAuthors: Set<string>; // novelty input
+  dwell?: Map<string, number>; // reels watch-time proxy
+  recencyHalfLifeSeconds: number; // global freshness control
 }
-export type SignalFn = (note: FeedNote, ctx: ScoringContext) => number;  // → 0–1
+export type SignalFn = (note: FeedNote, ctx: ScoringContext) => number; // → 0–1
 ```
 
 ---
 
 ## 4. Defaults per surface
 
-| Surface | Dominant signals | Rationale |
-|---|---|---|
-| **Feed** | recency 0.35, affinity 0.25, topics 0.15, engagement 0.10, WoT 0.10, novelty 0.05 | Quality-first personalization that stays close to chronological |
-| **Reels** | engagement 0.45, zaps 0.30, recency 0.15, affinity 0.10 (off) | Discovery-oriented; dwell folded into engagement |
-| **Discover** | engagement 0.40, wot 0.30 (quality gate), zaps 0.20, recency 0.10 | WoT is a floor, not a popularity boost |
+| Surface      | Dominant signals                                                                  | Rationale                                                       |
+| ------------ | --------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Feed**     | recency 0.35, affinity 0.25, topics 0.15, engagement 0.10, WoT 0.10, novelty 0.05 | Quality-first personalization that stays close to chronological |
+| **Reels**    | engagement 0.45, zaps 0.30, recency 0.15, affinity 0.10 (off)                     | Discovery-oriented; dwell folded into engagement                |
+| **Discover** | engagement 0.40, wot 0.30 (quality gate), zaps 0.20, recency 0.10                 | WoT is a floor, not a popularity boost                          |
 
 ---
 
@@ -95,13 +98,14 @@ export type SignalFn = (note: FeedNote, ctx: ScoringContext) => number;  // → 
 ```typescript
 export function rankNotes<T extends FeedNote>(surface, candidates, ctx): T[] {
   const cfg = algorithmPreferences.config[surface];
-  if (!cfg.enabled) return [...candidates].sort(byCreatedAtDesc);  // off = chronological
+  if (!cfg.enabled) return [...candidates].sort(byCreatedAtDesc); // off = chronological
 
   const entries = Object.entries(cfg.signals).filter(enabled && weight > 0);
-  const total = sum(weights) || 1;                                  // re-normalize
+  const total = sum(weights) || 1; // re-normalize
   const scored = candidates.map((note) => {
     let score = 0;
-    for (const [id, state] of entries) score += resolveSignal(id)(note, ctx) * state.weight / total;
+    for (const [id, state] of entries)
+      score += (resolveSignal(id)(note, ctx) * state.weight) / total;
     return { note, score };
   });
   scored.sort(byScoreDesc);
@@ -117,12 +121,12 @@ chip on feed posts.
 
 ## 6. Integration points (where the ranking actually runs)
 
-| Surface | File | Behavior |
-|---|---|---|
-| **Feed** | `src/routes/+page.svelte` | Re-ranks the "For you" timeline (`rankNotesWithBreakdown`) when the master switch is on. "Following", tag, and relay-search views stay chronological. Adds a "Ranked for you · ⟨preset⟩" banner + per-post dominant-signal chip. |
-| **Reels** | `src/routes/reels/+page.svelte` | Re-ranks the loaded reels (`rankNotes`), folding the `IntersectionObserver` watch-ratio into the engagement signal as a dwell proxy. Re-ranks only on load/config change (never per visibility tick — would jitter snap scroll). |
-| **Discover** | `src/routes/discover/+page.svelte` | Re-ranks the "Active creators" grid by engagement velocity + recency + WoT floor when enabled. Media + tags stay count/chronological. |
-| **Boot** | `src/routes/+layout.svelte` | `algorithmPreferences.load()` on mount alongside the other preference stores. |
+| Surface      | File                               | Behavior                                                                                                                                                                                                                         |
+| ------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Feed**     | `src/routes/+page.svelte`          | Re-ranks the "For you" timeline (`rankNotesWithBreakdown`) when the master switch is on. "Following", tag, and relay-search views stay chronological. Adds a "Ranked for you · ⟨preset⟩" banner + per-post dominant-signal chip. |
+| **Reels**    | `src/routes/reels/+page.svelte`    | Re-ranks the loaded reels (`rankNotes`), folding the `IntersectionObserver` watch-ratio into the engagement signal as a dwell proxy. Re-ranks only on load/config change (never per visibility tick — would jitter snap scroll). |
+| **Discover** | `src/routes/discover/+page.svelte` | Re-ranks the "Active creators" grid by engagement velocity + recency + WoT floor when enabled. Media + tags stay count/chronological.                                                                                            |
+| **Boot**     | `src/routes/+layout.svelte`        | `algorithmPreferences.load()` on mount alongside the other preference stores.                                                                                                                                                    |
 
 ---
 
@@ -152,7 +156,7 @@ chip on feed posts.
 
 - **Zap totals** are read straight from `note.zapTotalSats` (already maintained
   by the feed store), so the zaps signal needs **no extra relay queries**.
-- **WoT second-hop** *does* need extra kind-`3` queries. It's fetched lazily in
+- **WoT second-hop** _does_ need extra kind-`3` queries. It's fetched lazily in
   a capped batch (≤40 follows) and cached in memory with a 5-minute TTL via
   `context.ts → scheduleWotRefresh`. It never blocks ranking — the first pass
   simply scores unknown authors at WoT `0`; once the cache populates, the next

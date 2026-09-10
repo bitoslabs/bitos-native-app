@@ -1,17 +1,17 @@
 {
-  "images" : [
+  "images": [
     {
-      "filename" : "SolarDangerTriangleLinear.svg",
-      "idiom" : "universal",
-      "scale" : "1x"
+      "filename": "SolarDangerTriangleLinear.svg",
+      "idiom": "universal",
+      "scale": "1x"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "xcode",
+    "version": 1
   },
-  "properties" : {
-    "preserves-vector-representation" : true,
-    "template-rendering-intent" : "template"
+  "properties": {
+    "preserves-vector-representation": true,
+    "template-rendering-intent": "template"
   }
 }

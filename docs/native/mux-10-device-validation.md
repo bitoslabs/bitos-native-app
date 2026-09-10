@@ -25,30 +25,30 @@ green; this runbook is what converts "implemented" into "validated".
 Mark each **Pass / Fail / Partial** with a one-line note. A Fail on any
 zero-data-loss row (A1, A2, A7) is a release blocker.
 
-| # | Scenario | Steps | Required result | Exercises |
-| --- | --- | --- | --- | --- |
-| A1 | Save fails (full storage) | Fill storage near capacity → edit → tap ✕ | Draft stays open; NO "saved" claim; dialog offers Retry save / Keep editing / Delete draft | MUX-01 |
-| A2 | Close during save, reopen | Edit → ✕ mid-save-acknowledgement → kill app → reopen Create | Latest acknowledged revision restores completely; no missing source references | MUX-01 |
-| A3 | Adjusted GIF export | Make a GIF large enough to downscale → Export sheet → Export | Reads "Saved at a smaller size (downscaled ×N)" as SUCCESS (green); dims correct; animation retained | MUX-02/04 |
-| A4 | Multi-clip MP4 export | 3-clip timeline > 64 MB (or cap note visible) → Export | Disclosure of trim ladder up front; output correct dims/duration/orientation | MUX-04 |
-| A5 | Permission denied after render | Deny Photos add permission → Export | Rendered artifact survives; Export sheet's "Recovered exports" offers Retry save (no re-render); alternative guidance shown | MUX-05 |
-| A6 | Edit while export runs | Start export → immediately edit the draft | Export uses the accepted snapshot; new edits intact and separate | MUX-04/05 |
-| A7 | Kill during publish | Airplane mode → publish → kill app at upload stage → relaunch | Publishing → Recovery queue lists the job at its stage; Verify integrity passes; Retry after going online completes; no duplicate signed event | #/queue machine |
-| A8 | Mixed batch | Design with 3 captions → Make variations → CSV with 8 ready / 1 warn / 1 blocked | Confirmation dialog shows exact scope; blocked row can't be selected/approved; warning row approvable | MUX-06/07/08 |
-| A9 | Override one approved variant | Approve variant #3 → edit its row value in Setup | Only #3 becomes unapproved; siblings untouched | MUX-08 |
-| A10 | Signed-out bulk export | Sign out → batch of 5 → select all ready → Export selected | 5 saved to Photos; retry-failed path re-runs failures only; successes never duplicated | MUX-09 |
-| A11 | CSV edge cases | Import CSVs: wrong headers; quoted commas; Unicode; 101 rows | Preview dialog names every problem BEFORE import; 101-row file refused with the split instruction; ≤100 imports cleanly | MUX-07 |
-| A12 | Existing large batch | Load a pre-MUX-07 200-row batch document | Loads with all 200 rows; no truncation | MUX-07 |
+| #   | Scenario                       | Steps                                                                            | Required result                                                                                                                                | Exercises       |
+| --- | ------------------------------ | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| A1  | Save fails (full storage)      | Fill storage near capacity → edit → tap ✕                                        | Draft stays open; NO "saved" claim; dialog offers Retry save / Keep editing / Delete draft                                                     | MUX-01          |
+| A2  | Close during save, reopen      | Edit → ✕ mid-save-acknowledgement → kill app → reopen Create                     | Latest acknowledged revision restores completely; no missing source references                                                                 | MUX-01          |
+| A3  | Adjusted GIF export            | Make a GIF large enough to downscale → Export sheet → Export                     | Reads "Saved at a smaller size (downscaled ×N)" as SUCCESS (green); dims correct; animation retained                                           | MUX-02/04       |
+| A4  | Multi-clip MP4 export          | 3-clip timeline > 64 MB (or cap note visible) → Export                           | Disclosure of trim ladder up front; output correct dims/duration/orientation                                                                   | MUX-04          |
+| A5  | Permission denied after render | Deny Photos add permission → Export                                              | Rendered artifact survives; Export sheet's "Recovered exports" offers Retry save (no re-render); alternative guidance shown                    | MUX-05          |
+| A6  | Edit while export runs         | Start export → immediately edit the draft                                        | Export uses the accepted snapshot; new edits intact and separate                                                                               | MUX-04/05       |
+| A7  | Kill during publish            | Airplane mode → publish → kill app at upload stage → relaunch                    | Publishing → Recovery queue lists the job at its stage; Verify integrity passes; Retry after going online completes; no duplicate signed event | #/queue machine |
+| A8  | Mixed batch                    | Design with 3 captions → Make variations → CSV with 8 ready / 1 warn / 1 blocked | Confirmation dialog shows exact scope; blocked row can't be selected/approved; warning row approvable                                          | MUX-06/07/08    |
+| A9  | Override one approved variant  | Approve variant #3 → edit its row value in Setup                                 | Only #3 becomes unapproved; siblings untouched                                                                                                 | MUX-08          |
+| A10 | Signed-out bulk export         | Sign out → batch of 5 → select all ready → Export selected                       | 5 saved to Photos; retry-failed path re-runs failures only; successes never duplicated                                                         | MUX-09          |
+| A11 | CSV edge cases                 | Import CSVs: wrong headers; quoted commas; Unicode; 101 rows                     | Preview dialog names every problem BEFORE import; 101-row file refused with the split instruction; ≤100 imports cleanly                        | MUX-07          |
+| A12 | Existing large batch           | Load a pre-MUX-07 200-row batch document                                         | Loads with all 200 rows; no truncation                                                                                                         | MUX-07          |
 
 ## B. Accessibility
 
-| # | Check | Required result |
-| --- | --- | --- |
-| B1 | VoiceOver / TalkBack through editor → Post details → Preflight → Publishing | Every control has a label; selection row reads "Nudge left", "Approve variant 3" style labels; stage changes announced without reading every row |
-| B2 | Manipulation without gestures | Select a caption → use the contextual row (nudge/resize/rotate) exclusively → done | Full caption placement possible with zero drag/pinch |
-| B3 | Text at 200% | Walk editor + review + batch setup at max text size | No clipped primary action; status lines wrap; approval/selection controls still tappable |
-| B4 | Hit targets | Measure (Accessibility scanner or ruler on recording) the new controls: selection checks, approve buttons, clip tools, retry buttons | ≥48 dp / 44 pt effective bounds |
-| B5 | Keyboard visible | Add text in Post details + batch recipe fields | Focused field AND Done reachable; drafts commit on Done |
+| #   | Check                                                                       | Required result                                                                                                                                  |
+| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| B1  | VoiceOver / TalkBack through editor → Post details → Preflight → Publishing | Every control has a label; selection row reads "Nudge left", "Approve variant 3" style labels; stage changes announced without reading every row |
+| B2  | Manipulation without gestures                                               | Select a caption → use the contextual row (nudge/resize/rotate) exclusively → done                                                               | Full caption placement possible with zero drag/pinch                                     |
+| B3  | Text at 200%                                                                | Walk editor + review + batch setup at max text size                                                                                              | No clipped primary action; status lines wrap; approval/selection controls still tappable |
+| B4  | Hit targets                                                                 | Measure (Accessibility scanner or ruler on recording) the new controls: selection checks, approve buttons, clip tools, retry buttons             | ≥48 dp / 44 pt effective bounds                                                          |
+| B5  | Keyboard visible                                                            | Add text in Post details + batch recipe fields                                                                                                   | Focused field AND Done reachable; drafts commit on Done                                  |
 
 ## C. Usability spot-tasks (formative, 5–8 participants when possible)
 
