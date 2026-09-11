@@ -29,6 +29,17 @@ object SearchResults {
     /** Hashtag queries are single `#tag` tokens; tags stay bounded. */
     const val MAX_TAG_LENGTH = 64
 
+    /** Relay search queries stay bounded (NIP-50 `search` is a single string). */
+    const val MAX_QUERY_LENGTH = 128
+
+    /** Web discover parity: per-filter result cap for the NIP-50 `search` and
+     *  `#t` filters (`DISCOVER_SEARCH_EVENT_LIMIT`). */
+    const val RELAY_SEARCH_EVENT_LIMIT = 180
+
+    /** Web discover parity: recent-sample cap that keeps search working on
+     *  relays without NIP-50 (`DISCOVER_TEXT_FALLBACK_LIMIT`). */
+    const val RELAY_TEXT_FALLBACK_LIMIT = 240
+
     /**
      * Classifies a query as a hashtag search: exactly one `#token` after
      * trimming, `[a-zA-Z0-9_]+`, bounded — returns the lowercase tag, or
@@ -67,6 +78,62 @@ object SearchResults {
             """{"kinds":[${boundedKinds.joinToString(",")}],"#t":["$escaped"],"limit":$boundedLimit}""",
         )
     }
+
+    /**
+     * The search REQ pair for one query (web discover parity, split for relay
+     * tolerance). Several major relays (damus, nos.lol, yakihonne) reject a
+     * whole REQ when any of its filters carries the NIP-50 `search` field
+     * (`ERROR: bad req: unrecognised filter item: search`) — observed
+     * 2026-09-10 — so `search` must never share a subscription with the
+     * other filters: a rejection would silently kill hashtag and
+     * recent-sample recall too.
+     *
+     * - [RelaySearchRequests.baseRequest] — `#t` + bounded recent-sample
+     *   filters, answerable by every conforming relay. Free-text queries
+     *   double the lowercased term as the tag when it is a bounded single
+     *   token (searching `bitcoin` also finds tagged-but-uncaptioned
+     *   events); the recent sample keeps recall alive on relays without
+     *   NIP-50.
+     * - [RelaySearchRequests.searchRequest] — the NIP-50 `{"search": query}`
+     *   full-text filter as its own subscription (`<id>-s`); free text only,
+     *   since NIP-50 leaves `#` undefined in search strings. Non-supporting
+     *   relays answer CLOSED and nothing is lost — stores ignore non-EVENT
+     *   messages.
+     *
+     * Stores re-match everything locally via [matches]: search stays
+     * verify-first. Null when the query or kind set is outside bounds.
+     */
+    fun relaySearchRequests(subscriptionId: String, query: String, kinds: List<Int>): RelaySearchRequests? {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty() || trimmed.length > MAX_QUERY_LENGTH) return null
+        val boundedKinds = kinds.filter { it in 0..65_535 }.take(8)
+        if (boundedKinds.isEmpty()) return null
+        val kindsJson = boundedKinds.joinToString(",")
+
+        val baseFilters = mutableListOf<String>()
+        val tag = queryTag(trimmed) ?: normalizeTag(trimmed.lowercase())
+        if (tag != null) {
+            val escaped = NostrEventCodec.escape(tag)
+            baseFilters += """{"kinds":[$kindsJson],"#t":["$escaped"],"limit":$RELAY_SEARCH_EVENT_LIMIT}"""
+        }
+        baseFilters += """{"kinds":[$kindsJson],"limit":$RELAY_TEXT_FALLBACK_LIMIT}"""
+
+        val searchRequest = if (!trimmed.startsWith("#")) {
+            val escaped = NostrEventCodec.escape(trimmed)
+            NostrEventCodec.encodeRequest(
+                subscriptionId + "-s",
+                """{"kinds":[$kindsJson],"search":"$escaped","limit":$RELAY_SEARCH_EVENT_LIMIT}""",
+            )
+        } else null
+
+        return RelaySearchRequests(
+            baseRequest = NostrEventCodec.encodeRequest(subscriptionId, baseFilters),
+            searchRequest = searchRequest,
+        )
+    }
+
+    /** The two REQ messages [relaySearchRequests] builds for one query. */
+    class RelaySearchRequests(val baseRequest: String, val searchRequest: String?)
 
     /**
      * Deterministic local Discover match over an already verified relay

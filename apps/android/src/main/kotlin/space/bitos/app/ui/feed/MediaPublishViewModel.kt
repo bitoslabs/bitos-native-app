@@ -36,6 +36,151 @@ class MediaPublishViewModel(
     private val mutableMemeState = MutableStateFlow(MemePublishUiState())
     val memeState: StateFlow<MemePublishUiState> = mutableMemeState.asStateFlow()
 
+    /** MST-047 W4b publish-your-own-sound outcome (busy/message/url). */
+    data class SharedSoundPublishUiState(
+        val busy: Boolean = false,
+        val message: String? = null,
+        val url: String? = null,
+    )
+
+    private val mutableSharedSoundPublish = MutableStateFlow(SharedSoundPublishUiState())
+    val sharedSoundPublish: StateFlow<SharedSoundPublishUiState> =
+        mutableSharedSoundPublish.asStateFlow()
+
+    fun dismissSharedSoundPublish() {
+        mutableSharedSoundPublish.value = SharedSoundPublishUiState()
+    }
+
+    /** MST-045 publish-your-own-template outcome (busy/message). */
+    data class SharedTemplatePublishUiState(
+        val busy: Boolean = false,
+        val message: String? = null,
+    )
+
+    private val mutableSharedTemplatePublish = MutableStateFlow(SharedTemplatePublishUiState())
+    val sharedTemplatePublish: StateFlow<SharedTemplatePublishUiState> =
+        mutableSharedTemplatePublish.asStateFlow()
+
+    fun dismissSharedTemplatePublish() {
+        mutableSharedTemplatePublish.value = SharedTemplatePublishUiState()
+    }
+
+    /**
+     * Publish-your-own shared template (MST-045 write path): PURE DATA —
+     * no upload, no media. The current overlays convert through the one
+     * wire converter inside the shared composer; the shared rail's parse
+     * round-trips what this signs.
+     */
+    fun publishSharedTemplate(
+        label: String,
+        icon: String,
+        overlays: List<space.bitos.core.studio.MemeOverlay>,
+        priceSats: Long = 0L,
+        category: String = "meme",
+    ) {
+        if (mutableSharedTemplatePublish.value.busy) return
+        publisher.dismiss()
+        mutableSharedTemplatePublish.value = SharedTemplatePublishUiState(busy = true)
+        viewModelScope.launch {
+            try {
+                val signer = identity.createSigner()
+                    ?: throw BlossomUploader.UploadFailure("Importing needs an identity (Profile tab).")
+                val templateId = label.lowercase()
+                    .map { if (it.isLetterOrDigit()) it else '-' }
+                    .joinToString("")
+                    .trim('-')
+                    .take(40)
+                    .ifEmpty { "template" } + "-${System.currentTimeMillis() % 100_000}"
+                publisher.publishSharedTemplateNote(
+                    templateId = templateId,
+                    label = label,
+                    icon = icon,
+                    overlays = overlays,
+                    priceSats = priceSats,
+                    category = category,
+                    signerProvider = { signer },
+                    writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                )
+                val result = publisher.state.first { it.result != null }.result
+                mutableSharedTemplatePublish.value = when (result) {
+                    space.bitos.app.data.publish.PublishResult.PUBLISHED ->
+                        SharedTemplatePublishUiState(message = "Shared — the template is live on the rail")
+                    space.bitos.app.data.publish.PublishResult.SIGNING_REFUSED ->
+                        SharedTemplatePublishUiState(message = "Signing was refused")
+                    space.bitos.app.data.publish.PublishResult.INVALID ->
+                        SharedTemplatePublishUiState(message = "Those template details were rejected — check the label, icon and price")
+                    else -> SharedTemplatePublishUiState(message = "No relay accepted the template event")
+                }
+            } catch (failure: BlossomUploader.UploadFailure) {
+                mutableSharedTemplatePublish.value = SharedTemplatePublishUiState(message = failure.message)
+            } catch (_: Exception) {
+                mutableSharedTemplatePublish.value = SharedTemplatePublishUiState(message = "The template could not be published")
+            }
+        }
+    }
+
+    /**
+     * Publish-your-own shared sound (MST-047 W4b): audio bytes upload
+     * hash-verified FIRST, then the kind-30078 event composes and signs
+     * with the real artifact URL (never sign before upload). Junk inputs
+     * surface as named failures; the uploaded URL rides state on success
+     * (the caller can offer the creator their own rail row next session).
+     */
+    fun publishSharedSound(
+        bytes: ByteArray,
+        label: String,
+        license: String,
+        description: String,
+        topics: List<String> = emptyList(),
+        durationMs: Long,
+    ) {
+        if (mutableSharedSoundPublish.value.busy) return
+        publisher.dismiss()
+        mutableSharedSoundPublish.value = SharedSoundPublishUiState(busy = true)
+        viewModelScope.launch {
+            try {
+                val signer = identity.createSigner()
+                    ?: throw BlossomUploader.UploadFailure("Importing needs an identity (Profile tab).")
+                val media = withContext(Dispatchers.IO) {
+                    uploader.upload(bytes, "audio/mp4", signer, DefaultBlossomServer.url)
+                }
+                val soundId = label.lowercase()
+                    .map { if (it.isLetterOrDigit()) it else '-' }
+                    .joinToString("")
+                    .trim('-')
+                    .take(40)
+                    .ifEmpty { "sound" } + "-" + media.sha256Hex.take(6)
+                publisher.publishSharedSoundNote(
+                    soundId = soundId,
+                    label = label,
+                    url = media.url,
+                    sha256Hex = media.sha256Hex,
+                    license = license,
+                    durationSec = (durationMs / 1_000L).toInt().coerceIn(1, 15),
+                    mime = "audio/mp4",
+                    description = description.ifBlank { null },
+                    topics = topics,
+                    signerProvider = { signer },
+                    writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls,
+                )
+                val result = publisher.state.first { it.result != null }.result
+                mutableSharedSoundPublish.value = when (result) {
+                    space.bitos.app.data.publish.PublishResult.PUBLISHED ->
+                        SharedSoundPublishUiState(message = "Shared — the sound is live on the rail", url = media.url)
+                    space.bitos.app.data.publish.PublishResult.SIGNING_REFUSED ->
+                        SharedSoundPublishUiState(message = "Signing was refused")
+                    space.bitos.app.data.publish.PublishResult.INVALID ->
+                        SharedSoundPublishUiState(message = "Those sound details were rejected — check the license, label and length")
+                    else -> SharedSoundPublishUiState(message = "No relay accepted the sound event")
+                }
+            } catch (failure: BlossomUploader.UploadFailure) {
+                mutableSharedSoundPublish.value = SharedSoundPublishUiState(message = failure.message)
+            } catch (_: Exception) {
+                mutableSharedSoundPublish.value = SharedSoundPublishUiState(message = "The sound could not be published")
+            }
+        }
+    }
+
     private var memeJobCounter = 0
 
     /**

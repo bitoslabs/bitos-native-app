@@ -72,7 +72,7 @@ struct StaticPagesScreen: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            ForEach(Array((bridge.staticAboutFeatures() as? [[String: Any]] ?? []).enumerated()), id: \.offset) { _, entry in
+            ForEach(Array(bridge.staticAboutFeatures().enumerated()), id: \.offset) { _, entry in
                 SectionCard(title: entry["title"] as? String ?? "", body: entry["body"] as? String ?? "")
             }
     }
@@ -83,7 +83,7 @@ struct StaticPagesScreen: View {
     private var privacyPage: some View {
             HeaderCard(title: bridge.staticPrivacyTitle(), updated: bridge.staticPrivacyUpdated(), intro: bridge.staticPrivacyIntro())
             SectionCard(title: bridge.staticPrivacySummaryTitle(), body: bridge.staticPrivacySummaryBody(), highlight: true)
-            ForEach(Array((bridge.staticPrivacySections() as? [[String: Any]] ?? []).enumerated()), id: \.offset) { _, entry in
+            ForEach(Array(bridge.staticPrivacySections().enumerated()), id: \.offset) { _, entry in
                 SectionCard(title: entry["title"] as? String ?? "", body: entry["body"] as? String ?? "")
             }
     }
@@ -94,7 +94,7 @@ struct StaticPagesScreen: View {
     private var termsPage: some View {
             HeaderCard(title: bridge.staticTermsTitle(), updated: bridge.staticTermsUpdated(), intro: bridge.staticTermsIntro())
             SectionCard(title: bridge.staticTermsSummaryTitle(), body: bridge.staticTermsSummaryBody(), highlight: true)
-            ForEach(Array((bridge.staticTermsSections() as? [[String: Any]] ?? []).enumerated()), id: \.offset) { _, entry in
+            ForEach(Array(bridge.staticTermsSections().enumerated()), id: \.offset) { _, entry in
                 SectionCard(title: entry["title"] as? String ?? "", body: entry["body"] as? String ?? "")
             }
     }

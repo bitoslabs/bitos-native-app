@@ -92,7 +92,15 @@ data class FeedNote(
             threadRootId = threadRootId,
             threadParentId = threadParentId,
             poll = space.bitos.core.model.PollContract.poll(event),
-            hashtags = hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }.distinct().take(24).toList(),
+            // Web parity: hashtags are the event's `t` tags ∪ the `#tag`s
+            // scanned from content (NIP-24 events SHOULD carry both, but
+            // e.g. imeta media posts often tag without repeating the text —
+            // search must still match those).
+            hashtags = (
+                event.tags.filter { it.firstOrNull() == "t" }
+                    .mapNotNull { it.getOrNull(1)?.trim()?.takeIf { tag -> tag.length in 2..60 } } +
+                    hashtagPattern.findAll(event.content).mapNotNull { it.groupValues[1].takeIf(String::isNotBlank) }
+                ).distinct().take(24).toList(),
             mentions = mentionPattern.findAll(event.content).map { it.groupValues[1] }.distinct().take(24).toList(),
             mediaUrls = InlineMediaUrls.fromContent(event.content),
             externalVideoPreviews = ExternalVideoPreviews.fromContent(event.content),

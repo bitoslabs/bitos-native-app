@@ -92,12 +92,11 @@ final class HashtagFollowsStore {
         Task {
             await pool.start()
             start()
-            if let request = (bridge.interestSetRequest(
+            let request = bridge.interestSetRequest(
                 subscriptionId: "bitos-interest",
-                accountPubkey: accountPubkey ?? ""
-            ) as String?) {
-                await pool.broadcast(request)
-            }
+                accountPubkey: accountPubkey
+            )
+            await pool.broadcast(request)
         }
     }
 
@@ -114,7 +113,7 @@ final class HashtagFollowsStore {
                   let head = boxedBridge.bridge.interestSetFromEvent(
                       event: gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge),
                       accountPubkey: account
-                  ) as? [String: Any],
+                  ),
                   let hashtags = head["hashtags"] as? [String],
                   let createdAt = (head["createdAt"] as? NSNumber)?.int64Value else { return nil }
             return InterestHead(hashtags: hashtags, createdAt: Int64(createdAt))

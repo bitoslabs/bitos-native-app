@@ -256,6 +256,21 @@ fun CreateScreen(
     val sharedRows by templateStore.rows.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(Unit) { templateStore.subscribe() }
 
+    // Shared sounds (MST-047 W2): relay-fetched kind-30078 licensed
+    // library. "Use sound" hands off through the MST-050 Wave C/D
+    // audio-only seed path (hash-verified download, no re-upload).
+    var soundSeed by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<space.bitos.app.ui.create.meme.MemeSoundSeed?>(null)
+    }
+    val soundStore = androidx.compose.runtime.remember(context) {
+        space.bitos.app.data.feed.SharedSoundStore(
+            (context.applicationContext as space.bitos.app.BitOsApplication).applicationScope,
+            (context.applicationContext as space.bitos.app.BitOsApplication).memeTemplatePool,
+        )
+    }
+    val sharedSoundRows by soundStore.rows.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { soundStore.subscribe() }
+
     // Mass production (MST-048) lives in this screen: a non-null controller
     // replaces the hub with the batch flow, exactly like the editor paths.
     val scope = rememberCoroutineScope()
@@ -303,7 +318,7 @@ fun CreateScreen(
     if (showMeme) {
         space.bitos.app.ui.create.meme.MemeEditorScreen(
             onClose = {
-                showMeme = false; resumeSlotId = null; templateSeed = null; sharedSeed = null; memeSeeds = null
+                showMeme = false; resumeSlotId = null; templateSeed = null; sharedSeed = null; memeSeeds = null; soundSeed = null
             },
             sharedTagsJson = sharedSeed?.first,
             sharedContent = sharedSeed?.second,
@@ -312,6 +327,7 @@ fun CreateScreen(
             resume = resumeSlot,
             template = templateSeed,
             videoSeeds = memeSeeds,
+            soundSeed = soundSeed,
             onSlotsChanged = { slotsRevision += 1 },
             onMakeVariations = { projectJson, posterBytes ->
                 showMeme = false
@@ -528,6 +544,84 @@ fun CreateScreen(
                                 fontWeight = FontWeight.W600,
                                 maxLines = 1,
                                 modifier = Modifier.padding(horizontal = BitOSSpacing.xs, vertical = BitOSSpacing.xs),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Shared sounds (MST-047 W2): relay-fetched kind-30078 licensed
+        // library — license chip + duration on every row; tap = "Use
+        // sound" through the Wave C/D audio-only seed path.
+        if (sharedSoundRows.isNotEmpty()) {
+            Text("Shared sounds", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                sharedSoundRows.forEach { row ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = BitOSColors.surface,
+                        modifier = Modifier
+                            .width(128.dp)
+                            .clickable(onClickLabel = "Use sound ${row.label}") {
+                                soundSeed = space.bitos.app.ui.create.meme.MemeSoundSeed(
+                                    eventId = row.eventId,
+                                    authorPubkey = row.authorPubkey,
+                                    label = row.label,
+                                    mediaUrl = row.url,
+                                    isAudioOnly = true,
+                                    sha256 = row.sha256,
+                                )
+                                showMeme = true
+                            },
+                    ) {
+                        Column {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(60.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        .clip(HexPlateShape)
+                                        .background(studioCoverBrush(sharedSoundRows.indexOf(row))),
+                                )
+                                Icon(
+                                    space.bitos.app.ui.theme.AppIcons.MusicNote,
+                                    contentDescription = null,
+                                    tint = BitOSColors.textPrimary,
+                                    modifier = Modifier.size(26.dp),
+                                )
+                                Text(
+                                    row.license,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BitOSColors.textSecondary,
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(4.dp)
+                                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(50))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
+                            }
+                            Text(
+                                row.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.W600,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = BitOSSpacing.xs, vertical = 2.dp),
+                            )
+                            Text(
+                                if (row.durationMs > 0) "♪ ${row.durationMs / 1000}s · use sound" else "♪ use sound",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textSecondary,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = BitOSSpacing.xs),
                             )
                         }
                     }

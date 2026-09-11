@@ -278,9 +278,10 @@ enum MemeVideoExportIos {
               let rows = (root["matrix"] as? [NSNumber]), rows.count == 20 else { return nil }
         let m = rows.map(\.floatValue)
         let asset = AVURLAsset(url: url)
-        guard let track = asset.tracks(withMediaType: .video).first,
-              let transform = try? track.preferredTransform else { return nil }
-        let natural = track.naturalSize.applying(transform)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let transform = try? await track.load(.preferredTransform),
+              let naturalSize = try? await track.load(.naturalSize) else { return nil }
+        let natural = naturalSize.applying(transform)
         let size = CGSize(width: abs(natural.width), height: abs(natural.height))
         guard size.width > 2, size.height > 2 else { return nil }
 
@@ -332,7 +333,7 @@ enum MemeVideoExportIos {
         projectAdjust: (bri: Float, con: Float, sat: Float)? = nil,
         client: (any BusinessCoreClient)? = nil
     ) async throws -> URL {
-        guard let first = clips.first else {
+        guard !clips.isEmpty else {
             throw ExportError(message: "No clips to compose")
         }
         let composition = AVMutableComposition()
@@ -369,10 +370,10 @@ enum MemeVideoExportIos {
                 start: CMTime(value: clip.startMs, timescale: 1000),
                 end: CMTime(value: clip.endMs, timescale: 1000)
             )
-            if let sourceVideo = asset.tracks(withMediaType: .video).first {
+            if let sourceVideo = try? await asset.loadTracks(withMediaType: .video).first {
                 try videoTrack.insertTimeRange(range, of: sourceVideo, at: cursor)
             }
-            if let sourceAudio = asset.tracks(withMediaType: .audio).first {
+            if let sourceAudio = try? await asset.loadTracks(withMediaType: .audio).first {
                 try audioTrack.insertTimeRange(range, of: sourceAudio, at: cursor)
             }
             let inserted = CMTimeRange(start: cursor, duration: range.duration)
@@ -484,7 +485,7 @@ enum MemeVideoExportIos {
         }
 
         let asset = AVURLAsset(url: clipURL)
-        guard let track = asset.tracks(withMediaType: .video).first else {
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw ExportError(message: "The clip has no video track")
         }
 
@@ -493,12 +494,12 @@ enum MemeVideoExportIos {
             withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
         ), let compositionAudio = composition.addMutableTrack(
             withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
-        ), let audioTrack = asset.tracks(withMediaType: .audio).first else {
+        ), let audioTrack = try await asset.loadTracks(withMediaType: .audio).first else {
             throw ExportError(message: "The clip tracks could not be composed")
         }
         // The project trim window is the export contract (MST-030
         // revision): over-long clips are CUT here, not rejected.
-        let keep = await VideoStageIos.trimWindow(of: projectJson, assetDuration: asset.duration)
+        let keep = await VideoStageIos.trimWindow(of: projectJson, assetDuration: try await asset.load(.duration))
         try compositionVideo.insertTimeRange(
             CMTimeRange(start: .zero, duration: keep), of: track, at: .zero
         )
@@ -522,7 +523,7 @@ enum MemeVideoExportIos {
         instruction.timeRange = CMTimeRange(start: .zero, duration: outputDuration)
         let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideo)
         // Rotate to upright + fill the render size.
-        let uprightTransform = track.preferredTransform.concatenating(
+        let uprightTransform = (try await track.load(.preferredTransform)).concatenating(
             CGAffineTransform(scaleX: CGFloat(width) / CGFloat(probe.uprightWidth),
                               y: CGFloat(height) / CGFloat(probe.uprightHeight))
         )
@@ -661,14 +662,14 @@ enum MemeVideoExportIos {
             if (try? wav.write(to: wavURL)) != nil {
                 sfxWavURL = wavURL
                 let sfxAsset = AVURLAsset(url: wavURL)
-                if let sfxSource = sfxAsset.tracks(withMediaType: .audio).first,
+                if let sfxSource = try? await sfxAsset.loadTracks(withMediaType: .audio).first,
                    let sfxTrack = composition.addMutableTrack(
                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
                    ) {
                     let range = CMTimeRange(
                         start: .zero,
                         duration: CMTime(
-                            seconds: min(outputDuration.seconds, sfxAsset.duration.seconds),
+                            seconds: min(outputDuration.seconds, (try? await sfxAsset.load(.duration))?.seconds ?? 0),
                             preferredTimescale: 600
                         )
                     )
@@ -743,7 +744,7 @@ enum MemeVideoExportIos {
      */
     private static func transcode(source: URL, plan: ExportEncoderPlan) async throws -> URL {
         let asset = AVURLAsset(url: source)
-        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw ExportError(message: "The clip has no video track")
         }
         let reader = try AVAssetReader(asset: asset)
@@ -756,7 +757,7 @@ enum MemeVideoExportIos {
         )
         readerVideo.alwaysCopiesSampleData = false
         reader.add(readerVideo)
-        let audioTrack = asset.tracks(withMediaType: .audio).first
+        let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         var readerAudio: AVAssetReaderTrackOutput?
         if let audioTrack {
             let output = AVAssetReaderTrackOutput(
@@ -792,7 +793,8 @@ enum MemeVideoExportIos {
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVEncoderBitRateKey: plan.audioBitrate,
             ]
-            if let anyDescription = audioTrack.formatDescriptions.first,
+            let formatDescriptions = (try? await audioTrack.load(.formatDescriptions)) ?? []
+            if let anyDescription = formatDescriptions.first,
                let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(
                    (anyDescription as CFTypeRef) as! CMAudioFormatDescription
                ) {
@@ -865,7 +867,7 @@ enum MemeVideoExportIos {
 
         func start() {
             videoInput.requestMediaDataWhenReady(on: queue) { self.pumpVideo() }
-            if let audioInput, let audioOutput {
+            if let audioInput, audioOutput != nil {
                 audioInput.requestMediaDataWhenReady(on: queue) { self.pumpAudio() }
             }
         }

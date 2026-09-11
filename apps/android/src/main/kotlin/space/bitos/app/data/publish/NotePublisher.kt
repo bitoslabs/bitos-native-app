@@ -579,6 +579,74 @@ class NotePublisher(
     }
 
     /**
+     * MST-045 publish-your-own: the kind-30078 shared-template event —
+     * pure data (no upload): local overlays convert through the one wire
+     * converter inside the composer, so the rail's parse round-trips.
+     */
+    fun publishSharedTemplateNote(
+        templateId: String,
+        label: String,
+        icon: String,
+        overlays: List<space.bitos.core.studio.MemeOverlay>,
+        priceSats: Long = 0L,
+        category: String = "meme",
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeSharedTemplate(
+                signer.publicKeyHex(), templateId, label, icon, overlays, priceSats, category,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
+     * MST-047 publish-your-own: the kind-30078 shared-sound event. The
+     * audio must ALREADY be Blossom-uploaded and hash-verified —
+     * [url]/[sha256Hex] are the real artifact (the never-sign-first
+     * rule); the composer's contract gate rejects junk with INVALID.
+     */
+    fun publishSharedSoundNote(
+        soundId: String,
+        label: String,
+        url: String,
+        sha256Hex: String,
+        license: String,
+        durationSec: Int,
+        mime: String,
+        attribution: String? = null,
+        description: String? = null,
+        topics: List<String> = emptyList(),
+        signerProvider: suspend () -> IdentitySigner?,
+        writeRelays: List<RelayUrl>,
+    ) {
+        if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
+        scope.launch {
+            val signer = signerProvider() ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
+                return@launch
+            }
+            val note = composer.composeSharedSound(
+                signer.publicKeyHex(), soundId, label, url, sha256Hex, license,
+                durationSec, mime, attribution, description, topics,
+            ) ?: run {
+                mutableState.value = PublishUiState(result = PublishResult.INVALID)
+                return@launch
+            }
+            publishUnsigned(note, signer, writeRelays)
+        }
+    }
+
+    /**
      * Post-upload meme PoW (MST post-details, `composeStoryWithPow`
      * contract): mine the EXACT kind-22/21 template (media is uploaded —
      * the imeta is final) in bounded cancellable chunks on Dispatchers

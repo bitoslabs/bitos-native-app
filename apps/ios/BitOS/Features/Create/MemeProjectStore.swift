@@ -92,7 +92,7 @@ struct MemeProjectStore: Sendable {
                     try? png.write(to: target)
                 }
             }
-            let size = (try? UIImage(contentsOfFile: target.path)?.size) ?? CGSize(width: 1, height: 1)
+            let size = UIImage(contentsOfFile: target.path)?.size ?? CGSize(width: 1, height: 1)
             let aspect = size.height > 0 ? size.width / size.height : 1
             assetRows.append(["id": asset.id, "file": file, "aspect": aspect])
         }

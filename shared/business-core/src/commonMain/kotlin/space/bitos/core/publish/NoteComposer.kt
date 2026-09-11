@@ -5,6 +5,7 @@ import space.bitos.core.model.NostrLimits
 import space.bitos.core.nostr.EventHasher
 import space.bitos.core.nostr.NostrEventCodec
 import space.bitos.core.nostr.Sha256EventHasher
+import kotlinx.serialization.json.jsonObject
 
 /** Injected clock port (SBC-004): deterministic now for tests. */
 fun interface PublishClock {
@@ -46,6 +47,145 @@ class NoteComposer(
     /** Builds the unsigned kind-1 note; null when content is out of bounds. */
     fun composeTextNote(pubkeyHex: String, content: String): UnsignedNote? =
         composeTextNote(pubkeyHex, content, emptyList())
+
+    /**
+     * MST-045 publish-your-own: the unsigned kind-30078 shared-template
+     * event (`d = "com.bitos.bitz:template:<id>"`, plan §3.5). Overlays
+     * ride the LOCAL model and convert through the one wire converter
+     * (`MemeWireConvert.localToWire`) so the content byte-matches what
+     * `MemeTemplateContract.parse` reads back — round-trip parity is
+     * pinned by test. Null on any violation (non-slug id, blank label,
+     * icon outside the 8-id allowlist, price off the tier set, no
+     * publishable text overlay).
+     */
+    fun composeSharedTemplate(
+        authorPubkey: String,
+        templateId: String,
+        label: String,
+        icon: String,
+        overlays: List<space.bitos.core.studio.MemeOverlay>,
+        priceSats: Long = 0L,
+        category: String = "meme",
+        nowSeconds: Long = clock.nowSeconds(),
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (!templateId.matches(Regex("^[a-z0-9][a-z0-9._-]{0,47}$"))) return null
+        val boundedLabel = label.trim().take(space.bitos.core.studio.MemeTemplateContract.MAX_LABEL)
+        if (boundedLabel.isEmpty()) return null
+        if (icon !in space.bitos.core.studio.MemeTemplateContract.ICONS) return null
+        val price = space.bitos.core.studio.MemeTemplateContract.priceOf(priceSats)
+        if (price != priceSats) return null // off-tier prices never sign
+        val boundedCategory = space.bitos.core.studio.MemeTemplateContract.CATEGORIES
+            .firstOrNull { it == category } ?: "meme"
+        val textOverlays = overlays.filter {
+            it.kind != space.bitos.core.studio.MemeOverlayKind.IMAGE && it.text.isNotBlank()
+        }
+        if (textOverlays.isEmpty()) return null
+        if (nowSeconds <= 0) return null
+
+        // Canonical overlay JSON through the ONE wire encoder: encode the
+        // synthetic document, then lift its `overlays` array verbatim.
+        val wire = space.bitos.core.studio.MemeWireConvert.localToWire(
+            space.bitos.core.studio.MemeProject(mode = space.bitos.core.studio.MemeMode.IMAGE, overlays = textOverlays),
+            nowMs = 0L,
+        )
+        val documentJson = space.bitos.core.studio.MemeWireCodec.encode(wire)
+        val overlaysArray = runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(documentJson).jsonObject["overlays"]
+        }.getOrNull() ?: return null
+
+        val tags = listOf(
+            listOf("d", "${space.bitos.core.studio.MemeTemplateContract.D_TAG_PREFIX}$templateId"),
+        )
+        val content = kotlinx.serialization.json.buildJsonObject {
+            put("schema", kotlinx.serialization.json.JsonPrimitive(space.bitos.core.studio.MemeTemplateContract.SCHEMA))
+            put("version", kotlinx.serialization.json.JsonPrimitive(2))
+            put("label", kotlinx.serialization.json.JsonPrimitive(boundedLabel))
+            put("icon", kotlinx.serialization.json.JsonPrimitive(icon))
+            if (price > 0) put("price_sats", kotlinx.serialization.json.JsonPrimitive(price))
+            if (boundedCategory != "meme") put("category", kotlinx.serialization.json.JsonPrimitive(boundedCategory))
+            put("overlays", overlaysArray)
+        }.toString()
+        val id = space.bitos.core.nostr.NostrEventCodec.computeId(
+            hasher, authorPubkey, nowSeconds, space.bitos.core.model.NostrKinds.APP_DATA, tags, content,
+        )
+        return UnsignedNote(id, authorPubkey, nowSeconds, space.bitos.core.model.NostrKinds.APP_DATA, tags, content)
+    }
+
+    /**
+     * MST-047 publish-your-own: the unsigned kind-30078 shared-sound
+     * event (`d = "com.bitos.bitz:sound:<id>"`, plan §3.5). Built ONLY
+     * after the audio bytes are Blossom-uploaded and hash-verified —
+     * [url]/[sha256Hex] must be the REAL artifact (repo rule: never sign
+     * before the media upload verifies). Validation reuses
+     * `SharedSoundContract` bounds so the output round-trips through
+     * `SharedSoundContract.parse` — rail readers see exactly what this
+     * built. Null on any violation (license outside the CC ingest set,
+     * non-canonical sha, duration over 15 s, non-slug id, junk fields).
+     */
+    fun composeSharedSound(
+        authorPubkey: String,
+        soundId: String,
+        label: String,
+        url: String,
+        sha256Hex: String,
+        license: String,
+        durationSec: Int,
+        mime: String = space.bitos.core.studio.SharedSoundContract.DEFAULT_MIME,
+        attribution: String? = null,
+        description: String? = null,
+        topics: List<String> = emptyList(),
+        imageUrl: String? = null,
+        nowSeconds: Long = clock.nowSeconds(),
+    ): UnsignedNote? {
+        if (!authorPubkey.matches(Regex("^[0-9a-f]{64}$"))) return null
+        if (!soundId.matches(Regex("^[a-z0-9][a-z0-9._-]{0,47}$"))) return null
+        val boundedLabel = label.trim().take(space.bitos.core.studio.SharedSoundContract.MAX_LABEL)
+        if (boundedLabel.isEmpty()) return null
+        if (!url.startsWith("https://") || url.length > space.bitos.core.studio.SharedSoundContract.MAX_URL_LENGTH) return null
+        val sha = sha256Hex.lowercase()
+        if (!Regex("^[0-9a-f]{64}$").matches(sha)) return null
+        if (license !in space.bitos.core.studio.SharedSoundContract.INGESTABLE_LICENSES) return null
+        if (durationSec !in 1..space.bitos.core.studio.SharedSoundContract.MAX_DURATION_SEC) return null
+        val boundedMime = mime.trim().take(space.bitos.core.studio.SharedSoundContract.MAX_MIME)
+            .ifEmpty { space.bitos.core.studio.SharedSoundContract.DEFAULT_MIME }
+        val boundedTopics = topics.map { it.trim().take(space.bitos.core.studio.SharedSoundContract.MAX_TOPIC_LENGTH) }
+            .filter { it.isNotEmpty() }.distinct()
+            .take(space.bitos.core.studio.SharedSoundContract.MAX_TOPICS)
+        val boundedAttribution = attribution?.trim()
+            ?.take(space.bitos.core.studio.SharedSoundContract.MAX_ATTRIBUTION)?.takeIf { it.isNotEmpty() }
+        val boundedDescription = description?.trim()
+            ?.take(space.bitos.core.studio.SharedSoundContract.MAX_DESCRIPTION)?.takeIf { it.isNotEmpty() }
+        val boundedImage = imageUrl?.trim()
+            ?.take(space.bitos.core.studio.SharedSoundContract.MAX_IMAGE_URL_LENGTH)?.takeIf { it.isNotEmpty() }
+        if (nowSeconds <= 0) return null
+
+        val tags = buildList {
+            add(listOf("d", "${space.bitos.core.studio.SharedSoundContract.D_TAG_PREFIX}$soundId"))
+            add(listOf("url", url))
+            add(listOf("x", sha))
+            add(listOf("license", license))
+            boundedAttribution?.let { add(listOf("attribution", it)) }
+            boundedTopics.forEach { add(listOf("t", it)) }
+            boundedImage?.let { add(listOf("image", it)) }
+        }
+        if (tags.size > space.bitos.core.model.NostrLimits.MAX_TAGS) return null
+        val content = buildString {
+            append("{\"schema\":\"${space.bitos.core.studio.SharedSoundContract.SCHEMA}\"")
+            append(",\"version\":${space.bitos.core.studio.SharedSoundContract.VERSION}")
+            append(",\"label\":\"").append(space.bitos.core.nostr.NostrEventCodec.escape(boundedLabel)).append("\"")
+            append(",\"durationSec\":$durationSec")
+            append(",\"mime\":\"").append(space.bitos.core.nostr.NostrEventCodec.escape(boundedMime)).append("\"")
+            boundedDescription?.let {
+                append(",\"description\":\"").append(space.bitos.core.nostr.NostrEventCodec.escape(it)).append("\"")
+            }
+            append("}")
+        }
+        val id = space.bitos.core.nostr.NostrEventCodec.computeId(
+            hasher, authorPubkey, nowSeconds, space.bitos.core.studio.SharedSoundContract.KIND, tags, content,
+        )
+        return UnsignedNote(id, authorPubkey, nowSeconds, space.bitos.core.studio.SharedSoundContract.KIND, tags, content)
+    }
 
     /** APP-008: kind-1 with explicit tags (composer derives them via
      * `ComposerRules.deriveTags` — hashtags, NIP-27 entities, NIP-36). */

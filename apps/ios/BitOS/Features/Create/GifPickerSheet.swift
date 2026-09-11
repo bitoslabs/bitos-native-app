@@ -379,7 +379,7 @@ struct GifPickerSheet: View {
             } else {
                 items = fetched
             }
-            let pageMap = page as? [String: Any] ?? [:]
+            let pageMap = page
             nextOffset = intFrom(pageMap, "nextOffset")
             hasMore = pageMap["hasMore"] as? Bool ?? false
             if pageQuery.trimmingCharacters(in: .whitespaces).isEmpty {

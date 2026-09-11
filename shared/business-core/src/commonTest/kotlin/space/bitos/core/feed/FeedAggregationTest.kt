@@ -80,6 +80,23 @@ class FeedNoteTest {
     }
 
     @Test
+    fun hashtagsUnionTTaggedAndContentScanned() {
+        // Web `matchesDiscoverSearch` parity: `t` tags count even when the
+        // caption never repeats the literal `#tag` (media/imeta posts).
+        val feedNote = note(
+            "morning clip",
+            tags = listOf(listOf("t", "laostr"), listOf("t", "nostr")),
+        )
+        assertEquals(setOf("laostr", "nostr"), feedNote.hashtags.toSet())
+        assertTrue(SearchResults.matches(feedNote, "laostr"))
+        assertTrue(SearchResults.matches(feedNote, "#laostr"))
+        // Deduped when the tag also appears inline; out-of-bound tag values
+        // (blank, 1 char, > 60) are dropped.
+        val both = note("hello #nostr", tags = listOf(listOf("t", "nostr"), listOf("t", "x"), listOf("t", "")))
+        assertEquals(listOf("nostr"), both.hashtags)
+    }
+
+    @Test
     fun feedKindsIncludeTextAndBothNip71VideoKinds() {
         assertTrue(FeedNote.isFeedKind(NostrKinds.SHORT_TEXT_NOTE))
         assertTrue(FeedNote.isFeedKind(NostrKinds.NORMAL_VIDEO))

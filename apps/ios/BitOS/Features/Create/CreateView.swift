@@ -21,6 +21,10 @@ struct CreateView: View {
     @State private var templateSeed: String?
     @State private var sharedSeed: (tagsJson: String, content: String)?
     @State private var sharedTemplateStore: SharedTemplateStore?
+    /// Shared sounds (MST-047 W2): "Use sound" rides the MST-050 Wave C/D
+    /// audio-only seed path (hash-verified download, no re-upload).
+    @State private var soundSeed: MemeSoundSeed?
+    @State private var sharedSoundStore: SharedSoundStore?
     @State private var resumeSlotId: String?
     /// CAP→MEM handoff: latest camera take seeding the editor (video/mp4).
     @State private var memeSeed: Data?
@@ -35,7 +39,7 @@ struct CreateView: View {
     @Environment(AppEnvironment.self) private var environment
 
     private var slots: [MemeProjectStore.SlotEntryUi] {
-        slotsRevision // recompute on revision bump (delete/editor close)
+        _ = slotsRevision // recompute on revision bump (delete/editor close)
         return slotStore.listSlots()
     }
 
@@ -81,6 +85,11 @@ struct CreateView: View {
                 store.start()
                 sharedTemplateStore = store
             }
+            if sharedSoundStore == nil {
+                let store = SharedSoundStore(pool: environment.relayPool)
+                store.start()
+                sharedSoundStore = store
+            }
         }
     }
     /// The hub list + covers, split out of `body` — the combined
@@ -91,6 +100,7 @@ struct CreateView: View {
             startTilesSection
             templatesSection
             sharedTemplatesSection
+            sharedSoundsSection
             continueCreatingSection
             quickActionsSection
             projectLibrarySection
@@ -137,7 +147,7 @@ struct CreateView: View {
                 onCancel: { showCamera = false }
             )
         }
-        .fullScreenCover(isPresented: $showMeme, onDismiss: { memeSeed = nil; memeSeeds = nil }) {
+        .fullScreenCover(isPresented: $showMeme, onDismiss: { memeSeed = nil; memeSeeds = nil; soundSeed = nil }) {
             MemeEditorView(
                 slotStore: slotStore,
                 resumeSlot: resumeSlotId.flatMap { slotStore.loadSlot($0) },
@@ -146,10 +156,12 @@ struct CreateView: View {
                 sharedContent: sharedSeed?.content,
                 videoSeed: memeSeed,
                 videoSeeds: memeSeeds,
+                soundSeed: soundSeed,
                 onSlotsChanged: {
                     slotsRevision += 1
                     templateSeed = nil
                     sharedSeed = nil
+                    soundSeed = nil
                 },
                 onMakeVariations: { projectJson, posterPng in
                     showMeme = false
@@ -320,6 +332,46 @@ struct CreateView: View {
                 emoji: row.emoji, label: row.label,
                 gradient: StudioCoverGradient.gradient(at: rows.firstIndex(where: { $0.id == row.id }) ?? 0),
                 priceLabel: row.priceLabel
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Shared sounds (MST-047 W2): relay-fetched kind-30078 licensed
+    /// library — license chip + duration; tap = "Use sound" through the
+    /// Wave C/D audio-only seed path.
+    @ViewBuilder private var sharedSoundsSection: some View {
+        if let sharedRows = sharedSoundStore?.rows, !sharedRows.isEmpty {
+            Section("Shared sounds") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        ForEach(sharedRows) { row in
+                            sharedSoundCard(row, in: sharedRows)
+                        }
+                    }
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                .listRowBackground(Color.clear)
+            }
+        }
+    }
+
+    private func sharedSoundCard(_ row: SharedSoundStore.Row, in rows: [SharedSoundStore.Row]) -> some View {
+        Button {
+            soundSeed = MemeSoundSeed(
+                eventId: row.eventId,
+                authorPubkey: row.authorPubkey,
+                label: row.label,
+                mediaUrl: row.url,
+                isAudioOnly: true,
+                sha256: row.sha256
+            )
+            showMeme = true
+        } label: {
+            TemplateCoverCard(
+                emoji: "♪", label: row.label,
+                gradient: StudioCoverGradient.gradient(at: rows.firstIndex(where: { $0.id == row.id }) ?? 0),
+                priceLabel: row.durationMs > 0 ? "\(row.durationMs / 1000)s · \(row.license)" : row.license
             )
         }
         .buttonStyle(.plain)
@@ -927,7 +979,7 @@ private final class MassBatchFlow {
             let projectJson = row.projectJson
             do {
                 let png = try await Task.detached(priority: .userInitiated) {
-                    try await MemeRaster.renderPngData(asset: source, projectJson: projectJson, client: client)
+                    try MemeRaster.renderPngData(asset: source, projectJson: projectJson, client: client)
                 }.value
                 try await MemeRaster.saveToPhotos(png)
                 exportResults[row.id] = ""
@@ -1394,7 +1446,7 @@ private struct MassSetupView: View {
                     (root["missingRequired"] as? [String]) ?? [],
                     (root["overCap"] as? Bool) ?? false
                 )
-            } else if case .success(let url) = result, let text = try? String(contentsOf: url, encoding: .utf8) {
+            } else if case .success(let url) = result, let _ = try? String(contentsOf: url, encoding: .utf8) {
                 csvNotes = "The CSV could not be analyzed — check its encoding and try again."
             }
         }

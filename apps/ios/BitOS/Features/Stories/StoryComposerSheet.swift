@@ -318,7 +318,7 @@ struct StoryComposerSheet: View {
         defer { uploading = false }
         do {
             guard let data = try await item.loadTransferable(type: Data.self),
-                  await identity.account != nil else {
+                  identity.account != nil else {
                 throw BlossomUploader.UploadFailure(message: "Posting needs an identity.")
             }
             let mime = item.supportedContentTypes.first?.preferredMIMEType ?? "video/mp4"
@@ -399,7 +399,7 @@ struct StoryComposerSheet: View {
 
     /// Emoji grid (note-composer parity): appends to the caption.
     private var emojiSheetContent: some View {
-        let emojis = bridge.composerEmojis() as? [String] ?? []
+        let emojis = bridge.composerEmojis()
         return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             Text("Insert emoji")
                 .font(.system(size: 14, weight: .semibold))
@@ -648,7 +648,7 @@ struct StoryComposerSheet: View {
                 guard images.count < Self.maxImages else { break }
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self),
-                          await identity.account != nil else {
+                          identity.account != nil else {
                         throw BlossomUploader.UploadFailure(message: "Posting needs an identity.")
                     }
                     let uploaded = try await uploader.upload(

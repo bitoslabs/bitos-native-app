@@ -26,6 +26,8 @@ object NostrKinds {
     /** NIP-18 generic repost (embedded JSON payload). */
     const val GENERIC_REPOST = 16
     const val LONG_FORM = 30_023
+    /** NIP-78 namespaced app data (BitOS template/sound envelope). */
+    const val APP_DATA = 30_078
     /** NIP-68 picture event (image reels). */
     const val PICTURE = 20
     /** NIP-71 normal video event. */

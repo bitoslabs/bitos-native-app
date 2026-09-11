@@ -73,8 +73,8 @@ struct IdentityOnboardingMirror {
     let successDoneLabel: String
 
     private init() {
-        // KMP returns an NSDictionary; the conditional cast pins the typed view.
-        let raw = BusinessCoreBridge().identityOnboardingContent() as? [String: Any] ?? [:]
+        // KMP bridges the map straight to [String: Any].
+        let raw = BusinessCoreBridge().identityOnboardingContent()
         func str(_ key: String) -> String { raw[key] as? String ?? "" }
         appName = str("appName")
         tagline = str("tagline")

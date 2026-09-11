@@ -90,7 +90,7 @@ object BitzExplore {
  * for video URLs. The native head is the shared Home+Bitz subscription, so
  * Home's shallow kind-1 window and the repost/profile heads ride the same
  * REQ; Bitz pagination and NIP-50 search stay media-kinds-only
- * (`BitzTimelinePolicy` / bridge `bitzSearchRequest`).
+ * (`BitzTimelinePolicy` / bridge `searchRelayRequest`).
  */
 object BitzQuery {
     /** Standard reel-media kinds queried deep (NIP-68/NIP-71). */

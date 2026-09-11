@@ -199,7 +199,7 @@ final class StoriesStore {
         let trackedIds = tracked.map { (slide: StoriesStore.StorySlideMirror) in slide.id }
         guard let dict = bridge.storyInteractionFromEvent(
             event: bridgeEvent, slideIds: trackedIds, addresses: addresses
-        ) as? [String: Any],
+        ),
             let slideId = dict["slideId"] as? String,
             let type = dict["type"] as? String,
             let pubkey = dict["pubkey"] as? String,
@@ -283,7 +283,7 @@ final class StoriesStore {
             guard case .event(let gatedEvent) = gated else { return nil }
             let now = Int64(Date.now.timeIntervalSince1970)
             let bridgeEvent = gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge)
-            guard let slide = boxedBridge.bridge.storyFromEvent(event: bridgeEvent, nowSeconds: now) as? [String: Any],
+            guard let slide = boxedBridge.bridge.storyFromEvent(event: bridgeEvent, nowSeconds: now),
                   let id = slide["id"] as? String,
                   let pubkey = slide["pubkey"] as? String,
                   let content = slide["content"] as? String,

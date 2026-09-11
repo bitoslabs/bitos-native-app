@@ -101,9 +101,26 @@ the bed repeats cyclically to fill the timeline — preview glue wraps
 the position modulo the audible window; both platforms) and per-overlay
 sound windows (the SFX sheet anchors new cues to a selected overlay's
 visibility window start/end instead of the raw playhead; both
-platforms). Still out of scope: voice-over record, licensed marketplace
-(MST-047 stays separate), zap-splits to sound authors (needs invoice +
-preimage verification — future).
+platforms).
+
+### MST-047 — the kind-30078 shared-sound library (in flight)
+
+The licensed-library rail the trending bootstrap foreshadows (plan
+§3.5; APP-021's named dependency). Sound events are kind **30078**,
+`d = "com.bitos.bitz:sound:<id>"`, tags
+`url / x(sha256) / license / attribution ≤140 / t ≤10×40 / image ≤2048 / p`,
+content `{label ≤40, durationSec ≤15, mime ≤64 (default audio/webm),
+description ≤500}` — pinned by `contracts/meme/sound-event-v1.json`.
+
+| Wave | Scope                                                                                                                                                                                                                          | Status               |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| W1   | Shared `SharedSoundContract`: hostile-tolerant parse with a HARD license gate (only `CC0-1.0 / CC-BY-4.0 / CC-BY-NC-4.0` ingest — non-open licenses never reach the rail), canonical 64-hex sha expectation, `ingestCheck` (decoded 1–15 s, ≤ 8 MB, library ≤ 30) + bridge seams `memeSharedSoundSummary` / `memeSharedSoundIngestCheck` + common tests | ✅ 2026-09-10        |
+| W2   | `SharedSoundStore` (Android) + `SharedSoundStore.swift` (iOS): kind-30078 verified frames → newest-wins rail ≤ 24 rows → Studio/Create hub "Shared sounds" section (♪ rows, license + author credit)                                 | ✅ 2026-09-10        |
+| W3   | "Use sound": rail row → hash-verified download → `MemeSoundSeed(isAudioOnly, sha256)` through the EXISTING Wave C editor path — no re-upload; publish stamps `sound`/`p` + the event's attribution                                             | ✅ 2026-09-10        |
+| W4   | Local library persistence (≤ 30, ≤ 8 MB, ≤ 15 s) + publish-your-own sound (kind-30078 write path, CC-license picker)                                                                                                                  | ✅ 2026-09-10 (contracts + both platforms)                                                              |
+
+Still out of scope: voice-over record, zap-splits to sound authors
+(needs invoice + preimage verification — future).
 
 ## 6. Risks / notes
 

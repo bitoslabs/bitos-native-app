@@ -101,4 +101,69 @@ class SearchResultsTest {
         assertEquals(null, SearchResults.tagRequest("sub4", "a b", listOf(1), 50))
         assertEquals(null, SearchResults.tagRequest("sub5", "tag", emptyList(), 50))
     }
+
+    @Test
+    fun relaySearchRequestsSplitNip50IntoOwnSubscription() {
+        // Free text: the base REQ carries `#t` (lowercased term doubles as
+        // the tag) + recent-sample fallback; NIP-50 `search` (query as typed)
+        // rides its own `<id>-s` subscription so relays that reject `search`
+        // (`ERROR: bad req: unrecognised filter item: search` — damus,
+        // nos.lol, yakihonne, observed 2026-09-10) cannot kill the others.
+        val kinds = listOf(1, 20, 21, 22, 34235, 34236)
+        val requests = SearchResults.relaySearchRequests("s1", "LaoStr", kinds)!!
+        assertEquals(
+            """["REQ","s1",""" +
+                """{"kinds":[1,20,21,22,34235,34236],"#t":["laostr"],"limit":180},""" +
+                """{"kinds":[1,20,21,22,34235,34236],"limit":240}]""",
+            requests.baseRequest,
+        )
+        assertEquals(
+            """["REQ","s1-s",{"kinds":[1,20,21,22,34235,34236],"search":"LaoStr","limit":180}]""",
+            requests.searchRequest,
+        )
+    }
+
+    @Test
+    fun relaySearchRequestsSkipNip50ForHashtagQueries() {
+        // `#` is undefined in NIP-50 search strings: hashtag queries carry
+        // only the indexed `#t` filter plus the fallback sample, no `search`.
+        val requests = SearchResults.relaySearchRequests("s2", " #LaoStr ", listOf(1))!!
+        assertEquals(
+            """["REQ","s2",{"kinds":[1],"#t":["laostr"],"limit":180},{"kinds":[1],"limit":240}]""",
+            requests.baseRequest,
+        )
+        assertEquals(null, requests.searchRequest)
+    }
+
+    @Test
+    fun relaySearchRequestsDropTagFilterForMultiWordQueries() {
+        // Multi-word terms cannot index as a single `t` tag; base recall
+        // rides on the fallback sample, full text on the `search` REQ.
+        val requests = SearchResults.relaySearchRequests("s3", "two words", listOf(1))!!
+        assertEquals("""["REQ","s3",{"kinds":[1],"limit":240}]""", requests.baseRequest)
+        assertEquals(
+            """["REQ","s3-s",{"kinds":[1],"search":"two words","limit":180}]""",
+            requests.searchRequest,
+        )
+    }
+
+    @Test
+    fun relaySearchRequestsBoundsInputs() {
+        assertEquals(null, SearchResults.relaySearchRequests("s4", "   ", listOf(1)))
+        assertEquals(null, SearchResults.relaySearchRequests("s5", "q".repeat(SearchResults.MAX_QUERY_LENGTH + 1), listOf(1)))
+        assertEquals(null, SearchResults.relaySearchRequests("s6", "laostr", emptyList()))
+        assertEquals(null, SearchResults.relaySearchRequests("s7", "laostr", listOf(99_999)))
+        // Invalid 16-bit kinds are dropped, not fatal.
+        val requests = SearchResults.relaySearchRequests("s8", "laostr", listOf(1, 99_999))!!
+        assertEquals(
+            """["REQ","s8",""" +
+                """{"kinds":[1],"#t":["laostr"],"limit":180},""" +
+                """{"kinds":[1],"limit":240}]""",
+            requests.baseRequest,
+        )
+        assertEquals(
+            """["REQ","s8-s",{"kinds":[1],"search":"laostr","limit":180}]""",
+            requests.searchRequest,
+        )
+    }
 }

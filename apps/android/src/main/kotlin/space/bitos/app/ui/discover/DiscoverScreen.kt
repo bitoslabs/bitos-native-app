@@ -381,7 +381,7 @@ private fun SectionHeader(label: String, modifier: Modifier = Modifier) {
 @Composable
 private fun DiscoverFootnote() {
     Text(
-        "Search runs on relays that support NIP-50; results may vary by relay.",
+        "Search runs across your relays; text matching may vary by relay.",
         style = MaterialTheme.typography.labelSmall,
         color = BitOSColors.textTertiary,
         modifier = Modifier.padding(top = BitOSSpacing.base),

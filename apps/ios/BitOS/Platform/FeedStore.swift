@@ -718,12 +718,12 @@ final class FeedStore {
             if let target {
                 zapCountsBuffer[target, default: 0] += 1
                 // APP-009: live zap tally per thread note (+ summed msat).
-                if let tallyId = tallyTarget(for: target) {
+                if tallyTarget(for: target) != nil {
                     var tally = talliesBuffer[target] ?? NoteTallyMirror()
                     tally.zaps += 1
                     let invoice = event.tags.first { $0.first == "bolt11" }?.dropFirst().first
-                    if let invoice, let msat = bridgeFacade().bolt11AmountMillisats(invoice: invoice) as? Int64 {
-                        tally.zapMillisats += msat
+                    if let invoice {
+                        tally.zapMillisats += bridgeFacade().bolt11AmountMillisats(invoice: invoice)
                     }
                     talliesBuffer[target] = tally
                 }
@@ -969,7 +969,7 @@ final class FeedStore {
 
     /** In-place note-ref open: fetch the head, caller polls [refNote]. */
     func openNoteReference(raw: String) {
-        guard let ref = (bridgeFacade().eventRefParse(bech32: raw) as? [String: Any]) else { return }
+        guard let ref = bridgeFacade().eventRefParse(bech32: raw) else { return }
         let request: String?
         if ref["form"] as? String == "id", let id = ref["id"] as? String {
             request = bridgeFacade().threadRootRequestById(
@@ -989,7 +989,7 @@ final class FeedStore {
 
     /** Fetched head for the in-place ref open (null while in flight). */
     func refNote(raw: String) -> FeedNote? {
-        guard let ref = (bridgeFacade().eventRefParse(bech32: raw) as? [String: Any]) else { return nil }
+        guard let ref = bridgeFacade().eventRefParse(bech32: raw) else { return nil }
         if ref["form"] as? String == "id", let id = ref["id"] as? String {
             return remixAncestorEvents[id].map { client.feedNote(from: $0) }
         }
@@ -1100,7 +1100,7 @@ final class FeedStore {
         guard let account = accountPubkey, event.pubkey == account else { return }
         // The account's bookmark head resolved — the bootstrap stops re-asking.
         bookmarkHeadReceived = true
-        let ids = (bridgeFacade().bookmarkIds(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) ?? []
+        let ids = bridgeFacade().bookmarkIds(message: gated.message, relayUrl: event.relayUrl ?? "") ?? []
         // Newer verified heads replace the local set (bounded by composer).
         if event.createdAt >= (bookmarkHeadAt ?? Int64.min) {
             bookmarked = ids
@@ -1114,7 +1114,7 @@ final class FeedStore {
     private func absorbBlockList(_ gated: VerifiedEventFrame) {
         let event = gated.event
         guard let account = accountPubkey, event.pubkey == account else { return }
-        let ids = (bridgeFacade().blockListPubkeys(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) ?? []
+        let ids = bridgeFacade().blockListPubkeys(message: gated.message, relayUrl: event.relayUrl ?? "") ?? []
         if event.createdAt >= (blockHeadAt ?? Int64.min) {
             blocked = Set(ids)
             blockHeadAt = event.createdAt
@@ -1432,7 +1432,7 @@ final class FeedStore {
         // Only the account's own contact list drives the timeline.
         // (Ingest verified the frame; the author check filters.)
         guard event.pubkey == account,
-              let authors = (bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") as? [String]) else { return }
+              let authors = bridgeFacade().contactListAuthors(message: gated.message, relayUrl: event.relayUrl ?? "") else { return }
         guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
         followingAuthors = Set(authors)
         // Keep the public UI projection in the same MainActor transaction as
@@ -1461,7 +1461,7 @@ final class FeedStore {
               let authors = bridgeFacade().contactListAuthors(
                   message: "[\"EVENT\",\"bitos-cache\",\(client.eventJson(event))]",
                   relayUrl: event.relayUrl ?? "wss://relay.damus.io"
-              ) as? [String] else { return }
+              ) else { return }
         guard event.createdAt >= (contactHeadAt ?? Int64.min) else { return }
         followingAuthors = Set(authors)
         // Unfollowed authors' notes leave the window with the follow set —
@@ -1534,9 +1534,8 @@ final class FeedStore {
         guard !followingSubscribed, !followingAuthors.isEmpty else { return }
         followingSubscribed = true
         let authors = Array(followingAuthors)
-        if let request = (bridgeFacade().followingRequest(subscriptionId: "bitos-following", authors: authors) as? String) {
-            Task { await pool.broadcast(request) }
-        }
+        let request = bridgeFacade().followingRequest(subscriptionId: "bitos-following", authors: authors)
+        Task { await pool.broadcast(request) }
     }
 
     private func finishAccountHeadRefresh() {
@@ -1837,7 +1836,7 @@ final class FeedStore {
         func stringSetJson(_ set: Set<String>) -> String {
             "[" + set.map { "\"\($0)\"" }.joined(separator: ",") + "]"
         }
-        guard let ids = bridgeFacade().algorithmRankIds(
+        let ids = bridgeFacade().algorithmRankIds(
             notesJson: "[\(rows.joined(separator: ","))]",
             surfaceWire: "feed",
             snapshotJson: algoJson,
@@ -1848,7 +1847,8 @@ final class FeedStore {
             dismissedNoteIdsJson: stringSetJson(interaction.dismissedNotes),
             mutedAuthorsJson: stringSetJson(interaction.demotedAuthors),
             mutedTagsJson: stringSetJson(interaction.demotedTags)
-        ) as? [String], !ids.isEmpty else {
+        )
+        guard !ids.isEmpty else {
             return base
         }
         let byId = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

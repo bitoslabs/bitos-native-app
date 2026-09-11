@@ -4,14 +4,19 @@ import Observation
 
 /// Local Discover scopes; Bitz remains restricted to standard media kinds.
 enum SearchScope {
-    /// Discover's general search: text + native video kinds.
+    /// Discover's general search: web `DISCOVER_CONTENT_KINDS` parity —
+    /// text + all four media kinds.
     case general
-    /// Bitz search: standard media kinds (bridge `bitzSearchRequest`).
+    /// Bitz search: standard media kinds (bridge `searchRelayRequest`).
     case bitzMedia
 }
 
-/// Local Discover search over normally delivered, verified relay events.
-/// This avoids relay-specific NIP-50 search subscriptions.
+/// Discover search over normally delivered, verified relay events. Each
+/// debounced query broadcasts a REQ pair — a base REQ (NIP-01 `#t` + bounded
+/// recent-sample fallback) plus the NIP-50 `search` filter as its own
+/// subscription — so relays that reject `search` still deliver matchable
+/// events; results still pass `matchesSearch` locally, so search stays
+/// verify-first.
 @MainActor
 @Observable
 final class SearchStore {
@@ -90,21 +95,27 @@ final class SearchStore {
         isSearching = true
         hasSearched = true
 
-        let npub = query.hasPrefix("npub1") ? (bridge.resolveNpub(query: query) as? String) : nil
+        let npub = query.hasPrefix("npub1") ? bridge.resolveNpub(query: query) : nil
         resolvedNpub = npub
 
-        // NIP-01 hashtag recall: `#` has no defined meaning in a NIP-50
-        // search string, so `#tag` queries broadcast the standard `#t`
-        // filter instead — indexed by every conforming relay. Matching
-        // stays local + verified via `matchesSearch`.
+        // Web discover parity, split for relay tolerance: a base REQ (`#t` +
+        // bounded recent sample) every relay answers, plus the NIP-50
+        // `search` filter as its own subscription — several major relays
+        // reject a whole REQ when any filter carries `search`, which would
+        // silently kill hashtag and sample recall too. Matching stays local
+        // + verified via `matchesSearch`.
         subscriptionCounter += 1
-        if let request = (bridge.searchTagRequest(
+        if let requests = (bridge.searchRelayRequests(
             subscriptionId: "bitos-search-\(subscriptionCounter)",
             query: query,
-            kinds: scope.kinds.map { KotlinInt(value: Int32($0)) },
-            limit: 50
-        ) as String?) {
-            Task { await pool.broadcast(request) }
+            kinds: scope.kinds.map { KotlinInt(value: Int32($0)) }
+        ) as SearchResults.RelaySearchRequests?) {
+            let base = requests.baseRequest
+            let search = requests.searchRequest
+            Task {
+                await pool.broadcast(base)
+                if let search { await pool.broadcast(search) }
+            }
         }
 
         activeQuery = query
@@ -143,7 +154,7 @@ private extension SearchScope {
     /// The queried kind set (Discover general vs Bitz media-only).
     var kinds: [Int] {
         switch self {
-        case .general: [1, 21, 22]
+        case .general: [1, 20, 21, 22, 34235, 34236]
         case .bitzMedia: [20, 21, 22, 34235, 34236]
         }
     }

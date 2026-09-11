@@ -76,6 +76,20 @@ Then open [BitOS.xcodeproj](../../apps/ios/BitOS.xcodeproj), choose the `BitOS` 
 
 When running on a physical device, configure your own development team and signing in Xcode; never commit signing changes, provisioning profiles, or private keys.
 
+### iOS Swift warnings
+
+The Swift 6 type-check gate in `scripts/ios-build.sh` is kept warning-clean.
+The only accepted remainder is a handful of AVFoundation iOS 16
+synchronous-property deprecations (`tracks(withMediaType:)`, `duration`,
+`naturalSize`, `preferredTransform`) inside `MemeVideoExportIos.probe`,
+`MemeVideoSoundIos.decodePcm` and `VideoStageIos.buildComposition`.
+Those paths must stay synchronous: they feed synchronous MainActor store
+contracts (`appendClip`, `restoreClips`) and return non-Sendable AVFoundation
+objects, so the async `load(...)` replacements cannot cross the actor
+boundary under strict concurrency. Clearing them requires an async refactor
+of the editor session contracts plus media tests — not a mechanical fix.
+Export/encode paths (static, nonisolated) already use the async `load` APIs.
+
 ## 5. Build application artifacts
 
 Use the repository commands when you need a local app artifact rather than an

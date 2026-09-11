@@ -151,7 +151,7 @@ final class DmStore {
             recipientPubkey: recipient,
             content: content,
             nowSeconds: now
-        ) as? [String: Any] else { return nil }
+        ) else { return nil }
         guard let rumorId = result["rumorId"] as? String,
               let rumorPubkey = result["rumorPubkey"] as? String,
               let rumorContent = result["rumorContent"] as? String,
@@ -278,7 +278,7 @@ final class DmStore {
             guard let map = boxedBridge.bridge.secureDmUnwrapEvent(
                 event: gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge),
                 myPrivateKeyHex: resolveSecret(secretCache)
-            ) as? [String: Any],
+            ),
                   let id = map["id"] as? String,
                   let author = map["author"] as? String,
                   let content = map["content"] as? String,

@@ -577,7 +577,7 @@ struct ComposerScreen: View {
     }
 
     private var charCounter: some View {
-        let map = bridge.composerCounter(length: Int32(utf16Length)) as? [String: Any] ?? [:]
+        let map = bridge.composerCounter(length: Int32(utf16Length))
         let ratio = (map["ratio"] as? KotlinDouble)?.doubleValue ?? (map["ratio"] as? NSNumber)?.doubleValue ?? 0
         let near = (map["near"] as? KotlinBoolean)?.boolValue ?? false
         let over = (map["over"] as? KotlinBoolean)?.boolValue ?? false
@@ -624,7 +624,7 @@ struct ComposerScreen: View {
     }
 
     private var emojiSheetContent: some View {
-        let emojis = bridge.composerEmojis() as? [String] ?? []
+        let emojis = bridge.composerEmojis()
         return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             Text("Insert emoji")
                 .font(.system(size: 14, weight: .semibold))
@@ -776,7 +776,7 @@ struct ComposerScreen: View {
     private func derivedTags() -> String {
         let reason = contentWarningOn && !contentWarningReason.trimmingCharacters(in: .whitespaces).isEmpty
             ? contentWarningReason.trimmingCharacters(in: .whitespaces) : nil
-        return bridge.composerDeriveTags(content: composedContent(), contentWarningReason: reason) ?? "[]"
+        return bridge.composerDeriveTags(content: composedContent(), contentWarningReason: reason)
     }
 
     /// A mined nonce is valid for exactly one (content, target, tags)
@@ -823,7 +823,7 @@ struct ComposerScreen: View {
     private func restoreDraft() {
         guard !seeded else { return }
         guard let wire = UserDefaults.standard.string(forKey: draftKey),
-              let map = bridge.composerDraftDecode(json: wire) as? [String: Any] else { return }
+              let map = bridge.composerDraftDecode(json: wire) else { return }
         text = (map["text"] as? String) ?? ""
         remoteImageUrls = (map["urls"] as? [String]) ?? []
         let cw = (map["cw"] as? String) ?? ""
@@ -910,7 +910,7 @@ struct ComposerScreen: View {
             let tagsJson = bridge.composerDeriveTags(
                 content: contentWithMedia,
                 contentWarningReason: contentWarningOn ? contentWarningReason : nil
-            ) ?? "[]"
+            )
             RecentHashtagsStore.shared.record(used: RecentHashtagsStore.hashtagsIn(contentWithMedia))
             // Seed tags (remix/attribution) merge first, deduped by shared rule.
             let mergedTagsJson = seeded

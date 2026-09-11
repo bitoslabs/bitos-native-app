@@ -427,7 +427,7 @@ struct DiscoverView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Search hashtag \(topic)")
                 }
-                Text("Search runs on relays that support NIP-50; results may vary by relay.")
+                Text("Search runs across your relays; text matching may vary by relay.")
                     .font(.caption2)
                     .foregroundStyle(BitOSTheme.textTertiary)
                     .padding(.top, BitOSTheme.Spacing.base)
