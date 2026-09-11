@@ -125,19 +125,22 @@ final class BusinessCoreFacadeTests: XCTestCase {
         XCTAssertTrue(request.contains(#""kinds":[20,21,22,34235,34236],"limit":80"#))
         XCTAssertTrue(request.contains(#""kinds":[1],"limit":48"#))
         XCTAssertTrue(client.feedRequestSince(subscriptionId: "feed-gap", since: 600).contains(#""since":600"#))
-        // Web-parity search REQ: NIP-50 `search` + `#t` + recent-sample
-        // fallback filters in one REQ; Bitz passes standard media kinds
-        // only — never kind-1.
-        let bitzSearch = bridge.searchRelayRequest(
+        // Web-parity search REQ pair: base (`#t` + recent-sample fallback)
+        // everywhere + NIP-50 `search` as its own subscription; Bitz passes
+        // standard media kinds only — never kind-1.
+        let bitzSearch = bridge.searchRelayRequests(
             subscriptionId: "bs1",
             query: "lightning",
             kinds: [20, 21, 22, 34235, 34236].map { KotlinInt(value: Int32($0)) }
-        ) as String?
+        ) as SearchResults.RelaySearchRequests?
         XCTAssertNotNil(bitzSearch)
-        XCTAssertTrue(bitzSearch!.contains(#""kinds":[20,21,22,34235,34236],"search":"lightning","limit":180"#))
-        XCTAssertTrue(bitzSearch!.contains(#""#t":["lightning"],"limit":180"#))
-        XCTAssertTrue(bitzSearch!.contains(#""kinds":[20,21,22,34235,34236],"limit":240"#))
-        XCTAssertFalse(bitzSearch!.contains(#""kinds":[1]"#))
+        XCTAssertTrue(bitzSearch!.baseRequest.contains(#""#t":["lightning"],"limit":180"#))
+        XCTAssertTrue(bitzSearch!.baseRequest.contains(#""kinds":[20,21,22,34235,34236],"limit":240"#))
+        XCTAssertEqual(
+            bitzSearch!.searchRequest,
+            #"["REQ","bs1-s",{"kinds":[20,21,22,34235,34236],"search":"lightning","limit":180}]"#
+        )
+        XCTAssertFalse(bitzSearch!.baseRequest.contains(#""kinds":[1]"#))
         XCTAssertEqual(client.close(subscriptionId: "feed1"), #"["CLOSE","feed1"]"#)
     }
 

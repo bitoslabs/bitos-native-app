@@ -12,9 +12,11 @@ enum SearchScope {
 }
 
 /// Discover search over normally delivered, verified relay events. Each
-/// debounced query broadcasts one multi-filter REQ (NIP-50 `search` + NIP-01
-/// `#t` + bounded recent-sample fallback — web discover parity); results
-/// still pass `matchesSearch` locally, so search stays verify-first.
+/// debounced query broadcasts a REQ pair — a base REQ (NIP-01 `#t` + bounded
+/// recent-sample fallback) plus the NIP-50 `search` filter as its own
+/// subscription — so relays that reject `search` still deliver matchable
+/// events; results still pass `matchesSearch` locally, so search stays
+/// verify-first.
 @MainActor
 @Observable
 final class SearchStore {
@@ -93,22 +95,27 @@ final class SearchStore {
         isSearching = true
         hasSearched = true
 
-        let npub = query.hasPrefix("npub1") ? (bridge.resolveNpub(query: query) as? String) : nil
+        let npub = query.hasPrefix("npub1") ? bridge.resolveNpub(query: query) : nil
         resolvedNpub = npub
 
-        // Web discover parity: one multi-filter REQ — the NIP-50 `search`
-        // filter for relays that support it, the NIP-01 `#t` filter for
-        // indexed hashtag recall (the only filter for `#tag` queries, since
-        // NIP-50 leaves `#` undefined in search strings), and a bounded
-        // recent sample so relays without NIP-50 still deliver matchable
-        // events. Matching stays local + verified via `matchesSearch`.
+        // Web discover parity, split for relay tolerance: a base REQ (`#t` +
+        // bounded recent sample) every relay answers, plus the NIP-50
+        // `search` filter as its own subscription — several major relays
+        // reject a whole REQ when any filter carries `search`, which would
+        // silently kill hashtag and sample recall too. Matching stays local
+        // + verified via `matchesSearch`.
         subscriptionCounter += 1
-        if let request = (bridge.searchRelayRequest(
+        if let requests = (bridge.searchRelayRequests(
             subscriptionId: "bitos-search-\(subscriptionCounter)",
             query: query,
             kinds: scope.kinds.map { KotlinInt(value: Int32($0)) }
-        ) as String?) {
-            Task { await pool.broadcast(request) }
+        ) as SearchResults.RelaySearchRequests?) {
+            let base = requests.baseRequest
+            let search = requests.searchRequest
+            Task {
+                await pool.broadcast(base)
+                if let search { await pool.broadcast(search) }
+            }
         }
 
         activeQuery = query

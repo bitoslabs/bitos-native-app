@@ -442,6 +442,47 @@ final class MemeEditorStore {
         }
     }
 
+    /// Browse-videos attach (kind 21/22 "vdo sound", Wave C semantics):
+    /// bounded download of the source video → passthrough audio extract
+    /// (the provenance-aware `attachSoundtrack`) with NO url — the m4a
+    /// uploads hash-verified at publish time (never pre-upload).
+    func attachSoundFromVideoUrl(
+        mediaUrl: String,
+        sourceEventId: String,
+        author: String,
+        label: String
+    ) {
+        guard let url = URL(string: mediaUrl),
+              url.scheme == "https" || url.host == "localhost" || url.host == "127.0.0.1" else {
+            setNotice("Sound source URL is not loadable")
+            return
+        }
+        if soundtrackRow != nil {
+            setNotice("Remove the current soundtrack first")
+            return
+        }
+        setNotice("Loading sound…")
+        Task { @MainActor in
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard data.count <= 64 * 1024 * 1024 else {
+                    throw RemixSourceError(message: "source over 64 MiB")
+                }
+                switchModeToVideo()
+                attachSoundtrack(
+                    data: data,
+                    sourceEventId: sourceEventId.isEmpty ? nil : sourceEventId,
+                    author: author.isEmpty ? nil : author,
+                    label: label.isEmpty ? nil : "Original sound · \(label)"
+                )
+                setNotice(nil)
+            } catch {
+                setNotice(nil)
+                setExportFailure("Sound source could not be loaded")
+            }
+        }
+    }
+
     /// URL re-attach (trending / shared-sheet "Use"): the URL IS the
     /// artifact — bounded download, hash-verify, decode, attach with the
     /// URL pre-filled so publish stamps it WITHOUT re-uploading (Wave D
@@ -3567,6 +3608,25 @@ struct MemeEditorView: View {
                 }
             )
         }
+        .sheet(isPresented: $showVideoSounds) {
+            VideoSoundsBrowseSheet(
+                notes: environment.feedStore.notes,
+                onUse: { note in
+                    showVideoSounds = false
+                    store.attachSoundFromVideoUrl(
+                        mediaUrl: note.mediaUrls.first ?? "",
+                        sourceEventId: note.id,
+                        author: note.pubkey,
+                        label: note.content.split(separator: "\n", maxSplits: 1)
+                            .first.map(String.init)?.prefix(40).description ?? ""
+                    )
+                },
+                onOpen: { Task { await environment.relayPool.broadcast(
+                    "[\"REQ\",\"bitos-video-sounds\",{\"kinds\":[21,22],\"limit\":100}]"
+                ) } },
+                onClose: { showVideoSounds = false }
+            )
+        }
     }
 
     /// MST-045 publish-as-template dialog: pure data — no upload. Icon =
@@ -3782,7 +3842,7 @@ struct MemeEditorView: View {
             Task {
                 guard let data = try? await item.loadTransferable(type: Data.self),
                       let url = MemeVideoExportIos.writeTempClip(data),
-                      let probe = MemeVideoExportIos.probe(url: url) else {
+                      MemeVideoExportIos.probe(url: url) != nil else {
                     store.setExportFailure("Clip unreadable")
                     return
                 }
@@ -4687,6 +4747,7 @@ struct MemeEditorView: View {
     @State private var editorSoundStore: SharedSoundStore?
     @State private var soundQuery = ""
     @State private var showTrendingInEditor = false
+    @State private var showVideoSounds = false
 
     // ── Tray ────────────────────────────────────────────────────────────
 
@@ -4962,12 +5023,12 @@ struct MemeEditorView: View {
                     hasSourceAudio: !store.isBlankVideo,
                     online: editorSoundStore?.rows ?? [],
                     query: soundQuery,
-                    hasTrending: environment.feedStore.notes.contains(where: { $0.soundUrl != nil }),
                     onQueryChange: { value in
                         soundQuery = String(value.prefix(80))
                         editorSoundStore?.search(soundQuery)
                     },
                     onOpenTrending: { showTrendingInEditor = true },
+                    onOpenVideos: { showVideoSounds = true },
                     onUseOnlineSound: { row in
                         store.attachAudioFromUrl(
                             mediaUrl: row.url,
@@ -5469,7 +5530,7 @@ struct MemeEditorView: View {
     /// change, the session persists (assets copy-in + wire + poster +
     /// LRU index). Kill/relaunch loses nothing the user saw committed.
     private func runAutosave() async {
-        guard let slotStore else { return }
+        guard slotStore != nil else { return }
         if store.isEmpty { return }
         try? await Task.sleep(nanoseconds: MemeSlotsApi.autosaveDebounceMs * 1_000_000)
         guard !Task.isCancelled else { return }
@@ -6959,9 +7020,9 @@ private struct SoundPanelContent: View {
     var hasSourceAudio = true
     var online: [SharedSoundStore.Row] = []
     var query = ""
-    var hasTrending = false
     var onQueryChange: (String) -> Void = { _ in }
     var onOpenTrending: () -> Void = {}
+    var onOpenVideos: () -> Void = {}
     var onUseOnlineSound: (SharedSoundStore.Row) -> Void = { _ in }
     var onPickSound: () -> Void = {}
     var onOpenStudio: () -> Void
@@ -6976,35 +7037,59 @@ private struct SoundPanelContent: View {
             .onChange(of: query) { _, value in localQuery = value }
             .submitLabel(.search)
     }
-
     @ViewBuilder private var trendingSection: some View {
-        // ── Trending (§3.21): the ranked rail over the live feed.
-        if hasTrending {
-            Button(action: onOpenTrending) {
-                HStack(spacing: BitOSTheme.Spacing.sm) {
-                    Text("🔥").font(.title3)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Trending sounds")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(BitOSTheme.textPrimary)
-                        Text("Most-borrowed ♪ in your feed — 3-day half-life")
-                            .font(.caption2)
-                            .foregroundStyle(BitOSTheme.textSecondary)
-                    }
-                    Spacer()
-                    Text("Open")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(BitOSTheme.accent)
+        // ── Trending (§3.21) + browse videos: ALWAYS visible for
+        // discoverability (their screens own the empty states).
+        Button(action: onOpenTrending) {
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Text("\u{1F525}").font(.title3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Trending sounds")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text("Most-borrowed \u{266A} in your feed \u{2014} 3-day half-life")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
                 }
-                .padding(BitOSTheme.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
-                        .fill(BitOSTheme.accent.opacity(0.15))
-                )
+                Spacer()
+                Text("Open")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
             }
-            .buttonStyle(.plain)
+            .padding(BitOSTheme.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                    .fill(BitOSTheme.accent.opacity(0.15))
+            )
         }
+        .buttonStyle(.plain)
+        // \u{2500}\u{2500} Browse video sounds (kind 21/22 "vdo sound"): the sheet's
+        // own REQ fills the window live \u{2014} always offered.
+        Button(action: onOpenVideos) {
+            HStack(spacing: BitOSTheme.Spacing.sm) {
+                Text("\u{1F3AC}").font(.title3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Browse video sounds")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text("Any kind 21/22 bitz \u{2014} borrow its audio with credit")
+                        .font(.caption2)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                Spacer()
+                Text("Open")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.accent)
+            }
+            .padding(BitOSTheme.Spacing.sm)
+            .background(
+                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                    .fill(BitOSTheme.surface)
+            )
+        }
+        .buttonStyle(.plain)
     }
+
 
     @ViewBuilder private var onlineSection: some View {
         // ── Shared sounds (kind-30078 online rail; query-filtered) ──
@@ -7239,6 +7324,88 @@ private struct SoundPanelContent: View {
                 librarySection
             }
             publishSection
+        }
+    }
+}
+
+/// Browse video sounds (kind 21/22 "vdo sound", MST-050 browse
+/// surface): every https-video note in the LIVE feed window is a sound
+/// source — "Use sound" borrows its audio through the Wave-C extract
+/// path (provenance = the source event; publish stamps sound/p/
+/// attribution). Opening fires one bounded kinds-[21,22] REQ so the
+/// window fills while browsing; closing CLOSEs the sub.
+private struct VideoSoundsBrowseSheet: View {
+    let notes: [FeedNote]
+    let onUse: (FeedNote) -> Void
+    let onOpen: () -> Void
+    let onClose: () -> Void
+
+    @Environment(AppEnvironment.self) private var environment
+
+    private var videoNotes: [FeedNote] {
+        notes.filter {
+            ($0.kind == 21 || $0.kind == 22) &&
+                $0.mediaUrls.first?.hasPrefix("https") == true
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Kind 21/22 bitz in your feed — borrow any audio with credit.")
+                        .font(.caption)
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                if videoNotes.isEmpty {
+                    Section {
+                        Text("No videos in the window yet — the sheet re-queries kinds 21/22 while open.")
+                            .font(.caption)
+                            .foregroundStyle(BitOSTheme.textSecondary)
+                    }
+                }
+                Section {
+                    ForEach(videoNotes.prefix(30)) { note in
+                        Button {
+                            onUse(note)
+                        } label: {
+                            HStack(spacing: BitOSTheme.Spacing.sm) {
+                                Text("🎬").font(.title3)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(
+                                        note.content.split(separator: "\n", maxSplits: 1)
+                                            .first.map(String.init) ?? "Video bitz"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                    .foregroundStyle(BitOSTheme.textPrimary)
+                                    Text("kind \(note.kind) · \(String(note.pubkey.prefix(8)))…")
+                                        .font(.caption2)
+                                        .foregroundStyle(BitOSTheme.textSecondary)
+                                }
+                                Spacer()
+                                Text("Use sound")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(BitOSTheme.accent)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Video sounds")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { onClose() }
+                }
+            }
+            .onAppear { onOpen() }
+            .onDisappear {
+                Task { await environment.relayPool.broadcast(
+                    "[\"CLOSE\",\"bitos-video-sounds\"]"
+                ) }
+            }
         }
     }
 }
@@ -7618,7 +7785,7 @@ enum MemeRaster {
     private static func paintImage(_ row: [String: Any], in cgContext: CGContext, images: [String: UIImage]) {
         guard let assetId = row["asset"] as? String,
               let image = images[assetId],
-              let cgImage = image.cgImage else { return }
+              image.cgImage != nil else { return }
         let height = CGFloat((row["fontSize"] as? NSNumber)?.doubleValue ?? 0)
         guard height > 0 else { return }
         let width = height * CGFloat(image.size.width) / max(1, image.size.height)

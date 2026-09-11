@@ -23,8 +23,7 @@ enum MemeVideoSoundIos {
     /// Nil when the source has no readable audio track (named upstream).
     static func extract(url: URL) async -> Extracted? {
         let asset = AVURLAsset(url: url)
-        guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
-              audioTrack != nil else { return nil }
+        guard (try? await asset.loadTracks(withMediaType: .audio).first) != nil else { return nil }
         let assetDuration = try? await asset.load(.duration)
         let totalMs = Int64(((assetDuration?.seconds ?? 0) * 1000).rounded())
         let capMs = Int64(MemeSoundRules.shared.MAX_SOUND_DURATION_MS)
@@ -72,7 +71,7 @@ enum MemeVideoSoundIos {
         }
         defer { try? FileManager.default.removeItem(at: input) }
         let asset = AVURLAsset(url: input)
-        guard let audioTrack = try? asset.tracks(withMediaType: .audio).first else { return nil }
+        guard let audioTrack = asset.tracks(withMediaType: .audio).first else { return nil }
         guard let reader = try? AVAssetReader(asset: asset) else { return nil }
         let bedRate = Int(MemeSoundMix.shared.BED_RATE)
         let output = AVAssetReaderTrackOutput(

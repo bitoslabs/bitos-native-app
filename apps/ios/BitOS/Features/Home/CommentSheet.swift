@@ -508,14 +508,13 @@ struct CommentSheet: View {
 
     /// No cursor tracking in the pill field — inserts land at the end.
     private func insertHashtag() {
-        if let map = bridge.composerInsertHashtag(text: text, cursor: Int32(text.count)) as? [String: Any],
-           let next = map["text"] as? String {
+        if let next = bridge.composerInsertHashtag(text: text, cursor: Int32(text.count))["text"] as? String {
             text = next
         }
     }
 
     private var emojiSheetContent: some View {
-        let emojis = bridge.composerEmojis() as? [String] ?? []
+        let emojis = bridge.composerEmojis()
         return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
             Text("Insert emoji")
                 .font(.system(size: 14, weight: .semibold))
@@ -524,8 +523,7 @@ struct CommentSheet: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: BitOSTheme.Spacing.sm) {
                 ForEach(emojis, id: \.self) { emoji in
                     Button {
-                        if let map = bridge.composerInsertEmoji(text: text, cursor: Int32(text.count), emoji: emoji) as? [String: Any],
-                           let next = map["text"] as? String {
+                        if let next = bridge.composerInsertEmoji(text: text, cursor: Int32(text.count), emoji: emoji)["text"] as? String {
                             text = next
                         }
                         emojiSheet = false

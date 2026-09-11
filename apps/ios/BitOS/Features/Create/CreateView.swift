@@ -39,7 +39,7 @@ struct CreateView: View {
     @Environment(AppEnvironment.self) private var environment
 
     private var slots: [MemeProjectStore.SlotEntryUi] {
-        slotsRevision // recompute on revision bump (delete/editor close)
+        _ = slotsRevision // recompute on revision bump (delete/editor close)
         return slotStore.listSlots()
     }
 
@@ -979,7 +979,7 @@ private final class MassBatchFlow {
             let projectJson = row.projectJson
             do {
                 let png = try await Task.detached(priority: .userInitiated) {
-                    try await MemeRaster.renderPngData(asset: source, projectJson: projectJson, client: client)
+                    try MemeRaster.renderPngData(asset: source, projectJson: projectJson, client: client)
                 }.value
                 try await MemeRaster.saveToPhotos(png)
                 exportResults[row.id] = ""
@@ -1446,7 +1446,7 @@ private struct MassSetupView: View {
                     (root["missingRequired"] as? [String]) ?? [],
                     (root["overCap"] as? Bool) ?? false
                 )
-            } else if case .success(let url) = result, let text = try? String(contentsOf: url, encoding: .utf8) {
+            } else if case .success(let url) = result, let _ = try? String(contentsOf: url, encoding: .utf8) {
                 csvNotes = "The CSV could not be analyzed — check its encoding and try again."
             }
         }

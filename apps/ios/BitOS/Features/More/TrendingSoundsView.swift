@@ -39,7 +39,7 @@ struct TrendingSoundsView: View {
                       data.count <= 64 * 1024 * 1024,
                       let pcm = MemeVideoSoundIos.decodePcm(data: data) else { return nil }
                 let kotlinPcm = KotlinFloatArray(size: Int32(pcm.count)) { index in
-                    KotlinFloat(float: pcm[Int(index)])
+                    KotlinFloat(float: pcm[Int(truncating: index)])
                 }
                 let kotlinPeaks = MemeSoundWaveform.shared.peaks(
                     pcm: kotlinPcm,

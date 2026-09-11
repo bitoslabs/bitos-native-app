@@ -916,6 +916,28 @@ fun MemeEditorScreen(
         (context.applicationContext as space.bitos.app.BitOsApplication).feedRepository.state
     }.collectAsStateWithLifecycle()
 
+    // ── Browse video sounds (kind 21/22 "vdo sound"): one bounded REQ
+    // enriches the LIVE feed window; rows reuse the Wave-C extract path.
+    var showVideoSounds by remember { mutableStateOf(false) }
+    val videoSoundNotes = remember(feedNotes) {
+        feedNotes.notes.filter {
+            (it.kind == 21 || it.kind == 22) && it.mediaUrls.firstOrNull()?.startsWith("https") == true
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(showVideoSounds) {
+        val app = context.applicationContext as space.bitos.app.BitOsApplication
+        if (showVideoSounds) {
+            app.memeTemplatePool.broadcast(
+                space.bitos.core.nostr.NostrEventCodec.encodeRequest(
+                    "bitos-video-sounds",
+                    """{"kinds":[21,22],"limit":100}""",
+                ),
+            )
+        } else {
+            app.memeTemplatePool.broadcast("[\"CLOSE\",\"bitos-video-sounds\"]")
+        }
+    }
+
     // ── MST-045 write path: publish-your-own template state ──
     var showPublishTemplate by remember { mutableStateOf(false) }
     var publishTemplateLabel by remember { mutableStateOf("") }
@@ -1297,25 +1319,92 @@ fun MemeEditorScreen(
         }
     }
 
-    // Trending overlay (§3.21): the ranked rail over the live feed
-    // window, reusing the More-hub screen — "Use" attaches to THIS
-    // project through the hash-verified URL path (no re-upload).
-    if (showTrendingSounds) {
-        space.bitos.app.ui.more.TrendingSoundsScreen(
-            notes = feedNotes.notes,
-            onClose = { showTrendingSounds = false },
-            onUseSound = { row ->
-                showTrendingSounds = false
-                attachSoundFromUrl(
-                    mediaUrl = row.url,
-                    expectedSha256 = row.sha256,
-                    label = "Trending",
-                    eventId = row.sourceEventId ?: "",
-                    authorPubkey = "",
+
+    /**
+     * Browse-videos attach (kind 21/22 "vdo sound", Wave C semantics):
+     * bounded download of the source video → passthrough audio extract →
+     * attach with provenance and NO url (the m4a uploads hash-verified
+     * at publish time — never pre-upload).
+     */
+    fun attachSoundFromVideoUrl(
+        mediaUrl: String,
+        eventId: String,
+        authorPubkey: String,
+        label: String,
+    ) {
+        val url = runCatching { java.net.URI(mediaUrl).toURL() }.getOrNull()
+        if (url == null || (url.protocol != "https" && url.host != "localhost" && url.host != "127.0.0.1")) {
+            exportStatus = "Sound source URL is not loadable"
+            return
+        }
+        if (state.project.soundtrack != null) {
+            exportStatus = "Remove the current soundtrack first"
+            return
+        }
+        seedingProgress = 0 to 1
+        scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    try {
+                        connection.connectTimeout = 15_000
+                        connection.readTimeout = 30_000
+                        check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                        connection.inputStream.use { input ->
+                            val out = java.io.ByteArrayOutputStream()
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                out.write(buffer, 0, read)
+                                check(out.size() <= space.bitos.core.model.Blossom.MAX_FILE_BYTES) { "source too large" }
+                            }
+                            out.toByteArray()
+                        }
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+                val extracted = withContext(Dispatchers.IO) {
+                    val temp = java.io.File.createTempFile("meme-sound-src", ".mp4")
+                    try {
+                        temp.writeBytes(bytes)
+                        MemeVideoSound.extract(context, android.net.Uri.fromFile(temp))
+                    } finally {
+                        runCatching { temp.delete() }
+                    }
+                }
+                if (extracted == null) {
+                    exportStatus = "That video has no readable audio track"
+                    return@launch
+                }
+                val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+                if (decoded == null) {
+                    exportStatus = "That video's sound could not be decoded here"
+                    return@launch
+                }
+                state.switchMode(MemeMode.VIDEO)
+                soundtrackM4a = extracted.m4aBytes
+                soundtrackPcm = decoded
+                state.setSoundtrack(
+                    space.bitos.core.studio.MemeSoundtrack(
+                        sha256 = extracted.sha256Hex,
+                        durationMs = extracted.durationMs,
+                        sourceNoteId = eventId.takeIf { it.isNotBlank() },
+                        sourceAuthorPubkey = authorPubkey.takeIf { it.isNotBlank() },
+                        label = label.takeIf { it.isNotBlank() }?.let { "Original sound · $it" } ?: "Original sound",
+                    ),
                 )
-            },
-        )
+                exportStatus = null
+            } catch (error: IllegalStateException) {
+                exportStatus = "Sound source could not be loaded (${error.message})"
+            } finally {
+                seedingProgress = null
+            }
+        }
     }
+
+
     // Resume: the slot's `sound` asset rehydrates the session audio. A
     // sound the session cannot hear would export SILENT while the wire
     // promises it — strip the row and say so instead (consistency over
@@ -3305,8 +3394,8 @@ fun MemeEditorScreen(
                                 online = onlineSoundRows,
                                 query = soundQuery,
                                 onQueryChange = { soundQuery = it.take(80) },
-                                hasTrending = feedNotes.notes.any { it.soundOf != null },
                                 onOpenTrending = { showTrendingSounds = true },
+                                onOpenVideos = { showVideoSounds = true },
                                 onUseOnlineSound = { row ->
                                     attachSoundFromUrl(
                                         mediaUrl = row.url,
@@ -4134,6 +4223,46 @@ fun MemeEditorScreen(
             onJobVerify = { mediaPublishViewModel.verifyMemeJobIntegrity(it) },
         )
     }
+
+// ── Full-screen sound overlays render LAST so they draw on top of the
+    // Trending overlay (§3.21): the ranked rail over the live feed
+    // window, reusing the More-hub screen — "Use" attaches to THIS
+    // project through the hash-verified URL path (no re-upload).
+    if (showTrendingSounds) {
+        space.bitos.app.ui.more.TrendingSoundsScreen(
+            notes = feedNotes.notes,
+            onClose = { showTrendingSounds = false },
+            onUseSound = { row ->
+                showTrendingSounds = false
+                attachSoundFromUrl(
+                    mediaUrl = row.url,
+                    expectedSha256 = row.sha256,
+                    label = "Trending",
+                    eventId = row.sourceEventId ?: "",
+                    authorPubkey = "",
+                )
+            },
+        )
+    }
+
+    // Browse video sounds (kind 21/22): pick any feed video and borrow
+    // its audio through the Wave-C extract path (provenance stamped at
+    // publish: sound/p/attribution).
+    if (showVideoSounds) {
+        VideoSoundsBrowseSheet(
+            notes = videoSoundNotes,
+            onUse = { note ->
+                showVideoSounds = false
+                attachSoundFromVideoUrl(
+                    mediaUrl = note.mediaUrls.first(),
+                    eventId = note.id,
+                    authorPubkey = note.pubkey,
+                    label = note.content.lineSequence().firstOrNull()?.take(40)?.ifBlank { null } ?: "Original sound",
+                )
+            },
+            onClose = { showVideoSounds = false },
+        )
+    }
 }
 
 /** Decode-only bounds pass (no bitmap allocation); null for unreadable files. */
@@ -4642,11 +4771,11 @@ private fun SoundPanelContent(
     library: List<space.bitos.core.studio.SharedSoundLibrary.Entry> = emptyList(),
     online: List<space.bitos.app.data.feed.SharedSoundStore.Row> = emptyList(),
     query: String = "",
-    hasTrending: Boolean = false,
     publishBusy: Boolean = false,
     publishMessage: String? = null,
     onQueryChange: (String) -> Unit = {},
     onOpenTrending: () -> Unit = {},
+    onOpenVideos: () -> Unit = {},
     onUseOnlineSound: (space.bitos.app.data.feed.SharedSoundStore.Row) -> Unit = {},
     onPickLibrarySound: (space.bitos.core.studio.SharedSoundLibrary.Entry) -> Unit = {},
     onPublishSound: () -> Unit = {},
@@ -4781,13 +4910,15 @@ private fun SoundPanelContent(
             fun matches(vararg fields: String) =
                 needle.isEmpty() || fields.any { it.lowercase().contains(needle) }
 
-            // ── Trending (§3.21): the ranked rail over the live feed.
-            if (hasTrending) {
+            // ── Trending (§3.21): the ranked rail — ALWAYS visible for
+            // discoverability (its screen owns the empty state).
+            run {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = BitOSColors.primaryContainer,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable(onClickLabel = "Trending sounds") { onOpenTrending() },
                 ) {
                     Row(
@@ -4804,6 +4935,45 @@ private fun SoundPanelContent(
                             )
                             Text(
                                 "Most-borrowed ♪ in your feed — 3-day half-life",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BitOSColors.textSecondary,
+                            )
+                        }
+                        Text(
+                            "Open",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = BitOSColors.primary,
+                        )
+                    }
+                }
+            }
+
+            // ── Browse video sounds (kind 21/22 "vdo sound"): ALWAYS
+            // visible — the sheet's own REQ fills the window live.
+            run {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = BitOSColors.surfaceElevated,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(onClickLabel = "Browse video sounds") { onOpenVideos() },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                    ) {
+                        Text("🎬", style = MaterialTheme.typography.titleSmall)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Browse video sounds",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.W600,
+                            )
+                            Text(
+                                "Any kind 21/22 bitz — borrow its audio with credit",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = BitOSColors.textSecondary,
                             )
@@ -4841,6 +5011,7 @@ private fun SoundPanelContent(
                         color = BitOSColors.surface,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable(onClickLabel = "Use ${row.label}") { onUseOnlineSound(row) },
                     ) {
                         Row(
@@ -4888,6 +5059,7 @@ private fun SoundPanelContent(
                         color = BitOSColors.surface,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable(onClickLabel = "Use ${entry.label}") { onPickLibrarySound(entry) },
                     ) {
                         Row(
@@ -9830,6 +10002,97 @@ private fun PenControlsRow(
         }
         androidx.compose.material3.TextButton(onClick = onDone) {
             Text("Done", color = BitOSColors.primary, fontWeight = androidx.compose.ui.text.font.FontWeight.W700)
+        }
+    }
+}
+
+/**
+ * Browse video sounds (kind 21/22 "vdo sound", MST-050 browse surface):
+ * every https-video note in the LIVE feed window is a sound source —
+ * "Use sound" borrows its audio through the Wave-C extract path
+ * (provenance = the source event; publish stamps sound/p/attribution).
+ */
+@Composable
+private fun VideoSoundsBrowseSheet(
+    notes: List<space.bitos.core.feed.FeedNote>,
+    onUse: (space.bitos.core.feed.FeedNote) -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BitOSColors.background)
+            .verticalScroll(rememberScrollState())
+            .padding(BitOSSpacing.screen),
+        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Video sounds",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onClose) {
+                Text("Done", color = BitOSColors.primary, fontWeight = FontWeight.W600)
+            }
+        }
+        Text(
+            "Kind 21/22 bitz in your feed — borrow any audio with credit.",
+            style = MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+        )
+        if (notes.isEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = BitOSColors.surface,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(BitOSSpacing.base), verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+                    Text("No videos in the window yet", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W600)
+                    Text(
+                        "The sheet re-queries kinds 21/22 while open — pull the feed and come back.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                }
+            }
+        }
+        notes.take(30).forEach { note ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = BitOSColors.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClickLabel = "Use this video's sound") { onUse(note) },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                ) {
+                    Text("🎬", style = MaterialTheme.typography.titleSmall)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            note.content.lineSequence().firstOrNull()?.take(60)?.ifBlank { "Video bitz" } ?: "Video bitz",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.W600,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "kind ${note.kind} · ${note.pubkey.take(8)}…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = BitOSColors.textSecondary,
+                        )
+                    }
+                    Text(
+                        "Use sound",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.W600,
+                        color = BitOSColors.primary,
+                    )
+                }
+            }
         }
     }
 }

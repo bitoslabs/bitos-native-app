@@ -258,18 +258,21 @@ class BusinessCoreBridgeTest {
         assertTrue(request.contains(""""kinds":[1],"limit":48"""), request)
         val gapRequest = bridge.feedRequestSince("feed-gap", 600)
         assertTrue(gapRequest.contains(""""kinds":[1],"limit":48,"since":600"""), gapRequest)
-        // Web-parity search REQ: NIP-50 `search` + `#t` + recent-sample
-        // fallback filters in one REQ; Bitz passes media kinds only —
-        // never kind-1.
-        val bitzSearch = bridge.searchRelayRequest(
+        // Web-parity search REQ pair: base (`#t` + recent-sample fallback)
+        // everywhere + NIP-50 `search` as its own subscription; Bitz passes
+        // media kinds only — never kind-1.
+        val bitzSearch = bridge.searchRelayRequests(
             "bs1", "lightning", space.bitos.core.feed.BitzTimelinePolicy.MEDIA_KINDS,
         )!!
-        assertTrue(bitzSearch.startsWith("""["REQ","bs1","""), bitzSearch)
-        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"search":"lightning","limit":180"""), bitzSearch)
-        assertTrue(bitzSearch.contains(""""#t":["lightning"],"limit":180"""), bitzSearch)
-        assertTrue(bitzSearch.contains(""""kinds":[20,21,22,34235,34236],"limit":240"""), bitzSearch)
-        assertTrue(!bitzSearch.contains(""""kinds":[1]"""), bitzSearch)
-        assertEquals(null, bridge.searchRelayRequest("bs2", "   ", listOf(1)))
+        assertTrue(bitzSearch.baseRequest.startsWith("""["REQ","bs1","""), bitzSearch.baseRequest)
+        assertTrue(bitzSearch.baseRequest.contains(""""#t":["lightning"],"limit":180"""), bitzSearch.baseRequest)
+        assertTrue(bitzSearch.baseRequest.contains(""""kinds":[20,21,22,34235,34236],"limit":240"""), bitzSearch.baseRequest)
+        assertEquals(
+            """["REQ","bs1-s",{"kinds":[20,21,22,34235,34236],"search":"lightning","limit":180}]""",
+            bitzSearch.searchRequest,
+        )
+        assertTrue(!bitzSearch.baseRequest.contains(""""kinds":[1]"""), bitzSearch.baseRequest)
+        assertEquals(null, bridge.searchRelayRequests("bs2", "   ", listOf(1)))
         assertEquals("""["CLOSE","feed1"]""", bridge.close("feed1"))
         val profileRequest = bridge.profileRequest("p1", listOf("aa".repeat(32)))
         assertTrue(profileRequest.startsWith("""["REQ","p1","""), profileRequest)

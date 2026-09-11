@@ -502,7 +502,7 @@ final class InboxStore {
             case .event(let gatedEvent):
                 let bridgeEvent = gatedEvent.event.bridgeEvent(bridge: boxedBridge.bridge)
                 let blockHead: InboxFrame.BlockHead?
-                if let list = boxedBridge.bridge.blockListFromEvent(event: bridgeEvent, accountPubkey: account) as? [String: Any] {
+                if let list = boxedBridge.bridge.blockListFromEvent(event: bridgeEvent, accountPubkey: account) {
                     blockHead = InboxFrame.BlockHead(
                         createdAt: (list["createdAt"] as? NSNumber)?.int64Value ?? 0,
                         pubkeys: (list["pubkeys"] as? [String]) ?? []
@@ -511,7 +511,7 @@ final class InboxStore {
                     blockHead = nil
                 }
                 var row: InboxFrame.Row?
-                if let notification = boxedBridge.bridge.extractNotificationFromEvent(event: bridgeEvent, accountPubkey: account) as? [String: Any] {
+                if let notification = boxedBridge.bridge.extractNotificationFromEvent(event: bridgeEvent, accountPubkey: account) {
                     let kind = (notification["kind"] as? KotlinInt).flatMap { NotificationKind(ordinal: $0.intValue) }
                     row = InboxFrame.Row(
                         id: (notification["id"] as? String) ?? UUID().uuidString,

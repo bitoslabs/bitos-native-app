@@ -152,61 +152,82 @@ struct VideoPreviewScreen: View {
         exporting = true
 
         Task {
-            let asset = AVURLAsset(url: sourceURL)
-            guard let exportSession = AVAssetExportSession(
-                asset: asset, presetName: AVAssetExportPresetHighestQuality
-            ) else {
-                await MainActor.run {
-                    exporting = false
-                    onUse(data, mimeType) // fallback: untrimmed
-                }
-                return
-            }
-
-            let outputURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("bitos-trim-\(Int(Date.now.timeIntervalSince1970)).mp4")
-            try? FileManager.default.removeItem(at: outputURL)
-
-            exportSession.timeRange = CMTimeRange(
-                start: CMTime(seconds: trimStart, preferredTimescale: 600),
-                end: CMTime(seconds: trimEnd, preferredTimescale: 600)
+            let outcome = await Self.exportEdits(
+                sourceURL: sourceURL, trimStart: trimStart, trimEnd: trimEnd, mirrored: mirrored
             )
-            exportSession.outputURL = outputURL
-            exportSession.outputFileType = .mp4
-            if mirrored, let videoTrack = asset.tracks(withMediaType: .video).first {
-                exportSession.videoComposition = mirroredComposition(for: videoTrack)
-            }
-
-            await exportSession.export()
-
             await MainActor.run {
                 exporting = false
-                if exportSession.status == .completed,
-                   let trimmed = try? Data(contentsOf: outputURL), !trimmed.isEmpty {
-                    try? FileManager.default.removeItem(at: outputURL)
+                switch outcome {
+                case .edited(let trimmed):
                     onUse(trimmed, "video/mp4")
-                } else {
+                case .unusable: // no export session — keep the original take
+                    onUse(data, mimeType)
+                case .failed:
                     exportError = "Couldn’t apply edits. Try again or use the original take."
                 }
             }
         }
     }
 
+    private enum EditedVideoOutcome {
+        case edited(Data)
+        case unusable
+        case failed
+    }
+
+    /// AVFoundation export (nonisolated: AVAssetTrack / AVAssetExportSession
+    /// are not Sendable and must not cross actor boundaries). Only Sendable
+    /// values come back to the MainActor caller.
+    nonisolated private static func exportEdits(
+        sourceURL: URL, trimStart: Double, trimEnd: Double, mirrored: Bool
+    ) async -> EditedVideoOutcome {
+        let asset = AVURLAsset(url: sourceURL)
+        guard let exportSession = AVAssetExportSession(
+            asset: asset, presetName: AVAssetExportPresetHighestQuality
+        ) else {
+            return .unusable
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitos-trim-\(Int(Date.now.timeIntervalSince1970)).mp4")
+        try? FileManager.default.removeItem(at: outputURL)
+
+        exportSession.timeRange = CMTimeRange(
+            start: CMTime(seconds: trimStart, preferredTimescale: 600),
+            end: CMTime(seconds: trimEnd, preferredTimescale: 600)
+        )
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .mp4
+        if mirrored, let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+            exportSession.videoComposition = try? await mirroredComposition(for: videoTrack)
+        }
+
+        await exportSession.export()
+
+        guard exportSession.status == .completed,
+              let trimmed = try? Data(contentsOf: outputURL), !trimmed.isEmpty else {
+            return .failed
+        }
+        try? FileManager.default.removeItem(at: outputURL)
+        return .edited(trimmed)
+    }
+
     /// Builds a composition in the track's upright coordinate space, then
     /// mirrors it about that canvas's vertical axis. This preserves portrait
     /// capture orientation instead of mirroring raw encoded pixels.
-    private func mirroredComposition(for track: AVAssetTrack) -> AVVideoComposition {
-        let natural = track.naturalSize
+    nonisolated private static func mirroredComposition(for track: AVAssetTrack) async throws -> AVVideoComposition {
+        let natural = try await track.load(.naturalSize)
+        let preferredTransform = try await track.load(.preferredTransform)
         let oriented = CGRect(origin: .zero, size: natural)
-            .applying(track.preferredTransform)
+            .applying(preferredTransform)
             .standardized
         let renderSize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
         let mirror = CGAffineTransform(translationX: renderSize.width, y: 0).scaledBy(x: -1, y: 1)
 
         let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-        layerInstruction.setTransform(track.preferredTransform.concatenating(mirror), at: .zero)
+        layerInstruction.setTransform(preferredTransform.concatenating(mirror), at: .zero)
         let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: track.timeRange.duration)
+        instruction.timeRange = CMTimeRange(start: .zero, duration: (try await track.load(.timeRange)).duration)
         instruction.layerInstructions = [layerInstruction]
 
         let composition = AVMutableVideoComposition()

@@ -37,10 +37,11 @@ enum class SearchScope(val kinds: List<Int>) {
 
 /**
  * Discover search over the verified relay stream. Each debounced query
- * broadcasts one multi-filter REQ (NIP-50 `search` + NIP-01 `#t` + bounded
- * recent-sample fallback — web discover parity), so relays without NIP-50
- * still deliver matchable events; every result must still pass
- * [SearchResults.matches] on content the app has received and verified.
+ * broadcasts a REQ pair — a base REQ (NIP-01 `#t` + bounded recent-sample
+ * fallback) plus the NIP-50 `search` filter as its own subscription — so
+ * relays that reject `search` still deliver matchable events; every result
+ * must still pass [SearchResults.matches] on content the app has received
+ * and verified.
  */
 class SearchRepository(
     private val scope: CoroutineScope,
@@ -142,19 +143,22 @@ class SearchRepository(
         activeQuery = query
         activeScope = searchScope
 
-        // Web discover parity: one multi-filter REQ — the NIP-50 `search`
-        // filter for relays that support it, the NIP-01 `#t` filter for
-        // indexed hashtag recall (the only filter for `#tag` queries, since
-        // NIP-50 leaves `#` undefined in search strings), and a bounded
-        // recent sample so relays without NIP-50 still deliver matchable
-        // events. Results flow through the verified stream and
-        // `SearchResults.matches` — local search stays verify-first.
+        // Web discover parity, split for relay tolerance: a base REQ (`#t` +
+        // bounded recent sample) every relay answers, plus the NIP-50
+        // `search` filter as its own subscription — several major relays
+        // reject a whole REQ when any filter carries `search`, which would
+        // silently kill hashtag and sample recall too. Results flow through
+        // the verified stream and `SearchResults.matches` — local search
+        // stays verify-first.
         subscriptionCounter += 1
-        SearchResults.relaySearchRequest(
+        SearchResults.relaySearchRequests(
             subscriptionId = "bitos-search-$subscriptionCounter",
             query = query,
             kinds = searchScope.kinds,
-        )?.let(pool::broadcast)
+        )?.let { requests ->
+            pool.broadcast(requests.baseRequest)
+            requests.searchRequest?.let(pool::broadcast)
+        }
 
         // Resolve the search-in-progress state after a settling window.
         settleJob = scope.launch {

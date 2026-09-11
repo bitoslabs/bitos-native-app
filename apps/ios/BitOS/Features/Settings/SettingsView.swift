@@ -1379,7 +1379,7 @@ private struct HelpSection: View {
         .sheet(isPresented: $showDonate) {
             SupportDonateSheet(
                 supportNpub: facts.supportNpub,
-                tiers: facts.supportTiersSats.map { (sats: Int($0), recommended: Int($0) == Int(facts.recommendedTierSats)) }
+                tiers: facts.supportTiersSats.map { (sats: Int(truncating: $0), recommended: Int(truncating: $0) == Int(facts.recommendedTierSats)) }
                     .map { (sats: Int($0.0), recommended: $0.1) },
                 lookup: environment.profileLookup,
                 onDismiss: { showDonate = false }

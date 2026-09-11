@@ -80,41 +80,60 @@ object SearchResults {
     }
 
     /**
-     * One multi-filter search REQ, web discover parity (`searchDiscoverRelays`):
-     * NIP-01 OR's the filters of a single REQ, so search-capable relays answer
-     * the NIP-50 `search` filter while every conforming relay still answers
-     * the others.
+     * The search REQ pair for one query (web discover parity, split for relay
+     * tolerance). Several major relays (damus, nos.lol, yakihonne) reject a
+     * whole REQ when any of its filters carries the NIP-50 `search` field
+     * (`ERROR: bad req: unrecognised filter item: search`) — observed
+     * 2026-09-10 — so `search` must never share a subscription with the
+     * other filters: a rejection would silently kill hashtag and
+     * recent-sample recall too.
      *
-     * 1. NIP-50 `{"search": query}` full-text filter — free text only; NIP-50
-     *    leaves `#` undefined in search strings, so `#tag` queries skip it.
-     * 2. NIP-01 `#t` filter — exact hashtag recall; free-text queries double
-     *    the lowercased term as the tag when it is a bounded single token
-     *    (searching `bitcoin` also finds tagged-but-uncaptioned events).
-     * 3. Bounded recent sample of the same kinds — relays without NIP-50
-     *    still deliver matchable events; stores re-match locally via
-     *    [matches] so search stays verify-first.
+     * - [RelaySearchRequests.baseRequest] — `#t` + bounded recent-sample
+     *   filters, answerable by every conforming relay. Free-text queries
+     *   double the lowercased term as the tag when it is a bounded single
+     *   token (searching `bitcoin` also finds tagged-but-uncaptioned
+     *   events); the recent sample keeps recall alive on relays without
+     *   NIP-50.
+     * - [RelaySearchRequests.searchRequest] — the NIP-50 `{"search": query}`
+     *   full-text filter as its own subscription (`<id>-s`); free text only,
+     *   since NIP-50 leaves `#` undefined in search strings. Non-supporting
+     *   relays answer CLOSED and nothing is lost — stores ignore non-EVENT
+     *   messages.
      *
-     * Null when the query or kind set is outside bounds.
+     * Stores re-match everything locally via [matches]: search stays
+     * verify-first. Null when the query or kind set is outside bounds.
      */
-    fun relaySearchRequest(subscriptionId: String, query: String, kinds: List<Int>): String? {
+    fun relaySearchRequests(subscriptionId: String, query: String, kinds: List<Int>): RelaySearchRequests? {
         val trimmed = query.trim()
         if (trimmed.isEmpty() || trimmed.length > MAX_QUERY_LENGTH) return null
         val boundedKinds = kinds.filter { it in 0..65_535 }.take(8)
         if (boundedKinds.isEmpty()) return null
         val kindsJson = boundedKinds.joinToString(",")
-        val filters = mutableListOf<String>()
-        if (!trimmed.startsWith("#")) {
-            val escaped = NostrEventCodec.escape(trimmed)
-            filters += """{"kinds":[$kindsJson],"search":"$escaped","limit":$RELAY_SEARCH_EVENT_LIMIT}"""
-        }
+
+        val baseFilters = mutableListOf<String>()
         val tag = queryTag(trimmed) ?: normalizeTag(trimmed.lowercase())
         if (tag != null) {
             val escaped = NostrEventCodec.escape(tag)
-            filters += """{"kinds":[$kindsJson],"#t":["$escaped"],"limit":$RELAY_SEARCH_EVENT_LIMIT}"""
+            baseFilters += """{"kinds":[$kindsJson],"#t":["$escaped"],"limit":$RELAY_SEARCH_EVENT_LIMIT}"""
         }
-        filters += """{"kinds":[$kindsJson],"limit":$RELAY_TEXT_FALLBACK_LIMIT}"""
-        return NostrEventCodec.encodeRequest(subscriptionId, filters)
+        baseFilters += """{"kinds":[$kindsJson],"limit":$RELAY_TEXT_FALLBACK_LIMIT}"""
+
+        val searchRequest = if (!trimmed.startsWith("#")) {
+            val escaped = NostrEventCodec.escape(trimmed)
+            NostrEventCodec.encodeRequest(
+                subscriptionId + "-s",
+                """{"kinds":[$kindsJson],"search":"$escaped","limit":$RELAY_SEARCH_EVENT_LIMIT}""",
+            )
+        } else null
+
+        return RelaySearchRequests(
+            baseRequest = NostrEventCodec.encodeRequest(subscriptionId, baseFilters),
+            searchRequest = searchRequest,
+        )
     }
+
+    /** The two REQ messages [relaySearchRequests] builds for one query. */
+    class RelaySearchRequests(val baseRequest: String, val searchRequest: String?)
 
     /**
      * Deterministic local Discover match over an already verified relay

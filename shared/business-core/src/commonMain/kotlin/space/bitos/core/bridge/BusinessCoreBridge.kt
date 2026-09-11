@@ -1114,12 +1114,14 @@ class BusinessCoreBridge {
     fun matchesSearch(event: Event, query: String): Boolean =
         space.bitos.core.feed.SearchResults.matches(FeedNote.from(event.toCore()), query)
 
-    /** Multi-filter search REQ (web discover parity): NIP-50 `search` for
-     *  free text + NIP-01 `#t` hashtag recall + a bounded recent-sample
-     *  fallback for relays without NIP-50. Null when the query/kind set is
-     *  outside bounds. */
-    fun searchRelayRequest(subscriptionId: String, query: String, kinds: List<Int>): String? =
-        space.bitos.core.feed.SearchResults.relaySearchRequest(subscriptionId, query, kinds)
+    /** Search REQ pair (web discover parity): a base REQ (`#t` + bounded
+     *  recent-sample filters, answerable everywhere) plus the NIP-50
+     *  `search` filter as its own subscription — several major relays
+     *  reject any REQ carrying `search`, so it must never share a
+     *  subscription with the other filters. Null when the query/kind set
+     *  is outside bounds. */
+    fun searchRelayRequests(subscriptionId: String, query: String, kinds: List<Int>): space.bitos.core.feed.SearchResults.RelaySearchRequests? =
+        space.bitos.core.feed.SearchResults.relaySearchRequests(subscriptionId, query, kinds)
 
     /**
      * Identity onboarding content (spec §4, docs/ui/app-01): shared copy for

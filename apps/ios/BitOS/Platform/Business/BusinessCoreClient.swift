@@ -686,14 +686,14 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     }
 
     func eventStoreDdl() -> [String] {
-        bridge.eventStoreDdl() as? [String] ?? []
+        bridge.eventStoreDdl()
     }
 
     func eventStoreMigrations() -> [Int: [String]] {
         var migrations: [Int: [String]] = [:]
         for (key, value) in bridge.eventStoreMigrations() {
-            if let intKey = key as? Int, let values = value as? [String] {
-                migrations[intKey] = values
+            if let intKey = key as? Int {
+                migrations[intKey] = value
             }
         }
         return migrations
@@ -743,7 +743,7 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     }
 
     func memePalette() -> [String] {
-        (bridge.memePalette() as? [String]) ?? []
+        bridge.memePalette()
     }
 
     func memeDefaultOverlay(_ projectJson: String, kind: String, text: String) -> String {

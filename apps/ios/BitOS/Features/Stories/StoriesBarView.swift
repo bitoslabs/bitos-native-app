@@ -363,7 +363,7 @@ struct StoryViewerView: View {
             }
             advance()
         }
-        .onChange(of: index) { _ in
+        .onChange(of: index) {
             // New slide: restart the carousel and re-hide sensitive media.
             imageIndex = 0
             revealed = false

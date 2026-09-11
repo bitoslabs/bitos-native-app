@@ -235,7 +235,7 @@ struct AuthorProfileSheet: View {
     private var moreMenuButton: some View {
         let entries: [AppMenuEntry] = {
             var items: [AppMenuEntry] = []
-            if let npub {
+            if npub != nil {
                 items.append(.item(AppMenuItem(id: "copy-link", label: "Copy profile link", systemImage: AppIcons.link)))
                 items.append(.item(AppMenuItem(id: "copy-npub", label: npubCopied ? "npub copied" : "Copy npub", systemImage: AppIcons.copy)))
             }
