@@ -46,6 +46,14 @@ import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.Collections
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Timeline
+import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.CallSplit
+import androidx.compose.material.icons.rounded.EmojiEmotions
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.Home
@@ -194,6 +202,16 @@ object AppIcons {
     val Looks = Icons.Rounded.Palette           // prototype editor: Filter/Effects bar slot
     val TextGlyph = Icons.Rounded.TextFields    // prototype editor: Text bar slot
     val Wallpaper = Icons.Rounded.Wallpaper     // prototype editor: Background bar slot
+
+    // ── Editor shell (MSU-014): one glyph per tool, no collisions ────
+    val Captions = Icons.Rounded.Subtitles      // classic top/bottom meme captions
+    val Timeline = Icons.Rounded.Timeline       // timeline workspace entry
+    val Collections = Icons.Rounded.Collections // GIF frame tray
+    val Timer = Icons.Rounded.Timer             // duration / frame hold
+    val Keyboard = Icons.Rounded.Keyboard       // shortcuts reference
+    val CallSplit = Icons.Rounded.CallSplit     // split clip at playhead
+    val StickerEmoji = Icons.Rounded.EmojiEmotions // sticker sheet tool
+    val Schedule = Icons.Rounded.Schedule       // overlay timing window
 
     // ── Media ────────────────────────────────────────────────────────
     val Camera = Icons.Rounded.CameraAlt

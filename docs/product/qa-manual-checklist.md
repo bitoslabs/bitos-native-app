@@ -114,6 +114,102 @@ modes, the kinetic-GIF path and video→GIF conversion.
 | Blank-GIF export (3 s × 15 fps)    | ≤ 60 frames held; ladder ≤ 3 downscales / 8 MB — outcome copy says which                                   |
 | Derived bounds                     | Common-tested in `MemeCanvasAndSfxTemplatesTest.derivedGifTimingClampsIdentically` (single-sourced clamps) |
 
+## S8 — Editor shell (Android + iOS; run after any shell/catalogue change)
+
+Covers `meme-studio-ux-redesign-plan.md` waves W0–W6 (MSU-000..063): the
+shared `MemeTools` catalogue, the single tool bar, the timeline workspace,
+onboarding, the notice host, publish-vs-export clarity and mass production.
+The shared invariants (tier membership, glyph uniqueness within a tier, label
+/target floors) are enforced by `MemeToolsTest` / `DesignTokensTest` in
+`make check`; this section proves the RENDERED shell on device.
+
+### S8.1 — Tool bar & tier visibility per mode
+
+| #   | Step                                                             | Expected                                                                                                                  |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Open the editor in IMAGE, GIF and VIDEO mode                     | Exactly ONE tool bar; no second chip row anywhere in the session                                                         |
+| 2   | Read the primary bar in each mode                                | Media · Text · Sticker · Look in all three; **Sound** appears ONLY in VIDEO (GIF is silent, IMAGE has no timeline)        |
+| 3   | Count the primary tiles                                         | ≤ 5 tiles + one **More** tile (catalogue `MAX_PRIMARY_TOOLS`)                                                             |
+| 4   | Open More in each mode                                           | The advanced list matches the mode (Trim/Speed/Volume/Clips only in VIDEO; GIFs/Duration only in GIF; Canvas/Layers/Draw everywhere); Batch + Shortcuts present |
+| 5   | Select an overlay, then a clip, then a GIF frame                 | The contextual "Selected item" block appears with the right actions; with nothing selected it is absent                    |
+| 6   | Compare Android and iOS                                          | Same ids, same labels, same order, same icons for the same mode (both render from the one catalogue)                       |
+| 7   | Tap any tile with a hardware/desktop keyboard attached           | Labels are legible (≥12 sp labels) and every tile's touch target is ≥48 dp/pt                                              |
+
+### S8.2 — One capability, one chip
+
+| #   | Step                                                        | Expected                                                                              |
+| --- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 1   | Open Look, then grade and adjust inside it                  | ONE Look sheet with all sections — no separate Filter / Adjust / Look chips            |
+| 2   | Open More → Draw and the More → Layers row                  | Each capability is reachable from exactly one visible affordance                       |
+| 3   | Open the timeline workspace and read its dock               | True timeline tools only (Trim · Split · Speed · Volume · Clips · Add · SFX) — no Look, Layers, Draw, undo or redo |
+| 4   | Check the top chrome                                        | Exactly one undo and one redo affordance app-wide; disabled states correct             |
+
+### S8.3 — Timeline workspace round-trip
+
+| #   | Step                                                                    | Expected                                                                                     |
+| --- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 1   | More → Timeline (and the clip selection's "Open timeline")              | The workspace opens; the mode pill stays visible; header says **"Back to editor"**           |
+| 2   | Tap each lane (clip, image layer, SFX cue)                              | The tapped lane selects (opens its selection tier) — no lane silently swallows the tap       |
+| 3   | Scrub on the ruler strip only                                            | Scrubbing works on the ruler; tapping lanes still selects (the seek surface never covers them) |
+| 4   | Press "Back to editor"                                                   | Returns with the same selection + scroll state; no edits lost                                |
+| 5   | Zoom the ruler (fit ↔ 1 s) and drag the playhead                          | Zoom is session-local; the playhead readout stays visible; no engine change                  |
+| 6   | With a hardware keyboard, use ←/→ (1 s) and ↑/↓ (5 s) and space          | Scrubbing and play/pause respond while the workspace owns the keyboard                       |
+
+### S8.4 — Onboarding & empty states
+
+| #   | Step                                                                       | Expected                                                                                        |
+| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1   | First fresh editor session on a device that has never seen the coach       | The 3-step coach runs (canvas → tools → Next publishes) with Skip / Got it                       |
+| 2   | Resume a draft, and separately enter via remix / sound / template / camera | The coach does NOT run on any of these handoffs                                                  |
+| 3   | Image / GIF / video empty state                                            | The mode-appropriate guiding empty state with its primary action + a template rail               |
+| 4   | Use undo once on a fresh session                                            | A one-time notice names redo ("Undone — redo is beside undo in the top bar")                    |
+| 5   | Undo with an empty history; redo with an empty redo stack                   | "Nothing to undo" / "Nothing to redo" — never a dead tap                                         |
+
+### S8.5 — Notice host
+
+| #   | Step                                                          | Expected                                                                                             |
+| --- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 1   | Trigger a transient result (e.g. change a frame hold)         | A notice appears and auto-dismisses; posting the SAME message again does not restart the animation    |
+| 2   | Trigger an error (e.g. a failed export)                       | The error notice is persistent — it does not auto-dismiss                                            |
+| 3   | Delete an overlay / clip / layer                              | The notice offers **Undo**; tapping it restores the prior state (no confirm dialog for a reversible act) |
+| 4   | Post two notices in a row                                     | Newest wins (single slot); the previous one is replaced                                              |
+
+### S8.6 — Publish vs Export clarity
+
+| #   | Step                                                            | Expected                                                                                            |
+| --- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 1   | Look at the editor header                                       | ONE prominent primary (**Next**); Export is a demoted, labelled secondary icon                       |
+| 2   | Tap Next the first time                                          | The one-line explainer appears once: "Publish posts to Nostr · Export saves a file to this device." |
+| 3   | Open the export sheet                                            | It is titled **"Save a copy"** and saves a rendered FILE to the device                               |
+| 4   | Walk the review screen                                           | The review order is stated once (Preview · Caption · Tags · Safety · Publish); verify-before-sign machine unchanged |
+| 5   | Publish successfully                                             | Success is a result card: **Posted · View · Share · Make another** (+ Recovery queue); slot cleared as before |
+| 6   | Tap Share on the result card                                     | Shares an `njump.me/<eventId>` link (nothing is re-signed or re-uploaded)                            |
+
+### S8.7 — Mass production woven in
+
+| #   | Step                                                                     | Expected                                                                                            |
+| --- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| 1   | More → Batch (an image design with ≥1 caption)                           | Row reads **"Use as batch base"** with an explainer; tapping freezes the design and seeds a batch    |
+| 2   | After seeding, stay in / reopen the editor                              | A status strip shows "N of M rendered · View queue"; tapping it opens the newest batch in one step   |
+| 3   | Empty-state template rail → "Make N variants"                            | Applies the first template and seeds a batch; caption slots editable in the queue                    |
+| 4   | Verify no batch references the project                                   | No status strip is shown (the strip is conditional)                                                  |
+| 5   | More → Controls                                                          | Sheet titled **"Controls"** with an **"On screen"** section listing every action's touch affordance (undo, redo, play/pause, select prev/next, save a copy, review & publish, timeline, delete) |
+| 6   | Open Controls on a phone with NO hardware keyboard                       | The keyboard section is HIDDEN and the hint invites connecting one; no key glyphs a phone cannot press |
+| 7   | Attach a Bluetooth/desktop keyboard → reopen Controls                    | A **"Keyboard (optional)"** section appears listing the key glyphs (⌘/⌥ on iOS, Ctrl/Alt on Android)   |
+| 8   | With a hardware/desktop keyboard, use the documented keys                | undo (mod+Z) · redo (mod+Shift+Z) · export (mod+E) · publish (mod+Enter) · timeline (mod+T) · alt+↑/↓ selection · delete all fire; ignored while a sheet/text field owns the keyboard |
+
+### S8.8 — Progress surfaces & confirm audit (MSU-042/043)
+
+| #   | Step                                                                 | Expected                                                                                                          |
+| --- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 1   | Import several camera takes / library clips                          | ONE shared "Preparing clips…" overlay with a determinate `N of M` bar; it clears when staging finishes            |
+| 2   | Export a long video                                                  | The render overlay shows the shared title/body and an **indeterminate** spinner — never a fake percentage bar     |
+| 3   | Kill the app mid-import / mid-export, relaunch                       | Draft intact; no partial artifact published (durable job machinery unchanged)                                     |
+| 4   | Delete an overlay, then a clip, then a layer                         | NO confirm dialog — each posts the Undo notice; Undo restores it                                                   |
+| 5   | Switch mode with media loaded                                        | A confirm dialog appears first (irreversible: media clears, overlays stay)                                        |
+| 6   | Trigger a failed draft save and dismiss the editor                    | The discard dialog appears (irreversible: "Delete draft") — its copy matches the shared audit                     |
+| 7   | Discard camera takes                                                  | A confirm dialog appears before the takes are dropped                                                             |
+
 ## Run log
 
 | Date | Sections | Device / OS | Result | Notes |

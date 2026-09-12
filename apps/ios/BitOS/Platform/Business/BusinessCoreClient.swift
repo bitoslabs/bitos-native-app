@@ -252,6 +252,39 @@ protocol BusinessCoreClient: Sendable {
     /// Sticker packs `[{"id","label","stickers":[…]}]` (web port).
     func memeStickerPacks() -> String
 
+    // APP-019 shell contract (MSU-001..003): the native editor bars, notice
+    // host and Back resolution all render from these, so both platforms
+    // share one tool vocabulary and one back contract.
+    /// Tool catalogue JSON: `{"maxPrimary":5,"primary":{…},"advanced":{…},"selection":{…}}`.
+    func memeToolCatalog() -> String
+    /// Notice auto-dismiss facts: `{"timeoutMs":n,"persistent":bool,"maxMessageChars":n}`.
+    func memeEditorNoticeDefault(severity: String) -> String
+    /// Surface Back resolution: `{"exits":bool,"next":token}`.
+    func memeEditorSurfaceBack(surface: String) -> String
+    /// MSU-030 coach plan: `{"run":bool,"key":…,"steps":[…]}`.
+    func memeCoachPlan(
+        hasSeenCoach: Bool, isResume: Bool, isRemix: Bool,
+        isSoundSeed: Bool, isTemplateSeed: Bool, isCameraHandoff: Bool
+    ) -> String
+    /// MSU-031 guiding empty-state copy for a mode (`image|gif|video`).
+    func memeEmptyState(mode: String) -> String
+    /// MSU-040 notice host: post a notice, get the next host state JSON.
+    func memeNoticePost(
+        stateJson: String, severity: String, message: String,
+        actionId: String?, actionLabel: String?, timeoutMs: Int
+    ) -> String
+    /// MSU-040: advance the host clock (auto-dismiss applies).
+    func memeNoticeTick(stateJson: String, deltaMs: Int) -> String
+    /// MSU-040: dismiss the current notice.
+    func memeNoticeDismiss(stateJson: String) -> String
+    /// MSU-050..052 publish-vs-export copy (explainer, verbs, result card).
+    func memePublishCopy() -> String
+    /// MSU-060..063 mass-production + operator copy (batch base, strip,
+    /// template batch, keyboard reference).
+    func memeProductionCopy() -> String
+    /// MSU-042..043 feedback closure: busy surfaces + confirm classification.
+    func memeFeedbackCopy() -> String
+
     // APP-019 meme wire document (MST-019): the `com.bitos.bitz.meme` v1
     // interop wire. Foreign schema ids/versions normalize to "" — never throws.
     /// Tolerant parse + canonical re-encode (passthrough preserved).
@@ -779,6 +812,63 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeStickerPacks()
     }
 
+    func memeToolCatalog() -> String {
+        bridge.memeToolCatalog()
+    }
+
+    func memeEditorNoticeDefault(severity: String) -> String {
+        bridge.memeEditorNoticeDefault(severity: severity)
+    }
+
+    func memeEditorSurfaceBack(surface: String) -> String {
+        bridge.memeEditorSurfaceBack(surface: surface)
+    }
+
+    func memeCoachPlan(
+        hasSeenCoach: Bool, isResume: Bool, isRemix: Bool,
+        isSoundSeed: Bool, isTemplateSeed: Bool, isCameraHandoff: Bool
+    ) -> String {
+        bridge.memeCoachPlan(
+            hasSeenCoach: hasSeenCoach, isResume: isResume, isRemix: isRemix,
+            isSoundSeed: isSoundSeed, isTemplateSeed: isTemplateSeed,
+            isCameraHandoff: isCameraHandoff
+        )
+    }
+
+    func memeEmptyState(mode: String) -> String {
+        bridge.memeEmptyState(mode: mode)
+    }
+
+    func memeNoticePost(
+        stateJson: String, severity: String, message: String,
+        actionId: String?, actionLabel: String?, timeoutMs: Int
+    ) -> String {
+        bridge.memeNoticePost(
+            stateJson: stateJson, severity: severity, message: message,
+            actionId: actionId, actionLabel: actionLabel, timeoutMs: Int32(timeoutMs)
+        )
+    }
+
+    func memeNoticeTick(stateJson: String, deltaMs: Int) -> String {
+        bridge.memeNoticeTick(stateJson: stateJson, deltaMs: Int32(deltaMs))
+    }
+
+    func memeNoticeDismiss(stateJson: String) -> String {
+        bridge.memeNoticeDismiss(stateJson: stateJson)
+    }
+
+    func memePublishCopy() -> String {
+        bridge.memePublishCopy()
+    }
+
+    func memeProductionCopy() -> String {
+        bridge.memeProductionCopy()
+    }
+
+    func memeFeedbackCopy() -> String {
+        bridge.memeFeedbackCopy()
+    }
+
     func massBatchNew(_ name: String, nowMs: Int64) -> String {
         bridge.massBatchNew(name: name, nowMs: nowMs)
     }
@@ -1279,6 +1369,50 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
         )
     }
     func memeStickerPacks() -> String { FrameworkBusinessCoreClient().memeStickerPacks() }
+    func memeToolCatalog() -> String { FrameworkBusinessCoreClient().memeToolCatalog() }
+    func memeEditorNoticeDefault(severity: String) -> String {
+        FrameworkBusinessCoreClient().memeEditorNoticeDefault(severity: severity)
+    }
+    func memeEditorSurfaceBack(surface: String) -> String {
+        FrameworkBusinessCoreClient().memeEditorSurfaceBack(surface: surface)
+    }
+    func memeCoachPlan(
+        hasSeenCoach: Bool, isResume: Bool, isRemix: Bool,
+        isSoundSeed: Bool, isTemplateSeed: Bool, isCameraHandoff: Bool
+    ) -> String {
+        FrameworkBusinessCoreClient().memeCoachPlan(
+            hasSeenCoach: hasSeenCoach, isResume: isResume, isRemix: isRemix,
+            isSoundSeed: isSoundSeed, isTemplateSeed: isTemplateSeed,
+            isCameraHandoff: isCameraHandoff
+        )
+    }
+    func memeEmptyState(mode: String) -> String {
+        FrameworkBusinessCoreClient().memeEmptyState(mode: mode)
+    }
+    func memeNoticePost(
+        stateJson: String, severity: String, message: String,
+        actionId: String?, actionLabel: String?, timeoutMs: Int
+    ) -> String {
+        FrameworkBusinessCoreClient().memeNoticePost(
+            stateJson: stateJson, severity: severity, message: message,
+            actionId: actionId, actionLabel: actionLabel, timeoutMs: timeoutMs
+        )
+    }
+    func memeNoticeTick(stateJson: String, deltaMs: Int) -> String {
+        FrameworkBusinessCoreClient().memeNoticeTick(stateJson: stateJson, deltaMs: deltaMs)
+    }
+    func memeNoticeDismiss(stateJson: String) -> String {
+        FrameworkBusinessCoreClient().memeNoticeDismiss(stateJson: stateJson)
+    }
+    func memePublishCopy() -> String {
+        FrameworkBusinessCoreClient().memePublishCopy()
+    }
+    func memeProductionCopy() -> String {
+        FrameworkBusinessCoreClient().memeProductionCopy()
+    }
+    func memeFeedbackCopy() -> String {
+        FrameworkBusinessCoreClient().memeFeedbackCopy()
+    }
     func massBatchNew(_ name: String, nowMs: Int64) -> String {
         FrameworkBusinessCoreClient().massBatchNew(name, nowMs: nowMs)
     }

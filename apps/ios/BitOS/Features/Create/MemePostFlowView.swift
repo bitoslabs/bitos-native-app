@@ -14,7 +14,12 @@ struct MemePostFlowView: View {
     let publisher: NotePublisher
     /** M4b remix lineage carried from the editor handoff, if any. */
     let remixSeed: MemeRemixSeed?
+    /** MSU-050..052 publish-vs-export copy (explainer, verbs, result card). */
+    let copy: StudioPublishCopy
     let onPublished: () -> Void
+    /** MSU-052 post-publish result card follow-ons. */
+    let onSharePost: () -> Void
+    let onMakeAnother: () -> Void
     @State private var path: [FlowStep] = []
 
     init(
@@ -22,13 +27,19 @@ struct MemePostFlowView: View {
         identity: IdentityStore,
         publisher: NotePublisher,
         remixSeed: MemeRemixSeed? = nil,
-        onPublished: @escaping () -> Void
+        copy: StudioPublishCopy = .decode(),
+        onPublished: @escaping () -> Void,
+        onSharePost: @escaping () -> Void = {},
+        onMakeAnother: @escaping () -> Void = {}
     ) {
         self.store = store
         self.identity = identity
         self.publisher = publisher
         self.remixSeed = remixSeed
+        self.copy = copy
         self.onPublished = onPublished
+        self.onSharePost = onSharePost
+        self.onMakeAnother = onMakeAnother
     }
 
     enum FlowStep: Hashable { case preflight, publishing, queue }
@@ -45,6 +56,7 @@ struct MemePostFlowView: View {
                         store: store,
                         identity: identity,
                         draft: store.postDraft,
+                        copy: copy,
                         richTokens: { content in
                             ((environment.businessCore as? FrameworkBusinessCoreClient)?
                                 .bridgeForFollowing() ?? BusinessCoreBridge())
@@ -59,9 +71,12 @@ struct MemePostFlowView: View {
                     MemePublishingView(
                         store: store,
                         publisher: publisher,
+                        copy: copy,
                         onRetry: { beginPublish() },
                         onLater: { dismissFlow() },
                         onPublished: onPublished,
+                        onSharePost: onSharePost,
+                        onMakeAnother: onMakeAnother,
                         onOpenQueue: { path.append(.queue) }
                     )
                 case .queue:
@@ -579,6 +594,9 @@ private struct MemePreflightView: View {
     let store: MemeEditorStore
     let identity: IdentityStore
     let draft: MemePostDraft
+    /** MSU-051: the review order, stated once so the screen's shape is
+     *  predictable (preview → caption → tags → safety → publish). */
+    var copy: StudioPublishCopy = .decode()
     /// NIP-27 rich tokens for the caption preview (bridge seam — the same
     /// tokenizer the feed cards render with).
     let richTokens: (String) -> String
@@ -607,6 +625,10 @@ private struct MemePreflightView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+                // MSU-051: the review order, stated once.
+                Text(copy.reviewSteps.map(\.title).joined(separator: "  ·  "))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(BitOSTheme.textTertiary)
                 // Summary card: thumb + kind + imeta facts, with the caption
                 // rendered under the facts exactly as the feed card will
                 // show it.
@@ -760,9 +782,13 @@ private struct MemePreflightView: View {
 private struct MemePublishingView: View {
     let store: MemeEditorStore
     let publisher: NotePublisher
+    /** MSU-050..052 publish-vs-export copy (verbs, result card labels). */
+    var copy: StudioPublishCopy = .decode()
     let onRetry: () -> Void
     let onLater: () -> Void
     let onPublished: () -> Void
+    var onSharePost: () -> Void = {}
+    var onMakeAnother: () -> Void = {}
     var onOpenQueue: () -> Void = {}
 
     private var publisherFailed: Bool {
@@ -958,6 +984,9 @@ private struct MemePublishingView: View {
                 }
 
                 if succeeded {
+                    // MSU-052: a result card with follow-on actions instead
+                    // of a bare done state — the creator can view the post,
+                    // share it, or start another without hunting for exit.
                     HStack(alignment: .top, spacing: BitOSTheme.Spacing.xs) {
                         AppIcons.image(for: AppIcons.checkCircle)
                             .font(.system(size: 13))
@@ -971,18 +1000,34 @@ private struct MemePublishingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
 
                     HStack(spacing: BitOSTheme.Spacing.sm) {
-                        Button("Recovery queue", action: onOpenQueue)
-                            .frame(maxWidth: .infinity)
-                            .buttonStyle(.bordered)
                         Button {
                             onPublished()
                         } label: {
-                            Text("View on Bitz")
+                            Text(copy.view)
                                 .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(BitOSTheme.accent)
+                        Button {
+                            onSharePost()
+                        } label: {
+                            Text(copy.share)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    HStack(spacing: BitOSTheme.Spacing.sm) {
+                        Button("Recovery queue", action: onOpenQueue)
+                            .frame(maxWidth: .infinity)
+                            .buttonStyle(.bordered)
+                        Button {
+                            onMakeAnother()
+                        } label: {
+                            Text(copy.makeAnother)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
 
@@ -1013,7 +1058,7 @@ private struct MemePublishingView: View {
     private var successText: String {
         let accepted = publisher.receipts.filter { $0.accepted == true }.count
         let id = eventIdLabel.map { "event \($0) " } ?? ""
-        return "Published — \(id)confirmed on \(accepted) relay\(accepted == 1 ? "" : "s")."
+        return "\(copy.posted) — \(id)confirmed on \(accepted) relay\(accepted == 1 ? "" : "s")."
     }
 }
 

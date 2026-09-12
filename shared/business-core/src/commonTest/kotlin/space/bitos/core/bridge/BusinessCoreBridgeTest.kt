@@ -1212,6 +1212,157 @@ class BusinessCoreBridgeTest {
         assertEquals("", bridge.memeGifLadderCanvas(1080, 608, 4))
     }
 
+    @Test
+    fun memeToolCatalogSeamExposesOneBarPerMode() {
+        val json = bridge.memeToolCatalog()
+        // The primary cap travels with the catalogue so a native bar can
+        // assert it did not overflow.
+        assertTrue(json.contains("\"maxPrimary\":5"), json)
+        // Stable lowercase tokens the native `when` switches on.
+        assertTrue(json.contains("\"id\":\"media\""), json)
+        assertTrue(json.contains("\"id\":\"time_window\""), json)
+        // Every mode bucket exists, and the four creative essentials are in
+        // each. Sound is VIDEO-only.
+        listOf("image", "gif", "video").forEach { mode ->
+            assertTrue(json.contains("\"$mode\""), "missing bucket $mode")
+        }
+        assertTrue(json.contains("\"label\":\"Look\""), json)
+        // The shipped duplicate ids must not reappear as separate tools.
+        listOf("Filter", "Adjust", "Effects").forEach { legacy ->
+            assertFalse(json.contains("\"label\":\"$legacy\""), "legacy tool $legacy returned")
+        }
+    }
+
+    @Test
+    fun memeEditorNoticeDefaultSeamPinsSeverityTimeouts() {
+        val info = bridge.memeEditorNoticeDefault("info")
+        assertTrue(info.contains("\"timeoutMs\":2400"), info)
+        assertTrue(info.contains("\"persistent\":false"), info)
+        val error = bridge.memeEditorNoticeDefault("error")
+        assertTrue(error.contains("\"timeoutMs\":0"), error)
+        assertTrue(error.contains("\"persistent\":true"), error)
+        assertTrue(error.contains("\"maxMessageChars\":160"), error)
+        // Case-insensitive; unknown severities resolve to INFO (never throws).
+        assertEquals(info, bridge.memeEditorNoticeDefault("INFO"))
+        assertEquals(info, bridge.memeEditorNoticeDefault("nonsense"))
+    }
+
+    @Test
+    fun memeEditorSurfaceBackSeamUnwindsSheetThenExits() {
+        // Nothing open → the caller exits.
+        val none = bridge.memeEditorSurfaceBack("none")
+        assertTrue(none.contains("\"exits\":true"), none)
+        // A sheet closes and lands on nothing.
+        val look = bridge.memeEditorSurfaceBack("sheet:look")
+        assertTrue(look.contains("\"exits\":false"), look)
+        assertTrue(look.contains("\"next\":\"none\""), look)
+        // Compose restores to the bare stage (not another overlay).
+        val compose = bridge.memeEditorSurfaceBack("compose:o1")
+        assertTrue(compose.contains("\"next\":\"none\""), compose)
+        // Timeline / review are reversible too.
+        assertTrue(bridge.memeEditorSurfaceBack("timeline").contains("\"exits\":false"))
+        // A malformed token is treated as none — lenient, never throws.
+        val junk = bridge.memeEditorSurfaceBack("garbage")
+        assertTrue(junk.contains("\"exits\":true"), junk)
+        assertEquals(none, bridge.memeEditorSurfaceBack(""))
+    }
+
+    @Test
+    fun memeCoachPlanSeamGatesOnHandoffsAndExposesSteps() {
+        // A fresh session runs the coach and carries the shared key.
+        val fresh = bridge.memeCoachPlan(
+            hasSeenCoach = false, isResume = false, isRemix = false,
+            isSoundSeed = false, isTemplateSeed = false, isCameraHandoff = false,
+        )
+        assertTrue(fresh.contains("\"run\":true"), fresh)
+        assertTrue(fresh.contains("\"key\":\"studio_coach_seen\""), fresh)
+        assertTrue(fresh.contains("\"id\":\"stage\""), fresh)
+        assertTrue(fresh.contains("\"anchor\":\"tools\""), fresh)
+        assertTrue(fresh.contains("\"skipLabel\":\"Skip\""), fresh)
+        // Already seen → never again.
+        assertTrue(
+            bridge.memeCoachPlan(
+                hasSeenCoach = true, isResume = false, isRemix = false,
+                isSoundSeed = false, isTemplateSeed = false, isCameraHandoff = false,
+            ).contains("\"run\":false"),
+        )
+        // A handoff suppresses it (remix shown; the shared test covers all).
+        assertTrue(
+            bridge.memeCoachPlan(
+                hasSeenCoach = false, isResume = false, isRemix = true,
+                isSoundSeed = false, isTemplateSeed = false, isCameraHandoff = false,
+            ).contains("\"run\":false"),
+        )
+    }
+
+    @Test
+    fun memeNoticeHostSeamsPostTickDismissWithDuplicatesSwallowed() {
+        // Post an info notice; it renders visible + transient.
+        val posted = bridge.memeNoticePost(
+            stateJson = "", severity = "info", message = "Layer added",
+            actionId = null, actionLabel = null, timeoutMs = -1,
+        )
+        assertTrue(posted.contains("\"visible\":true"), posted)
+        assertTrue(posted.contains("\"message\":\"Layer added\""), posted)
+        assertTrue(posted.contains("\"severity\":\"info\""), posted)
+        // Posting an identical message is a no-op (does not restart).
+        val again = bridge.memeNoticePost(
+            stateJson = posted, severity = "info", message = "Layer added",
+            actionId = null, actionLabel = null, timeoutMs = -1,
+        )
+        assertTrue(again.contains("\"elapsedMs\":0"), again)
+        // Tick past the INFO window → auto-dismissed.
+        val expired = bridge.memeNoticeTick(posted, 3_000)
+        assertTrue(expired.contains("\"visible\":false"), expired)
+        // An undoable notice carries the action token.
+        val undoable = bridge.memeNoticePost(
+            stateJson = "", severity = "info", message = "Overlay removed",
+            actionId = "undo", actionLabel = "Undo", timeoutMs = -1,
+        )
+        assertTrue(undoable.contains("\"id\":\"undo\""), undoable)
+        // Errors are persistent: a long tick never dismisses.
+        val error = bridge.memeNoticePost(
+            stateJson = "", severity = "error", message = "Save failed",
+            actionId = null, actionLabel = null, timeoutMs = -1,
+        )
+        assertTrue(bridge.memeNoticeTick(error, 10_000_000).contains("\"visible\":true"))
+        // Dismiss clears immediately; junk state degrades to empty.
+        assertTrue(bridge.memeNoticeDismiss(undoable).contains("\"visible\":false"))
+        assertTrue(bridge.memeNoticeTick("junk", 100).contains("\"visible\":false"))
+    }
+
+    @Test
+    fun memeEmptyStateSeamServesEachModeAndFallsBack() {        val image = bridge.memeEmptyState("image")
+        assertTrue(image.contains("\"primary\":\"Pick an image\""), image)
+        val video = bridge.memeEmptyState("video")
+        assertTrue(video.contains("\"primary\":\"Pick a clip\""), video)
+        val gif = bridge.memeEmptyState("gif")
+        assertTrue(gif.contains("\"tertiary\":\"Browse GIFs\""), gif)
+        // Case-insensitive; unknown/blank falls back to IMAGE (never blank).
+        assertEquals(image, bridge.memeEmptyState("IMAGE"))
+        assertEquals(image, bridge.memeEmptyState("nonsense"))
+        assertEquals(image, bridge.memeEmptyState(""))
+        // The undo hint + dead-tap copy travel with the same seam.
+        assertTrue(image.contains("\"nothingToUndo\":\"Nothing to undo\""), image)
+    }
+
+    @Test
+    fun memePublishCopySeamCarriesTheTwoVerbExplainerAndOrder() {
+        val json = bridge.memePublishCopy()
+        assertTrue(json.contains("\"primaryAction\":\"Next\""), json)
+        assertTrue(json.contains("\"exportAction\":\"Save a copy\""), json)
+        // The explainer names both destinations.
+        assertTrue(json.contains("Nostr"), json)
+        assertTrue(json.contains("device"), json)
+        // The review order rides the seam in screen order.
+        assertTrue(json.contains("\"id\":\"preview\""), json)
+        assertTrue(json.contains("\"id\":\"safety\""), json)
+        assertTrue(json.contains("\"title\":\"Publish\""), json)
+        // Result-card labels.
+        assertTrue(json.contains("\"posted\":\"Posted\""), json)
+        assertTrue(json.contains("\"makeAnother\":\"Make another\""), json)
+    }
+
     // ── Event-based extractor seams (decode-once stage, audit Phase 2) ──
 
     /** Fabricated events suffice here: these seams trust the gate, so the

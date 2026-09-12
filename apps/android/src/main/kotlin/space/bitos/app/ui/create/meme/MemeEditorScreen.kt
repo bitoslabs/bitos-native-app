@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -64,6 +65,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -253,11 +263,28 @@ fun MemeEditorScreen(
     onSlotsChanged: () -> Unit = {},
     /** MUX-06: hand the frozen design + rendered poster to mass production. */
     onMakeVariations: ((String, ByteArray) -> Unit)? = null,
+    /** MSU-061: an in-editor batch status line, e.g. "3 of 8 rendered".
+     *  Null (the default) hides the strip. */
+    batchStatus: String? = null,
+    /** MSU-061: tap on the strip → open the batch queue in one step. */
+    onOpenBatchQueue: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var exporting by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+    /**
+     * MSU-040: the typed notice host. `exportStatus` keeps its existing
+     * call sites (≈80 writes) but is now MIRRORED into the host below, so
+     * every message immediately gains the shared lifecycle — severity,
+     * auto-dismiss, newest-wins, duplicate-swallow — instead of rendering
+     * as a permanent, error-indistinguishable line. New code should call
+     * `notices.info/success/error/undoable` directly.
+     */
+    val notices = remember { EditorNoticeController() }
+    LaunchedEffect(exportStatus) {
+        if (exportStatus == null) notices.dismiss() else notices.postLegacyStatus(exportStatus!!)
+    }
     /** Full-screen export experience (render progress → result → Done). */
     var showExport by remember { mutableStateOf(false) }
     /** MST-036 session-only export preset: Auto default = the automatic
@@ -292,6 +319,38 @@ fun MemeEditorScreen(
             }
         }
     }
+    // ── MSU-030..033: onboarding + guiding empty states ──────────────
+    // The coach runs only for a fresh, self-started session (never on a
+    // resume or a remix/sound/template/camera handoff) and only once per
+    // device — the rules live in the shared core.
+    val coachPlan = remember {
+        StudioCoachPlan.query(
+            hasSeenCoach = StudioCoachPrefs.hasSeenCoach(context),
+            isResume = resume != null,
+            isRemix = remixSeed != null,
+            isSoundSeed = soundSeed != null,
+            isTemplateSeed = template != null || sharedTagsJson != null,
+            isCameraHandoff = videoSeeds?.isNotEmpty() == true,
+        )
+    }
+    var coachStepIndex by remember { mutableStateOf(0) }
+    var coachDismissed by remember { mutableStateOf(!coachPlan.run) }
+    val coachActive = !coachDismissed && coachPlan.steps.isNotEmpty()
+    // Guiding empty-state copy for the mode the creator is in.
+    val emptyState = remember(state.project.mode) { StudioEmptyState.decode(state.project.mode.name.lowercase()) }
+    // MSU-050..052: publish-vs-export copy (explainer, verbs, result card).
+    val publishCopy = remember { StudioPublishCopy.decode() }
+    // MSU-060..063: mass-production + operator copy.
+    val productionCopy = remember { StudioProductionCopy.decode() }
+    // MSU-042..043: feedback closure — busy surfaces + confirm classification.
+    val feedbackCopy = remember { StudioFeedbackCopy.decode() }
+    // MSU-050: the explainer is shown on the first publish-sheet open only.
+    var publishExplainerShown by remember { mutableStateOf(false) }
+    // MSU-063: the operator keyboard reference (More → Shortcuts).
+    var showShortcuts by remember { mutableStateOf(false) }
+    // MSU-033: the undo/redo hint fires once, the first time undo is used.
+    var undoHintShown by remember { mutableStateOf(false) }
+
     // M2 GIF mode session frames (in-memory; PNG bytes feed slot autosave).
     val gifFrames = remember { mutableStateListOf<android.graphics.Bitmap>() }
     val gifDelays = remember { mutableStateListOf<Int>() }
@@ -648,13 +707,24 @@ fun MemeEditorScreen(
      *  (command or clip-list edit), then re-hydrates the session clips. */
     fun undoEdit(): Boolean {
         val undone = state.undo()
-        if (undone) reconcileClipsFromWire()
+        if (undone) {
+            reconcileClipsFromWire()
+            // MSU-033: name redo the first time undo is used, so the pair is
+            // learnt together instead of discovered by accident.
+            if (!undoHintShown) {
+                undoHintShown = true
+                exportStatus = emptyState.undoHint
+            }
+        } else {
+            // Never a dead tap.
+            exportStatus = emptyState.nothingToUndo
+        }
         return undone
     }
 
     fun redoEdit(): Boolean {
         val redone = state.redo()
-        if (redone) reconcileClipsFromWire()
+        if (redone) reconcileClipsFromWire() else exportStatus = emptyState.nothingToRedo
         return redone
     }
 
@@ -1658,6 +1728,10 @@ fun MemeEditorScreen(
     /** Precision sheet (selection rail ▸ Move): nudge/zoom/rotate cluster. */
     var showPrecision by remember { mutableStateOf(false) }
     var showCanvas by remember { mutableStateOf(false) }
+    /** MSU-010: the More overflow (advanced tools behind one tile). */
+    var showMore by remember { mutableStateOf(false) }
+    /** MSU-012: timing sheet for a SELECTED (not composing) overlay. */
+    var advancedTextId by remember { mutableStateOf<String?>(null) }
     /** V2 Draw mode: pen strokes captured on the stage (all modes). */
     var drawMode by remember { mutableStateOf(false) }
     var penColorIndex by remember { mutableIntStateOf(2) }
@@ -2377,6 +2451,51 @@ fun MemeEditorScreen(
         }
     }
 
+    /** MSU-063: cycle the selection through the project overlays (operator
+     *  keyboard next/prev, Alt+↑/↓). */
+    fun nudgeSelection(delta: Int) {
+        val overlays = state.project.overlays
+        if (overlays.isEmpty()) return
+        val currentIndex = overlays.indexOfFirst { it.id == state.selectedOverlayId }
+        val next = if (currentIndex < 0) {
+            if (delta > 0) 0 else overlays.lastIndex
+        } else {
+            ((currentIndex + delta) % overlays.size + overlays.size) % overlays.size
+        }
+        state.select(overlays[next].id)
+    }
+
+    /** MSU-060/062: freeze the current design (optionally after applying a
+     *  template) and hand it to mass production, with a confirmation toast.
+     *  The queue link lives on the Create hub's batch area. */
+    fun seedBatchBase(templateId: String?) {
+        val callback = onMakeVariations ?: return
+        templateId?.let { id ->
+            state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))
+        }
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val layerBitmaps = decodeLayerBitmaps()
+                    if (activeAsset != null) {
+                        val source = MemeRaster.decodeForExport(context.contentResolver, activeAsset.uri)
+                            ?: error("Image could not be read")
+                        MemeRaster.render(source, state.project) { layerBitmaps[it] }
+                    } else {
+                        MemeRaster.renderBlank(state.project) { layerBitmaps[it] }
+                    }
+                }
+            }
+            result.onSuccess { bitmap ->
+                val bytes = java.io.ByteArrayOutputStream().also { stream ->
+                    check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) { "PNG encode failed" }
+                }.toByteArray()
+                callback(space.bitos.core.studio.MemeProjectContract.encode(state.project), bytes)
+                notices.success(productionCopy.batchSeeded)
+            }.onFailure { exportStatus = "Could not render the design — ${it.message}" }
+        }
+    }
+
     // Back follows the ✕ contract; a mid-air gesture is cancelled first.
     BackHandler(enabled = true) {
         when {
@@ -2389,12 +2508,48 @@ fun MemeEditorScreen(
             else -> requestClose()
         }
     }
+    // MSU-063: operator keyboard pass (hardware / desktop-class keyboards).
+    // `mod` = Ctrl/Cmd; the reference sheet (More → Shortcuts) documents
+    // exactly this set. Skipped while typing so the keyboard never fights a
+    // text field.
+    val editorKeyHandler: (androidx.compose.ui.input.key.KeyEvent) -> Boolean = { event ->
+        if (event.type != KeyEventType.KeyDown) {
+            false
+        } else if (editingOverlayId != null || activePanel != null) {
+            false
+        } else {
+            val mod = event.isCtrlPressed || event.isMetaPressed
+            val shift = event.isShiftPressed
+            val alt = event.isAltPressed
+            when {
+                mod && !shift && event.key == Key.Z -> { undoEdit(); true }
+                mod && shift && event.key == Key.Z -> { redoEdit(); true }
+                mod && event.key == Key.E -> { showExportSheet = true; true }
+                mod && event.key == Key.T -> { suiteMode = true; true }
+                mod && event.key == Key.Enter -> {
+                    if (!showPublish) {
+                        showPublish = true
+                    }
+                    true
+                }
+                alt && event.key == Key.DirectionUp -> { nudgeSelection(-1); true }
+                alt && event.key == Key.DirectionDown -> { nudgeSelection(1); true }
+                event.key == Key.Backspace && state.selectedOverlayId != null -> {
+                    state.selectedOverlayId?.let { state.removeOverlay(it) }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(BitOSColors.background)
-            .statusBarsPadding(),
+            .statusBarsPadding()
+            .focusable()
+            .onKeyEvent(editorKeyHandler),
     ) {
         // ── Top chrome (prototype topbar: close · "Editor" · draft) ─────
         Row(
@@ -2430,14 +2585,35 @@ fun MemeEditorScreen(
                 onClick = {
                     activePanel = null
                     mediaPublishViewModel?.resetCompletedMemePublish()
+                    // MSU-050: the one-line explainer, shown on the first
+                    // open so the two "done" verbs are separated in words.
+                    if (!publishExplainerShown) {
+                        publishExplainerShown = true
+                        notices.info(publishCopy.publishExplainer)
+                    }
                     showPublish = true
                 },
                 enabled = mediaPublishViewModel != null && headerHasMedia &&
                     !headerPublishBusy && !headerRestoreIncomplete,
                 colors = ButtonDefaults.textButtonColors(contentColor = BitOSColors.primary),
-                modifier = Modifier.semantics { contentDescription = "Next — post details" },
+                modifier = Modifier.semantics { contentDescription = "Next — review and publish to Nostr" },
             ) {
-                Text("Next", fontWeight = FontWeight.W600)
+                Text(publishCopy.primaryAction, fontWeight = FontWeight.W600)
+            }
+            // MSU-050: Export is no longer a peer of the primary. It is a
+            // labelled secondary that saves a rendered FILE (the copy says
+            // so), reachable here and from More; the explainer above states
+            // the difference the first time the creator publishes.
+            IconButton(
+                onClick = { showExportSheet = true },
+                enabled = (activeAssetId != null || blankDesignActive ||
+                    (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
+                    (hasVideo && blankVideoHasContent)) && !exporting,
+                modifier = Modifier.semantics {
+                    contentDescription = "${publishCopy.exportAction} — save a rendered file to this device"
+                },
+            ) {
+                Icon(AppIcons.Download, contentDescription = null, tint = BitOSColors.textSecondary)
             }
             IconButton(
                 onClick = { exportStatus = when (draftSaveState) {
@@ -2458,11 +2634,197 @@ fun MemeEditorScreen(
             }
         }
 
+        // ── MSU-061: in-editor batch status strip ────────────────────────
+        // Shown only while a batch references this project, so an operator
+        // keeps editing and still sees "3 of 8 rendered · View queue".
+        batchStatus?.let { strip ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(BitOSColors.surface)
+                    .clickable(enabled = onOpenBatchQueue != null) { onOpenBatchQueue?.invoke() }
+                    .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.xs)
+                    .semantics { contentDescription = strip },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            ) {
+                Icon(
+                    AppIcons.Sparkles,
+                    contentDescription = null,
+                    tint = BitOSColors.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    strip,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onOpenBatchQueue != null) {
+                    Icon(
+                        AppIcons.ChevronRight,
+                        contentDescription = null,
+                        tint = BitOSColors.textSecondary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
+
         // ── Stage: media + overlays, single gesture target ───────────────
         // Prototype `create-edit`: the stage renders into a fixed-height
         // card that scrolls with the tools; the expert suite keeps the
         // legacy full-bleed weight(1f) stage.
         val suiteActive = suiteMode && videoMode && hasVideo
+
+        // ── MSU-010/012: one tool vocabulary, one router ─────────────────
+        // Every tool action routes through [onTool]; the enabled rules are
+        // shared with the iOS shell so the two bars cannot drift.
+        val looksEnabled = activeAsset != null || gifFrames.isNotEmpty() || (videoMode && hasVideo)
+        // MSU-012: what is selected right now (drives the selection tier).
+        // An explicit overlay selection wins over the mode default.
+        val selectedOverlay = state.project.overlays.firstOrNull { it.id == state.selectedOverlayId }
+        val currentSelectionKind: space.bitos.core.studio.MemeTools.SelectionKind =
+            when {
+                selectedOverlay != null -> when (selectedOverlay.kind) {
+                    space.bitos.core.studio.MemeOverlayKind.IMAGE ->
+                        space.bitos.core.studio.MemeTools.SelectionKind.IMAGE_LAYER
+                    space.bitos.core.studio.MemeOverlayKind.STICKER ->
+                        space.bitos.core.studio.MemeTools.SelectionKind.STICKER
+                    else -> space.bitos.core.studio.MemeTools.SelectionKind.TEXT
+                }
+                videoMode && hasVideo -> space.bitos.core.studio.MemeTools.SelectionKind.CLIP
+                gifMode && gifFrames.isNotEmpty() -> space.bitos.core.studio.MemeTools.SelectionKind.GIF_FRAME
+                else -> space.bitos.core.studio.MemeTools.SelectionKind.NONE
+            }
+        fun toolEnabled(tool: space.bitos.core.studio.MemeTools.ToolId): Boolean =
+            when (tool) {
+                space.bitos.core.studio.MemeTools.ToolId.MEDIA -> true
+                space.bitos.core.studio.MemeTools.ToolId.TEXT,
+                space.bitos.core.studio.MemeTools.ToolId.STICKER,
+                space.bitos.core.studio.MemeTools.ToolId.CAPTIONS,
+                -> state.canAddOverlay
+                space.bitos.core.studio.MemeTools.ToolId.SOUND -> videoMode && hasVideo
+                space.bitos.core.studio.MemeTools.ToolId.LOOK -> looksEnabled
+                space.bitos.core.studio.MemeTools.ToolId.TRIM,
+                space.bitos.core.studio.MemeTools.ToolId.SPEED,
+                space.bitos.core.studio.MemeTools.ToolId.VOLUME,
+                space.bitos.core.studio.MemeTools.ToolId.CLIPS,
+                space.bitos.core.studio.MemeTools.ToolId.SPLIT,
+                space.bitos.core.studio.MemeTools.ToolId.MUTE,
+                -> hasVideo
+                space.bitos.core.studio.MemeTools.ToolId.DURATION -> gifMode
+                space.bitos.core.studio.MemeTools.ToolId.BATCH -> onMakeVariations != null
+                else -> true
+            }
+        fun openToolSheet(id: String) {
+            drawMode = false
+            activePanel = null
+            when (id) {
+                "media" -> launchPicker()
+                "look" -> activePanel = MemeEditorPanel.FX
+                "sound" -> activePanel = MemeEditorPanel.SOUND
+                "captions" -> activePanel = MemeEditorPanel.MEME
+                "sticker" -> activePanel = MemeEditorPanel.STICKERS
+                "layers" -> showLayers = true
+                "canvas" -> showCanvas = true
+                "clips" -> showClipSheet = true
+                "trim" -> showTrim = true
+                "speed" -> showSpeed = true
+                "volume" -> showVolume = true
+                "sfx" -> showSfx = true
+                "gifs" -> showGifBrowse = true
+                "duration" -> showBlankGifCreate = true
+            }
+        }
+        fun onTool(tool: space.bitos.core.studio.MemeTools.ToolId) {
+            when (tool) {
+                space.bitos.core.studio.MemeTools.ToolId.SHORTCUTS -> {
+                    showMore = false
+                    showShortcuts = true
+                }
+                space.bitos.core.studio.MemeTools.ToolId.TEXT -> startTextCompose()
+                space.bitos.core.studio.MemeTools.ToolId.DRAW -> {
+                    activePanel = null
+                    showMore = false
+                    drawMode = !drawMode
+                }
+                space.bitos.core.studio.MemeTools.ToolId.TIMELINE -> {
+                    showMore = false
+                    suiteMode = true
+                }
+                space.bitos.core.studio.MemeTools.ToolId.SPLIT -> {
+                    showMore = false
+                    splitAtPlayhead()
+                }
+                space.bitos.core.studio.MemeTools.ToolId.MUTE -> {
+                    showMore = false
+                    videoClips.getOrNull(selectedClipIndex)?.let { clip ->
+                        state.beginClipsEdit()
+                        videoClips[selectedClipIndex] = clip.copy(
+                            volume = if (clip.volume == 0f) 1f else 0f,
+                        )
+                        syncWireClips()
+                    }
+                }
+                space.bitos.core.studio.MemeTools.ToolId.BATCH -> {
+                    showMore = false
+                    seedBatchBase(templateId = null)
+                }
+                space.bitos.core.studio.MemeTools.ToolId.DELETE ->
+                    state.selectedOverlayId?.let { state.removeOverlay(it) }
+                space.bitos.core.studio.MemeTools.ToolId.EDIT,
+                space.bitos.core.studio.MemeTools.ToolId.TIME_WINDOW,
+                -> state.selectedOverlayId?.let { advancedTextId = it }
+                space.bitos.core.studio.MemeTools.ToolId.DUPLICATE ->
+                    state.selectedOverlayId?.let { id ->
+                        state.duplicateOverlay(id) ?: run {
+                            exportStatus = "Overlay limit reached (${MemeProjectContract.MAX_OVERLAYS})"
+                        }
+                    }
+                space.bitos.core.studio.MemeTools.ToolId.FORWARD ->
+                    state.selectedOverlayId?.let { state.moveOverlay(it, +1) }
+                space.bitos.core.studio.MemeTools.ToolId.BACKWARD ->
+                    state.selectedOverlayId?.let { state.moveOverlay(it, -1) }
+                space.bitos.core.studio.MemeTools.ToolId.OPEN_TIMELINE -> suiteMode = true
+                space.bitos.core.studio.MemeTools.ToolId.HOLD ->
+                    gifDelays.getOrNull(gifPreviewIndex)?.let { hold ->
+                        val next = if (hold >= 200) 50 else hold + 50
+                        gifDelays[gifPreviewIndex] = next
+                        exportStatus = "Frame hold $next ms"
+                    }
+                space.bitos.core.studio.MemeTools.ToolId.MOVE_LEFT -> {
+                    if (gifPreviewIndex > 0) {
+                        val from = gifPreviewIndex
+                        val frame = gifFrames.removeAt(from)
+                        val delay = gifDelays.removeAt(from)
+                        gifFrames.add(from - 1, frame)
+                        gifDelays.add(from - 1, delay)
+                        gifPreviewIndex = from - 1
+                    }
+                }
+                space.bitos.core.studio.MemeTools.ToolId.MOVE_RIGHT -> {
+                    if (gifPreviewIndex < gifFrames.size - 1) {
+                        val from = gifPreviewIndex
+                        val frame = gifFrames.removeAt(from)
+                        val delay = gifDelays.removeAt(from)
+                        gifFrames.add(from + 1, frame)
+                        gifDelays.add(from + 1, delay)
+                        gifPreviewIndex = from + 1
+                    }
+                }
+                else -> openToolSheet(tool.name.lowercase())
+            }
+        }
+        val activeToolSheetId: String? = when {
+            activePanel == MemeEditorPanel.FX -> "look"
+            activePanel == MemeEditorPanel.SOUND -> "sound"
+            activePanel == MemeEditorPanel.MEME -> "captions"
+            activePanel == MemeEditorPanel.STICKERS -> "sticker"
+            else -> null
+        }
+
         val stageArea: @Composable (Modifier) -> Unit = { stageBoxModifier ->
         val stageWidth = stagePx.width.coerceAtLeast(1)
         val stageHeight = stagePx.height.coerceAtLeast(1)
@@ -2543,15 +2905,29 @@ fun MemeEditorScreen(
                 }
             } else if (current == null && pinnedCanvasTerms == null && !gifMode && !videoMode) {
                 EmptyCanvasCta(
+                    state = emptyState,
                     onPick = ::launchPicker,
                     onBlank = { state.setCanvas("1:1", "#FFFFFF") },
+                    onTemplate = { id ->
+                        state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))
+                        exportStatus = "Template applied — tap the text to edit it"
+                    },
+                    onTemplateBatch = if (onMakeVariations != null) {
+                        { id -> seedBatchBase(id.takeIf { it.isNotBlank() }) }
+                    } else null,
+                    production = productionCopy,
                 )
             } else if (videoMode) {
                 EmptyCanvasCta(
+                    state = emptyState,
                     onPick = ::launchPicker,
                     onBlank = {
                         activePanel = null
                         showBlankCreate = true
+                    },
+                    onTemplate = { id ->
+                        state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))
+                        exportStatus = "Template applied — tap the text to edit it"
                     },
                 )
             } else if (blankGifActive) {
@@ -2614,6 +2990,7 @@ fun MemeEditorScreen(
                 }
             } else if (gifMode && gifFrames.isEmpty()) {
                 EmptyCanvasCta(
+                    state = emptyState,
                     onPick = ::launchPicker,
                     onBlank = {
                         activePanel = null
@@ -2622,6 +2999,10 @@ fun MemeEditorScreen(
                     onBrowseGifs = {
                         activePanel = null
                         showGifBrowse = true
+                    },
+                    onTemplate = { id ->
+                        state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))
+                        exportStatus = "Template applied — tap the text to edit it"
                     },
                 )
             } else if (gifMode) {
@@ -2855,8 +3236,10 @@ fun MemeEditorScreen(
                         SelectionControlsRail(
                             isText = selected.kind != MemeOverlayKind.STICKER &&
                                 selected.kind != MemeOverlayKind.IMAGE,
+                            showTiming = videoMode,
                             dimmed = state.gestureActive,
                             onEdit = { editingOverlayId = selected.id },
+                            onTiming = { advancedTextId = selected.id },
                             onDuplicate = {
                                 state.duplicateOverlay(selected.id) ?: run {
                                     exportStatus = "Overlay limit reached (${MemeProjectContract.MAX_OVERLAYS})"
@@ -2865,7 +3248,11 @@ fun MemeEditorScreen(
                             onForward = { state.moveOverlay(selected.id, +1) },
                             onBackward = { state.moveOverlay(selected.id, -1) },
                             onPrecision = { showPrecision = true },
-                            onDelete = { state.removeOverlay(selected.id) },
+                            onDelete = {
+                                state.removeOverlay(selected.id)
+                                // MSU-041: reversible → offer Undo, no dialog.
+                                notices.undoable("Overlay removed")
+                            },
                         )
                     }
                 }
@@ -2892,6 +3279,9 @@ fun MemeEditorScreen(
 
         }
 
+        // MSU-040: the status line is now ONLY non-notice guidance
+        // (progress + empty hints). Transient results and errors render in
+        // the notice host below, which owns auto-dismiss and the Undo slot.
         val statusLine: @Composable () -> Unit = {
         when {
                 exporting -> Row(
@@ -2914,18 +3304,6 @@ fun MemeEditorScreen(
                 )
             }
 
-                exportStatus != null -> Text(
-                exportStatus!!,
-                style = MaterialTheme.typography.labelSmall,
-                color = BitOSColors.textSecondary,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = BitOSSpacing.base),
-            )
-
                 state.selectedOverlayId != null && editingOverlayId == null -> Text(
                 "drag · scale · rotate",
                 style = MaterialTheme.typography.labelSmall,
@@ -2945,6 +3323,33 @@ fun MemeEditorScreen(
         }
 
         if (suiteActive) {
+            // MSU-013: the mode pill + undo/redo live in ONE place. Suite
+            // mode shows the same row, so the pair is never duplicated
+            // (it previously existed only inside the dock).
+            ModePillsRow(
+                activeMode = state.project.mode,
+                canUndo = state.canUndo,
+                canRedo = state.canRedo,
+                onPickMode = { mode ->
+                    if (mode == state.project.mode) return@ModePillsRow
+                    if (state.isEmpty && gifFrames.isEmpty()) {
+                        state.switchMode(mode)
+                    } else {
+                        confirmModeSwitch = true
+                        pendingModeSwitch = mode
+                    }
+                },
+                onAddClip = {
+                    videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                },
+                onAddImage = {
+                    layerPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onUndo = ::undoEdit,
+                onRedo = ::redoEdit,
+            )
             stageArea(
                 Modifier
                     .weight(1f)
@@ -2952,23 +3357,22 @@ fun MemeEditorScreen(
                     .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
             )
             if (drawMode) penControls()
-            SuiteDock(
+            TimelineWorkspace(
                 project = state.project,
                 clips = videoClips.toList(),
                 rate = videoRate,
                 selectedClipIndex = selectedClipIndex,
                 onSelectClip = { selectedClipIndex = it },
+                onSelectLayer = { id -> state.select(id) },
+                onSelectCue = { id ->
+                    exportStatus = state.project.sfxCues.firstOrNull { it.id == id }
+                        ?.let { "${space.bitos.core.studio.SfxSynth.labelOf(it.sfx)} cue @ ${it.atMs / 1000}s" }
+                },
+                selectedOverlayId = state.selectedOverlayId,
                 positionMs = videoPositionMs,
                 transport = videoTransport,
-                canUndo = state.canUndo,
-                canRedo = state.canRedo,
-                onUndo = ::undoEdit,
-                onRedo = ::redoEdit,
-                onOpenLayers = { showLayers = true },
-                looksEnabled = (videoMode && hasVideo) || activeAsset != null,
-                onOpenLooks = { showLooks = true },
+                onOpenLayerInsert = { showLayers = true },
                 onOpenSfx = { showSfx = true },
-                onOpenDraw = { drawMode = true },
                 onOpenTrim = { showTrim = true },
                 onOpenClip = { showClipSheet = true },
                 onOpenVolume = { showVolume = true },
@@ -3037,6 +3441,7 @@ fun MemeEditorScreen(
                 ModePillsRow(
                     activeMode = state.project.mode,
                     canUndo = state.canUndo,
+                    canRedo = state.canRedo,
                     onPickMode = { mode ->
                         if (mode == state.project.mode) return@ModePillsRow
                         if (state.isEmpty && gifFrames.isEmpty()) {
@@ -3067,26 +3472,20 @@ fun MemeEditorScreen(
                         }
                     },
                     onUndo = ::undoEdit,
+                    onRedo = ::redoEdit,
                 )
-                QuickToolsRow(
-                    canAddOverlay = state.canAddOverlay,
-                    looksEnabled = activeAsset != null || gifFrames.isNotEmpty() || (videoMode && hasVideo),
-                    soundEnabled = videoMode && hasVideo,
-                    saveEnabled = (activeAssetId != null || blankDesignActive ||
-                        (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
-                        (hasVideo && blankVideoHasContent)) && !exporting,
-                    activePanel = activePanel,
+                // MSU-010: the FIVE creator tools (shared catalogue) + More.
+                // The shipped shell rendered two overlapping bars here
+                // (QuickToolsRow's 7 chips AND PerModeBar's 6) with one
+                // panel reachable from three of them; this is the single bar.
+                EditorToolBar(
+                    mode = state.project.mode,
+                    activeSheetId = activeToolSheetId,
+                    moreOpen = showMore,
                     drawActive = drawMode,
-                    onPanel = { panel ->
-                        drawMode = false
-                        activePanel = if (activePanel == panel) null else panel
-                    },
-                    onAddText = ::startTextCompose,
-                    onDraw = {
-                        activePanel = null
-                        drawMode = !drawMode
-                    },
-                    onSave = { showExportSheet = true },
+                    enabled = { tool -> toolEnabled(tool) },
+                    onTool = { tool -> onTool(tool) },
+                    onMore = { showMore = true },
                 )
                 if (drawMode) penControls()
         if (gifMode) {
@@ -3147,7 +3546,7 @@ fun MemeEditorScreen(
                         onDelete = {
                             if (videoClips.size > 1) {
                                 removeClip(selectedClipIndex)
-                                exportStatus = "Clip deleted"
+                                notices.undoable("Clip deleted")
                             } else {
                                 exportStatus = "Keep at least one clip"
                             }
@@ -3207,46 +3606,12 @@ fun MemeEditorScreen(
             }
             }
             }
-            // While composing, the typing dock owns the bottom — the
-            // per-mode chips (Canvas/Text/Clips…) and status line would
-            // squeeze between it and the keyboard.
+            // While composing, the typing dock owns the bottom — the tool
+            // bar and status line would squeeze between it and the keyboard.
             if (editingOverlayId == null) {
-                PerModeBar(
-                    videoMode = videoMode,
-                    gifMode = gifMode,
-                    onNotice = { exportStatus = it },
-                    onOpenClips = { showClipSheet = true },
-                    onOpenTrim = { showTrim = true },
-                    onOpenFx = {
-                        drawMode = false
-                        activePanel = MemeEditorPanel.FX
-                    },
-                    onOpenText = ::startTextCompose,
-                    onOpenLayers = {
-                        activePanel = null
-                        showLayers = true
-                    },
-                    onOpenSuite = {
-                        activePanel = null
-                        suiteMode = true
-                    },
-                    onCycleGifSpeed = {
-                        val next = if (gifUniformDelayMs >= 200) 50 else gifUniformDelayMs + 50
-                        gifUniformDelayMs = next
-                        exportStatus = "Frame hold $next ms"
-                    },
-                    onOpenCanvas = { showCanvas = true },
-                    showCanvasChip = blankVideoActive,
-                    gifDurationChip = blankGifActive,
-                    onOpenGifDuration = {
-                        activePanel = null
-                        showBlankGifCreate = true
-                    },
-                    onOpenGifBrowse = {
-                        activePanel = null
-                        showGifBrowse = true
-                    },
-                )
+                // MSU-012: selection actions live in the vertical rail
+                // beside the selected element (one affordance, never both a
+                // rail and a row); clip/frame actions join with W2.
                 statusLine()
             }
         }
@@ -3467,6 +3832,131 @@ fun MemeEditorScreen(
             }
         }
 
+        // ── MSU-010: the More overflow (one entry for every advanced tool).
+        if (showMore) {
+            ModalBottomSheet(onDismissRequest = { showMore = false }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = BitOSSpacing.base)
+                        .padding(bottom = BitOSSpacing.lg),
+                ) {
+                    Text(
+                        "More tools",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.W700,
+                        modifier = Modifier.padding(bottom = BitOSSpacing.sm),
+                    )
+                    MoreToolsSheetContent(
+                        mode = state.project.mode,
+                        selectionKind = currentSelectionKind,
+                        enabled = { tool -> toolEnabled(tool) },
+                        onTool = { tool ->
+                            showMore = false
+                            onTool(tool)
+                        },
+                        production = productionCopy,
+                    )
+                }
+            }
+        }
+
+        // ── MSU-063 (touch-first revision): the Controls reference. Every
+        // row names its ON-SCREEN affordance first; the keyboard is an
+        // optional accelerator shown only when a hardware keyboard is
+        // attached, so a bare phone never sees keys it cannot press.
+        if (showShortcuts) {
+            ModalBottomSheet(onDismissRequest = { showShortcuts = false }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = BitOSSpacing.base)
+                        .padding(bottom = BitOSSpacing.lg),
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+                ) {
+                    Text(
+                        productionCopy.controlsTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.W700,
+                    )
+                    Text(
+                        productionCopy.keyboardAbsentHint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BitOSColors.textSecondary,
+                    )
+                    Spacer(Modifier.height(BitOSSpacing.xs))
+                    // ── On screen (always available) ───────────────────────
+                    Text(
+                        productionCopy.touchSectionTitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.W700,
+                        color = BitOSColors.textSecondary,
+                    )
+                    productionCopy.controls.forEach { control ->
+                        ControlRow(
+                            label = control.label,
+                            value = control.touch,
+                            mono = false,
+                        )
+                    }
+                    // ── Keyboard (only when one is attached) ───────────────
+                    val keyboard = productionCopy.keyboardRows
+                    if (keyboard.isNotEmpty() && hardwareKeyboardAttached()) {
+                        Spacer(Modifier.height(BitOSSpacing.sm))
+                        Text(
+                            productionCopy.keyboardSectionTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W700,
+                            color = BitOSColors.textSecondary,
+                        )
+                        keyboard.forEach { control ->
+                            ControlRow(
+                                label = control.label,
+                                value = control.keys
+                                    .split("+")
+                                    .joinToString(" ") { androidKeyGlyph(it) },
+                                mono = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── MSU-012: timing window for a SELECTED (not composing) overlay.
+        if (advancedTextId != null) {
+            val id = advancedTextId!!
+            val overlay = state.project.overlays.firstOrNull { it.id == id }
+            if (overlay == null) {
+                advancedTextId = null
+            } else {
+                TextSheet(
+                    overlay = overlay,
+                    onText = { state.updateStyle(id, text = it) },
+                    onFont = { state.updateStyle(id, font = it) },
+                    onSize = { state.updateStyle(id, size = it) },
+                    onColor = { state.updateStyle(id, colorIndex = it) },
+                    onOutline = { state.updateStyle(id, outline = it) },
+                    onShadow = { state.updateStyle(id, shadow = it) },
+                    onFx = { fx -> state.updateStyle(id, fx = fx, clearFx = fx == null) },
+                    onWindow = { startMs, endMs ->
+                        state.updateStyle(
+                            id,
+                            startMs = startMs,
+                            endMs = endMs,
+                            clearEndMs = (endMs ?: 0L) <= 0L,
+                        )
+                    },
+                    showTiming = videoMode,
+                    onDelete = {
+                        state.removeOverlay(id)
+                        advancedTextId = null
+                    },
+                    onDismiss = { advancedTextId = null },
+                )
+            }
+        }
+
         // ── Next: into the publish flow (prototype "Next · post details").
         val hasMedia = activeAssetId != null || gifFrames.isNotEmpty() || hasVideo
         val publishBusy = memePublishState?.phase.let {
@@ -3492,12 +3982,15 @@ fun MemeEditorScreen(
 
 
     if (showDiscard) {
+        // MSU-043: classified irreversible — copy from the shared audit.
+        val rule = feedbackCopy.confirms.firstOrNull { it.id == "discard-draft" }
         AlertDialog(
             onDismissRequest = { showDiscard = false },
-            title = { Text("Could not save the draft") },
+            title = { Text(rule?.title ?: "Could not save the draft") },
             text = {
                 Text(
-                    "Your edits are still open. Retry the save to keep them, or delete the draft deliberately.",
+                    rule?.body
+                        ?: "Your edits are still open. Retry the save to keep them, or delete the draft deliberately.",
                 )
             },
             confirmButton = {
@@ -3516,10 +4009,13 @@ fun MemeEditorScreen(
     }
 
     if (confirmModeSwitch) {
+        // MSU-043: classified irreversible — the copy comes from the shared
+        // audit (`mode-switch`), so both platforms ask the same question.
+        val rule = feedbackCopy.confirms.firstOrNull { it.id == "mode-switch" }
         AlertDialog(
             onDismissRequest = { confirmModeSwitch = false },
-            title = { Text("Start a ${if (pendingModeSwitch == MemeMode.GIF) "GIF" else "image"} project?") },
-            text = { Text("Switching clears the current media (overlays stay). Continue?") },
+            title = { Text(rule?.title ?: "Start a new project?") },
+            text = { Text(rule?.body ?: "Switching clears the current media (overlays stay). Continue?") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmModeSwitch = false
@@ -3822,7 +4318,10 @@ fun MemeEditorScreen(
                     state.select(id)
                     showLayers = false
                 },
-                onDelete = { state.removeOverlay(it) },
+                onDelete = {
+                    state.removeOverlay(it)
+                    notices.undoable("Layer removed")
+                },
                 onMove = { id, delta -> state.moveOverlay(id, delta) },
                 onInsert = {
                     showLayers = false
@@ -3979,7 +4478,76 @@ fun MemeEditorScreen(
     // Clip-import progress: full-screen scrim so the studio never looks
     // dead while camera takes / picked clips are probed and staged.
     seedingProgress?.let { (done, total) ->
-        ClipImportOverlay(done = done, total = total)
+        ClipImportOverlay(
+            done = done,
+            total = total,
+            surface = feedbackCopy.surfaceFor("import-clips"),
+        )
+    }
+
+    // ── MSU-030: first-run coach (fresh, self-started sessions only) ────
+    if (coachActive) {
+        StudioCoachOverlay(
+            plan = coachPlan,
+            stepIndex = coachStepIndex,
+            onNext = {
+                if (coachStepIndex < coachPlan.steps.lastIndex) {
+                    coachStepIndex += 1
+                } else {
+                    coachDismissed = true
+                    StudioCoachPrefs.markCoachSeen(context)
+                }
+            },
+            onSkip = {
+                coachDismissed = true
+                StudioCoachPrefs.markCoachSeen(context)
+            },
+        )
+    }
+
+    // ── MSU-040: the notice host. One notice at a time, newest wins,
+    // transient notices auto-dismiss and errors persist. Rendered last so
+    // it draws above the editor; it clears when the editor is busy with a
+    // full-screen overlay (export/publish) which carries its own status.
+    LaunchedEffect(notices.isVisible(), notices.current?.id) {
+        if (!notices.isVisible()) return@LaunchedEffect
+        // 60 fps-ish clock; the shared host decides when to dismiss.
+        while (notices.isVisible()) {
+            kotlinx.coroutines.delay(100)
+            notices.tick(100)
+        }
+    }
+    if (notices.isVisible() && !showExport && !showPublish && !coachActive) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 96.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            notices.current?.let { notice ->
+                EditorNoticeBar(
+                    notice = notice,
+                    remaining = notices.remainingFraction(),
+                    onAction = { actionId ->
+                        when (actionId) {
+                            // MSU-041: the notice's Undo is the editor's
+                            // single undo affordance (coalesced history).
+                            "undo" -> {
+                                undoEdit()
+                                notices.dismiss()
+                            }
+                            "retry" -> {
+                                val jobId = exportJobs.recoverable().firstOrNull()?.id
+                                if (jobId != null) retryExportSave(jobId)
+                                notices.dismiss()
+                            }
+                            else -> notices.dismiss()
+                        }
+                    },
+                    onDismiss = { notices.dismiss() },
+                )
+            }
+        }
     }
 
     if (showExport) {
@@ -3990,6 +4558,7 @@ fun MemeEditorScreen(
                 showExport = false
                 exportStatus = null
             },
+            surface = feedbackCopy.surfaceFor("export-render"),
         )
     }
 
@@ -4019,6 +4588,7 @@ fun MemeEditorScreen(
             },
             draft = postDraft,
             onDraftChange = { postDraft = it },
+            copy = publishCopy,
             onPublish = { caption, altText, cwReason, tags, license, allowZaps, remixOf, remixAuthor, remixRelays, remixLabel, powBits ->
                 val project = state.project
                 // Video/GIF modes have no `activeAsset` (their media lives in
@@ -4217,6 +4787,25 @@ fun MemeEditorScreen(
                 showPublish = false
                 onClose()
             },
+            onSharePost = {
+                showPublish = false
+                // MSU-052: share the just-published note as a link anyone
+                // can open — njump resolves the event id across clients.
+                val eventId = memePublishState?.eventId
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(
+                        android.content.Intent.EXTRA_TEXT,
+                        if (eventId != null) "https://njump.me/$eventId" else "Posted from BitOS",
+                    )
+                }
+                context.startActivity(android.content.Intent.createChooser(send, null))
+            },
+            onMakeAnother = {
+                showPublish = false
+                clearSlot()
+                onClose()
+            },
             recoverableJobs = mediaPublishViewModel.memeJobs(),
             onJobRetry = { mediaPublishViewModel.retryMemeJob(it) },
             onJobDiscard = { mediaPublishViewModel.discardMemeJob(it) },
@@ -4308,15 +4897,18 @@ sealed interface ExportOutcome {
 /** Inline editor panels (prototype create-edit tool panels). */
 private enum class MemeEditorPanel { MEME, STICKERS, SOUND, FX }
 
-/** Prototype mode switcher: uppercase pills + the undo button. */
+/** Prototype mode switcher: uppercase pills + undo/redo (MSU-013 — the
+ *  pair lives here in the top chrome, exactly once, in every shell). */
 @Composable
 private fun ModePillsRow(
     activeMode: MemeMode,
     canUndo: Boolean,
+    canRedo: Boolean,
     onPickMode: (MemeMode) -> Unit,
     onAddClip: () -> Unit,
     onAddImage: () -> Unit,
     onUndo: () -> Unit,
+    onRedo: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -4382,148 +4974,15 @@ private fun ModePillsRow(
                 tint = if (canUndo) BitOSColors.textPrimary else BitOSColors.textTertiary,
             )
         }
-    }
-}
-
-/** Prototype quick-tool chip shell: label pill with the accent rules (the
- *  "hot" Meme tool tints, the open panel gets the accent border). */
-@Composable
-private fun QuickToolChipShell(
-    label: String,
-    hot: Boolean,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    icon: @Composable () -> Unit,
-) {
-    val tint = if (active || hot) BitOSColors.primary else BitOSColors.textSecondary
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(
-                when {
-                    active -> BitOSColors.primary.copy(alpha = 0.22f)
-                    hot -> BitOSColors.primary.copy(alpha = 0.12f)
-                    else -> BitOSColors.surface
-                },
+        IconButton(onClick = onRedo, enabled = canRedo) {
+            Icon(
+                AppIcons.Redo,
+                contentDescription = "Redo",
+                tint = if (canRedo) BitOSColors.textPrimary else BitOSColors.textTertiary,
             )
-            .border(
-                1.dp,
-                if (active || hot) BitOSColors.primary else BitOSColors.border,
-                CircleShape,
-            )
-            .clickable(enabled = enabled) { onClick() }
-            .alpha(if (enabled) 1f else 0.4f)
-            .semantics { contentDescription = label },
-    ) {
-        icon()
-        Text(
-            label,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.W700,
-            color = tint,
-            maxLines = 1,
-        )
+        }
     }
 }
-
-/** Quick-tool chip with a Solar studio glyph. */
-@Composable
-private fun QuickToolChip(
-    icon: SolarStudioIcon,
-    label: String,
-    hot: Boolean = false,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) = QuickToolChipShell(label, hot, active, enabled, onClick) {
-    SolarStudioIconImage(icon, contentDescription = null, tint = if (active || hot) BitOSColors.primary else BitOSColors.textSecondary, modifier = Modifier.size(16.dp))
-}
-
-/** Quick-tool chip with a vector glyph. */
-@Composable
-private fun QuickToolChipVector(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) = QuickToolChipShell(label, false, active, enabled, onClick) {
-    Icon(icon, contentDescription = null, tint = if (active) BitOSColors.primary else BitOSColors.textSecondary, modifier = Modifier.size(15.dp))
-}
-
-/** Quick tool chips (prototype: Meme · Text · Stickers · Sound · Effects;
- *  Draw/Save stay as native extras). Text skips the panel entirely — it
- *  enters IG-style compose mode (type on the canvas) via [onAddText]. */
-@Composable
-private fun QuickToolsRow(
-    canAddOverlay: Boolean,
-    looksEnabled: Boolean,
-    soundEnabled: Boolean,
-    saveEnabled: Boolean,
-    activePanel: MemeEditorPanel?,
-    drawActive: Boolean,
-    onPanel: (MemeEditorPanel) -> Unit,
-    onAddText: () -> Unit,
-    onDraw: () -> Unit,
-    onSave: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = BitOSSpacing.base),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        QuickToolChip(
-            icon = SolarStudioIcon.MagicWand,
-            label = "Meme",
-            hot = true,
-            active = activePanel == MemeEditorPanel.MEME,
-            enabled = canAddOverlay,
-        ) { onPanel(MemeEditorPanel.MEME) }
-        QuickToolChip(
-            icon = SolarStudioIcon.Text,
-            label = "Text",
-            active = false,
-            enabled = canAddOverlay,
-        ) { onAddText() }
-        QuickToolChip(
-            icon = SolarStudioIcon.Sticker,
-            label = "Stickers",
-            active = activePanel == MemeEditorPanel.STICKERS,
-            enabled = canAddOverlay,
-        ) { onPanel(MemeEditorPanel.STICKERS) }
-        QuickToolChip(
-            icon = SolarStudioIcon.Soundwave,
-            label = "Sound",
-            active = activePanel == MemeEditorPanel.SOUND,
-            enabled = soundEnabled,
-        ) { onPanel(MemeEditorPanel.SOUND) }
-        QuickToolChip(
-            icon = SolarStudioIcon.Palette,
-            label = "Look",
-            active = activePanel == MemeEditorPanel.FX,
-            enabled = looksEnabled,
-        ) { onPanel(MemeEditorPanel.FX) }
-        QuickToolChip(
-            icon = SolarStudioIcon.Pen,
-            label = "Draw",
-            active = drawActive,
-            enabled = true,
-        ) { onDraw() }
-        QuickToolChipVector(
-            icon = AppIcons.Download,
-            label = "Export",
-            active = false,
-            enabled = saveEnabled,
-        ) { onSave() }
-    }
-}
-
 
 /** IG-style compose bar (type-on-canvas): font-style pills with a live
  *  preview word, the shared palette as dots, outline/background/shadow
@@ -5619,7 +6078,12 @@ private fun ExportSettingsContent(
             .padding(bottom = BitOSSpacing.lg),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        Text("Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text("Save a copy", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text(
+            "Saves a rendered file to this device. To post it to Nostr instead, use Next.",
+            style = MaterialTheme.typography.bodySmall,
+            color = BitOSColors.textSecondary,
+        )
         Text(format, style = MaterialTheme.typography.titleSmall)
         Text(
             "Destination: " + (if (isVideo) "Movies" else "Photos") + " · " +
@@ -5830,6 +6294,8 @@ private fun SelectionControlsRail(
     onBackward: () -> Unit,
     onPrecision: () -> Unit,
     onDelete: () -> Unit,
+    showTiming: Boolean = false,
+    onTiming: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -5846,6 +6312,9 @@ private fun SelectionControlsRail(
     ) {
         if (isText) {
             RailButton("Edit text", AppIcons.Pen, onClick = onEdit)
+        }
+        if (showTiming) {
+            RailButton("Timing window", AppIcons.Schedule, onClick = onTiming)
         }
         RailButton("Duplicate overlay", AppIcons.Copy, onClick = onDuplicate)
         RailButton("Bring forward", AppIcons.FlipToFront, onClick = onForward)
@@ -5963,26 +6432,20 @@ private fun RailButton(
     }
 }
 
-/** Per-mode bottom toolbar (prototype edBar). */
+/** MSU-010: the ONE tool bar. Renders the shared catalogue's primary set
+ *  for the mode (identical vocabulary in every mode) plus the More tile.
+ *  Replaces the shipped pair of overlapping bars. */
 @Composable
-private fun PerModeBar(
-    onOpenClips: () -> Unit,
-    onOpenTrim: () -> Unit,
-    videoMode: Boolean,
-    gifMode: Boolean,
-    onNotice: (String) -> Unit,
-    onOpenFx: () -> Unit,
-    onOpenText: () -> Unit,
-    onOpenLayers: () -> Unit,
-    onOpenSuite: () -> Unit,
-    onCycleGifSpeed: () -> Unit,
-    onOpenCanvas: () -> Unit = {},
-    onOpenGifBrowse: () -> Unit = {},
-    /** Blank timeline: show the Canvas (re-style) chip in video mode. */
-    showCanvasChip: Boolean = false,
-    /** Blank GIF: swap the Speed chip for the Duration (re-style) chip. */
-    gifDurationChip: Boolean = false,
-    onOpenGifDuration: () -> Unit = {},
+private fun EditorToolBar(
+    mode: MemeMode,
+    activeSheetId: String?,
+    moreOpen: Boolean,
+    drawActive: Boolean,
+    enabled: (space.bitos.core.studio.MemeTools.ToolId) -> Boolean,
+    onTool: (space.bitos.core.studio.MemeTools.ToolId) -> Unit,
+    /** Opens the More overflow — a SEPARATE action from the Shortcuts
+     *  tool id it used to borrow, which now opens the Controls sheet. */
+    onMore: () -> Unit,
 ) {
     val borderColor = BitOSColors.border
     Row(
@@ -5996,45 +6459,358 @@ private fun PerModeBar(
                     strokeWidth = 1.dp.toPx(),
                 )
             }
-            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-        horizontalArrangement = Arrangement.SpaceAround,
+            .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.sm),
+        horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        if (videoMode) {
-            if (showCanvasChip) {
-                ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
+        space.bitos.core.studio.MemeTools.primaryFor(mode).forEach { tool ->
+            ToolTile(
+                tool = tool,
+                active = activeSheetId == tool.name.lowercase() ||
+                    (tool == space.bitos.core.studio.MemeTools.ToolId.DRAW && drawActive),
+                enabled = enabled(tool),
+                onClick = { onTool(tool) },
+            )
+        }
+        ToolTile(
+            tool = space.bitos.core.studio.MemeTools.ToolId.SHORTCUTS,
+            labelOverride = "More",
+            iconOverride = AppIcons.More,
+            active = moreOpen,
+            enabled = true,
+            onClick = onMore,
+        )
+    }
+}
+
+/**
+ * MSU-014: one accessible tool tile — icon over a legible label, a full
+ * ≥ [space.bitos.core.design.DesignTokens.MIN_TOOL_TARGET_DP] target, and a
+ * `contentDescription` naming the ACTION (the shipped tiles exposed only a
+ * 9 sp label beside a glyph).
+ */
+@Composable
+private fun ToolTile(
+    tool: space.bitos.core.studio.MemeTools.ToolId,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    labelOverride: String? = null,
+    iconOverride: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
+    if (labelOverride == null && iconOverride == null) {
+        // Catalogue-declared glyph (semantic and collision-checked).
+        ToolTileShell(
+            label = tool.label,
+            toolName = tool.name,
+            active = active,
+            enabled = enabled,
+            onClick = onClick,
+        ) {
+            Icon(
+                toolIcon(tool),
+                contentDescription = null,
+                tint = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    } else {
+        ToolTileShell(
+            label = labelOverride ?: tool.label,
+            toolName = "more",
+            active = active,
+            enabled = enabled,
+            onClick = onClick,
+        ) {
+            iconOverride?.let {
+                Icon(
+                    it,
+                    contentDescription = null,
+                    tint = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
             }
-            ClipToolButton(AppIcons.Video, "Clips") { onOpenClips() }
-            ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
-            ClipToolButton(AppIcons.Crop, "Trim") { onOpenTrim() }
-            ClipToolButton(AppIcons.AppsGrid, "Overlay") { onOpenLayers() }
-            ClipToolButton(AppIcons.Sparkles, "Timeline") { onOpenSuite() }
-        } else if (gifMode) {
-            ClipToolButton(AppIcons.Gif, "GIFs") { onOpenGifBrowse() }
-            ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
-            if (gifDurationChip) {
-                // Blank GIF: the loop length replaces the frame-hold speed.
-                ClipToolButton(AppIcons.Speed, "Duration") { onOpenGifDuration() }
-            } else {
-                ClipToolButton(AppIcons.Speed, "Speed") { onCycleGifSpeed() }
-            }
-            ClipToolButton(AppIcons.Loop, "Loop") { onNotice("GIFs loop forever — nothing to set") }
-            ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
-            ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
-        } else {
-            ClipToolButton(AppIcons.Ratio, "Canvas") { onOpenCanvas() }
-            ClipToolButton(AppIcons.TextGlyph, "Text") { onOpenText() }
-            ClipToolButton(AppIcons.AppsGrid, "Layers") { onOpenLayers() }
-            ClipToolButton(AppIcons.Looks, "Filter") { onOpenFx() }
-            ClipToolButton(AppIcons.Filter, "Adjust") { onOpenFx() }
         }
     }
 }
 
 @Composable
+private fun ToolTileShell(
+    label: String,
+    toolName: String,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier
+            .sizeIn(
+                minWidth = space.bitos.core.design.DesignTokens.MIN_TOOL_TARGET_DP.dp,
+                minHeight = space.bitos.core.design.DesignTokens.MIN_TOOL_TARGET_DP.dp,
+            )
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .alpha(if (enabled) 1f else 0.4f)
+            .padding(horizontal = BitOSSpacing.xs, vertical = BitOSSpacing.xs)
+            .semantics { contentDescription = label },
+    ) {
+        icon()
+        Text(
+            label,
+            fontSize = space.bitos.core.design.DesignTokens.MIN_TOOL_LABEL_SP.sp,
+            fontWeight = FontWeight.W600,
+            color = if (active) BitOSColors.primary else BitOSColors.textSecondary,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Platform-neutral shortcut token → the Android/desktop key glyph. */
+private fun androidKeyGlyph(token: String): String = when (token) {
+    "mod" -> "Ctrl"
+    "shift" -> "Shift"
+    "alt" -> "Alt"
+    "space" -> "Space"
+    "enter" -> "Enter"
+    "backspace" -> "⌫"
+    "arrowup" -> "↑"
+    "arrowdown" -> "↓"
+    "arrowleft" -> "←"
+    "arrowright" -> "→"
+    else -> token.uppercase()
+}
+
+/**
+ * MSU-063 (touch-first revision): one controls-reference row — the action
+ * on the left, its on-screen affordance (or key glyphs) on the right.
+ */
+@Composable
+private fun ControlRow(label: String, value: String, mono: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = BitOSColors.textPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W600,
+            color = BitOSColors.textSecondary,
+            fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else null,
+        )
+    }
+}
+
+/**
+ * MSU-063 (touch-first revision): true when a hardware keyboard is
+ * attached. The Controls sheet hides its keyboard section otherwise, so a
+ * bare phone never sees keys it cannot press. Re-reads on configuration
+ * change (docking/undocking raises one with a new keyboard type).
+ */
+@Composable
+private fun hardwareKeyboardAttached(): Boolean {
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    // A physical keyboard reports QWERTY (or 12-KEY); phones without one
+    // report NOKEYS/UNDEFINED, so the keyboard section stays hidden there.
+    return configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY ||
+        configuration.keyboard == android.content.res.Configuration.KEYBOARD_12KEY
+}
+
+/** Catalogue icon key → the platform glyph (MU-014 parity table). */
+private fun toolIcon(
+    tool: space.bitos.core.studio.MemeTools.ToolId,
+): androidx.compose.ui.graphics.vector.ImageVector = when (tool) {
+    space.bitos.core.studio.MemeTools.ToolId.MEDIA -> AppIcons.Photo
+    space.bitos.core.studio.MemeTools.ToolId.TEXT -> AppIcons.TextGlyph
+    space.bitos.core.studio.MemeTools.ToolId.STICKER -> AppIcons.StickerEmoji
+    space.bitos.core.studio.MemeTools.ToolId.SOUND -> AppIcons.MusicNote
+    space.bitos.core.studio.MemeTools.ToolId.LOOK -> AppIcons.Looks
+    space.bitos.core.studio.MemeTools.ToolId.CAPTIONS -> AppIcons.Captions
+    space.bitos.core.studio.MemeTools.ToolId.CANVAS -> AppIcons.Ratio
+    space.bitos.core.studio.MemeTools.ToolId.LAYERS -> AppIcons.Layer
+    space.bitos.core.studio.MemeTools.ToolId.DRAW -> AppIcons.Pen
+    space.bitos.core.studio.MemeTools.ToolId.TRIM -> AppIcons.Scissors
+    space.bitos.core.studio.MemeTools.ToolId.SPEED -> AppIcons.Speed
+    space.bitos.core.studio.MemeTools.ToolId.CLIPS -> AppIcons.Video
+    space.bitos.core.studio.MemeTools.ToolId.TIMELINE -> AppIcons.Timeline
+    space.bitos.core.studio.MemeTools.ToolId.VOLUME -> AppIcons.SoundOn
+    space.bitos.core.studio.MemeTools.ToolId.SFX -> AppIcons.MusicNote
+    space.bitos.core.studio.MemeTools.ToolId.GIFS -> AppIcons.Gif
+    space.bitos.core.studio.MemeTools.ToolId.DURATION -> AppIcons.Timer
+    space.bitos.core.studio.MemeTools.ToolId.BATCH -> AppIcons.Sparkles
+    space.bitos.core.studio.MemeTools.ToolId.SHORTCUTS -> AppIcons.Keyboard
+    space.bitos.core.studio.MemeTools.ToolId.EDIT -> AppIcons.Pen
+    space.bitos.core.studio.MemeTools.ToolId.TIME_WINDOW -> AppIcons.Schedule
+    space.bitos.core.studio.MemeTools.ToolId.DUPLICATE -> AppIcons.Copy
+    space.bitos.core.studio.MemeTools.ToolId.FORWARD -> AppIcons.FlipToFront
+    space.bitos.core.studio.MemeTools.ToolId.BACKWARD -> AppIcons.FlipToBack
+    space.bitos.core.studio.MemeTools.ToolId.SPLIT -> AppIcons.CallSplit
+    space.bitos.core.studio.MemeTools.ToolId.MUTE -> AppIcons.Mute
+    space.bitos.core.studio.MemeTools.ToolId.HOLD -> AppIcons.Timer
+    space.bitos.core.studio.MemeTools.ToolId.MOVE_LEFT -> AppIcons.NudgeLeft
+    space.bitos.core.studio.MemeTools.ToolId.MOVE_RIGHT -> AppIcons.NudgeRight
+    space.bitos.core.studio.MemeTools.ToolId.OPEN_TIMELINE -> AppIcons.Timeline
+    space.bitos.core.studio.MemeTools.ToolId.DELETE -> AppIcons.Delete
+}
+
+/**
+ * MSU-010/012: the More overflow — advanced tools for the mode plus the
+ * contextual actions for the current selection. Opened by the More tile;
+ * every row routes through the same `onTool` router as the primary bar.
+ */
+@Composable
+private fun MoreToolsSheetContent(
+    mode: MemeMode,
+    selectionKind: space.bitos.core.studio.MemeTools.SelectionKind,
+    enabled: (space.bitos.core.studio.MemeTools.ToolId) -> Boolean,
+    onTool: (space.bitos.core.studio.MemeTools.ToolId) -> Unit,
+    /** MSU-060: batch-base copy (label + explainer) from the shared seam. */
+    production: StudioProductionCopy = StudioProductionCopy.decode(),
+) {
+    val advanced = space.bitos.core.studio.MemeTools.advancedFor(mode)
+    val selection = space.bitos.core.studio.MemeTools.selectionFor(selectionKind)
+    Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+        if (selection.isNotEmpty()) {
+            Text(
+                "Selected item",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.W700,
+                color = BitOSColors.textSecondary,
+            )
+            selection.forEach { tool ->
+                MoreToolRow(tool, enabled = enabled(tool), onClick = { onTool(tool) })
+            }
+            HorizontalDivider(
+                color = BitOSColors.border,
+                modifier = Modifier.padding(vertical = BitOSSpacing.sm),
+            )
+        }
+        Text(
+            "Tools",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.W700,
+            color = BitOSColors.textSecondary,
+        )
+        advanced.forEach { tool ->
+            MoreToolRow(tool, enabled = enabled(tool), onClick = { onTool(tool) })
+            // MSU-060: the Batch row names what a batch base is before the
+            // creator commits to it (the shipped row was a bare "Make
+            // variations" inside the export sheet).
+            if (tool == space.bitos.core.studio.MemeTools.ToolId.BATCH) {
+                Text(
+                    production.batchBaseExplainer,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BitOSColors.textTertiary,
+                    modifier = Modifier.padding(start = BitOSSpacing.sm, bottom = BitOSSpacing.xs),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreToolRow(
+    tool: space.bitos.core.studio.MemeTools.ToolId,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .alpha(if (enabled) 1f else 0.4f)
+            .padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.sm)
+            .semantics { contentDescription = tool.label },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.md),
+    ) {
+        Icon(
+            toolIcon(tool),
+            contentDescription = null,
+            tint = BitOSColors.textSecondary,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            tool.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = BitOSColors.textPrimary,
+        )
+    }
+}
+
+/** Selection actions row (MSU-012): appears above the tool bar, exactly
+ *  when something is selected, listing only that kind's valid actions. */
+@Composable
+internal fun SelectionActionRow(
+    kind: space.bitos.core.studio.MemeTools.SelectionKind,
+    enabled: (space.bitos.core.studio.MemeTools.ToolId) -> Boolean,
+    onTool: (space.bitos.core.studio.MemeTools.ToolId) -> Unit,
+) {
+    val actions = space.bitos.core.studio.MemeTools.selectionFor(kind)
+    if (actions.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+    ) {
+        actions.forEach { tool ->
+            val destructive = tool == space.bitos.core.studio.MemeTools.ToolId.DELETE
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(BitOSColors.surface)
+                    .border(1.dp, BitOSColors.border, RoundedCornerShape(50))
+                    .clickable(enabled = enabled(tool)) { onTool(tool) }
+                    .alpha(if (enabled(tool)) 1f else 0.4f)
+                    .padding(horizontal = BitOSSpacing.md, vertical = BitOSSpacing.xs)
+                    .semantics { contentDescription = tool.label },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+            ) {
+                Icon(
+                    toolIcon(tool),
+                    contentDescription = null,
+                    tint = if (destructive) BitOSColors.error else BitOSColors.textSecondary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    tool.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (destructive) BitOSColors.error else BitOSColors.textPrimary,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * MSU-031/032: the guiding empty state — shared copy for the mode, the
+ * primary pick action plus the mode's alternatives, and a template rail so
+ * a beginner can start from something instead of a blank screen.
+ */
+@Composable
 private fun EmptyCanvasCta(
+    state: StudioEmptyState,
     onPick: () -> Unit,
     onBlank: (() -> Unit)? = null,
     onBrowseGifs: (() -> Unit)? = null,
+    onTemplate: ((String) -> Unit)? = null,
+    /** MSU-062: "Make N variants" — seeds a batch from a template. Null
+     *  hides the action (no batch plumbing in this host). */
+    onTemplateBatch: ((String) -> Unit)? = null,
+    /** MSU-060..063 copy (template-batch label/explainer). */
+    production: StudioProductionCopy = StudioProductionCopy.decode(),
 ) {
     val borderColor = BitOSColors.border
     Column(
@@ -6073,12 +6849,17 @@ private fun EmptyCanvasCta(
                     modifier = Modifier.size(36.dp),
                 )
                 Spacer(Modifier.height(BitOSSpacing.sm))
-                Text("Pick an image", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    state.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                )
                 Spacer(Modifier.height(BitOSSpacing.xs))
                 Text(
-                    "Up to ${MemeProjectContract.maxAssets(MemeMode.IMAGE)} images",
+                    state.body,
                     style = MaterialTheme.typography.bodySmall,
                     color = BitOSColors.textSecondary,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -6092,7 +6873,7 @@ private fun EmptyCanvasCta(
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(BitOSSpacing.xs))
-            Text("Start blank canvas")
+            Text(state.secondary ?: "Start blank canvas")
         }
     }
     if (onBrowseGifs != null) {
@@ -6104,7 +6885,72 @@ private fun EmptyCanvasCta(
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(BitOSSpacing.xs))
-            Text("Browse GIFs")
+            Text(state.tertiary ?: "Browse GIFs")
+        }
+    }
+    // MSU-032: start from a template — the beginner's shortcut past a
+    // blank canvas (built-in pack; shared kind-30078 rows live on the hub).
+    if (onTemplate != null && !state.primary.isBlank()) {
+        Spacer(Modifier.height(BitOSSpacing.xs))
+        Text(
+            "Or start from a template",
+            style = MaterialTheme.typography.labelMedium,
+            color = BitOSColors.textSecondary,
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            contentPadding = PaddingValues(horizontal = BitOSSpacing.xs),
+        ) {
+            rowItems(space.bitos.core.studio.MemeTemplates.PACK, key = { it.id }) { template ->
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = BitOSColors.surface,
+                    border = BorderStroke(1.dp, BitOSColors.border),
+                    onClick = { onTemplate(template.id) },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Use the ${template.label} template"
+                    },
+                ) {
+                    Column(
+                        Modifier.padding(horizontal = BitOSSpacing.sm, vertical = BitOSSpacing.xs),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(template.emoji, fontSize = 20.sp)
+                        Text(
+                            template.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.W600,
+                            color = BitOSColors.textPrimary,
+                        )
+                    }
+                }
+            }
+        }
+        // MSU-062: template-first batch — one tap turns the first template
+        // into a batch whose variants share the layout, not the caption.
+        if (onTemplateBatch != null) {
+            Spacer(Modifier.height(BitOSSpacing.xs))
+            OutlinedButton(
+                onClick = { onTemplateBatch("") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = production.templateBatchAction(production.templateBatchCount) },
+            ) {
+                Icon(
+                    AppIcons.Sparkles,
+                    contentDescription = null,
+                    tint = BitOSColors.textSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(BitOSSpacing.xs))
+                Text(production.templateBatchAction(production.templateBatchCount))
+            }
+            Text(
+                production.templateBatchExplainer,
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textTertiary,
+                textAlign = TextAlign.Center,
+            )
         }
     }
     }
@@ -6964,6 +7810,11 @@ private fun MemePostFlowScreen(
     ) -> Unit,
     onDismiss: () -> Unit,
     onPublished: () -> Unit,
+    /** MSU-050..052 publish-vs-export copy (explainer, verbs, result card). */
+    copy: StudioPublishCopy = StudioPublishCopy.decode(),
+    /** MSU-052 post-publish result card follow-ons. */
+    onSharePost: () -> Unit = {},
+    onMakeAnother: () -> Unit = {},
     recoverableJobs: List<space.bitos.app.ui.feed.MemePublishJob> = emptyList(),
     onJobRetry: (Int) -> Unit = {},
     onJobDiscard: (Int) -> Unit = {},
@@ -7038,12 +7889,27 @@ private fun MemePostFlowScreen(
             }
             Text(
                 when (step) {
-                    0 -> "Post details"; 1 -> "Preflight"; 2 -> "Publishing"; else -> "Recovery queue"
+                    0 -> "Review"; 1 -> "Preflight"; 2 -> "Publishing"; else -> "Recovery queue"
                 },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.W700,
             )
             Spacer(Modifier.weight(1f))
+        }
+
+        // MSU-051: the review order, stated once so the screen's shape is
+        // predictable (preview → caption → tags → safety → publish).
+        if (step == 0) {
+            Text(
+                copy.reviewSteps.joinToString("  ·  ") { it.second },
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = BitOSColors.textTertiary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = BitOSSpacing.lg)
+                    .padding(bottom = BitOSSpacing.xs),
+            )
         }
 
         Column(
@@ -7517,6 +8383,7 @@ private fun MemePostFlowScreen(
                     timelineSeconds = timelineSeconds,
                     clipCount = clipCount,
                     gifFrameCount = gifFrameCount,
+                    copy = copy,
                     onRetry = {
                         onPublish(
                             caption,
@@ -7534,6 +8401,8 @@ private fun MemePostFlowScreen(
                     },
                     onLater = onDismiss,
                     onPublished = onPublished,
+                    onSharePost = onSharePost,
+                    onMakeAnother = onMakeAnother,
                 )
                 Spacer(Modifier.height(BitOSSpacing.lg))
             } else {
@@ -7710,6 +8579,10 @@ private fun PublishMachineSection(
     onLater: () -> Unit,
     onPublished: () -> Unit,
     onOpenQueue: () -> Unit = {},
+    /** MSU-052 post-publish result card. */
+    copy: StudioPublishCopy = StudioPublishCopy.decode(),
+    onSharePost: () -> Unit = {},
+    onMakeAnother: () -> Unit = {},
 ) {
     val order = listOf(
         space.bitos.app.ui.feed.MemePublishStage.RENDER,
@@ -8042,6 +8915,9 @@ private fun PublishMachineSection(
         }
 
         if (succeeded) {
+            // MSU-052: a result card with follow-on actions instead of a
+            // bare "Done" — the creator can view the post, share it, or
+            // start another without hunting for the exit.
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -8053,7 +8929,7 @@ private fun PublishMachineSection(
                 Icon(AppIcons.CheckCircle, contentDescription = null, tint = BitOSColors.success, modifier = Modifier.size(13.dp).align(Alignment.Top))
                 val idLabel = state.eventId?.takeIf { it.length >= 12 }?.let { "event ${it.take(8)}…${it.takeLast(4)} " } ?: ""
                 Text(
-                    "Published — $idLabel${"confirmed on ${state.confirmedRelayHosts.size} relay"}" +
+                    "${copy.posted} — $idLabel${"confirmed on ${state.confirmedRelayHosts.size} relay"}" +
                         if (state.confirmedRelayHosts.size == 1) "." else "s.",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.W600,
@@ -8061,15 +8937,24 @@ private fun PublishMachineSection(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
-                OutlinedButton(onClick = onOpenQueue, modifier = Modifier.weight(1f)) {
-                    Text("Recovery queue")
-                }
                 Button(
                     onClick = onPublished,
                     colors = ButtonDefaults.buttonColors(containerColor = BitOSColors.primary, contentColor = androidx.compose.ui.graphics.Color.White),
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("View on Bitz", fontWeight = FontWeight.W600)
+                    Text(copy.view, fontWeight = FontWeight.W600)
+                }
+                OutlinedButton(
+                    onClick = onSharePost,
+                    modifier = Modifier.weight(1f),
+                ) { Text(copy.share) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+                OutlinedButton(onClick = onOpenQueue, modifier = Modifier.weight(1f)) {
+                    Text("Recovery queue")
+                }
+                OutlinedButton(onClick = onMakeAnother, modifier = Modifier.weight(1f)) {
+                    Text(copy.makeAnother)
                 }
             }
         }
@@ -9105,31 +9990,33 @@ private val SuiteOverlayColors = listOf(
 )
 
 /**
- * The expert dock (mockup `scr-suite`, M5 multi-track): LAYERED tracks —
- * one lane per timeline clip (`vdo 1`, `vdo 2`, … staggered by their
- * cumulative offsets), one lane per IMAGE layer (`image 1…`) positioned by
- * its visibility window, plus overlays · audio · sfx lanes — with a
- * scrubbable playhead over the whole stack, the contextual tool chips and
- * the undo/redo · Preview · Export action rows. Real data only.
+ * The **timeline workspace** (MSU-020..023; mockup `scr-suite`, M5
+ * multi-track): layered tracks — one lane per timeline clip (`vdo 1`…),
+ * one per IMAGE layer, plus overlays · audio · sfx — a scrubbable ruler
+ * with zoom, and a lane-select row. Real data only.
+ *
+ * This is a deliberate, labelled workspace, NOT a second editor: an
+ * explicit "Back to editor" header (MSU-020), only true timeline tools
+ * (MSU-022 — no Clips/Draw/Layers/Looks duplicates), and EVERY lane is
+ * tappable (MSU-021 — a read-only lane silently swallowing taps was a
+ * shipped defect; the seek catch-all also used to sit on top of the lanes
+ * and eat their taps, which is fixed here by scoping seek to the ruler).
  */
 @Composable
-private fun SuiteDock(
+private fun TimelineWorkspace(
     project: MemeProject,
     clips: List<SessionClip>,
     rate: Float,
     selectedClipIndex: Int,
     onSelectClip: (Int) -> Unit,
+    onSelectLayer: (String) -> Unit,
+    onSelectCue: (String) -> Unit,
+    /** Currently selected overlay id (highlights its lane segment). */
+    selectedOverlayId: String?,
     positionMs: Long,
     transport: VideoTransport,
-    canUndo: Boolean,
-    canRedo: Boolean,
-    onUndo: () -> Unit,
-    onRedo: () -> Unit,
-    onOpenLayers: () -> Unit,
-    looksEnabled: Boolean,
-    onOpenLooks: () -> Unit,
+    onOpenLayerInsert: () -> Unit,
     onOpenSfx: () -> Unit,
-    onOpenDraw: () -> Unit,
     onOpenTrim: () -> Unit,
     onOpenClip: () -> Unit,
     onOpenVolume: () -> Unit,
@@ -9157,6 +10044,10 @@ private fun SuiteDock(
             kotlinx.coroutines.delay(200)
         }
     }
+    // MSU-023: ruler zoom (1 = fit). 1× shows 1 s ticks; deeper zoom
+    // reveals the sub-second grid. Session-local, never persisted.
+    var zoom by remember { mutableStateOf(1f) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -9164,21 +10055,103 @@ private fun SuiteDock(
             .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        // ── Layered tracks + playhead (tap anywhere to seek) ────────────
+        // ── Workspace header (MSU-020): an explicit way back, a clear
+        // title, and the ruler zoom + a hardware-keyboard seek target. ───
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
+            TextButton(onClick = onClose, modifier = Modifier.semantics { contentDescription = "Back to editor" }) {
+                Icon(AppIcons.Back, contentDescription = null, tint = BitOSColors.textPrimary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Back to editor", fontWeight = FontWeight.W600, maxLines = 1)
+            }
+            Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = { zoom = (zoom - 1f).coerceAtLeast(1f) },
+                enabled = zoom > 1f,
+                modifier = Modifier.semantics { contentDescription = "Zoom out timeline" },
+            ) { Text("−", style = MaterialTheme.typography.titleMedium) }
+            Text(
+                if (zoom <= 1f) "fit" else "${zoom.toInt()}×",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = BitOSColors.textTertiary,
+            )
+            IconButton(
+                onClick = { zoom = (zoom + 1f).coerceAtMost(6f) },
+                enabled = zoom < 6f,
+                modifier = Modifier.semantics { contentDescription = "Zoom in timeline" },
+            ) { Text("+", style = MaterialTheme.typography.titleMedium) }
+        }
+        // ── Layered tracks + playhead ───────────────────────────────────
         androidx.compose.foundation.layout.BoxWithConstraints {
             // THE ruler is the lane box, which starts after the 52dp label
             // column (+ its spacer). Measuring fractions against the full
             // dock width made segments/playhead/ticks drift off the lanes'
             // true zero point — the timeline now starts where the lanes do.
             val laneStart = 52.dp + BitOSSpacing.sm
-            val trackWidth = maxWidth - laneStart
+            val trackWidth = (maxWidth - laneStart) * zoom
             val density = LocalDensity.current
             val laneStartPx = with(density) { laneStart.toPx() }
             val trackWidthPx = with(density) { trackWidth.toPx() }
             val laneCount = clipRows.size + imageLayers.size + 3
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            // MSU-023: hardware-keyboard scrubbing (desktop-class /
+            // external keyboards) — ←/→ nudge 1 s, ↑/↓ nudge 5 s, space
+            // toggles play. Focusable so it only fires while the workspace
+            // owns the keyboard.
+            val seekBy: (Long) -> Unit = { delta ->
+                transport.seekTo((positionMs + delta).coerceIn(0L, durationMs))
+            }
+            fun handleKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+                if (event.type != KeyEventType.KeyDown) return false
+                return when (event.key) {
+                    Key.DirectionLeft -> { seekBy(-1000L); true }
+                    Key.DirectionRight -> { seekBy(1000L); true }
+                    Key.DirectionUp -> { seekBy(-5000L); true }
+                    Key.DirectionDown -> { seekBy(5000L); true }
+                    Key.Spacebar -> { transport.playPause(); true }
+                    else -> false
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusable()
+                    .onKeyEvent { handleKey(it) },
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                // Ruler: tick marks over the playhead span. The tick row is
+                // the SEEK surface — the lanes below stay tappable (MSU-021).
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = laneStart)
+                        .height(14.dp)
+                        .pointerInput(durationMs, trackWidthPx, zoom) {
+                            // The ruler box is already padded by laneStart, so
+                            // offset.x is measured from the timeline zero.
+                            detectTapGestures { offset ->
+                                val fraction = (offset.x / trackWidthPx).coerceIn(0f, 1f)
+                                transport.seekTo((fraction * durationMs).toLong())
+                            }
+                        },
+                ) {
+                    val tickCount = (durationMs / 1000L).toInt().coerceAtLeast(1)
+                    repeat(tickCount + 1) { second ->
+                        val x = trackWidth * (second.toFloat() / (durationMs / 1000f).coerceAtLeast(1f))
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = x.coerceAtMost(trackWidth))
+                                .width(if (second % 5 == 0) 1.5.dp else 1.dp)
+                                .height(if (second % 5 == 0) 12.dp else 7.dp)
+                                .background(BitOSColors.border),
+                        )
+                    }
+                }
                 // Video clips — each on its own lane, staggered by its
-                // timeline offset (the mockup scr-suite "tracks" stack).
+                // timeline offset. Tappable: selects the clip (MSU-021).
                 clipRows.forEachIndexed { index, (clip, offsetMs) ->
                     val left = (offsetMs.toFloat() / durationMs).coerceIn(0f, 1f)
                     val width = (outMs(clip).toFloat() / durationMs).coerceIn(0f, 1f - left)
@@ -9211,12 +10184,17 @@ private fun SuiteDock(
                     }
                 }
                 // IMAGE layers — one lane each, segment = visibility window.
+                // Tappable: selects the layer (MSU-021).
                 imageLayers.forEachIndexed { index, layer ->
                     val start = layer.startMs ?: 0L
                     val end = layer.endMs?.takeIf { it > 0 } ?: durationMs
                     val left = (start.toFloat() / durationMs).coerceIn(0f, 1f)
                     val width = ((end - start).toFloat() / durationMs).coerceIn(0f, 1f - left)
-                    TrackLane("image ${index + 1}") {
+                    TrackLane(
+                        "image ${index + 1}",
+                        onClick = { onSelectLayer(layer.id) },
+                        highlight = layer.id == selectedOverlayId,
+                    ) {
                         Box(
                             Modifier
                                 .align(Alignment.CenterStart)
@@ -9227,6 +10205,7 @@ private fun SuiteDock(
                         )
                     }
                 }
+                // Overlays lane — tappable per segment.
                 TrackLane("overlays") {
                     project.overlays.forEachIndexed { index, overlay ->
                         val start = overlay.startMs ?: 0L
@@ -9239,10 +10218,14 @@ private fun SuiteDock(
                                 .fillMaxHeight()
                                 .padding(start = trackWidth * left)
                                 .fillMaxWidth(width)
+                                .clip(RoundedCornerShape(4.dp))
                                 .background(
                                     SuiteOverlayColors[index % SuiteOverlayColors.size],
                                     RoundedCornerShape(4.dp),
-                                ),
+                                )
+                                .clickable(onClickLabel = "Select ${overlay.kind.name.lowercase()} overlay") {
+                                    onSelectLayer(overlay.id)
+                                },
                         )
                     }
                 }
@@ -9264,14 +10247,17 @@ private fun SuiteDock(
                         }
                     }
                 }
+                // SFX lane — each cue is a tappable marker (MSU-021).
                 TrackLane("sfx") {
                     project.sfxCues.forEach { cue ->
                         Box(
                             Modifier
                                 .align(Alignment.CenterStart)
                                 .padding(start = trackWidth * (cue.atMs.toFloat() / durationMs))
-                                .size(width = 3.dp, height = 14.dp)
-                                .background(Color(0xFFFFB000), RoundedCornerShape(2.dp)),
+                                .size(width = 10.dp, height = 18.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color(0xFFFFB000), RoundedCornerShape(2.dp))
+                                .clickable(onClickLabel = "Select cue") { onSelectCue(cue.id) },
                         )
                     }
                 }
@@ -9283,24 +10269,11 @@ private fun SuiteDock(
                     .align(Alignment.TopStart)
                     .padding(start = laneStart + trackWidth * (positionMs.toFloat() / durationMs))
                     .width(2.dp)
-                    .height(((laneCount * 20) + ((laneCount - 1) * 3)).dp)
+                    .height(((laneCount * 20) + ((laneCount - 1) * 3) + 17).dp)
                     .background(BitOSColors.primary, RoundedCornerShape(1.dp)),
             )
-            // Tap-to-seek anywhere on the lanes (same ruler: x is measured
-            // from the lane start, not the dock edge).
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .pointerInput(durationMs, trackWidthPx, laneStartPx) {
-                        detectTapGestures { offset ->
-                            val fraction = ((offset.x - laneStartPx) / trackWidthPx).coerceIn(0f, 1f)
-                            transport.seekTo((fraction * durationMs).toLong())
-                        }
-                    },
-            )
         }
-        // ── Time readout (mono, like the mockup footer) — 00:00 aligns
-        // with the lanes' zero point, 00:end with the lane's right edge.
+        // ── Time readout + zoomable ruler scroll (mono, mockup footer) ───
         Row(
             Modifier
                 .fillMaxWidth()
@@ -9321,53 +10294,28 @@ private fun SuiteDock(
             )
             Text(suiteClock(durationMs), style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = BitOSColors.textTertiary)
         }
-        // ── Contextual tool chips (mockup: Draw/Layers/Looks/Trim/SFX/…) ─
+        // ── Timeline tools ONLY (MSU-022): no Clips/Draw/Layers/Looks —
+        // those live in the tool bar / More sheet now. ──────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
         ) {
-            SuiteToolChip(label = "Clips", icon = AppIcons.AppsGrid, enabled = true, onClick = onOpenClip)
-            SuiteToolChip(label = "Draw", icon = AppIcons.Pen, enabled = true, onClick = onOpenDraw)
-            SuiteToolChip(label = "Layers", icon = AppIcons.AppsGrid, enabled = true, onClick = onOpenLayers)
-            SuiteToolChip(label = "Looks", solarIcon = space.bitos.app.ui.theme.SolarStudioIcon.Palette, enabled = looksEnabled, onClick = onOpenLooks)
             SuiteToolChip(label = "Trim", icon = AppIcons.Scissors, enabled = true, onClick = onOpenTrim)
-            SuiteToolChip(label = "Split", icon = AppIcons.Scissors, enabled = true, onClick = onSplit)
-            SuiteToolChip(label = "SFX ≤${space.bitos.core.studio.SfxSynth.MAX_CUES}", solarIcon = space.bitos.app.ui.theme.SolarStudioIcon.Soundwave, enabled = true, onClick = onOpenSfx)
-            SuiteToolChip(label = "Volume", icon = AppIcons.MusicNote, enabled = true, onClick = onOpenVolume)
+            SuiteToolChip(label = "Split", icon = AppIcons.CallSplit, enabled = true, onClick = onSplit)
             SuiteToolChip(label = "Speed", icon = AppIcons.Speed, enabled = true, onClick = onOpenSpeed)
-        }
-        // ── Action rows: undo/redo + autosave on one line, the primary
-        // Preview/Export actions on their own — a single squeezed row made
-        // "autosave on" stack one letter per line on narrow screens. ──────
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
-        ) {
-            IconButton(onClick = onUndo, enabled = canUndo, modifier = Modifier.semantics { contentDescription = "Undo" }) {
-                space.bitos.app.ui.theme.SolarStudioIconImage(
-                    space.bitos.app.ui.theme.SolarStudioIcon.UndoLeft,
-                    contentDescription = null,
-                    tint = if (canUndo) BitOSColors.textPrimary else BitOSColors.textTertiary,
-                )
-            }
-            IconButton(onClick = onRedo, enabled = canRedo, modifier = Modifier.semantics { contentDescription = "Redo" }) {
-                Icon(AppIcons.Redo, contentDescription = null, tint = if (canRedo) BitOSColors.textPrimary else BitOSColors.textTertiary)
-            }
-            Text(
-                "autosave on",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = BitOSColors.textTertiary,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+            SuiteToolChip(label = "Volume", icon = AppIcons.SoundOn, enabled = true, onClick = onOpenVolume)
+            SuiteToolChip(label = "Clips", icon = AppIcons.Video, enabled = true, onClick = onOpenClip)
+            SuiteToolChip(label = "Add", icon = AppIcons.Add, enabled = true, onClick = onOpenLayerInsert)
+            SuiteToolChip(
+                label = "SFX ≤${space.bitos.core.studio.SfxSynth.MAX_CUES}",
+                solarIcon = space.bitos.app.ui.theme.SolarStudioIcon.Soundwave,
+                enabled = true,
+                onClick = onOpenSfx,
             )
-            IconButton(onClick = onClose, modifier = Modifier.semantics { contentDescription = "Close suite" }) {
-                Icon(AppIcons.Close, contentDescription = null, tint = BitOSColors.textSecondary)
-            }
         }
+        // ── Primary actions ─────────────────────────────────────────────
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
@@ -9402,11 +10350,200 @@ private fun SuiteDock(
 }
 
 /**
+ * MSU-030: the first-run coach. A dimmed scrim with one step at a time
+ * (shared copy), a Next/Finish button and a permanent Skip. Dismissing any
+ * way marks it seen — the tour is never shown twice.
+ */
+@Composable
+private fun StudioCoachOverlay(
+    plan: StudioCoachPlan,
+    stepIndex: Int,
+    onNext: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val step = plan.steps.getOrNull(stepIndex.coerceIn(0, plan.steps.lastIndex)) ?: return
+    val last = stepIndex >= plan.steps.lastIndex
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xD9000000))
+            .clickable(enabled = false) {}
+            .navigationBarsPadding(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = BitOSSpacing.screen),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(BitOSSpacing.base),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = BitOSColors.surfaceElevated,
+                border = BorderStroke(1.dp, BitOSColors.border),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    Modifier.padding(BitOSSpacing.lg),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+                ) {
+                    Icon(
+                        toolIcon(
+                            when (step.anchor) {
+                                "stage" -> space.bitos.core.studio.MemeTools.ToolId.DRAW
+                                "tools" -> space.bitos.core.studio.MemeTools.ToolId.LOOK
+                                else -> space.bitos.core.studio.MemeTools.ToolId.DELETE
+                            },
+                        ),
+                        contentDescription = null,
+                        tint = BitOSColors.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Text(
+                        step.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.W700,
+                        color = BitOSColors.textPrimary,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        step.body,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BitOSColors.textSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onSkip,
+                    modifier = Modifier.semantics { contentDescription = plan.skipLabel },
+                ) {
+                    Text(plan.skipLabel, color = BitOSColors.textSecondary)
+                }
+                Text(
+                    "${stepIndex + 1}/${plan.steps.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = BitOSColors.textTertiary,
+                )
+                Button(
+                    onClick = onNext,
+                    modifier = Modifier.semantics {
+                        contentDescription = if (last) plan.doneLabel else "Next"
+                    },
+                ) {
+                    Text(if (last) plan.doneLabel else "Next", fontWeight = FontWeight.W600)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * MSU-040: the notice bar — one line, severity-colored, with an optional
+ * action button (Undo / Retry) and a thin auto-dismiss progress line for
+ * transient notices. Errors show no progress line (they persist).
+ */
+@Composable
+private fun EditorNoticeBar(
+    notice: space.bitos.core.studio.EditorNotices.Notice,
+    remaining: Float,
+    onAction: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val accent = when (notice.severity) {
+        space.bitos.core.studio.EditorNotices.Severity.ERROR -> BitOSColors.error
+        space.bitos.core.studio.EditorNotices.Severity.SUCCESS -> BitOSColors.success
+        else -> BitOSColors.primary
+    }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = BitOSColors.surfaceOverlay,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.5f)),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .fillMaxWidth(0.94f)
+            .semantics { contentDescription = notice.message },
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.padding(
+                    start = BitOSSpacing.base,
+                    end = BitOSSpacing.sm,
+                    top = BitOSSpacing.sm,
+                    bottom = BitOSSpacing.sm,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+            ) {
+                Text(
+                    notice.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BitOSColors.textPrimary,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                notice.action?.let { action ->
+                    TextButton(
+                        onClick = { onAction(action.id) },
+                        modifier = Modifier.semantics { contentDescription = action.label },
+                    ) {
+                        Text(action.label, color = accent, fontWeight = FontWeight.W700)
+                    }
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics { contentDescription = "Dismiss" },
+                ) {
+                    Icon(
+                        AppIcons.Close,
+                        contentDescription = null,
+                        tint = BitOSColors.textTertiary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            // A transient notice drains a thin bar; an error keeps none.
+            if (notice.timeoutMs > 0) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { remaining.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = accent,
+                    trackColor = BitOSColors.border,
+                    drawStopIndicator = {},
+                )
+            }
+        }
+    }
+}
+
+/**
  * Clip-import progress (M5 UX): spinner + "clip X of Y" + a determinate
  * bar — probing/staging sources is real work the user should see.
  */
 @Composable
-private fun ClipImportOverlay(done: Int, total: Int) {
+private fun ClipImportOverlay(
+    done: Int,
+    total: Int,
+    surface: StudioProgressSurface = StudioProgressSurface(
+        id = "import-clips",
+        title = "Preparing clips…",
+        body = "Probing and staging your source clips.",
+        determinate = true,
+    ),
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -9425,22 +10562,31 @@ private fun ClipImportOverlay(done: Int, total: Int) {
                 color = BitOSColors.primary,
             )
             Text(
-                "Preparing clips…",
+                surface.title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.W600,
                 color = Color.White,
             )
-            androidx.compose.material3.LinearProgressIndicator(
-                progress = { if (total > 0) done.toFloat() / total else 0f },
-                modifier = Modifier.fillMaxWidth(),
-                color = BitOSColors.primary,
-                trackColor = Color(0x33FFFFFF),
-            )
-            Text(
-                "$done of $total",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color(0xB3FFFFFF),
-            )
+            if (surface.determinate) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { if (total > 0) done.toFloat() / total else 0f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = BitOSColors.primary,
+                    trackColor = Color(0x33FFFFFF),
+                )
+                Text(
+                    "$done of $total",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xB3FFFFFF),
+                )
+            } else if (surface.body.isNotBlank()) {
+                Text(
+                    surface.body,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xB3FFFFFF),
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
@@ -9456,6 +10602,13 @@ private fun ExportFullScreen(
     status: String?,
     outcome: ExportOutcome? = null,
     onDone: () -> Unit,
+    /** MSU-042: the render surface's shared title/body. */
+    surface: StudioProgressSurface = StudioProgressSurface(
+        id = "export-render",
+        title = "Rendering your meme…",
+        body = "This can take a moment for long clips — keep the screen open.",
+        determinate = false,
+    ),
 ) {
     val succeeded = outcome?.let { it is ExportOutcome.Success || it is ExportOutcome.SuccessAdjusted }
         ?: (status?.startsWith("Saved") == true)
@@ -9490,12 +10643,12 @@ private fun ExportFullScreen(
                     color = BitOSColors.primary,
                 )
                 Text(
-                    "Rendering your meme…",
+                    surface.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.W600,
                 )
                 Text(
-                    "This can take a moment for long clips — keep the screen open.",
+                    surface.body,
                     style = MaterialTheme.typography.bodySmall,
                     color = BitOSColors.textSecondary,
                     textAlign = TextAlign.Center,

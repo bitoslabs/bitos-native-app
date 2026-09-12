@@ -65,6 +65,138 @@ final class BusinessCoreClientTests: XCTestCase {
         XCTAssertEqual(8, packs.first?.stickers.count)
     }
 
+    /// MSU-001..003 shell contract through the client: the editor bars,
+    /// notice host and Back resolution render from these seams, so both
+    /// platforms share one tool vocabulary and one back rule. Mirrors the
+    /// common `memeToolCatalogSeam*` / `memeEditor*Seam*` battery.
+    func testMemeShellContractSeams() {
+        let client = FrameworkBusinessCoreClient()
+
+        // Tool catalogue: the primary cap travels with it, tokens are stable
+        // and lowercase, and every mode bucket exists.
+        let catalog = client.memeToolCatalog()
+        XCTAssertTrue(catalog.contains(#""maxPrimary":5"#), catalog)
+        XCTAssertTrue(catalog.contains(#""id":"media""#), catalog)
+        XCTAssertTrue(catalog.contains(#""id":"time_window""#), catalog)
+        for mode in ["image", "gif", "video"] {
+            XCTAssertTrue(catalog.contains(#""\#(mode)""#), catalog)
+        }
+        // The shipped duplicate tool labels must not reappear.
+        for legacy in ["Filter", "Adjust", "Effects"] {
+            XCTAssertFalse(catalog.contains(#""label":"\#(legacy)""#), catalog)
+        }
+
+        // Notice defaults: errors are persistent, others auto-dismiss; an
+        // unknown severity resolves to INFO (never throws).
+        let info = client.memeEditorNoticeDefault(severity: "info")
+        XCTAssertTrue(info.contains(#""timeoutMs":2400"#), info)
+        XCTAssertTrue(info.contains(#""persistent":false"#), info)
+        let error = client.memeEditorNoticeDefault(severity: "error")
+        XCTAssertTrue(error.contains(#""timeoutMs":0"#), error)
+        XCTAssertTrue(error.contains(#""persistent":true"#), error)
+        XCTAssertEqual(info, client.memeEditorNoticeDefault(severity: "nonsense"))
+
+        // Back contract: nothing open → exit; a sheet closes first.
+        let none = client.memeEditorSurfaceBack(surface: "none")
+        XCTAssertTrue(none.contains(#""exits":true"#), none)
+        let look = client.memeEditorSurfaceBack(surface: "sheet:look")
+        XCTAssertTrue(look.contains(#""exits":false"#), look)
+        XCTAssertTrue(look.contains(#""next":"none""#), look)
+        XCTAssertTrue(client.memeEditorSurfaceBack(surface: "compose:o1").contains(#""next":"none""#))
+        XCTAssertTrue(client.memeEditorSurfaceBack(surface: "timeline").contains(#""exits":false"#))
+        // A malformed token degrades to "none" (lenient, never throws).
+        XCTAssertEqual(none, client.memeEditorSurfaceBack(surface: "garbage"))
+    }
+
+    /// MSU-040 notice host through the client: post/tick/dismiss, with
+    /// duplicates swallowed and errors persistent.
+    func testMemeNoticeHostSeams() {
+        let client = FrameworkBusinessCoreClient()
+        let posted = client.memeNoticePost(
+            stateJson: "", severity: "info", message: "Layer added",
+            actionId: nil, actionLabel: nil, timeoutMs: -1
+        )
+        XCTAssertTrue(posted.contains(#""visible":true"#), posted)
+        XCTAssertTrue(posted.contains(#""message":"Layer added""#), posted)
+        // An identical re-post does not restart the clock.
+        let again = client.memeNoticePost(
+            stateJson: posted, severity: "info", message: "Layer added",
+            actionId: nil, actionLabel: nil, timeoutMs: -1
+        )
+        XCTAssertTrue(again.contains(#""elapsedMs":0"#), again)
+        // Past the INFO window → dismissed.
+        XCTAssertTrue(client.memeNoticeTick(stateJson: posted, deltaMs: 3000).contains(#""visible":false"#))
+        // An error is persistent.
+        let error = client.memeNoticePost(
+            stateJson: "", severity: "error", message: "Save failed",
+            actionId: nil, actionLabel: nil, timeoutMs: -1
+        )
+        XCTAssertTrue(client.memeNoticeTick(stateJson: error, deltaMs: 10_000_000).contains(#""visible":true"#))
+        // The Undo action token rides along.
+        let undoable = client.memeNoticePost(
+            stateJson: "", severity: "info", message: "Overlay removed",
+            actionId: "undo", actionLabel: "Undo", timeoutMs: -1
+        )
+        XCTAssertTrue(undoable.contains(#""id":"undo""#), undoable)
+        XCTAssertTrue(client.memeNoticeDismiss(stateJson: undoable).contains(#""visible":false"#))
+        // Junk state degrades to empty (never throws).
+        XCTAssertTrue(client.memeNoticeTick(stateJson: "junk", deltaMs: 10).contains(#""visible":false"#))
+    }
+
+    /// MSU-050..052: the publish-vs-export copy seam decodes the shared
+    /// contract (explainer, verbs, review order, result-card labels).
+    func testMemePublishCopySeam() {
+        let client = FrameworkBusinessCoreClient()
+        let json = client.memePublishCopy()
+        XCTAssertTrue(json.contains(#""primaryAction":"Next""#), json)
+        XCTAssertTrue(json.contains(#""exportAction":"Save a copy""#), json)
+        XCTAssertTrue(json.contains(#""posted":"Posted""#), json)
+        XCTAssertTrue(json.contains(#""makeAnother":"Make another""#), json)
+        XCTAssertTrue(json.contains(#""id":"preview""#), json)
+        let decoded = StudioPublishCopy.decode()
+        XCTAssertEqual(decoded.reviewSteps.map(\.id), ["preview", "caption", "tags", "safety", "publish"])
+        XCTAssertEqual(decoded.primaryAction, "Next")
+    }
+
+    /// MSU-060..063: the mass-production + operator copy seam decodes the
+    /// shared contract (batch base, strip, template batch, shortcuts).
+    func testMemeProductionCopySeam() {
+        let client = FrameworkBusinessCoreClient()
+        let json = client.memeProductionCopy()
+        XCTAssertTrue(json.contains(#""batchBaseAction":"Use as batch base""#), json)
+        XCTAssertTrue(json.contains(#""shortcutsTitle":"Keyboard shortcuts""#), json)
+        XCTAssertTrue(json.contains(#""id":"undo""#), json)
+        let decoded = StudioProductionCopy.decode()
+        XCTAssertEqual(decoded.batchBaseAction, "Use as batch base")
+        XCTAssertEqual(decoded.batchStrip(rendered: 3, total: 8), "3 of 8 rendered · View queue")
+        XCTAssertNil(decoded.batchStrip(rendered: 0, total: 0))
+        XCTAssertEqual(decoded.batchStrip(rendered: 9, total: 8), "8 of 8 rendered · View queue")
+        XCTAssertEqual(decoded.templateBatchAction(count: 3), "Make 3 variants")
+        XCTAssertEqual(decoded.templateBatchAction(count: 1), "Make 1 variant")
+        // Touch-first: every control names an on-screen affordance.
+        XCTAssertTrue(decoded.controls.contains { $0.id == "publish" && $0.touch == "Header Next" })
+        XCTAssertTrue(decoded.controls.allSatisfy { !$0.touch.isEmpty })
+        XCTAssertEqual(decoded.keyboardRows.count, 9)
+    }
+
+    /// MSU-042..043: the feedback-closure seam decodes the busy surfaces
+    /// and the confirm-vs-undo classification.
+    func testMemeFeedbackCopySeam() {
+        let client = FrameworkBusinessCoreClient()
+        let json = client.memeFeedbackCopy()
+        XCTAssertTrue(json.contains(#""id":"export-render""#), json)
+        XCTAssertTrue(json.contains(#""determinate":false"#), json)
+        XCTAssertTrue(json.contains(#""id":"mode-switch""#), json)
+        XCTAssertTrue(json.contains(#""mode":"undo""#), json)
+        let decoded = StudioFeedbackCopy.decode()
+        XCTAssertEqual(decoded.surfaceFor("import-clips").title, "Preparing clips…")
+        XCTAssertFalse(decoded.surfaceFor("export-render").determinate)
+        XCTAssertTrue(decoded.requiresDialog("mode-switch"))
+        XCTAssertFalse(decoded.requiresDialog("delete-overlay"))
+        XCTAssertNil(decoded.fraction(decoded.surfaceFor("export-render"), done: 1, total: 2))
+        XCTAssertEqual(decoded.fraction(decoded.surfaceFor("import-clips"), done: 1, total: 2), 0.5)
+    }
+
     /// MST-019: the `com.bitos.bitz.meme` v1 interop wire through the
     /// client — normalize re-stamps and keeps passthrough, wire → local
     /// lands fraction sizes in px, local → wire re-exports the web shape.
