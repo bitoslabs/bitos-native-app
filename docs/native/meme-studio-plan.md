@@ -7,7 +7,11 @@ polish (M4). Follow-on waves: **M5 multi-clip timeline / take-native
 camera handoff / picker layer expansion — see
 `meme-studio-multiclip-plan.md` (MST-050..063)** · **blank canvases for
 all modes + kinetic GIF + video→GIF export — see
-`meme-blank-canvas-crossmode-plan.md` (MST-070..087).**
+`meme-blank-canvas-crossmode-plan.md` (MST-070..087).** · **shell
+redesign for beginner usability + mass production — see
+`meme-studio-ux-redesign-plan.md` (MSU-000..071; shared tool catalogue,
+one tool bar per mode, contextual selection tier, promoted timeline
+workspace, notice system).**
 
 This plan turns §3.19 into a concrete, phased build. It follows the repo
 architecture: deterministic rules and schemas in `shared/business-core`
@@ -99,6 +103,17 @@ taps stop reading as broken. Cross-screen handoff uses a one-shot payload
 router, never via globals.
 
 ### 2.2 Editor screen (shared layout contract)
+
+> **Shell redesign (live).** The shipped shell diverged from this V1 layout;
+> `meme-studio-ux-redesign-plan.md` (MSU-000..071) restructures it — one tool
+> bar per mode rendered from the shared `MemeTools` catalogue, a contextual
+> selection tier, the timeline promoted to a labelled workspace, a typed
+> notice host, publish-vs-export clarity and an in-editor batch entry. The
+> placement/a11y floors and the built-in copy live in the shared
+> `studio/` contracts (`MemeTools` · `EditorSurfaces` · `EditorNotices` ·
+> `StudioOnboarding` · `StudioProduction`), rendered natively on both
+> platforms — see `docs/DESIGN_SYSTEM.md` §0. Read §2.2 as the V1 target the
+> redesign supersedes where it disagrees.
 
 ```
 ┌──────────────────────────────────────┐

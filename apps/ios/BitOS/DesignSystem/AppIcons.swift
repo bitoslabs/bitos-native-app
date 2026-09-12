@@ -186,4 +186,55 @@ enum AppIcons {
     // Solar Linear has no 3×3 grid glyph; native square.grid.3x3 by the
     // icon-system.md platform-convention rule.
     static let gridGuides = "square.grid.3x3"
+
+    // ── Editor shell (MSU-014): one glyph per tool, no collisions ─────
+    static let captions = "captions.bubble"           // classic top/bottom captions
+    static let timeline = "timeline.selection"        // timeline workspace entry
+    static let frameTray = "rectangle.stack"          // GIF frame tray
+    static let gifLibrary = "photo.stack"             // GIF library browse
+    static let durationTimer = "timer"                // duration / frame hold
+    static let keyboardKeys = "keyboard"              // shortcuts reference
+    static let split = "scissors.badge.ellipsis"      // split clip at playhead
+    static let schedule = "clock.arrow.circlepath"    // overlay timing window
+    static let moreIcon = "ellipsis"                  // More overflow
+
+    /// Catalogue icon key → the platform glyph (MSU-014 parity table).
+    /// Keys come from `MemeTools.ToolId.iconKey` via the bridge.
+    static func symbol(forCatalogIcon key: String) -> String {
+        switch key {
+        case "media": return photo
+        case "text": return textStyle
+        case "sticker": return sticker
+        case "sound": return sfx
+        case "look": return looks
+        case "captions": return captions
+        case "canvas": return "rectangle.on.rectangle"
+        case "layers": return "square.3.layers.3d"
+        case "draw": return pen
+        case "trim": return "scissors"
+        case "speed": return durationTimer
+        case "clips": return video
+        case "timeline": return timeline
+        case "volume": return "speaker.wave.2"
+        case "sfx": return sfx
+        case "frames": return frameTray
+        case "gifs": return gifLibrary
+        case "duration": return durationTimer
+        case "batch": return remix
+        case "shortcuts": return keyboardKeys
+        case "edit": return pen
+        case "time": return schedule
+        case "duplicate": return "square.on.square"
+        case "forward": return "square.2.layers.3d.top.filled"
+        case "backward": return "square.2.layers.3d.bottom.filled"
+        case "split": return split
+        case "mute": return "speaker.slash"
+        case "hold": return durationTimer
+        case "move-left": return "chevron.left"
+        case "move-right": return "chevron.right"
+        case "delete": return "trash"
+        case "more": return moreIcon
+        default: return "circle"
+        }
+    }
 }

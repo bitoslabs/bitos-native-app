@@ -168,6 +168,19 @@ struct CreateView: View {
                     let flow = MassBatchFlow()
                     massFlow = flow
                     flow.createFromDesign(projectJson: projectJson, posterPng: posterPng)
+                },
+                // MSU-061: the in-editor strip while a batch references the
+                // editor's work.
+                batchStatus: batchSummary.flatMap { summary in
+                    StudioProductionCopy.decode().batchStrip(
+                        rendered: summary.rendered, total: summary.rows
+                    )
+                },
+                onOpenBatchQueue: {
+                    showMeme = false
+                    // Same entry as the hub's Batch tile — the flow loads
+                    // the newest batch itself.
+                    massFlow = MassBatchFlow()
                 }
             )
         }
@@ -798,6 +811,8 @@ private struct MassBatchSummary {
     let rows: Int
     let published: Int
     let awaiting: Int
+    /// MSU-061: how many variants have a rendered poster (drives the strip).
+    var rendered: Int = 0
     var fraction: CGFloat { rows > 0 ? CGFloat(published) / CGFloat(rows) : 0 }
 }
 
@@ -806,13 +821,15 @@ private func massSummary(of docJson: String) -> MassBatchSummary? {
           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let rows = root["rows"] as? [[String: Any]] else { return nil }
     var published = 0
+    var rendered = 0
     for raw in ((root["states"] as? [String: [String: Any]]) ?? [:]).values {
         if (raw["publish"] as? String)?.lowercased() == "published" { published += 1 }
+        if (raw["render"] as? String)?.lowercased() == "rendered" { rendered += 1 }
     }
     let name = MassBatchFiles.field("name", of: docJson) ?? "Untitled batch"
     return MassBatchSummary(
         name: name, rows: rows.count, published: published,
-        awaiting: max(0, rows.count - published)
+        awaiting: max(0, rows.count - published), rendered: rendered
     )
 }
 

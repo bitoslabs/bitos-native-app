@@ -327,6 +327,186 @@ Full system plan: `docs/native/meme-studio-plan.md` (M0–M4 task IDs MST-xxx
 below map to that plan; EDT/MEM epic rows stay the source of truth for the
 V2 suite).
 
+- [ ] **Shell redesign wave — `MSU-000..071`
+  (`docs/native/meme-studio-ux-redesign-plan.md`, COMPLETE 2026-09-12).**
+  Feature parity is done; the *shell* is the blocker: two overlapping tool
+  bars (`QuickToolsRow` 7 chips + `PerModeBar` 5–6 chips in one session),
+  one panel reachable from three chips (Filter/Adjust/Look → FX), a glyph
+  meaning three things (`AppsGrid` = Overlay/Layers/Clips), two editors
+  (`suiteMode` dead-end dock), 9 sp chip labels, and a text-line toast with
+  no action. Fix is structural, not functional: shared `MemeTools`
+  catalogue (both platforms render one bar per mode), pure
+  `EditorSurface`/`EditorNotice`, a contextual selection tier, the timeline
+  dock promoted to a labelled workspace with editable lanes, a real notice
+  host with Undo, and in-editor batch entry. No engine/export/publish
+  change; verify-before-sign invariant untouched. Sequencing W0
+  (shared contract) → W1 (one bar) → W2 (timeline) → W3–W5 (onboarding,
+  notices, publish/export clarity) → W6 (mass production) → W7 (QA/docs).
+  All waves shipped, including W4 MSU-042/043 (closed 2026-09-12).
+  - [x] **W0 MSU-001..004 — SHARED SHELL CONTRACT (2026-09-11, COMPLETE).**
+    SHARED: `studio/MemeTools.kt` (tool catalogue — ids/labels/icon keys,
+    `primaryFor(mode)`/`advancedFor(mode)`/`selectionFor(kind)`,
+    `catalogJson()`; invariants = universal four present in every mode
+    within the 5-cap, no repeated id, primary order a stable subsequence,
+    one tier per id, exactly one Look id so grade/adjust/motion cannot
+    split), `studio/EditorNotices.kt` (severity→auto-dismiss timeouts,
+    errors persistent, `NoticeAction` id tokens, `undoable()`),
+    `studio/EditorSurfaces.kt` (pure overlay+sheet stack; `back()` returns
+    null ONLY when the editor should exit — the repo's "back dismisses the
+    sheet, not the editor" rule made testable; `tokenOf()` for BackHandler
+    keys), `DesignTokens` **v2** (`MIN_TOOL_LABEL_SP`=15,
+    `MIN_TOOL_TARGET_DP`=48 — the shipped 9 sp labels were below a legible
+    floor). BRIDGE: `memeToolCatalog` / `memeEditorNoticeDefault` /
+    `memeEditorSurfaceBack` + iOS client surface (protocol + Framework +
+    Fixture). TESTS: `MemeToolsTest` (8), `EditorNoticesTest` (7),
+    `EditorSurfacesTest` (9), 3 bridge seams — **shared macosArm64Test
+    821/821 green**; Android `compileDebugKotlin` green; iOS xcframework
+    regenerated (5 new symbols) + full-app Swift 6 strict-concurrency
+    type-check green; structure check green. Design note recorded: a glyph
+    may be reused for the SAME meaning across tiers (Timeline entry vs
+    clip-selection Timeline action); the invariant is distinct glyphs
+    *within a tier*. Remaining waves W1+ are native UI work.
+  - [x] **W1 MSU-010..014 — ONE TOOL BAR, BOTH PLATFORMS (2026-09-11,
+    COMPLETE).** The core usability fix. ANDROID `MemeEditorScreen.kt`:
+    `QuickToolsRow` (7 chips) + `PerModeBar` (5–6 chips) deleted — one
+    `EditorToolBar` renders `MemeTools.primaryFor(mode)` (Media · Text ·
+    Sticker · Sound · Look) + a More tile; `MoreToolsSheetContent` holds the
+    advanced tools AND the selection's contextual actions;
+    `SelectionActionRow` for clip/frame selections (overlay actions stay in
+    the vertical rail — one affordance, not two); a single `toolIcon()`
+    parity table + `ToolTile`/`ToolTileShell` (≥48 dp, 12 sp labels,
+    action-naming descriptions); one router (`toolEnabled`/`onTool`/
+    `openToolSheet`/`activeToolSheetId`/`currentSelectionKind`).
+    `ModePillsRow` gained **redo** and now renders in the suite layout too;
+    `SuiteDock` lost its duplicate undo/redo. Export moved to the top chrome
+    (it lost its only entry with QuickToolsRow). IOS mirror
+    (`MemeEditorView.swift`): `editorToolBar` + `MemeToolCatalog` (bridge
+    decode) + `ToolTile` + `moreToolsSheet` + `onTool`/`toolEnabled`/
+    `modeKey`/`startBatchFromDesign`; `perModeBar`/`quickTools`/
+    `QuickToolChip` deleted; `AppIcons.symbol(forCatalogIcon:)` added.
+    CATALOGUE corrections: `CAPTIONS` + `GIFS` added (meme-generator sheet +
+    GIF library reachability), unused `FRAMES` dropped, `DesignTokens`
+    `MIN_TOOL_LABEL_SP` 15→**12** (both platform standards: Material 3 nav
+    bar 12 sp, Apple tab bar 10 pt — 15 would look oversized in a tool tile).
+    Verified: shared `macosArm64Test` exit 0; Android
+    `:apps:android:compileDebugKotlin` green; iOS xcframework + Swift 6
+    strict-concurrency type-check **exit 0, zero errors**.
+  - [x] **W2 MSU-020..024 — TIMELINE WORKSPACE, BOTH PLATFORMS
+    (2026-09-11, COMPLETE).** `SuiteDock`/`SuiteDockView` →
+    `TimelineWorkspace`/`TimelineWorkspaceView`: explicit **"Back to
+    editor"** header + ruler zoom (MSU-020), **every lane tappable**
+    (MSU-021 — clip → select clip, image → select layer, overlay segment →
+    select overlay, cue → report), duplicate tools dropped so only Trim ·
+    Split · Speed · Volume · Clips · Add · SFX remain (MSU-022),
+    hardware-keyboard scrubbing (←/→ 1 s, ↑/↓ 5 s, space) + a 1 s tick
+    ruler with 5 s emphasis (MSU-023). TWO LATENT BUGS FIXED: the Android
+    dock's full-size seek `Box` was drawn OVER the lane stack and swallowed
+    every lane tap; the iOS dock's drag-anywhere gesture did the same —
+    seek is now scoped to the ruler strip. Verified: shared
+    `macosArm64Test` exit 0; Android compile green; iOS Swift 6
+    strict-concurrency type-check exit 0, zero errors.
+  - [x] **W3 MSU-030..033 — ONBOARDING + GUIDING EMPTY STATES, BOTH
+    PLATFORMS (2026-09-11, COMPLETE).** New shared `StudioOnboarding`
+    (coach steps + `shouldRunCoach` eligibility + per-mode `EmptyState` copy
+    + undo/redo copy; `StudioOnboardingTest`) + bridge seams `memeCoachPlan`
+    / `memeEmptyState`. ANDROID `ui/create/meme/StudioOnboardingUi.kt`
+    (`StudioCoachPrefs` device-local flag, `StudioCoachPlan`/`StudioEmptyState`
+    tolerant decoders), `StudioCoachOverlay`, `EmptyCanvasCta` now shared-copy
+    + template rail, undo/redo notices. IOS `Features/Create/StudioOnboardingUi.swift`
+    (mirror; registered in pbxproj), `StudioCoachOverlayView` on
+    `lifecycleLayer`, `emptyCta` shared-copy + template rail, undo hint.
+    The coach runs ONLY for a fresh, self-started session — never on resume/
+    remix/sound-seed/template/camera-handoff, once per device (the shipped
+    editor had NO such gate). Empty states now guide every mode (previously
+    only blank sessions). Verified: shared `macosArm64Test` exit 0; Android
+    compile green; iOS Swift 6 strict-concurrency type-check exit 0.
+  - [x] **W4 MSU-040..043 — FEEDBACK SYSTEM (2026-09-11 for 040/041; 2026-09-12
+    for 042/043; COMPLETE).** SHARED `NoticeHost.kt` (pure lifecycle:
+    newest-wins, duplicate-swallow, severity timeouts, dismiss,
+    remaining-fraction; `NoticeHostTest` 11 cases) + bridge seams
+    `memeNoticePost`/`memeNoticeTick`/`memeNoticeDismiss`. ANDROID
+    `EditorNoticeController` + `EditorNoticeBar` (severity color, action
+    slot, drain progress line, dismiss) rendered above the editor with a
+    100 ms clock; the legacy `exportStatus` string is MIRRORED into the host
+    (migration shim — all ~80 writes gain the lifecycle immediately; failure
+    copy classified by marker so errors persist). IOS `EditorNoticeHost.swift`
+    (+pbxproj) + `EditorNoticeBarIos` on the top overlay with a
+    `notice-clock` task. MSU-041: overlay/clip/layer deletes post
+    `undoable(...)` and the notice's Undo runs the single coalesced undo (no
+    dialog for reversible actions). **MSU-042/043 CLOSED 2026-09-12:** SHARED
+    `StudioProgress.kt` (five named `ProgressSurface`s — import-clips /
+    export-render / gif-ladder / batch-render / publish — each with one
+    title/body + an honest `determinate` flag; a `CONFIRMS` audit
+    classifying destructive surfaces `MODE` (⇒ dialog) vs `REVERSIBLE`
+    (⇒ Undo notice); `fraction()` returns null for indeterminate surfaces so
+    a simulated bar is unrepresentable; `StudioProgressTest` 8 cases) +
+    bridge seam `memeFeedbackCopy()`. ANDROID `StudioFeedbackCopy.decode()`
+    + `ClipImportOverlay`/`ExportFullScreen` render the shared surface copy;
+    the mode-switch and discard-draft dialogs read the shared rules. IOS
+    `StudioFeedbackCopy` decoder + a `isStagingClips` overlay using the
+    shared surface; both confirmationDialogs read the shared copy.
+    `BusinessCoreClient` gained `memeFeedbackCopy()` (protocol + framework +
+    fixture) + `testMemeFeedbackCopySeam`. Verified: shared exit 0; Android
+    compile green; iOS type-check exit 0.
+
+  - [x] **W5 MSU-050..052 — PUBLISH vs EXPORT CLARITY, BOTH PLATFORMS
+    (2026-09-11, COMPLETE).** SHARED `StudioOnboarding.PublishCopy`
+    (explainer, `PrimaryAction="Next"`, `ExportAction="Save a copy"`,
+    posted/view/share/make-another labels, `ReviewSteps` order,
+    `VERIFY_BEFORE_SIGN`) + bridge seam `memePublishCopy()`. ANDROID
+    `StudioPublishCopy.decode()`; the header's single primary is "Next" with
+    the one-line explainer on first open, Export demoted to a labelled
+    secondary icon (`"{Export} — save a rendered file to this device"`); the
+    export sheet retitled "Save a copy"; the review screen states the review
+    order; success is a result card (Posted · View · Share · Make another ·
+    Recovery queue). IOS mirrors this: `StudioPublishCopy` decoder in
+    `StudioOnboardingUi.swift`, new `headerExportButton`, explainer on first
+    publish open, `ExportSettingsSheet` title = "Save a copy", preflight
+    review-order line, and `MemePublishingView` result card with a
+    `ShareSheet` (`njump.me/<eventId>`). `BusinessCoreClient` gained the
+    `memePublishCopy()` seam (protocol + Framework + Fixture) and
+    `BusinessCoreClientTests.testMemePublishCopySeam`. Verified: shared exit
+    0; Android compile green; iOS type-check exit 0; structure check green.
+
+  - [x] **W6 MSU-060..063 — MASS PRODUCTION WOVEN IN, BOTH PLATFORMS
+    (2026-09-12, COMPLETE).** SHARED `StudioProduction` (batch-base action +
+    explainer + seeded toast + queue link; pure `batchStrip(rendered,total)`
+    with clamped counts; `templateBatchAction(count)` clamped to ≤12; the
+    operator `SHORTCUTS` table with platform-neutral key tokens) + bridge
+    seam `memeProductionCopy()` (+ `StudioProductionTest`). ANDROID
+    `StudioProductionCopy.decode()`; More ▸ Batch = **"Use as batch base"**
+    with an explainer row and a "Batch seeded…" notice; an in-editor
+    **status strip** (`CreateScreen` passes `batchStatus` from the newest
+    batch's rendered count + `onOpenBatchQueue`); the empty-state template
+    rail gains **"Make N variants"** (applies the first template, then
+    `seedBatchBase`); the root is `focusable()` with a `handleEditorKey`
+    binding undo/redo · export · publish · timeline · alt-↑/↓ selection ·
+    delete, documented in a new More ▸ **Shortcuts** sheet
+    (`androidKeyGlyph`). IOS mirrors all four: `StudioProductionCopy`
+    decoder in `StudioOnboardingUi.swift`; `startBatchFromDesign` posts the
+    seeded notice; a `layoutLayer` strip bound to `CreateView`'s
+    `batchSummary.rendered`; `startTemplateBatch` in `emptyCta`; a root
+    `onKeyPress(handleEditorKey)` + `shortcutsSheet` (`iosKeyGlyph` uses
+    ⌘/⇧/⌥). `BusinessCoreClient` gained `memeProductionCopy()` (protocol +
+    Framework + Fixture) and `testMemeProductionCopySeam`; `MassBatchSummary`
+    gained `rendered` on both platforms. Verified: shared exit 0; Android
+    compile green; iOS xcframework + type-check exit 0; structure check
+    green.
+
+  - [x] **W7 MSU-070..071 — VERIFICATION & CLOSE-OUT (2026-09-12,
+    COMPLETE).** MSU-070: new **S8 — Editor shell** section in
+    `docs/product/qa-manual-checklist.md` (S8.1 tier visibility per mode,
+    S8.2 one-capability-one-chip, S8.3 timeline-workspace round-trip, S8.4
+    onboarding/empty states, S8.5 notice host, S8.6 publish-vs-export
+    clarity, S8.7 mass production woven in) — concrete on-device steps for
+    the shell the shared invariants (`MemeToolsTest`/`DesignTokensTest`)
+    can only prove in the abstract. MSU-071: `meme-studio-plan.md` §2.2
+    cross-links this plan and marks where it supersedes the V1 layout;
+    `docs/DESIGN_SYSTEM.md` §0 names the full shared shell contract set and
+    the "extend the shared contract, never hand-roll per platform" rule;
+    this tracker carries W0–W7. Plan flipped to **COMPLETE** (W4 MSU-042/043
+    documented as the only deferrals). Verified: structure check green.
+
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.
 
 - [x] Camera capture + preview + trim + media publish (W0, CAP/PUB epics)

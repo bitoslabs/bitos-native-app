@@ -26,7 +26,9 @@ import kotlin.math.pow
  * values must never crash an adapter (same rule as SettingsContract).
  */
 object DesignTokens {
-    const val SCHEMA_VERSION = 1
+    /** v2 (MSU-004): added the editor tool-bar a11y floors
+     *  ([MIN_TOOL_LABEL_SP], [MIN_TOOL_TARGET_DP]). */
+    const val SCHEMA_VERSION = 2
 
     /** Appearance modes the palette resolves for. */
     enum class Mode { DARK, LIGHT }
@@ -221,6 +223,18 @@ object DesignTokens {
     /** Minimum touch targets (§2.6): iOS points / Android dp. */
     const val MIN_TOUCH_TARGET_PT = 44
     const val MIN_TOUCH_TARGET_DP = 48
+
+    /**
+     * Editor tool-bar accessibility floors (MSU-014). The shipped quick-tool
+     * chips rendered 9 sp labels, which is below a legible floor on a phone.
+     * The floor is set at the platform-standard tool/tab label size
+     * (Material 3 navigation bar = 12 sp, Apple tab bar = 10 pt) rather than
+     * an arbitrary larger value that would look oversized in a tool tile.
+     */
+    const val MIN_TOOL_LABEL_SP = 12
+
+    /** Minimum side of a tool tile in the editor bars (dp / pt). */
+    const val MIN_TOOL_TARGET_DP = 48
 
     /**
      * Flat-top hexagon fractions — CSS `.hex-clip`

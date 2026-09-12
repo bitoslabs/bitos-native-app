@@ -8,7 +8,21 @@
 
 Token _values_ are owned once by the versioned shared contract
 `shared/business-core/src/commonMain/kotlin/space/bitos/core/design/DesignTokens.kt`
-(SCHEMA_VERSION 1) and mirrored into both platforms — extend, don't fork:
+(SCHEMA_VERSION 2; v2 added the editor tool-bar accessibility floors —
+`MIN_TOOL_LABEL_SP`, `MIN_TOOL_TARGET_DP` — per `meme-studio-ux-redesign-plan.md`
+MSU-004) and mirrored into both platforms — extend, don't fork.
+
+The editor **shell** is likewise single-sourced, in the sibling
+`studio/` contracts (both platforms render them; no view forks):
+`MemeTools` (the one tool catalogue — ids, labels, icon keys, tiers, per-mode
+primary/advanced/selection lists), `EditorSurfaces` (surface stack + Back
+semantics), `EditorNotices`/`NoticeHost` (typed notices + lifecycle),
+`StudioOnboarding` (coach steps, empty states, publish-vs-export copy) and
+`StudioProduction` (batch base, batch strip, template batch, the operator
+shortcut table). They reach the apps through the `meme*` seams on
+`BusinessCoreBridge` → iOS `BusinessCoreClient` (protocol + framework +
+fixture). When adding an editor control or a line of guidance, extend the
+shared contract — never hand-roll it per platform.
 
 | Layer          | File                                                                                                    | Owns                                                                                                                                                    |
 | :------------- | :------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -2585,10 +2585,373 @@ class BusinessCoreBridge {
         }
     }.toString()
 
+    // ── MSU (meme-studio-ux-redesign-plan.md): the shell contract both
+    // platforms render their tool bars and surfaces from. Pure data — no
+    // closures cross the bridge; notice actions are id tokens.
+
+    /**
+     * MSU-001 tool catalogue:
+     * `{"maxPrimary":5,"primary":{"image":[…],"gif":[…],"video":[…]},
+     *   "advanced":{…},"selection":{…}}` — single-sourced from
+     * [space.bitos.core.studio.MemeTools.catalogJson].
+     */
+    fun memeToolCatalog(): String = space.bitos.core.studio.MemeTools.catalogJson()
+
+    /**
+     * MSU-002 default auto-dismiss window (ms) for a notice severity:
+     * `{"timeoutMs":n,"persistent":bool}`. `severity` is
+     * `"info"|"success"|"error"`; unknown severities resolve to INFO.
+     */
+    fun memeEditorNoticeDefault(severity: String): String {
+        val resolved = when (severity.lowercase()) {
+            "success" -> space.bitos.core.studio.EditorNotices.Severity.SUCCESS
+            "error" -> space.bitos.core.studio.EditorNotices.Severity.ERROR
+            else -> space.bitos.core.studio.EditorNotices.Severity.INFO
+        }
+        val timeout = space.bitos.core.studio.EditorNotices.timeoutFor(resolved)
+        return buildJsonObject {
+            put("timeoutMs", timeout)
+            put("persistent", timeout == 0)
+            put("maxMessageChars", space.bitos.core.studio.EditorNotices.MAX_MESSAGE_CHARS)
+        }.toString()
+    }
+
+    /**
+     * MSU-003 surface Back resolution. `surface` is a machine token
+     * (`"none"`, `"sheet:look"`, `"panel:pen"`, `"compose:o1"`,
+     * `"timeline"`, `"review"`).
+     *
+     * Returns `{"exits":bool,"next":<token>}` — `exits` is true only when
+     * nothing was open, so the caller leaves the editor exactly then. A
+     * malformed token is treated as `"none"` (lenient, never throws).
+     */
+    fun memeEditorSurfaceBack(surface: String): String {
+        val parsed = parseSurfaceToken(surface)
+        val next = space.bitos.core.studio.EditorSurfaces.back(parsed)
+        return buildJsonObject {
+            put("exits", next == null)
+            put(
+                "next",
+                space.bitos.core.studio.EditorSurfaces.tokenOf(next ?: parsed),
+            )
+        }.toString()
+    }
+
+    /** Token → [space.bitos.core.studio.EditorSurfaces.State]. */
+    private fun parseSurfaceToken(        token: String,
+    ): space.bitos.core.studio.EditorSurfaces.State {
+        val trimmed = token.trim()
+        return when {
+            trimmed.isEmpty() || trimmed == "none" ->
+                space.bitos.core.studio.EditorSurfaces.State.Empty
+            trimmed == "timeline" ->
+                space.bitos.core.studio.EditorSurfaces.State(
+                    sheet = space.bitos.core.studio.EditorSurfaces.Surface.TimeLine,
+                )
+            trimmed == "review" ->
+                space.bitos.core.studio.EditorSurfaces.State(
+                    sheet = space.bitos.core.studio.EditorSurfaces.Surface.Review,
+                )
+            trimmed.startsWith("sheet:") ->
+                space.bitos.core.studio.EditorSurfaces.State(
+                    sheet = space.bitos.core.studio.EditorSurfaces.Surface.sheet(
+                        trimmed.removePrefix("sheet:"),
+                    ),
+                )
+            trimmed.startsWith("panel:") ->
+                space.bitos.core.studio.EditorSurfaces.State(
+                    overlay = space.bitos.core.studio.EditorSurfaces.Surface.inlinePanel(
+                        trimmed.removePrefix("panel:"),
+                    ),
+                )
+            trimmed.startsWith("compose:") ->
+                space.bitos.core.studio.EditorSurfaces.State(
+                    overlay = space.bitos.core.studio.EditorSurfaces.Surface.compose(
+                        trimmed.removePrefix("compose:"),
+                    ),
+                )
+            else -> space.bitos.core.studio.EditorSurfaces.State.Empty
+        }
+    }
+
+    // ── MSU-040 notice host: one visible notice, newest-wins, severity
+    // timeouts. Pure state post/tick/dismiss, resolved on the bridge so both
+    // platforms share one lifecycle.
+
+    /**
+     * MSU-040: post a notice and get the next host state.
+     * `stateJson`/reply are `{"notice":{…},"elapsedMs":n}`; a blank/null
+     * notice means empty. A duplicate of the current notice is a no-op.
+     */
+    fun memeNoticePost(stateJson: String, severity: String, message: String, actionId: String?, actionLabel: String?, timeoutMs: Int): String {
+        val state = decodeNoticeState(stateJson)
+        val resolved = when (severity.lowercase()) {
+            "success" -> space.bitos.core.studio.EditorNotices.Severity.SUCCESS
+            "error" -> space.bitos.core.studio.EditorNotices.Severity.ERROR
+            else -> space.bitos.core.studio.EditorNotices.Severity.INFO
+        }
+        val action = if (!actionId.isNullOrBlank() && !actionLabel.isNullOrBlank()) {
+            space.bitos.core.studio.EditorNotices.NoticeAction(actionId, actionLabel)
+        } else {
+            null
+        }
+        val notice = space.bitos.core.studio.EditorNotices.of(
+            id = state.current?.id?.plus(1) ?: 1L,
+            severity = resolved,
+            message = message,
+            action = action,
+            timeoutMs = timeoutMs.takeIf { it >= 0 },
+        )
+        return encodeNoticeState(space.bitos.core.studio.NoticeHost.post(state, notice))
+    }
+
+    /** MSU-040: advance the host clock by [deltaMs]; auto-dismiss applies. */
+    fun memeNoticeTick(stateJson: String, deltaMs: Int): String =
+        encodeNoticeState(space.bitos.core.studio.NoticeHost.tick(decodeNoticeState(stateJson), deltaMs))
+
+    /** MSU-040: dismiss the current notice immediately. */
+    fun memeNoticeDismiss(stateJson: String): String =
+        encodeNoticeState(space.bitos.core.studio.NoticeHost.dismiss(decodeNoticeState(stateJson)))
+
+    private fun decodeNoticeState(json: String): space.bitos.core.studio.NoticeHost.State {
+        if (json.isBlank()) return space.bitos.core.studio.NoticeHost.State.Empty
+        return runCatching {
+            val root = kotlinx.serialization.json.Json.parseToJsonElement(json).jsonObject
+            val noticeObj = root["notice"]?.jsonObject
+                ?: return space.bitos.core.studio.NoticeHost.State.Empty
+            val severity = when (noticeObj["severity"]?.jsonPrimitive?.content?.lowercase()) {
+                "success" -> space.bitos.core.studio.EditorNotices.Severity.SUCCESS
+                "error" -> space.bitos.core.studio.EditorNotices.Severity.ERROR
+                else -> space.bitos.core.studio.EditorNotices.Severity.INFO
+            }
+            val actionObj = noticeObj["action"]?.jsonObject
+            space.bitos.core.studio.NoticeHost.State(
+                current = space.bitos.core.studio.EditorNotices.Notice(
+                    id = noticeObj["id"]?.jsonPrimitive?.content?.toLongOrNull() ?: 1L,
+                    severity = severity,
+                    message = noticeObj["message"]?.jsonPrimitive?.content.orEmpty(),
+                    action = actionObj?.let {
+                        space.bitos.core.studio.EditorNotices.NoticeAction(
+                            id = it["id"]?.jsonPrimitive?.content.orEmpty(),
+                            label = it["label"]?.jsonPrimitive?.content.orEmpty(),
+                        )
+                    },
+                    timeoutMs = noticeObj["timeoutMs"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                ),
+                elapsedMs = root["elapsedMs"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+            )
+        }.getOrDefault(space.bitos.core.studio.NoticeHost.State.Empty)
+    }
+
+    private fun encodeNoticeState(state: space.bitos.core.studio.NoticeHost.State): String = buildJsonObject {
+        put("elapsedMs", state.elapsedMs)
+        put("visible", space.bitos.core.studio.NoticeHost.isVisible(state))
+        put("remaining", space.bitos.core.studio.NoticeHost.remainingFraction(state))
+        val current = state.current
+        if (current == null) {
+            put("notice", kotlinx.serialization.json.JsonNull)
+        } else {
+            put("notice", buildJsonObject {
+                put("id", current.id)
+                put("severity", current.severity.name.lowercase())
+                put("message", current.message)
+                put("timeoutMs", current.timeoutMs)
+                current.action?.let { action ->
+                    put("action", buildJsonObject {
+                        put("id", action.id)
+                        put("label", action.label)
+                    })
+                }
+            })
+        }
+    }.toString()
+
+    // ── MSU-030..033 studio onboarding: shared coach steps + empty-state
+    // copy so both platforms guide a first-time creator identically.
+    /**
+     * Coach eligibility + steps:
+     * `{"run":bool,"skipLabel":…,"doneLabel":…,"steps":[{"id","anchor","icon","title","body"}]}`.
+     *
+     * [hasSeenCoach]/[isResume]/[isRemix]/[isSoundSeed]/[isTemplateSeed]/
+     * [isCameraHandoff] mirror `StudioOnboarding.Context`; the rules live
+     * in the shared core (`shouldRunCoach`).
+     */
+    fun memeCoachPlan(
+        hasSeenCoach: Boolean,
+        isResume: Boolean,
+        isRemix: Boolean,
+        isSoundSeed: Boolean,
+        isTemplateSeed: Boolean,
+        isCameraHandoff: Boolean,
+    ): String {
+        val onboarding = space.bitos.core.studio.StudioOnboarding
+        val context = space.bitos.core.studio.StudioOnboarding.Context(
+            hasSeenCoach = hasSeenCoach,
+            isResume = isResume,
+            isRemix = isRemix,
+            isSoundSeed = isSoundSeed,
+            isTemplateSeed = isTemplateSeed,
+            isCameraHandoff = isCameraHandoff,
+        )
+        return buildJsonObject {
+            put("run", onboarding.shouldRunCoach(context))
+            put("key", onboarding.COACH_KEY)
+            put("skipLabel", onboarding.SKIP_LABEL)
+            put("doneLabel", onboarding.DONE_LABEL)
+            put("steps", buildJsonArray {
+                onboarding.COACH_STEPS.forEach { step ->
+                    add(buildJsonObject {
+                        put("id", step.id)
+                        put("anchor", step.anchor)
+                        put("icon", step.iconToken)
+                        put("title", step.title)
+                        put("body", step.body)
+                    })
+                }
+            })
+        }.toString()
+    }
+
+    /**
+     * Guiding empty-state copy for a mode:
+     * `{"title":…,"body":…,"icon":…,"primary":…,"secondary":…,"tertiary":…}`.
+     * `mode` is `"image"|"gif"|"video"`; unknown values fall back to the
+     * IMAGE copy (never blank).
+     */
+    fun memeEmptyState(mode: String): String {
+        val resolved = when (mode.lowercase()) {
+            "gif" -> space.bitos.core.studio.MemeMode.GIF
+            "video" -> space.bitos.core.studio.MemeMode.VIDEO
+            else -> space.bitos.core.studio.MemeMode.IMAGE
+        }
+        val state = space.bitos.core.studio.StudioOnboarding.emptyStateFor(resolved)
+        return buildJsonObject {
+            put("title", state.title)
+            put("body", state.body)
+            put("icon", state.iconToken)
+            put("primary", state.primaryLabel)
+            put("secondary", state.secondaryLabel ?: "")
+            put("tertiary", state.tertiaryLabel ?: "")
+            put("hint", space.bitos.core.studio.StudioOnboarding.ADD_SOMETHING_HINT)
+            put("undoHint", space.bitos.core.studio.StudioOnboarding.UNDO_HINT)
+            put("nothingToUndo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_UNDO)
+            put("nothingToRedo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_REDO)
+        }.toString()
+    }
+
+    /**
+     * MSU-050..052 publish-vs-export copy + review order:
+     * `{"publishExplainer":…,"primaryAction":…,"exportAction":…,
+     *   "reviewSteps":[{"id","title"}],"posted":…,"view":…,"share":…,
+     *   "makeAnother":…,"verifyBeforeSign":…}`. Pure copy — no behavior.
+     */
+    fun memePublishCopy(): String {
+        val onboarding = space.bitos.core.studio.StudioOnboarding
+        return buildJsonObject {
+            put("publishExplainer", onboarding.PUBLISH_EXPLAINER)
+            put("primaryAction", onboarding.PRIMARY_ACTION)
+            put("exportAction", onboarding.EXPORT_ACTION)
+            put("posted", onboarding.POSTED_LABEL)
+            put("view", onboarding.VIEW_LABEL)
+            put("share", onboarding.SHARE_LABEL)
+            put("makeAnother", onboarding.MAKE_ANOTHER_LABEL)
+            put("verifyBeforeSign", onboarding.VERIFY_BEFORE_SIGN)
+            put("reviewSteps", buildJsonArray {
+                onboarding.REVIEW_STEPS.forEach { step ->
+                    add(buildJsonObject {
+                        put("id", step.id)
+                        put("title", step.title)
+                    })
+                }
+            })
+        }.toString()
+    }
+
+    /**
+     * MSU-060..063 mass-production + operator copy:
+     * `{"batchBaseAction":…,"batchBaseExplainer":…,"batchSeeded":…,
+     *   "batchQueueLink":…,"templateBatchCount":n,"templateBatchExplainer":…,
+     *   "controlsTitle":…,"touchSectionTitle":…,"keyboardSectionTitle":…,
+     *   "keyboardAbsentHint":…,"shortcutsHint":…,
+     *   "controls":[{"id","label","touch","keys"}],
+     *   "shortcuts":[{"id","label","keys"}]}`. `keys` is `""` when a row
+     * has no hardware accelerator. Pure copy — no behavior.
+     */
+    fun memeProductionCopy(): String {
+        val production = space.bitos.core.studio.StudioProduction
+        return buildJsonObject {
+            put("batchBaseAction", production.BATCH_BASE_ACTION)
+            put("batchBaseExplainer", production.BATCH_BASE_EXPLAINER)
+            put("batchSeeded", production.BATCH_SEEDED_MESSAGE)
+            put("batchQueueLink", production.BATCH_QUEUE_LINK)
+            put("templateBatchCount", production.TEMPLATE_BATCH_COUNT)
+            put("templateBatchExplainer", production.TEMPLATE_BATCH_EXPLAINER)
+            put("controlsTitle", production.SHORTCUTS_TITLE)
+            put("touchSectionTitle", production.TOUCH_SECTION_TITLE)
+            put("keyboardSectionTitle", production.KEYBOARD_SECTION_TITLE)
+            put("keyboardAbsentHint", production.KEYBOARD_ABSENT_HINT)
+            put("shortcutsHint", production.SHORTCUTS_HINT)
+            put("controls", buildJsonArray {
+                production.CONTROLS.forEach { control ->
+                    add(buildJsonObject {
+                        put("id", control.id)
+                        put("label", control.label)
+                        put("touch", control.touch)
+                        put("keys", control.keys ?: "")
+                    })
+                }
+            })
+            put("shortcuts", buildJsonArray {
+                production.SHORTCUTS.forEach { shortcut ->
+                    add(buildJsonObject {
+                        put("id", shortcut.id)
+                        put("keys", shortcut.keys)
+                        put("label", shortcut.label)
+                    })
+                }
+            })
+        }.toString()
+    }
+
+    /**
+     * MSU-042..043 feedback closure:
+     * `{"progress":[{"id","title","body","determinate"}],
+     *   "confirms":[{"id","mode","title","body"}]}` where `mode` is
+     * `"confirm"` (irreversible ⇒ dialog) or `"undo"` (reversible ⇒ Undo
+     * notice). Pure copy + classification — no behavior.
+     */
+    fun memeFeedbackCopy(): String {
+        val feedback = space.bitos.core.studio.StudioProgress
+        return buildJsonObject {
+            put("progress", buildJsonArray {
+                feedback.ALL.forEach { surface ->
+                    add(buildJsonObject {
+                        put("id", surface.id)
+                        put("title", surface.title)
+                        put("body", surface.body)
+                        put("determinate", surface.determinate)
+                    })
+                }
+            })
+            put("confirms", buildJsonArray {
+                feedback.CONFIRMS.forEach { rule ->
+                    add(buildJsonObject {
+                        put("id", rule.id)
+                        put(
+                            "mode",
+                            if (rule.mode == space.bitos.core.studio.StudioProgress.ConfirmMode.MODE) "confirm" else "undo",
+                        )
+                        put("title", rule.title)
+                        put("body", rule.body)
+                    })
+                }
+            })
+        }.toString()
+    }
+
     // ── APP-019 mass production (plan M4 wave 5 / MST-048): the Swift
     // Create hub drives the same batch document through four JSON seams.
     // Corrupt wires → "" (the hub never hard-fails on a bad tap).
-
     /** Fresh batch document (canonical starter project + recipe). */
     /**
      * MUX-06: a new batch FROM an editor design — the decoded meme project

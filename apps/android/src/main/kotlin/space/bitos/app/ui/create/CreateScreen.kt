@@ -337,6 +337,24 @@ fun CreateScreen(
                     }
                 }
             },
+            // MSU-061: the in-editor strip — "3 of 8 rendered · View queue"
+            // — while the newest batch still references the editor's work.
+            batchStatus = batchSummary?.let { summary ->
+                space.bitos.core.studio.StudioProduction.batchStrip(
+                    rendered = summary.rendered,
+                    total = summary.rows,
+                )
+            },
+            onOpenBatchQueue = {
+                showMeme = false
+                // Land directly on the newest batch (one tap, not the
+                // picker): the strip already named which batch it means.
+                mass = MassBatchUi(massFiles, scope).also { batch ->
+                    batch.listBatches().firstOrNull()?.let { entry ->
+                        batch.loadBatch(entry.batchId)?.let(batch::open)
+                    }
+                }
+            },
         )
         return
     }
@@ -2322,7 +2340,7 @@ private fun readBounded(uri: Uri, context: android.content.Context): ByteArray? 
 }.getOrNull()
 
 /** Hub batch-queue bar data (scr-home mockup): newest batch progress. */
-private data class MassSummary(val name: String, val rows: Int, val published: Int, val awaiting: Int)
+private data class MassSummary(val name: String, val rows: Int, val published: Int, val awaiting: Int, val rendered: Int = 0)
 
 private fun massSummary(files: MassBatchFiles): MassSummary? {
     val newest = files.listBatches().firstOrNull() ?: return null
@@ -2330,10 +2348,14 @@ private fun massSummary(files: MassBatchFiles): MassSummary? {
     val published = document.states.values.count {
         it.publish == space.bitos.core.studio.MassPublishState.PUBLISHED
     }
+    val rendered = document.states.values.count {
+        it.render == space.bitos.core.studio.MassRenderState.RENDERED
+    }
     return MassSummary(
         name = newest.name,
         rows = document.rows.size,
         published = published,
         awaiting = (document.rows.size - published).coerceAtLeast(0),
+        rendered = rendered,
     )
 }
