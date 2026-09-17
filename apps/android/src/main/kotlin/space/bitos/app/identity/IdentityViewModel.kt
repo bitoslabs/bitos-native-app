@@ -215,10 +215,35 @@ class IdentityViewModel(
     /**
      * Sign-out = deactivate (legacy parity): the ACTIVE pointer clears but
      * every sealed slot and registry row survives — one-tap switch back in.
+     * In-flight remote-signer waits are cancelled and their lanes torn
+     * down (ID-006d); no secrets are wiped by sign-out.
      */
     fun signOut() {
+        shutdownRemoteSigners(wipeTransportSecrets = false)
         registry.setActive(null)
         mutableState.value = IdentityUiState()
+    }
+
+    /**
+     * ID-006d: switch, sign-out, removal, timeout and app termination all
+     * land here — cancel in-flight requests, close subscriptions, tear
+     * down sockets and (on removal) wipe the sealed transport keys.
+     */
+    private fun shutdownRemoteSigners(wipeTransportSecrets: Boolean, wipeForPubkey: String? = null) {
+        viewModelScope.launch {
+            activeNip46Session.value?.let { session ->
+                session.shutdown()
+                if (wipeTransportSecrets) session.wipeTransportSecret()
+            }
+            if (wipeTransportSecrets) {
+                wipeForPubkey?.let {
+                    space.bitos.app.identity.nip46.SecureNip46TransportSecretStore(store).removeTransportSecret(it)
+                }
+            }
+            _activeNip46Session.value = null
+            activeNip55Client.value?.cancelWait()
+            _activeNip55Client.value = null
+        }
     }
 
     /**
@@ -239,6 +264,8 @@ class IdentityViewModel(
     /** One-tap account switch (registry row → sealed slot → active). */
     fun switchTo(pubkeyHex: String) {
         if (mutableState.value.account?.pubkeyHex == pubkeyHex) return
+        // ID-006d: the previous account's signer lane dies with the switch.
+        shutdownRemoteSigners(wipeTransportSecrets = false)
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(busy = true)
             val secret = withContext(Dispatchers.IO) { store.loadSecret(slotPubkey = pubkeyHex) }
@@ -266,6 +293,9 @@ class IdentityViewModel(
      */
     fun removeRegisteredAccount(pubkeyHex: String) {
         viewModelScope.launch {
+            // ID-006d: removal wipes the account's native signer state —
+            // in-flight waits cancel, the NIP-46 transport key slot dies.
+            shutdownRemoteSigners(wipeTransportSecrets = true, wipeForPubkey = pubkeyHex)
             withContext(Dispatchers.IO) { store.removeSecret(pubkeyHex) }
             registry.remove(pubkeyHex)
             if (mutableState.value.account?.pubkeyHex == pubkeyHex) {

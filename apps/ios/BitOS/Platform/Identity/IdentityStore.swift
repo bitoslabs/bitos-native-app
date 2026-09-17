@@ -296,8 +296,26 @@ final class IdentityStore {
         importError = nil
     }
 
+
+    /// ID-006d: switch, sign-out, removal and app exit land here — cancel
+    /// in-flight waits, close subscriptions, tear sockets down; removal
+    /// additionally wipes the sealed NIP-46 transport key.
+    private func shutdownRemoteSigners(wipeTransportSecret: Bool = false, for pubkey: String? = nil) {
+        let session = activeNip46Session
+        activeNip46Session = nil
+        nip46SessionAccount = nil
+        Task {
+            await session?.shutdown()
+            if wipeTransportSecret {
+                await session?.wipeTransportSecret()
+                if let pubkey { IdentityKeychain.removeNip46TransportSlot(pubkey: pubkey) }
+            }
+        }
+    }
+
     /// Sign-out = deactivate (legacy parity): the pointer clears, slots survive.
     func signOut() {
+        shutdownRemoteSigners()
         setActive(nil)
         account = nil
         preview = nil
@@ -312,6 +330,7 @@ final class IdentityStore {
     /// accounts would be unreachable.
     func removeAccount() {
         if let pubkey = account?.pubkeyHex {
+            shutdownRemoteSigners(wipeTransportSecret: true, for: pubkey)
            IdentityKeychain.removeSlot(pubkey: pubkey)
            registeredAccounts.removeAll { $0.pubkeyHex == pubkey }
            persistRegistry()
@@ -331,6 +350,7 @@ final class IdentityStore {
     /// derive runs off-main; a concurrent account change invalidates the hop.
     func switchTo(pubkeyHex: String) {
         guard account?.pubkeyHex != pubkeyHex else { return }
+        shutdownRemoteSigners()
         busy = true
         sessionEpoch += 1
         let epoch = sessionEpoch
@@ -361,6 +381,7 @@ final class IdentityStore {
     /// Removing the ACTIVE account hops to the next sealed account instead of
     /// dropping to browse (same rationale as `removeAccount`).
     func removeRegisteredAccount(pubkeyHex: String) {
+        shutdownRemoteSigners(wipeTransportSecret: true, for: pubkeyHex)
         IdentityKeychain.removeSlot(pubkey: pubkeyHex)
         registeredAccounts.removeAll { $0.pubkeyHex == pubkeyHex }
         persistRegistry()
