@@ -80,6 +80,29 @@ enum IdentityKeychain {
         SecItemDelete(query as CFDictionary)
     }
 
+    // ── NIP-46 client transport key (ID-006a/d) ────────────────────
+
+    private static let nip46SlotPrefix = "nip46-transport-"
+
+    /// Seals the per-account NIP-46 client transport secret.
+    static func saveNip46TransportSecret(_ secretHex: String, slotPubkey: String) -> Bool {
+        write(secretHex: secretHex, account: nip46SlotPrefix + slotPubkey)
+    }
+
+    static func loadNip46TransportSecret(slotPubkey: String) -> String? {
+        load(account: nip46SlotPrefix + slotPubkey)
+    }
+
+    /// ID-006d: account removal wipes the sealed transport key slot.
+    static func removeNip46TransportSlot(pubkey: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: nip46SlotPrefix + pubkey,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     private static func write(secretHex: String, account key: String) -> Bool {
         let data = Data(secretHex.utf8)
         let query: [String: Any] = [

@@ -5583,8 +5583,13 @@ class BusinessCoreBridge {
     fun nip46EventFrame(unsignedEventJson: String, eventIdHex: String, signatureHex: String): String? {
         if (eventIdHex.length != 64 || signatureHex.length != 128) return null
         if (!unsignedEventJson.startsWith("{")) return null
-        return """["EVENT",{"id":"$eventIdHex""" + unsignedEventJson.removePrefix("{") +
-            ""","sig":"$signatureHex"}]"""
+        return buildString(unsignedEventJson.length + 96) {
+            append("[\"EVENT\",{")
+            append("\"id\":\"").append(eventIdHex).append("\",")
+            // The inner fields of the canonical unsigned object (both braces stripped).
+            append(unsignedEventJson.substring(1, unsignedEventJson.length - 1))
+            append(",\"sig\":\"").append(signatureHex).append("\"}]")
+        }
     }
 
     /** Response-lane REQ filter (authors pinned when the signer is known). */
@@ -5620,6 +5625,25 @@ class BusinessCoreBridge {
         return space.bitos.core.identity.nip46.Nip46SessionCodec.encodeRequestJson(
             space.bitos.core.identity.SignEventRequest(requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content),
         )
+    }
+
+    /** The NIP-46/NIP-55 unsigned wire form (`{"kind","content","tags","created_at"}`) for signing. */
+    fun signEventUnsignedWire(
+        requestId: String,
+        accountPubkeyHex: String,
+        createdAtSeconds: Long,
+        kind: Int,
+        tagsJson: String,
+        content: String,
+    ): String? {
+        val tags = try {
+            Json.parseToJsonElement(tagsJson).jsonArray.map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.SignEventRequest(
+            requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content,
+        ).unsignedEventJson()
     }
 
     /** Independent validator gate for any signer-returned event (SBC-008a). */
