@@ -73,37 +73,11 @@ object Nip46SessionCodec {
 
     // ── SignEventRequest (originating payload for sign_event) ────────
 
-    fun encodeRequestJson(request: SignEventRequest): String = buildJsonObject {
-        put("requestId", request.requestId)
-        put("accountPubkeyHex", request.accountPubkeyHex)
-        put("createdAtSeconds", request.createdAtSeconds)
-        put("kind", request.kind)
-        put("tags", buildJsonArray {
-            request.tags.forEach { tag ->
-                add(buildJsonArray { tag.forEach { item -> add(kotlinx.serialization.json.JsonPrimitive(item)) } })
-            }
-        })
-        put("content", request.content)
-    }.toString()
+    fun encodeRequestJson(request: SignEventRequest): String =
+        space.bitos.core.identity.SignEventRequestJson.encode(request)
 
-    fun decodeRequestJson(json: String): SignEventRequest? {
-        if (json.isEmpty() || json.length > space.bitos.core.model.NostrLimits.MAX_EVENT_BYTES) return null
-        return try {
-            val root = Json.parseToJsonElement(json).jsonObject
-            SignEventRequest(
-                requestId = root["requestId"]?.jsonPrimitive?.contentOrNull ?: return null,
-                accountPubkeyHex = root["accountPubkeyHex"]?.jsonPrimitive?.contentOrNull ?: return null,
-                createdAtSeconds = root["createdAtSeconds"]?.jsonPrimitive?.longOrNull ?: return null,
-                kind = root["kind"]?.jsonPrimitive?.longOrNull?.toInt() ?: return null,
-                tags = root["tags"]?.jsonArray?.map { tag ->
-                    tag.jsonArray.map { it.jsonPrimitive.contentOrNull ?: return null }
-                } ?: return null,
-                content = root["content"]?.jsonPrimitive?.contentOrNull ?: return null,
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
+    fun decodeRequestJson(json: String): SignEventRequest? =
+        space.bitos.core.identity.SignEventRequestJson.decode(json)
 
     // ── Commands ─────────────────────────────────────────────────────
 
