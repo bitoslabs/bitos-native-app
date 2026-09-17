@@ -127,23 +127,48 @@ data class StudioEmptyState(    val title: String,
                 nothingToRedo = "Nothing to redo",
             )
             return runCatching {
-                val root = JSONObject(BusinessCoreBridge().memeEmptyState(mode))
-                fun text(key: String, default: String) =
-                    root.optString(key, default).ifBlank { default }
-                fallback.copy(
-                    title = text("title", fallback.title),
-                    body = text("body", fallback.body),
-                    icon = text("icon", fallback.icon),
-                    primary = text("primary", fallback.primary),
-                    secondary = root.optString("secondary").takeIf { it.isNotBlank() },
-                    tertiary = root.optString("tertiary").takeIf { it.isNotBlank() },
-                    hint = text("hint", fallback.hint),
-                    undoHint = text("undoHint", fallback.undoHint),
-                    nothingToUndo = text("nothingToUndo", fallback.nothingToUndo),
-                    nothingToRedo = text("nothingToRedo", fallback.nothingToRedo),
-                )
+                decodeFields(JSONObject(BusinessCoreBridge().memeEmptyState(mode)), fallback)
             }.getOrDefault(fallback)
         }
+
+        /**
+         * MEM-003c sound-first copy: VIDEO mode with a verified soundtrack
+         * attached and no clip ("Your sound is ready. Add a video to
+         * begin."). Junk falls back to hard-coded copy, same rule.
+         */
+        fun decodeSoundFirst(): StudioEmptyState {
+            val fallback = StudioEmptyState(
+                title = "Your sound is ready",
+                body = "Add a video to begin.",
+                icon = "sound",
+                primary = "Add video",
+                secondary = "Change sound",
+                tertiary = null,
+                hint = "Add text, a sticker or a look — everything autosaves.",
+                undoHint = "Undone — redo is beside undo in the top bar.",
+                nothingToUndo = "Nothing to undo",
+                nothingToRedo = "Nothing to redo",
+            )
+            return runCatching {
+                decodeFields(JSONObject(BusinessCoreBridge().memeSoundFirstEmptyState()), fallback)
+            }.getOrDefault(fallback)
+        }
+
+        private fun decodeFields(
+            root: JSONObject,
+            fallback: StudioEmptyState,
+        ): StudioEmptyState = fallback.copy(
+            title = root.optString("title", fallback.title).ifBlank { fallback.title },
+            body = root.optString("body", fallback.body).ifBlank { fallback.body },
+            icon = root.optString("icon", fallback.icon).ifBlank { fallback.icon },
+            primary = root.optString("primary", fallback.primary).ifBlank { fallback.primary },
+            secondary = root.optString("secondary").takeIf { it.isNotBlank() },
+            tertiary = root.optString("tertiary").takeIf { it.isNotBlank() },
+            hint = root.optString("hint", fallback.hint).ifBlank { fallback.hint },
+            undoHint = root.optString("undoHint", fallback.undoHint).ifBlank { fallback.undoHint },
+            nothingToUndo = root.optString("nothingToUndo", fallback.nothingToUndo).ifBlank { fallback.nothingToUndo },
+            nothingToRedo = root.optString("nothingToRedo", fallback.nothingToRedo).ifBlank { fallback.nothingToRedo },
+        )
     }
 }
 

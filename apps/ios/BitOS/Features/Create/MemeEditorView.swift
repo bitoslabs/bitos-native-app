@@ -106,6 +106,10 @@ struct MemeSoundSeed: Equatable {
     var isAudioOnly: Bool = false
     /// Expected 64-hex hash for `isAudioOnly` downloads (integrity gate).
     var sha256: String? = nil
+    /// MEM-003b: local sound-library entry id — the Create-hub picker's
+    /// "My sound library" rows attach by id (local bytes + sha verify, no
+    /// network); the URL fields carry the entry's provenance values.
+    var localSoundId: String? = nil
 }
 
 /// Remix source fetch failure (bounded download / decode).
@@ -3290,6 +3294,11 @@ struct MemeEditorView: View {
     let remixSeed: MemeRemixSeed?
     /// "Use this sound" handoff (Wave C): borrow THIS bitz's audio only.
     let soundSeed: MemeSoundSeed?
+    /// MEM-003b "Pick sound from a video": the Create-hub sound picker
+    /// hands the picked library video's bytes here — the editor's
+    /// existing extraction path owns extraction + failure copy. Consumed
+    /// once; nil on re-acceptance.
+    let soundFromVideo: Data?
     /// MUX-06: hand the frozen design + rendered poster to mass production.
     var onMakeVariations: ((String, Data) -> Void)? = nil
     /// MSU-061: an in-editor batch status line ("3 of 8 rendered"); nil
@@ -3309,6 +3318,7 @@ struct MemeEditorView: View {
         videoSeeds: [Data]? = nil,
         remixSeed: MemeRemixSeed? = nil,
         soundSeed: MemeSoundSeed? = nil,
+        soundFromVideo: Data? = nil,
         onSlotsChanged: @escaping () -> Void = {},
         onMakeVariations: ((String, Data) -> Void)? = nil,
         batchStatus: String? = nil,
@@ -3323,6 +3333,7 @@ struct MemeEditorView: View {
         self.videoSeeds = videoSeeds
         self.remixSeed = remixSeed
         self.soundSeed = soundSeed
+        self.soundFromVideo = soundFromVideo
         self.onSlotsChanged = onSlotsChanged
         self.onMakeVariations = onMakeVariations
         self.batchStatus = batchStatus
@@ -3509,6 +3520,10 @@ struct MemeEditorView: View {
         // out as the soundtrack, enter video mode with no clip — the
         // creator adds their own.
         .task(id: "sound-seed") { await seedSoundSession() }
+        // MEM-003b "Pick sound from a video" (Create-hub sound picker):
+        // the editor's existing extraction path owns extraction, named
+        // progress and failure copy. Runs once against an empty session.
+        .task(id: "sound-from-video") { await consumeSoundFromVideoHandoff() }
 
         .confirmationDialog(
             feedbackCopy.confirms.first { $0.id == "mode-switch" }?.title
@@ -4231,6 +4246,17 @@ struct MemeEditorView: View {
         guard let soundSeed, store.clips.isEmpty, store.assets.isEmpty,
               store.videoClipData == nil, store.gifFramesCount == 0,
               store.soundtrackRow == nil else { return }
+        // MEM-003b local library pick: bytes + sha verify + decode, no
+        // network (the picker's "My sound library" rows hand the entry id).
+        if let localSoundId = soundSeed.localSoundId {
+            guard let entry = store.soundLibraryEntries.first(where: { $0.id == localSoundId }) else {
+                store.setNotice("That saved sound's audio is missing")
+                return
+            }
+            store.switchModeToVideo()
+            store.attachLibrarySound(entry)
+            return
+        }
         guard let url = URL(string: soundSeed.mediaUrl),
               url.scheme == "https" || url.host == "localhost" || url.host == "127.0.0.1" else {
             store.setNotice("Sound source URL is not loadable")
@@ -4266,6 +4292,17 @@ struct MemeEditorView: View {
             store.setNotice(nil)
             store.setExportFailure("Sound source could not be loaded")
         }
+    }
+
+    /// MEM-003b: consume the Create-hub "Pick sound from a video" handoff
+    /// exactly once against an empty session — the editor's own Sound-tool
+    /// extraction (`attachSoundtrack`) owns extraction and failure copy.
+    private func consumeSoundFromVideoHandoff() async {
+        guard let soundFromVideo, store.clips.isEmpty, store.assets.isEmpty,
+              store.videoClipData == nil, store.gifFramesCount == 0,
+              store.soundtrackRow == nil else { return }
+        store.switchModeToVideo()
+        store.attachSoundtrack(pickedData: soundFromVideo)
     }
 
     /// Expert-suite layout: full-bleed flexible stage + dock (app-15 scr-suite).
@@ -4876,10 +4913,17 @@ struct MemeEditorView: View {
             }
             // Blank VIDEO (plan D1): the synthesized canvas clip is the
             // media — ratio · background · duration picked in the sheet.
+            // MEM-003c: a sound-first session's secondary action re-opens
+            // the sound sheet ("Change sound"), not blank-create.
             if store.isVideoMode {
                 Button {
-                    activePanel = nil
-                    showBlankCreate = true
+                    if isSoundFirstSession {
+                        activePanel = nil
+                        togglePanel(.sound)
+                    } else {
+                        activePanel = nil
+                        showBlankCreate = true
+                    }
                 } label: {
                     Label(copy.secondary ?? "Start blank canvas", systemImage: "rectangle.on.rectangle")
                         .font(.subheadline.weight(.semibold))
@@ -5197,8 +5241,21 @@ struct MemeEditorView: View {
     }
 
     /// MSU-031: guiding empty-state copy for the current mode (shared).
+    /// MEM-003c: a sound-first session (soundtrack attached, no clip) gets
+    /// the sound-first copy — "Add video" / "Change sound".
     private var emptyState: StudioEmptyState {
-        StudioEmptyState.decode(mode: modeKey)
+        if store.isVideoMode, store.soundtrackRow != nil,
+           store.clips.isEmpty, store.assets.isEmpty, store.videoClipData == nil {
+            return StudioEmptyState.decodeSoundFirst()
+        }
+        return StudioEmptyState.decode(mode: modeKey)
+    }
+
+    /// MEM-003c: whether the empty CTA is the sound-first one (its
+    /// secondary action re-opens the sound sheet instead of blank-create).
+    private var isSoundFirstSession: Bool {
+        store.isVideoMode && store.soundtrackRow != nil &&
+            store.clips.isEmpty && store.assets.isEmpty && store.videoClipData == nil
     }
 
     /// MSU-030: coach eligibility for THIS session (handoffs suppress it).

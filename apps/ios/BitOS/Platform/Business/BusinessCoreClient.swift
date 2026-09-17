@@ -268,6 +268,23 @@ protocol BusinessCoreClient: Sendable {
     ) -> String
     /// MSU-031 guiding empty-state copy for a mode (`image|gif|video`).
     func memeEmptyState(mode: String) -> String
+    /// MEM-003c sound-first empty-state copy (VIDEO mode, soundtrack
+    /// attached, no clip) — same shape as [memeEmptyState].
+    func memeSoundFirstEmptyState() -> String
+    /// MEM-003a remix paste-field parser: `{"id","relays"}` on success,
+    /// else `{"error","message"}` (stable token + shared display copy).
+    func remixSourceTargetParse(_ raw: String) -> String
+    /// MEM-005a/c preflight classification of one VERIFIED fetched source:
+    /// `{"idMatches","mediaUrl","mediaKind","license","askRequired",
+    ///   "attribution","memeTag"}` — mediaUrl "" = no loadable media
+    /// (credited-post fallback, never a blank studio remix).
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String
+    /// MEM-005a by-id lookup REQ (kinds 1/20/21/22, limit 1); "" on a
+    /// malformed id.
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String
     /// MSU-040 notice host: post a notice, get the next host state JSON.
     func memeNoticePost(
         stateJson: String, severity: String, message: String,
@@ -839,6 +856,33 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeEmptyState(mode: mode)
     }
 
+    func memeSoundFirstEmptyState() -> String {
+        bridge.memeSoundFirstEmptyState()
+    }
+
+    func remixSourceTargetParse(_ raw: String) -> String {
+        bridge.remixSourceTargetParse(raw: raw)
+    }
+
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String {
+        bridge.remixSourcePreflight(
+            eventId: eventId,
+            pubkey: pubkey,
+            kind: Int64(kind),
+            createdAt: createdAt,
+            content: content,
+            tagsJson: tagsJson,
+            creatorLabel: creatorLabel
+        )
+    }
+
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String {
+        bridge.remixSourceLookupRequest(subscriptionId: subscriptionId, eventId: eventId)
+    }
+
     func memeNoticePost(
         stateJson: String, severity: String, message: String,
         actionId: String?, actionLabel: String?, timeoutMs: Int
@@ -1388,6 +1432,24 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeEmptyState(mode: String) -> String {
         FrameworkBusinessCoreClient().memeEmptyState(mode: mode)
+    }
+    func memeSoundFirstEmptyState() -> String {
+        FrameworkBusinessCoreClient().memeSoundFirstEmptyState()
+    }
+    func remixSourceTargetParse(_ raw: String) -> String {
+        FrameworkBusinessCoreClient().remixSourceTargetParse(raw)
+    }
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String {
+        FrameworkBusinessCoreClient().remixSourcePreflight(
+            eventId: eventId, pubkey: pubkey, kind: kind, createdAt: createdAt,
+            content: content, tagsJson: tagsJson, creatorLabel: creatorLabel
+        )
+    }
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String {
+        FrameworkBusinessCoreClient().remixSourceLookupRequest(subscriptionId: subscriptionId, eventId: eventId)
     }
     func memeNoticePost(
         stateJson: String, severity: String, message: String,

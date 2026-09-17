@@ -231,6 +231,10 @@ data class MemeSoundSeed(
     val isAudioOnly: Boolean = false,
     /** Expected 64-hex hash for [isAudioOnly] downloads (integrity gate). */
     val sha256: String? = null,
+    /** MEM-003b: local sound-library entry id — the picker's local rows
+     *  attach by id (bytes + sha verify, no network); the URL fields carry
+     *  the entry's values for provenance. */
+    val localSoundId: String? = null,
 )
 
 /**
@@ -260,6 +264,11 @@ fun MemeEditorScreen(
     remixSeed: MemeRemixSeed? = null,
     /** "Use this sound" handoff (Wave C): borrow THIS bitz's audio only. */
     soundSeed: MemeSoundSeed? = null,
+    /** MEM-003b "Pick sound from a video": the Create-hub sound picker
+     *  hands a picked library video here — the editor's existing
+     *  extraction path owns extraction, named progress and failure copy.
+     *  Consumed once; null on re-composition after acceptance. */
+    soundFromVideoUri: android.net.Uri? = null,
     onSlotsChanged: () -> Unit = {},
     /** MUX-06: hand the frozen design + rendered poster to mass production. */
     onMakeVariations: ((String, ByteArray) -> Unit)? = null,
@@ -929,34 +938,55 @@ fun MemeEditorScreen(
     var soundtrackM4a by remember { mutableStateOf<ByteArray?>(null) }
     var soundtrackPcm by remember { mutableStateOf<Pair<FloatArray, Int>?>(null) }
     var extractingSound by remember { mutableStateOf(false) }
+
+    /** One shared extraction path (MEM-003b): the editor's Sound-tool
+     *  picker AND the Create-hub "Pick sound from a video" handoff run
+     *  exactly these steps — named progress, bounded decode, identical
+     *  failure copy. */
+    suspend fun extractSoundtrackFrom(uri: android.net.Uri) {
+        extractingSound = true
+        val extracted = withContext(Dispatchers.IO) { MemeVideoSound.extract(context, uri) }
+        if (extracted == null) {
+            extractingSound = false
+            exportStatus = "No readable audio track in that video"
+            return
+        }
+        val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+        extractingSound = false
+        if (decoded == null) {
+            exportStatus = "That sound could not be decoded on this device"
+            return
+        }
+        soundtrackM4a = extracted.m4aBytes
+        soundtrackPcm = decoded
+        state.setSoundtrack(
+            space.bitos.core.studio.MemeSoundtrack(
+                sha256 = extracted.sha256Hex,
+                durationMs = extracted.durationMs,
+                label = "Original sound",
+            ),
+        )
+        exportStatus = null
+    }
+
     val soundtrackPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        extractingSound = true
-        scope.launch {
-            val extracted = withContext(Dispatchers.IO) { MemeVideoSound.extract(context, uri) }
-            if (extracted == null) {
-                extractingSound = false
-                exportStatus = "No readable audio track in that video"
-                return@launch
-            }
-            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
-            extractingSound = false
-            if (decoded == null) {
-                exportStatus = "That sound could not be decoded on this device"
-                return@launch
-            }
-            soundtrackM4a = extracted.m4aBytes
-            soundtrackPcm = decoded
-            state.setSoundtrack(
-                space.bitos.core.studio.MemeSoundtrack(
-                    sha256 = extracted.sha256Hex,
-                    durationMs = extracted.durationMs,
-                    label = "Original sound",
-                ),
-            )
-            exportStatus = null
+        scope.launch { extractSoundtrackFrom(uri) }
+    }
+
+    // MEM-003b: the Create-hub sound picker's video handoff — consumed
+    // once (cleared right away so a recomposition never re-extracts).
+    var pendingSoundVideoUri by remember(soundFromVideoUri) {
+        mutableStateOf(soundFromVideoUri)
+    }
+    LaunchedEffect(pendingSoundVideoUri) {
+        val uri = pendingSoundVideoUri ?: return@LaunchedEffect
+        pendingSoundVideoUri = null
+        if (state.project.soundtrack == null && soundtrackM4a == null) {
+            state.switchMode(MemeMode.VIDEO)
+            extractSoundtrackFrom(uri)
         }
     }
 
@@ -1595,6 +1625,48 @@ fun MemeEditorScreen(
         if (state.project.assets.isNotEmpty() || videoClips.isNotEmpty() ||
             assets.isNotEmpty() || gifFrames.isNotEmpty() || state.project.soundtrack != null
         ) {
+            return@LaunchedEffect
+        }
+        // MEM-003b local library pick: bytes + sha verify + decode, no
+        // network (the picker's "My sound library" rows hand the entry id).
+        if (seed.localSoundId != null) {
+            val entry = libraryEntries.firstOrNull { it.id == seed.localSoundId }
+            val bytes = entry?.let { soundLibrary.bytes(it.id) }
+            if (entry == null || bytes == null) {
+                exportStatus = "That saved sound's audio is missing"
+                return@LaunchedEffect
+            }
+            extractingSound = true
+            val digest = withContext(Dispatchers.IO) {
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+            }
+            if (digest != entry.sha256) {
+                extractingSound = false
+                exportStatus = "Saved sound failed its hash check — nothing was loaded"
+                return@LaunchedEffect
+            }
+            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, bytes) }
+            extractingSound = false
+            if (decoded == null) {
+                exportStatus = "That saved sound could not be decoded here"
+                return@LaunchedEffect
+            }
+            state.switchMode(MemeMode.VIDEO)
+            soundtrackM4a = bytes
+            soundtrackPcm = decoded
+            state.setSoundtrack(
+                space.bitos.core.studio.MemeSoundRules.normalize(
+                    space.bitos.core.studio.MemeSoundtrack(
+                        url = entry.url,
+                        sha256 = entry.sha256,
+                        durationMs = entry.durationMs,
+                        sourceNoteId = entry.sourceEventId.takeIf { it.isNotBlank() },
+                        sourceAuthorPubkey = entry.authorPubkey.takeIf { it.isNotBlank() },
+                        label = entry.label.takeIf { it.isNotBlank() } ?: "Original sound",
+                    ),
+                ),
+            )
             return@LaunchedEffect
         }
         val url = runCatching { java.net.URI(seed.mediaUrl).toURL() }.getOrNull()
@@ -2918,12 +2990,21 @@ fun MemeEditorScreen(
                     production = productionCopy,
                 )
             } else if (videoMode) {
+                // MEM-003c: a sound-first session (soundtrack attached, no
+                // clip) gets its own guiding copy — "Add video" seeds the
+                // timeline, "Change sound" re-opens the sound sheet.
+                val soundFirst = state.project.soundtrack != null && !hasVideo
+                val soundFirstState = remember { StudioEmptyState.decodeSoundFirst() }
                 EmptyCanvasCta(
-                    state = emptyState,
+                    state = if (soundFirst) soundFirstState else emptyState,
                     onPick = ::launchPicker,
-                    onBlank = {
-                        activePanel = null
-                        showBlankCreate = true
+                    onBlank = if (soundFirst) {
+                        { activePanel = MemeEditorPanel.SOUND }
+                    } else {
+                        {
+                            activePanel = null
+                            showBlankCreate = true
+                        }
                     },
                     onTemplate = { id ->
                         state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))

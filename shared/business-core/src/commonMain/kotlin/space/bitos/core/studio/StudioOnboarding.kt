@@ -148,6 +148,20 @@ object StudioOnboarding {
         )
     }
 
+    /**
+     * Sound-first empty state (MEM-003c): VIDEO mode with a verified
+     * soundtrack attached and no clip yet. The soundtrack row stays the
+     * source of truth for label/volume/loop/remove; the secondary action
+     * re-opens the sound sheet (the "Change sound" path).
+     */
+    val SOUND_FIRST_EMPTY = EmptyState(
+        title = "Your sound is ready",
+        body = "Add a video to begin.",
+        iconToken = "sound",
+        primaryLabel = "Add video",
+        secondaryLabel = "Change sound",
+    )
+
     /** The line shown once media exists but nothing is on it yet. */
     const val ADD_SOMETHING_HINT = "Add text, a sticker or a look — everything autosaves."
 

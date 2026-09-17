@@ -46,8 +46,13 @@ web code wins** — file a plan fix instead of inventing new constants.
 - **Publish page**: preview, caption, tags, visibility, cover strip (video), CW + alt text;
   publish machine (render → verify → upload → sign(+pow) → publish).
 - Project autosave + recovery: ≤6 continue-creating slots (EDT-001/002), crash-safe.
-- Hub completion: enable the dead "Quick MEM" row; disabled states for Sound/Remix
-  (until APP-021/MEM-003); design-system icons everywhere.
+- Hub completion: Quick MEM is live. Sound/remix protocol and contextual Bitz
+  entries are live; the Create-hub source-picker reach specified in
+  `create-hub-sound-remix-plan.md` SHIPPED 2026-09-17 (`MEM-003a-c`,
+  `MEM-005a-c` — source-first "Start with a sound" / "Remix a Bitz"
+  entries behind `studio_sound_source_picker`/`studio_remix_source_picker`,
+  release-off/debug-on; EDT-013 device audit pending).
+  Design-system icons apply everywhere.
 
 **Out of scope V1, sequenced in M4/V2 from the proven web feature set
 (tracked in EDT/MEM tables — do not pull forward)**
@@ -96,11 +101,11 @@ incl. hash mismatch and relaunch).
 | Bitz header camera                               | Record Bitz                                      | Unchanged (kind-22 pipeline).                                                                                                                           |
 | Trending sounds row (APP-021)                    | Absent                                           | V1.x: "Use sound" seeds a video project (`soundSeed`).                                                                                                  |
 
-Dead hub rows (Use a sound / Remix) get a disabled state + "Soon" chip in M0 so
-taps stop reading as broken. Cross-screen handoff uses a one-shot payload
-(`{tab, resumeSlotId?, template?, soundSeed?, remix?}`) — web
-`studio-handoff.svelte.ts` is the model; native passes it through the hub
-router, never via globals.
+The original M0 disabled hub rows (Use a sound / Remix) are superseded by
+`create-hub-sound-remix-plan.md`: sound is enabled through its source picker;
+remix is enabled only after a verified source is selected. Cross-screen
+handoff uses a one-shot typed payload (`Sound`, `ExtractSoundFromVideo`,
+`Remix`, or `CreditedPost`) through the native hub router, never globals.
 
 ### 2.2 Editor screen (shared layout contract)
 

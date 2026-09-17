@@ -66,3 +66,4 @@ infra/data/
 Secrets.xcconfig
 
 .log
+.zcode

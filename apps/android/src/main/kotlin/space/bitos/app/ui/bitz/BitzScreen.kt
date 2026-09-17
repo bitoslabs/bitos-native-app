@@ -374,25 +374,20 @@ fun BitzScreen(
 
     fun remixSeedTags(note: FeedNote): List<List<String>> {
         val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
-        val base: List<List<String>> = space.bitos.core.feed.RemixRules.tagsFor(note.id, note.pubkey)
-        return base + listOfNotNull(space.bitos.core.feed.RemixRules.attributionTag(label))
+        return space.bitos.app.ui.create.MemeRemixHandoff.creditedPostTags(note, label)
     }
 
-    /** Builds the editor handoff: source media, decoded-layout payload id,
-     *  relay hints (source-tag relays + write relays, ≤3) and the author
-     *  label for the attribution credit. Null when nothing can load. */
+    /** Builds the editor handoff through the ONE shared mapper
+     *  (MemeRemixHandoff — the Create-hub remix picker builds the same
+     *  seed): source media, decoded-layout payload id, relay hints
+     *  (source-tag relays + write relays, ≤3) and the author label for
+     *  the attribution credit. Null when nothing can load. */
     fun remixEditorSeed(note: FeedNote): space.bitos.app.ui.create.meme.MemeRemixSeed? {
-        val mediaUrl = note.video?.url ?: note.mediaUrls.firstOrNull() ?: return null
         val label = state.profiles[note.pubkey]?.bestDisplayName ?: shortPubkey(note.pubkey)
-        val writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls.map { it.value }
-        return space.bitos.app.ui.create.meme.MemeRemixSeed(
-            eventId = note.id,
-            pubkey = note.pubkey,
-            label = label,
-            relays = space.bitos.core.feed.RemixRules.relayHints(note.remixRelays, writeRelays),
-            mediaUrl = mediaUrl,
-            isVideo = note.video != null,
-            memeTag = note.memeTag,
+        return space.bitos.app.ui.create.MemeRemixHandoff.editorSeed(
+            note = note,
+            creatorLabel = label,
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls.map { it.value },
         )
     }
 

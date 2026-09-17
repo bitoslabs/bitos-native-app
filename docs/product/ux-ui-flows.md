@@ -693,15 +693,31 @@ already be live) and confirmed discard.
 ## 10. Remix and Use Sound
 
 ```text
-Bitz or Sound page -> Use this / Remix
-  -> show source creator, license, attribution, rights signal
-  -> Quick Bitz or MEM
+Create or Bitz/Sound page -> Start with a sound / Remix a Bitz
+  -> choose a verified source (sound or Bitz)
+  -> show source creator, license, attribution and rights signal
+  -> Studio sound-first project / verified remix handoff
   -> preserve parent/root/sound/template edges
-  -> review attribution/value recipients
+  -> review automatic attribution/value recipients
   -> publish
 ```
 
-Attribution does not claim legal permission. Unavailable/unsupported assets offer replace, continue without, or cancel.
+The Create hub's **Start with a sound** and **Remix a Bitz** actions are
+source-first: neither creates a misleading blank remix or a hidden soundtrack.
+Start with a sound offers verified shared/trending/local sounds and a native
+video source; it opens VIDEO mode with sound attached and no clip. Remix a
+Bitz accepts a bounded pasted/scanned Nostr target or a bounded list of the
+user's recent verified Bitz, then verifies the source before it can seed the
+editor. The Bitz rail remains the fast contextual entry for either action.
+
+The remix preflight names creator, source, license and attribution. A
+restrictive license requires explicit continuation; a valid source with no
+loadable media offers a credited note instead of claiming a Studio remix.
+Sound/remix cancellation, lookup failure, unsupported media, hash mismatch,
+or relay loss preserves the Create hub and sends nothing. Attribution does not
+claim legal permission and cannot be silently removed. Full interaction,
+state, accessibility and implementation requirements live in
+[`create-hub-sound-remix-plan.md`](../native/create-hub-sound-remix-plan.md).
 
 ## 11. Social and wallet flows
 

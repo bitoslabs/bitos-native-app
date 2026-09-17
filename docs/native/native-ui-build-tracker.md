@@ -623,6 +623,25 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-17 — **Create-hub sound/remix source pickers** (MEM-003a-c,
+  MEM-005a-c, plan `create-hub-sound-remix-plan.md`): the two stale
+  "Soon" rows became source-first entries — **Start with a sound**
+  (picker: shared sounds · trending link into the existing surface ·
+  local library by entry id · pick-sound-from-a-video into the editor's
+  existing extraction; one preview at a time with play/pause labels) and
+  **Remix a Bitz** (paste + QR-from-photo scan through the shared
+  bounded parser, verified by-id relay lookup with a named timeout card,
+  account-scoped recent Bitz, preflight card with license ask +
+  attribution preview, cycle refusal, credited-post fallback through the
+  seeded composer). Sound-first editor empty state ("Your sound is
+  ready. Add a video to begin." + Change sound → sound sheet) on both
+  platforms; Bitz-card remix seed building deduped into one handoff
+  mapper per platform (`MemeRemixHandoff` / `RemixRulesHelper`). Flags
+  `studio_sound_source_picker`/`studio_remix_source_picker`
+  (release-off, debug-on). Open: EDT-013 device a11y/relay-recovery
+  audit, live-camera QR scan (photo-decode shipped), on-device QA of the
+  failure matrix (`contracts/meme/remix-source-failure-matrix.json`).
+
 - 2026-09-10 — **Browse video sounds (kind 21/22) in the Sound
   sheet** (left uncommitted for owner review): the "vdo sound" browse
   gap closed — 🎬 row → sheet over the live kind-21/22 window (bounded

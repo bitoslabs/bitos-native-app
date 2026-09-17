@@ -471,9 +471,17 @@ fun BitOSApp(
                 } else if (showCreateHub) {
                     // T4: the capture pipeline (record → trim → publish and
                     // library import) is reachable from the Bitz header and
-                    // the Home app-bar camera icon.
+                    // the Home app-bar camera icon. MEM-003/MEM-005: the
+                    // hub's sound/remix source pickers route through the
+                    // shell's trending surface, seeded composer and the
+                    // shared cycle pre-flight.
+                    val identityForHub by identityViewModel.state.collectAsStateWithLifecycle()
                     space.bitos.app.ui.create.CreateScreen(
                         mediaPublishViewModel = mediaPublishViewModel,
+                        accountPubkey = identityForHub.account?.pubkeyHex,
+                        remixLineageCycles = homeViewModel::remixLineageCycles,
+                        onOpenTrendingSounds = { showCreateHub = false; showTrendingSounds = true },
+                        onOpenRemixComposer = { openSeededComposer(it) },
                         onClose = { showCreateHub = false },
                     )
                 } else if (memeRemixSeed != null) {

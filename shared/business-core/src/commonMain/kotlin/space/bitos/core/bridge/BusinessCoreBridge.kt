@@ -2496,6 +2496,99 @@ class BusinessCoreBridge {
         }.toString()
     }
 
+    // ── Create-hub sound/remix source pickers (MEM-003/MEM-005) ────────
+
+    /**
+     * MEM-003a paste-field parser for the remix source picker. Returns
+     * `{"id":"<64-hex>","relays":["wss://…",…]}` for an accepted
+     * note/nevent/BitOS-URL target, else `{"error":"<token>","message":"…"}`.
+     * The rejection token is stable (`RemixTargetRejection.name`); the
+     * message is shared display copy. Pure — no relay or UI code.
+     */
+    fun remixSourceTargetParse(raw: String): String = buildJsonObject {
+        val parsed = space.bitos.core.studio.RemixSourceTargets.parse(raw)
+        if (parsed is space.bitos.core.studio.RemixTarget.Event) {
+            put("id", parsed.id)
+            put("relays", buildJsonArray {
+                parsed.relayHints.forEach { add(JsonPrimitive(it)) }
+            })
+        } else {
+            val rejection = space.bitos.core.studio.RemixSourceTargets.rejectionOf(raw)
+                ?: space.bitos.core.studio.RemixTargetRejection.NOT_AN_EVENT
+            put("error", rejection.name)
+            put("message", rejection.message)
+        }
+    }.toString()
+
+    /**
+     * MEM-005a/c preflight classification of one VERIFIED fetched source:
+     * `{"mediaUrl":"…","mediaKind":"video|image","license":"…"|"",
+     * "askRequired":bool,"attribution":"remix of …"}` — mediaUrl "" means
+     * "no loadable media": the picker offers the seeded credited post,
+     * never a blank studio remix. Pure over the shared rules.
+     */
+    fun remixSourcePreflight(
+        eventId: String,
+        pubkey: String,
+        kind: Long,
+        createdAt: Long,
+        content: String,
+        tagsJson: String,
+        creatorLabel: String,
+    ): String {
+        val tags = try {
+            space.bitos.core.store.TagsCodec.decode(tagsJson).orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val id = space.bitos.core.model.EventId.parse(eventId)
+        val author = space.bitos.core.model.Pubkey.parse(pubkey)
+        if (id == null || author == null) {
+            return buildJsonObject {
+                put("idMatches", false)
+                put("mediaUrl", "")
+                put("mediaKind", "")
+                put("license", "")
+                put("askRequired", false)
+                put("attribution", "")
+                put("memeTag", "")
+            }.toString()
+        }
+        val note = space.bitos.core.feed.FeedNote.from(
+            space.bitos.core.model.NostrEvent(
+                id = id,
+                pubkey = author,
+                createdAt = createdAt,
+                kind = kind.toInt(),
+                tags = tags,
+                content = content,
+                signature = null,
+                receivedFromRelay = null,
+            ),
+        )
+        val preflight = space.bitos.core.studio.RemixPreflight
+        return buildJsonObject {
+            put("idMatches", preflight.idMatches(eventId, note))
+            put("mediaUrl", preflight.mediaUrlOf(note) ?: "")
+            put("mediaKind", preflight.mediaKindOf(note) ?: "")
+            put("license", note.license ?: "")
+            put("askRequired", preflight.requiresAsk(note))
+            put("attribution", preflight.attributionPreview(creatorLabel))
+            put("memeTag", note.memeTag ?: "")
+        }.toString()
+    }
+
+    /** By-id lookup REQ for one remix target (kinds 1/20/21/22, limit 1). */
+    fun remixSourceLookupRequest(subscriptionId: String, eventId: String): String =
+        try {
+            space.bitos.core.nostr.NostrEventCodec.encodeRequest(
+                subscriptionId,
+                space.bitos.core.studio.RemixPreflight.lookupFilter(eventId),
+            )
+        } catch (_: Exception) {
+            ""
+        }
+
     // ── M2 GIF planning seams: iOS rasters/encodes natively (plan §4.2 —
     // CGImageSource decode + CGImageDestination encode) but the TIMING and
     // ladder rules stay single-sourced in the shared planner.
@@ -2898,6 +2991,28 @@ class BusinessCoreBridge {
             put("primary", state.primaryLabel)
             put("secondary", state.secondaryLabel ?: "")
             put("tertiary", state.tertiaryLabel ?: "")
+            put("hint", space.bitos.core.studio.StudioOnboarding.ADD_SOMETHING_HINT)
+            put("undoHint", space.bitos.core.studio.StudioOnboarding.UNDO_HINT)
+            put("nothingToUndo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_UNDO)
+            put("nothingToRedo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_REDO)
+        }.toString()
+    }
+
+    /**
+     * Sound-first empty state (MEM-003c): the VIDEO-mode session a
+     * `MemeSoundSeed` opens — soundtrack attached, no clip. Same shape as
+     * [memeEmptyState]; `secondary` ("Change sound") re-opens the sound
+     * sheet, `primary` ("Add video") opens the media picker.
+     */
+    fun memeSoundFirstEmptyState(): String {
+        val state = space.bitos.core.studio.StudioOnboarding.SOUND_FIRST_EMPTY
+        return buildJsonObject {
+            put("title", state.title)
+            put("body", state.body)
+            put("icon", state.iconToken)
+            put("primary", state.primaryLabel)
+            put("secondary", state.secondaryLabel ?: "")
+            put("tertiary", "")
             put("hint", space.bitos.core.studio.StudioOnboarding.ADD_SOMETHING_HINT)
             put("undoHint", space.bitos.core.studio.StudioOnboarding.UNDO_HINT)
             put("nothingToUndo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_UNDO)

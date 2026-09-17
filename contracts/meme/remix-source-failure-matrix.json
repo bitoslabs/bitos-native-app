@@ -1,0 +1,56 @@
+{
+  "v": 1,
+  "comment": [
+    "MEM-005c failure matrix for the Create-hub sound/remix source pickers",
+    "(plan docs/native/create-hub-sound-remix-plan.md §Required states +",
+    "acceptance test 5). Common-pure rows are pinned by unit batteries",
+    "(RemixSourceTargetTest, RemixSourcePreflightTest, RemixTest chain cases,",
+    "MemeRemixHandoffTest on Android); adapter-lifecycle rows are the device",
+    "QA script (EDT-013). Nothing in this matrix may publish, sign or leave",
+    "a partial project behind."
+  ],
+  "cases": [
+    {
+      "id": "source-mismatch",
+      "kind": "common-pure",
+      "pinnedBy": "RemixSourcePreflightTest.mismatchGuardRejectsDifferentEvent",
+      "behavior": "A relay delivering an event whose id differs from the pasted target never resolves the lookup; the picker keeps the paste field and names nothing published."
+    },
+    {
+      "id": "lineage-cycle",
+      "kind": "common-pure",
+      "pinnedBy": "RemixTest.chainDetectsCyclesIncludingSelfLoops + preflight gate",
+      "behavior": "Open remix on a looping lineage is refused before the editor opens ('This lineage loops'); no draft, no seed. Re-checked pre-sign by the publish path."
+    },
+    {
+      "id": "relay-timeout",
+      "kind": "adapter",
+      "pinnedBy": "device QA (EDT-013); store contract: RemixSourceLookup.State.Timeout / RemixSourceLookupStore.timedOut",
+      "behavior": "The named 'Checking this Bitz on relays…' stage settles to a timeout card with Retry; Cancel closes the sub and cancels the fetch. No project is created."
+    },
+    {
+      "id": "source-disappears-during-download",
+      "kind": "adapter",
+      "pinnedBy": "device QA (EDT-013); editor seeding contract (remix/sound LaunchedEffect)",
+      "behavior": "A URL that fails mid-download surfaces the editor's named failure ('Remix/Sound source could not be loaded'); the session stays usable, nothing signs."
+    },
+    {
+      "id": "unsupported-media",
+      "kind": "common-pure",
+      "pinnedBy": "RemixSourcePreflightTest.noMediaMeansNoRemixSource + MemeRemixHandoffTest.noLoadableMediaMeansNoEditorSeed",
+      "behavior": "A valid event with no loadable media offers 'Create credited post' (seeded composer); the tags retain remix/p/attribution and never claim a studio remix."
+    },
+    {
+      "id": "account-switch",
+      "kind": "adapter",
+      "pinnedBy": "device QA (EDT-013); store contract: RecentBitzStore re-opens a fresh window per pubkey",
+      "behavior": "Switching accounts clears the picker's recent window and any in-flight lookup on close; the new account's list is scoped to its own pubkey. No cross-account seeds survive."
+    },
+    {
+      "id": "malformed-paste",
+      "kind": "common-pure",
+      "pinnedBy": "contracts/meme/remix-source-targets.json + RemixSourceTargetTest.rejectionsAreNamed",
+      "behavior": "Malformed/oversized/unsupported/profile/address targets get the shared named rejection copy; the paste field and the hub stay intact."
+    }
+  ]
+}

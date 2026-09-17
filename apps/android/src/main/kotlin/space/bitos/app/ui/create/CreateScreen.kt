@@ -83,6 +83,7 @@ import java.security.MessageDigest
 import kotlin.coroutines.resume
 
 private data class CreateAction(
+    val id: String,
     val icon: @Composable (Modifier) -> Unit,
     val title: String,
     val subtitle: String,
@@ -105,50 +106,69 @@ internal object ImportedVideoRules {
     }
 }
 
-private val quickActions = listOf(
-    CreateAction(
-        icon = { modifier ->
-            space.bitos.app.ui.theme.SolarFeedIconImage(
-                space.bitos.app.ui.theme.SolarFeedIcon.Gallery,
-                contentDescription = null,
-                tint = BitOSColors.primary,
-                modifier = modifier,
-            )
-        },
-        title = "Import media",
-        subtitle = "From your library",
-        description = "Pick a video and polish it in the studio editor",
-        enabled = true,
-    ),
-    CreateAction(
-        icon = { modifier ->
-            space.bitos.app.ui.theme.SolarStudioIconImage(
-                space.bitos.app.ui.theme.SolarStudioIcon.MusicNote,
-                contentDescription = null,
-                tint = BitOSColors.primary,
-                modifier = modifier,
-            )
-        },
-        title = "Use a sound",
-        subtitle = "Sound library",
-        description = "Start a project from a licensed sound",
-        enabled = false,
-    ),
-    CreateAction(
-        icon = { modifier ->
-            space.bitos.app.ui.theme.SolarStudioIconImage(
-                space.bitos.app.ui.theme.SolarStudioIcon.MagicWand,
-                contentDescription = null,
-                tint = BitOSColors.primary,
-                modifier = modifier,
-            )
-        },
-        title = "Remix",
-        subtitle = "Provenance-aware",
-        description = "Build on a template with attribution",
-        enabled = false,
-    ),
-)
+/** One enabled "Create with" quick-action row (plan table §Create hub
+ *  placement and copy); sound/remix rows exist only when their flag is
+ *  on (MEM-003c/MEM-005b kill switches). */
+private fun quickActions(
+    soundPickerEnabled: Boolean,
+    remixPickerEnabled: Boolean,
+): List<CreateAction> = buildList {
+    add(
+        CreateAction(
+            id = "import",
+            icon = { modifier ->
+                space.bitos.app.ui.theme.SolarFeedIconImage(
+                    space.bitos.app.ui.theme.SolarFeedIcon.Gallery,
+                    contentDescription = null,
+                    tint = BitOSColors.primary,
+                    modifier = modifier,
+                )
+            },
+            title = "Import media",
+            subtitle = "From your library",
+            description = "Pick a video and polish it in the studio editor",
+            enabled = true,
+        ),
+    )
+    if (soundPickerEnabled) {
+        add(
+            CreateAction(
+                id = "sound",
+                icon = { modifier ->
+                    space.bitos.app.ui.theme.SolarStudioIconImage(
+                        space.bitos.app.ui.theme.SolarStudioIcon.MusicNote,
+                        contentDescription = null,
+                        tint = BitOSColors.primary,
+                        modifier = modifier,
+                    )
+                },
+                title = "Start with a sound",
+                subtitle = "Sound sources",
+                description = "Add your video after you choose a sound.",
+                enabled = true,
+            ),
+        )
+    }
+    if (remixPickerEnabled) {
+        add(
+            CreateAction(
+                id = "remix",
+                icon = { modifier ->
+                    space.bitos.app.ui.theme.SolarStudioIconImage(
+                        space.bitos.app.ui.theme.SolarStudioIcon.MagicWand,
+                        contentDescription = null,
+                        tint = BitOSColors.primary,
+                        modifier = modifier,
+                    )
+                },
+                title = "Remix a Bitz",
+                subtitle = "Credit included",
+                description = "Start from a Bitz; the original creator is credited automatically.",
+                enabled = true,
+            ),
+        )
+    }
+}
 
 /** "Start something new" tiles (mockup app-15 scr-home): Bitz · Meme · Batch. */
 private data class StartTile(
@@ -215,6 +235,10 @@ private val HexPlateShape = object : androidx.compose.ui.graphics.Shape {
 @Composable
 fun CreateScreen(
     mediaPublishViewModel: space.bitos.app.ui.feed.MediaPublishViewModel,
+    accountPubkey: String? = null,
+    remixLineageCycles: suspend (space.bitos.core.feed.FeedNote) -> Boolean = { false },
+    onOpenTrendingSounds: () -> Unit = {},
+    onOpenRemixComposer: (List<List<String>>) -> Unit = {},
     onClose: () -> Unit = {},
 ) {
     var showCamera by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -227,10 +251,28 @@ fun CreateScreen(
         androidx.compose.runtime.mutableStateOf<space.bitos.core.studio.MemeTemplate?>(null)
     }
     /** CAP→MEM handoff (M5): camera takes (strip order) seed video mode —
-     * each take becomes its own timeline clip, unmerged. */
+     *  each take becomes its own timeline clip, unmerged. */
     var memeSeeds by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<List<ByteArray>?>(null)
     }
+    // ── MEM-003/MEM-005 Create-hub source pickers ────────────────────
+    // One typed one-shot handoff each; cleared on editor close/cancel so
+    // nothing survives as a phantom seed (account switch clears with the
+    // hub itself — the pickers are screen-local state).
+    var showSoundPicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showRemixPicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var remixSeed by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<space.bitos.app.ui.create.meme.MemeRemixSeed?>(null)
+    }
+    /** MEM-003b "Pick sound from a video": local asset reference handed
+     *  to the editor's existing extraction path. */
+    var soundFromVideoUri by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<android.net.Uri?>(null)
+    }
+    val actions = quickActions(
+        soundPickerEnabled = StudioFeatureFlags.soundSourcePickerEnabled,
+        remixPickerEnabled = StudioFeatureFlags.remixSourcePickerEnabled,
+    )
 
     var resumeSlotId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
@@ -315,10 +357,139 @@ fun CreateScreen(
         }
     }
 
+    // ── MEM-003b sound picker data (all reused stores, no duplicates) ──
+    val soundLibrary = remember {
+        space.bitos.app.ui.create.meme.SharedSoundLibraryStore(File(context.filesDir, "studio"))
+    }
+    var soundLibraryRevision by remember { mutableIntStateOf(0) }
+    val libraryEntries = remember(soundLibraryRevision) { soundLibrary.list() }
+    // Trending preview rows: the SAME deterministic ranking the trending
+    // surface renders (MemeSoundTrending.rank over the live feed window).
+    val feedContent by remember(context) {
+        (context.applicationContext as space.bitos.app.BitOsApplication).feedRepository.state
+    }.collectAsStateWithLifecycle()
+    val trendingRows = remember(feedContent) {
+        val now = System.currentTimeMillis()
+        val usages = feedContent.notes.mapNotNull { note ->
+            note.soundOf?.let { sound ->
+                space.bitos.core.studio.MemeSoundTrending.Usage(
+                    eventId = note.id,
+                    createdAtMs = note.createdAt,
+                    url = sound.url,
+                    sha256 = sound.sha256,
+                    sourceEventId = sound.eventId,
+                    authorPubkey = sound.pubkey,
+                )
+            }
+        }
+        space.bitos.core.studio.MemeSoundTrending.rank(usages, nowMs = now)
+    }
+    /** MEM-003b "Pick sound from a video": the picker only picks — the
+     *  editor's existing extraction path owns extraction. */
+    val soundVideoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        showSoundPicker = false
+        soundFromVideoUri = uri
+        showMeme = true
+    }
+
+    // ── MEM-005a remix picker data: verified by-id lookup + the
+    //  account-scoped recent window (both close with the picker). ──────
+    val remixLookup = remember(context) {
+        val app = context.applicationContext as space.bitos.app.BitOsApplication
+        space.bitos.app.data.feed.RemixSourceLookup(app.applicationScope, app.memeTemplatePool)
+    }
+    val recentBitz = remember(context) {
+        val app = context.applicationContext as space.bitos.app.BitOsApplication
+        space.bitos.app.data.feed.RecentBitzStore(app.applicationScope, app.memeTemplatePool)
+    }
+
+    if (showSoundPicker) {
+        SoundSourcePickerScreen(
+            sharedRows = sharedSoundRows,
+            trendingRows = trendingRows,
+            libraryEntries = libraryEntries,
+            libraryBytes = soundLibrary::bytes,
+            onUseShared = { row ->
+                soundSeed = space.bitos.app.ui.create.meme.MemeSoundSeed(
+                    eventId = row.eventId,
+                    authorPubkey = row.authorPubkey,
+                    label = row.label,
+                    mediaUrl = row.url,
+                    isAudioOnly = true,
+                    sha256 = row.sha256,
+                )
+                showSoundPicker = false
+                showMeme = true
+            },
+            onUseTrending = { row ->
+                soundSeed = space.bitos.app.ui.create.meme.MemeSoundSeed(
+                    eventId = row.sourceEventId ?: "",
+                    authorPubkey = "",
+                    label = "Trending",
+                    mediaUrl = row.url,
+                    isAudioOnly = true,
+                    sha256 = row.sha256,
+                )
+                showSoundPicker = false
+                showMeme = true
+            },
+            onUseLibrary = { entry ->
+                soundSeed = space.bitos.app.ui.create.meme.MemeSoundSeed(
+                    eventId = entry.sourceEventId,
+                    authorPubkey = entry.authorPubkey,
+                    label = entry.label,
+                    mediaUrl = entry.url,
+                    isAudioOnly = false,
+                    sha256 = entry.sha256,
+                    localSoundId = entry.id,
+                )
+                showSoundPicker = false
+                showMeme = true
+            },
+            onPickFromVideo = {
+                soundVideoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+            },
+            onOpenTrending = {
+                showSoundPicker = false
+                onOpenTrendingSounds()
+            },
+            onClose = { showSoundPicker = false },
+        )
+        return
+    }
+
+    if (showRemixPicker) {
+        RemixSourcePickerScreen(
+            lookup = remixLookup,
+            recent = recentBitz,
+            accountPubkey = accountPubkey,
+            writeRelays = space.bitos.app.data.feed.DefaultRelays.writeUrls.map { it.value },
+            remixLineageCycles = remixLineageCycles,
+            onOpenRemix = { seed ->
+                showRemixPicker = false
+                remixSeed = seed
+                showMeme = true
+            },
+            onOpenCreditedPost = { tags ->
+                showRemixPicker = false
+                onOpenRemixComposer(tags)
+            },
+            onClose = { showRemixPicker = false },
+        )
+        return
+    }
+
     if (showMeme) {
         space.bitos.app.ui.create.meme.MemeEditorScreen(
             onClose = {
                 showMeme = false; resumeSlotId = null; templateSeed = null; sharedSeed = null; memeSeeds = null; soundSeed = null
+                remixSeed = null; soundFromVideoUri = null
+                // The editor's attach path saves new sounds to the local
+                // library — re-read it so the picker's rows stay fresh.
+                soundLibraryRevision += 1
             },
             sharedTagsJson = sharedSeed?.first,
             sharedContent = sharedSeed?.second,
@@ -328,6 +499,8 @@ fun CreateScreen(
             template = templateSeed,
             videoSeeds = memeSeeds,
             soundSeed = soundSeed,
+            soundFromVideoUri = soundFromVideoUri,
+            remixSeed = remixSeed,
             onSlotsChanged = { slotsRevision += 1 },
             onMakeVariations = { projectJson, posterBytes ->
                 showMeme = false
@@ -788,7 +961,7 @@ fun CreateScreen(
             }
         }
 
-        quickActions.forEach { action ->
+        actions.forEach { action ->
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = BitOSColors.surface,
@@ -796,11 +969,16 @@ fun CreateScreen(
                     .fillMaxWidth()
                     .alpha(if (action.enabled) 1f else 0.55f)
                     .then(
-                        if (action.enabled && action.title == "Import media") {
+                        if (action.enabled) {
                             Modifier.clickable(onClickLabel = action.title) {
-                                importPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
-                                )
+                                when (action.id) {
+                                    "import" -> importPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                                    )
+                                    // MEM-003c/MEM-005b: source-first entries.
+                                    "sound" -> showSoundPicker = true
+                                    "remix" -> showRemixPicker = true
+                                }
                             }
                         } else {
                             Modifier

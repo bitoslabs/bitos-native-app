@@ -111,6 +111,32 @@ struct StudioEmptyState: Equatable {
         guard let data = FrameworkBusinessCoreClient().memeEmptyState(mode: mode).data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .imageFallback }
+        return Self.decodeFields(root, fallback: .imageFallback)
+    }
+
+    /// MEM-003c sound-first copy: VIDEO mode with a verified soundtrack
+    /// attached and no clip ("Your sound is ready. Add a video to
+    /// begin."). Junk falls back to hard-coded copy, same rule.
+    static func decodeSoundFirst() -> StudioEmptyState {
+        let fallback = StudioEmptyState(
+            title: "Your sound is ready",
+            body: "Add a video to begin.",
+            icon: "sound",
+            primary: "Add video",
+            secondary: "Change sound",
+            tertiary: nil,
+            hint: "Add text, a sticker or a look — everything autosaves.",
+            undoHint: "Undone — redo is beside undo in the top bar.",
+            nothingToUndo: "Nothing to undo",
+            nothingToRedo: "Nothing to redo"
+        )
+        guard let data = FrameworkBusinessCoreClient().memeSoundFirstEmptyState().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return fallback }
+        return Self.decodeFields(root, fallback: fallback)
+    }
+
+    private static func decodeFields(_ root: [String: Any], fallback: StudioEmptyState) -> StudioEmptyState {
         func text(_ key: String, _ fallback: String) -> String {
             let value = root[key] as? String ?? ""
             return value.isEmpty ? fallback : value
@@ -120,16 +146,16 @@ struct StudioEmptyState: Equatable {
             return value.isEmpty ? nil : value
         }
         return StudioEmptyState(
-            title: text("title", imageFallback.title),
-            body: text("body", imageFallback.body),
-            icon: text("icon", imageFallback.icon),
-            primary: text("primary", imageFallback.primary),
+            title: text("title", fallback.title),
+            body: text("body", fallback.body),
+            icon: text("icon", fallback.icon),
+            primary: text("primary", fallback.primary),
             secondary: optional("secondary"),
             tertiary: optional("tertiary"),
-            hint: text("hint", imageFallback.hint),
-            undoHint: text("undoHint", imageFallback.undoHint),
-            nothingToUndo: text("nothingToUndo", imageFallback.nothingToUndo),
-            nothingToRedo: text("nothingToRedo", imageFallback.nothingToRedo)
+            hint: text("hint", fallback.hint),
+            undoHint: text("undoHint", fallback.undoHint),
+            nothingToUndo: text("nothingToUndo", fallback.nothingToUndo),
+            nothingToRedo: text("nothingToRedo", fallback.nothingToRedo)
         )
     }
 }

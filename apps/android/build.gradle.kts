@@ -43,6 +43,14 @@ android {
         // Blocking setup/requests only — never account or draft deletion.
         buildConfigField("boolean", "IDENTITY_NIP46_ENABLED", "false")
         buildConfigField("boolean", "IDENTITY_NIP55_ENABLED", "false")
+
+        // Studio Create-hub source pickers (MEM-003/MEM-005, plan
+        // create-hub-sound-remix-plan.md §rollout): off by default, on in
+        // internal (debug) builds. A kill switch hides the corresponding
+        // hub entry only — it never removes drafts, Bitz-card sound/remix
+        // actions, local sound-library assets or relay access.
+        buildConfigField("boolean", "STUDIO_SOUND_SOURCE_PICKER_ENABLED", "false")
+        buildConfigField("boolean", "STUDIO_REMIX_SOURCE_PICKER_ENABLED", "false")
     }
 
     buildFeatures {
@@ -54,6 +62,9 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Internal builds exercise the Create-hub source pickers.
+            buildConfigField("boolean", "STUDIO_SOUND_SOURCE_PICKER_ENABLED", "true")
+            buildConfigField("boolean", "STUDIO_REMIX_SOURCE_PICKER_ENABLED", "true")
         }
         release {
             isMinifyEnabled = true
