@@ -6,6 +6,7 @@ import Security
 /// Signer kind mirror (shared `SignerKind`).
 enum PlatformSignerKind: Sendable, Equatable {
     case localKey
+    case nip46
     case readOnly
 }
 
@@ -457,6 +458,83 @@ final class IdentityStore {
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let raw = dict["relays"] as? [String] else { return [] }
         return raw.compactMap(RelayURL.init(rawValue:))
+    }
+
+    // MARK: - Remote signer setup (ID-006b)
+
+    struct RemoteSetupPreview: Equatable {
+        let pubkeyHex: String
+        let npub: String
+        let bunkerPubkeyHex: String
+        let relays: [String]
+    }
+
+    var remoteSetup: RemoteSetupPreview?
+    var remoteSetupError: String?
+    var remoteSetupBusy = false
+
+    /// bunker:// setup: connect through an EPHEMERAL transport key and
+    /// require the bunker's own `get_public_key` answer. Nothing is saved
+    /// until the user confirms the returned npub.
+    func startNip46Setup(uri: String) async {
+        guard IdentityFlags.nip46Enabled else { return }
+        remoteSetupError = nil
+        remoteSetupBusy = true
+        defer { remoteSetupBusy = false }
+        guard let json = BusinessCoreBridge().nip46ParseUri(uri: uri),
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let bunker = dict["pubkey"] as? String,
+              let relays = (dict["relays"] as? [String])?.compactMap(RelayURL.init(rawValue:)),
+              !relays.isEmpty else {
+            remoteSetupError = "That bunker link doesn't look valid."
+            return
+        }
+        let pairingSecret = dict["secret"] as? String
+        let session = Nip46SignerSession(
+            config: Nip46SessionConfig(
+                bunkerPubkeyHex: bunker, relays: relays, label: nil, accountPubkeyHex: ""
+            ),
+            ephemeralTransportKey: true
+        )
+        switch await session.connectAndGetPublicKey(pairingSecret: pairingSecret) {
+        case .connected(let pubkey):
+            guard let npub = BusinessCoreBridge().npubEncode(pubkeyHex: pubkey) else {
+                remoteSetupError = "The signer returned an unusable key."
+                return
+            }
+            remoteSetup = RemoteSetupPreview(
+                pubkeyHex: pubkey, npub: npub,
+                bunkerPubkeyHex: bunker, relays: relays.map { $0.rawValue }
+            )
+        case .failed:
+            remoteSetupError = "The signer couldn't complete the connection. Try again when it's open."
+        }
+    }
+
+    /// Saves the confirmed remote account (public metadata only).
+    func confirmRemoteSetup() {
+        guard let preview = remoteSetup else { return }
+        registeredAccounts.removeAll { $0.pubkeyHex == preview.pubkeyHex }
+        let metadataJson = """
+        {"bunkerPubkeyHex":"\(preview.bunkerPubkeyHex)","relays":[\(preview.relays.map { "\"\($0)\"" }.joined(separator: ","))],"connectionVersion":1}
+        """
+        registeredAccounts.append(RegisteredAccountRow(
+            pubkeyHex: preview.pubkeyHex, npub: preview.npub, displayName: nil,
+            signerKind: "REMOTE_NIP46", nip46Json: metadataJson, nip55Json: nil
+        ))
+        persistRegistry()
+        setActive(preview.pubkeyHex)
+        account = AccountIdentity(pubkeyHex: preview.pubkeyHex, npub: preview.npub, signerKind: .nip46)
+        cachedActiveSecret = nil
+        sessionEpoch += 1
+        remoteSetup = nil
+        remoteSetupError = nil
+    }
+
+    func cancelRemoteSetup() {
+        remoteSetup = nil
+        remoteSetupError = nil
     }
 
     // MARK: - Helpers

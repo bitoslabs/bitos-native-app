@@ -305,6 +305,145 @@ class IdentityViewModel(
         mutableProfileEdit.value = ProfileEditState()
     }
 
+    // ── Remote signer setup (ID-006b / ID-007a) ────────────────────
+
+    /** One in-flight remote-signer setup awaiting user confirmation. */
+    data class RemoteSetupPreview(
+        val kind: SignerKind,
+        /** The account pubkey the signer itself returned (never assumed). */
+        val pubkeyHex: String,
+        val npub: String,
+        /** NIP-46 only: the connection the account will persist. */
+        val nip46: space.bitos.core.identity.Nip46AccountMetadata? = null,
+        /** NIP-55 only: the pinned signer package. */
+        val nip55Package: String? = null,
+    )
+
+    private val mutableRemoteSetup = MutableStateFlow<RemoteSetupPreview?>(null)
+    val remoteSetup: StateFlow<RemoteSetupPreview?> = mutableRemoteSetup.asStateFlow()
+
+    private val mutableRemoteSetupError = MutableStateFlow<String?>(null)
+    val remoteSetupError: StateFlow<String?> = mutableRemoteSetupError.asStateFlow()
+
+    private val mutableRemoteSetupBusy = MutableStateFlow(false)
+    val remoteSetupBusy: StateFlow<Boolean> = mutableRemoteSetupBusy.asStateFlow()
+
+    /**
+     * bunker:// setup (ID-006b): parse, connect, and require the bunker's
+     * own `get_public_key` answer before anything is saved. No account
+     * exists until the user confirms the returned npub. The transport key
+     * slot is keyed by the RETURNED pubkey, so an unconfirmed attempt
+     * leaves nothing persisted behind the registry write.
+     */
+    fun startNip46Setup(uri: String) {
+        if (!IdentityFeatureFlags.nip46Enabled) return
+        val connection = space.bitos.core.identity.nip46.Nip46Uri.parseBunker(uri) ?: run {
+            mutableRemoteSetupError.value = "That bunker link doesn't look valid."
+            return
+        }
+        viewModelScope.launch {
+            mutableRemoteSetupBusy.value = true
+            mutableRemoteSetupError.value = null
+            val session = space.bitos.app.identity.nip46.Nip46SignerSession(
+                scope = (getApplication() as? space.bitos.app.BitOsApplication)?.applicationScope ?: viewModelScope,
+                metadata = space.bitos.core.identity.Nip46AccountMetadata(
+                    bunkerPubkeyHex = connection.remotePubkeyHex,
+                    relays = connection.relays.map { it.value },
+                ),
+                accountPubkeyHex = "", // learned from the handshake below
+                secretStore = object : space.bitos.app.identity.nip46.Nip46TransportSecretStore {
+                    // Setup holds the transport key in memory only; the
+                    // persisted slot is created by the confirmed session.
+                    override fun loadOrCreateTransportSecret(accountPubkeyHex: String): String? = store.generateSecretHex()
+                    override fun removeTransportSecret(accountPubkeyHex: String) {}
+                },
+                transportFactory = { relay, _ ->
+                    space.bitos.app.data.relay.OkHttpRelayTransport(
+                        relay, space.bitos.app.data.relay.relayHttpClient(),
+                    ) { }
+                },
+                setupTimeoutMs = 30_000,
+            )
+            val result = session.connectAndGetPublicKey(connection.secret)
+            mutableRemoteSetupBusy.value = false
+            when (result) {
+                is space.bitos.app.identity.nip46.Nip46SetupResult.Connected -> {
+                    val pubkey = result.accountPubkeyHex
+                    val npub = NostrKeyCodec.npub(pubkey) ?: run {
+                        mutableRemoteSetupError.value = "The signer returned an unusable key."
+                        return@launch
+                    }
+                    mutableRemoteSetup.value = RemoteSetupPreview(
+                        kind = SignerKind.REMOTE_NIP46,
+                        pubkeyHex = pubkey,
+                        npub = npub,
+                        nip46 = space.bitos.core.identity.Nip46AccountMetadata(
+                            bunkerPubkeyHex = connection.remotePubkeyHex,
+                            relays = connection.relays.map { it.value },
+                        ),
+                    )
+                }
+                is space.bitos.app.identity.nip46.Nip46SetupResult.Failed ->
+                    mutableRemoteSetupError.value = remoteFailureText(result.result)
+            }
+        }
+    }
+
+    /** NIP-55 setup (ID-007a): a validated get_public_key result awaits confirmation. */
+    fun prepareNip55Setup(pubkeyHex: String, signerPackage: String) {
+        if (!IdentityFeatureFlags.nip55Enabled) return
+        val npub = NostrKeyCodec.npub(pubkeyHex) ?: run {
+            mutableRemoteSetupError.value = "The signer returned an unusable key."
+            return
+        }
+        mutableRemoteSetup.value = RemoteSetupPreview(
+            kind = SignerKind.EXTERNAL_NIP55,
+            pubkeyHex = pubkeyHex,
+            npub = npub,
+            nip55Package = signerPackage,
+        )
+    }
+
+    /** Saves the confirmed remote account (public metadata only). */
+    fun confirmRemoteSetup() {
+        val preview = mutableRemoteSetup.value ?: return
+        registry.register(
+            space.bitos.core.identity.RegisteredAccount(
+                pubkeyHex = preview.pubkeyHex,
+                npub = preview.npub,
+                addedAtSeconds = System.currentTimeMillis() / 1_000,
+                signerKind = preview.kind,
+                nip46 = preview.nip46,
+                nip55 = preview.nip55Package?.let {
+                    space.bitos.core.identity.Nip55AccountMetadata(signerPackage = it)
+                },
+            ),
+            makeActive = true,
+        )
+        mutableRemoteSetup.value = null
+        mutableRemoteSetupError.value = null
+        mutableState.value = mutableState.value.copy(
+            account = AccountIdentity(
+                pubkeyHex = preview.pubkeyHex,
+                npub = preview.npub,
+                signerKind = preview.kind,
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    fun cancelRemoteSetup() {
+        mutableRemoteSetup.value = null
+        mutableRemoteSetupError.value = null
+    }
+
+    private fun remoteFailureText(result: space.bitos.core.identity.SignEventResult): String = when (result) {
+        is space.bitos.core.identity.SignEventResult.TimedOut -> "The signer didn't answer in time. Try again when it's open."
+        is space.bitos.core.identity.SignEventResult.Unavailable -> "Couldn't reach the signer's relays. Check the link and your connection."
+        is space.bitos.core.identity.SignEventResult.Denied -> "The signer refused the connection."
+        else -> "The signer couldn't complete the connection."
+    }
+
     /** Transient signer for the active account; null when none (ID-006c). */
     suspend fun createSigner(): space.bitos.core.identity.EventApprovalSigner? = withContext(Dispatchers.IO) {
         val active = registry.activePubkey.value

@@ -45,6 +45,13 @@ struct IdentityOnboardingMirror {
     let methodBody: String
     let methodInfo: String
     let nip46ComingSoon: String
+    let nip46SetupTitle: String
+    let nip46SetupBody: String
+    let nip46FieldLabel: String
+    let nip46ConnectLabel: String
+    let nip46ConfirmTitle: String
+    let nip46ConfirmBody: String
+    let nip46DeniedNotice: String
     let methods: [Method]
     let importFieldLabel: String
     let importReviewNote: String
@@ -83,6 +90,13 @@ struct IdentityOnboardingMirror {
         methodBody = str("methodBody")
         methodInfo = str("methodInfo")
         nip46ComingSoon = str("nip46ComingSoon")
+        nip46SetupTitle = str("nip46SetupTitle")
+        nip46SetupBody = str("nip46SetupBody")
+        nip46FieldLabel = str("nip46FieldLabel")
+        nip46ConnectLabel = str("nip46ConnectLabel")
+        nip46ConfirmTitle = str("nip46ConfirmTitle")
+        nip46ConfirmBody = str("nip46ConfirmBody")
+        nip46DeniedNotice = str("nip46DeniedNotice")
         importFieldLabel = str("importFieldLabel")
         importReviewNote = str("importReviewNote")
         addAccountTitle = str("addAccountTitle")
@@ -137,6 +151,7 @@ private enum OnboardingFlowStep {
     case welcome
     case method
     case importKey
+    case nip46
     case backup
     case verify
     case success
@@ -174,9 +189,22 @@ struct OnboardingScreen: View {
                             step = .backup
                         },
                         onImport: { step = .importKey },
-                        onComingSoon: { notice in
-                            comingSoonNotice = notice
+                        onNip46: {
+                            if IdentityFlags.nip46Enabled {
+                                step = .nip46
+                            } else {
+                                comingSoonNotice = content.nip46ComingSoon
+                            }
                         }
+                    )
+                case .nip46:
+                    ConnectRemoteSignerStep(
+                        store: store,
+                        onBack: {
+                            store.cancelRemoteSetup()
+                            step = .method
+                        },
+                        onDone: onDone
                     )
                 case .importKey:
                     ImportStep(
@@ -349,7 +377,7 @@ private struct MethodStep: View {
     let onBack: () -> Void
     let onCreate: () -> Void
     let onImport: () -> Void
-    let onComingSoon: (String) -> Void
+    let onNip46: () -> Void
     private let content = IdentityOnboardingMirror.shared
 
     var body: some View {
@@ -369,7 +397,7 @@ private struct MethodStep: View {
                                 switch method.id {
                                 case "create": onCreate()
                                 case "import": onImport()
-                                case "nip46": onComingSoon(content.nip46ComingSoon)
+                                case "nip46": onNip46()
                                 default: break
                                 }
                             }
@@ -909,5 +937,72 @@ private func onboardingSymbol(_ token: String) -> String {
     case "link": "link"
     case "android": "cpu"
     default: "key.fill"
+    }
+}
+
+/// ID-006b: paste a bunker:// link, connect, confirm the returned npub.
+private struct ConnectRemoteSignerStep: View {
+    let store: IdentityStore
+    let onBack: () -> Void
+    let onDone: () -> Void
+
+    @State private var input = ""
+    private let content = IdentityOnboardingMirror.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let preview = store.remoteSetup {
+                    Text(content.nip46ConfirmTitle)
+                        .font(.system(size: 18, weight: .heavy))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text(content.nip46ConfirmBody)
+                        .font(.system(size: 13))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    Text(preview.npub)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                        .textSelection(.enabled)
+                    Text("Signer relays: \(preview.relays.joined(separator: ", "))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(BitOSTheme.textTertiary)
+                    HStack {
+                        AppButton(title: "Back", variant: .ghost) { onBack() }
+                        Spacer()
+                        AppButton(title: "Use this identity", variant: .primary) {
+                            store.confirmRemoteSetup()
+                            onDone()
+                        }
+                    }
+                } else {
+                    Text(content.nip46SetupTitle)
+                        .font(.system(size: 24, weight: .heavy))
+                        .foregroundStyle(BitOSTheme.textPrimary)
+                    Text(content.nip46SetupBody)
+                        .font(.system(size: 14))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                    SecretKeyField(
+                        text: $input,
+                        error: nil,
+                        onSubmit: {
+                            Task { await store.startNip46Setup(uri: input.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                    )
+                    if let error = store.remoteSetupError {
+                        StateBannerView(tone: .warn, text: error)
+                    }
+                    HStack {
+                        AppButton(title: "Back", variant: .ghost) { onBack() }
+                        Spacer()
+                        AppButton(title: store.remoteSetupBusy ? "Connecting…" : content.nip46ConnectLabel, variant: .primary) {
+                            Task { await store.startNip46Setup(uri: input.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                        .disabled(store.remoteSetupBusy || input.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .background(BitOSTheme.background)
     }
 }

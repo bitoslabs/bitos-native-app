@@ -291,6 +291,7 @@ fun BitOSApp(
         ) {
         Scaffold(
             containerColor = BitOSColors.background,
+            snackbarHost = { space.bitos.app.ui.components.SignerWaitBanner(identityViewModel) },
             bottomBar = {
                 // APP-008: the composer is a full page (legacy CreateView
                 // parity) — the tab bar never renders under it. The Create

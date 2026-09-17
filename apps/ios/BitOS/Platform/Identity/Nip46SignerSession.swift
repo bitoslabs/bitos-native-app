@@ -71,14 +71,20 @@ actor Nip46SignerSession {
     private(set) var phase: Nip46SessionPhase = .idle
     private(set) var awaitingAuthUrl = false
 
+    /// Setup attempts use an ephemeral transport key: nothing is sealed
+    /// until the user confirms the returned account (ID-006b).
+    private let ephemeralTransportKey: Bool
+
     init(config: Nip46SessionConfig,
          urlSession: URLSession = .bitOSRelaySession(),
          signTimeoutMs: Int64 = 120_000,
-         setupTimeoutMs: Int64 = 30_000) {
+         setupTimeoutMs: Int64 = 30_000,
+         ephemeralTransportKey: Bool = false) {
         self.config = config
         self.urlSession = urlSession
         self.signTimeoutMs = signTimeoutMs
         self.setupTimeoutMs = setupTimeoutMs
+        self.ephemeralTransportKey = ephemeralTransportKey
     }
 
     // MARK: - Public surface
@@ -86,6 +92,12 @@ actor Nip46SignerSession {
     /// Ensures the client transport key exists (sealed per-account slot).
     func ensureTransportKey() -> Bool {
         if transportSecretHex != nil { return true }
+        if ephemeralTransportKey {
+            guard let fresh = Self.randomHex64() else { return false }
+            transportSecretHex = fresh
+            transportPubkeyHex = BusinessCoreBridge().derivePublicKey(secretHex: fresh)
+            return transportPubkeyHex != nil
+        }
         let existing = IdentityKeychain.loadNip46TransportSecret(slotPubkey: config.accountPubkeyHex)
         let secret: String
         if let existing {

@@ -1203,6 +1203,13 @@ class BusinessCoreBridge {
             "methodInfo" to content.METHOD_INFO,
             "nip46ComingSoon" to content.NIP46_COMING_SOON,
             "nip55ComingSoon" to content.NIP55_COMING_SOON,
+            "nip46SetupTitle" to content.NIP46_SETUP_TITLE,
+            "nip46SetupBody" to content.NIP46_SETUP_BODY,
+            "nip46FieldLabel" to content.NIP46_FIELD_LABEL,
+            "nip46ConnectLabel" to content.NIP46_CONNECT_LABEL,
+            "nip46ConfirmTitle" to content.NIP46_CONFIRM_TITLE,
+            "nip46ConfirmBody" to content.NIP46_CONFIRM_BODY,
+            "nip46DeniedNotice" to content.NIP46_DENIED_NOTICE,
             "methods" to content.METHODS.map { method ->
                 mapOf(
                     "id" to method.id,

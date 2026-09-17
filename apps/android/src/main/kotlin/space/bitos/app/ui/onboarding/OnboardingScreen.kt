@@ -96,7 +96,7 @@ object OnboardingPrefs {
  * APP-002 carousel; the identity transaction itself runs through
  * [IdentityViewModel] exactly like the You-tab and More-hub paths.
  */
-private enum class OnboardingStep { WELCOME, METHOD, IMPORT, BACKUP, VERIFY, SUCCESS }
+private enum class OnboardingStep { WELCOME, METHOD, IMPORT, BACKUP, VERIFY, SUCCESS, NIP46, NIP55 }
 
 @Composable
 fun OnboardingScreen(
@@ -154,7 +154,24 @@ fun OnboardingScreen(
                     step = OnboardingStep.BACKUP
                 },
                 onImport = { step = OnboardingStep.IMPORT },
-                onComingSoon = { comingSoonNotice = it },
+                onNip46 = {
+                    if (space.bitos.app.identity.IdentityFeatureFlags.nip46Enabled) step = OnboardingStep.NIP46
+                    else comingSoonNotice = content.NIP46_COMING_SOON
+                },
+                onNip55 = {
+                    if (space.bitos.app.identity.IdentityFeatureFlags.nip55Enabled) step = OnboardingStep.NIP55
+                    else comingSoonNotice = content.NIP55_COMING_SOON
+                },
+            )
+            OnboardingStep.NIP46 -> Nip46SetupStep(
+                identityViewModel = identityViewModel,
+                onBack = { identityViewModel.cancelRemoteSetup(); step = OnboardingStep.METHOD },
+                onDone = onDone,
+            )
+            OnboardingStep.NIP55 -> Nip55SetupStep(
+                identityViewModel = identityViewModel,
+                onBack = { identityViewModel.cancelRemoteSetup(); step = OnboardingStep.METHOD },
+                onDone = onDone,
             )
             OnboardingStep.IMPORT -> ImportStep(
                 onBack = { step = OnboardingStep.METHOD },
@@ -286,7 +303,8 @@ private fun MethodStep(
     onBack: () -> Unit,
     onCreate: () -> Unit,
     onImport: () -> Unit,
-    onComingSoon: (String) -> Unit,
+    onNip46: () -> Unit,
+    onNip55: () -> Unit,
 ) {
     val content = IdentityOnboardingContent
     Column(Modifier.fillMaxSize()) {
@@ -311,8 +329,8 @@ private fun MethodStep(
                     when (method.id) {
                         "create" -> onCreate()
                         "import" -> onImport()
-                        "nip46" -> onComingSoon(content.NIP46_COMING_SOON)
-                        "nip55" -> onComingSoon(content.NIP55_COMING_SOON)
+                        "nip46" -> onNip46()
+                        "nip55" -> onNip55()
                     }
                 }
             }
