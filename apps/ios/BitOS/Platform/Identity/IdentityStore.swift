@@ -35,7 +35,23 @@ struct RegisteredAccountRow: Identifiable, Equatable {
     let pubkeyHex: String
     let npub: String
     var displayName: String?
+    /// Shared `SignerKind` name (LOCAL_KEY / REMOTE_NIP46 / EXTERNAL_NIP55 / READ_ONLY).
+    var signerKind: String
+    /// NIP-46 metadata JSON or nil (bunker pubkey, relays, label).
+    var nip46Json: String?
+    /// NIP-55 metadata JSON or nil (pinned package).
+    var nip55Json: String?
     var id: String { pubkeyHex }
+
+    init(pubkeyHex: String, npub: String, displayName: String?,
+         signerKind: String = "LOCAL_KEY", nip46Json: String? = nil, nip55Json: String? = nil) {
+        self.pubkeyHex = pubkeyHex
+        self.npub = npub
+        self.displayName = displayName
+        self.signerKind = signerKind
+        self.nip46Json = nip46Json
+        self.nip55Json = nip55Json
+    }
 }
 
 @MainActor
@@ -154,7 +170,10 @@ final class IdentityStore {
     private func loadRegistry() {
         let wire = registryDefaults.string(forKey: Self.registryKey) ?? ""
         registeredAccounts = bridge.accountRegistryDecode(json: wire).map {
-            RegisteredAccountRow(pubkeyHex: $0.pubkeyHex, npub: $0.npub, displayName: $0.displayName)
+            RegisteredAccountRow(
+                pubkeyHex: $0.pubkeyHex, npub: $0.npub, displayName: $0.displayName,
+                signerKind: $0.signerKind, nip46Json: $0.nip46Json, nip55Json: $0.nip55Json
+            )
         }
         activeRegistryPubkey = registryDefaults.string(forKey: Self.activeKey)
     }
@@ -164,7 +183,8 @@ final class IdentityStore {
             accounts: registeredAccounts.map {
                 BusinessCoreBridge.RegisteredAccountWire(
                     pubkeyHex: $0.pubkeyHex, npub: $0.npub,
-                    displayName: $0.displayName, addedAtSeconds: 0
+                    displayName: $0.displayName, addedAtSeconds: 0,
+                    signerKind: $0.signerKind, nip46Json: $0.nip46Json, nip55Json: $0.nip55Json
                 )
             }
         )

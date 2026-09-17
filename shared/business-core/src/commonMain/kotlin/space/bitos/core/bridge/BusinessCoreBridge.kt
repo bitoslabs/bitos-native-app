@@ -2,6 +2,7 @@ package space.bitos.core.bridge
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -720,27 +721,85 @@ class BusinessCoreBridge {
     /** hex64 pubkey -> npub (display form). */
     fun npubEncode(pubkeyHex: String): String? = space.bitos.core.identity.NostrKeyCodec.npub(pubkeyHex)
 
-    // ── Multi-account registry (APP-018a row 1) ─────────────────
+    // ── Multi-account registry (APP-018a row 1; SBC-008c v2) ─────
 
-    /** Registry row wire — public projections only, never secrets. */
+    /**
+     * Registry row wire — public projections only, never secrets. v2 adds
+     * the signer kind and per-kind metadata JSON (`nip46`/`nip55` below).
+     */
     class RegisteredAccountWire(
         val pubkeyHex: String,
         val npub: String,
         val displayName: String? = null,
         val addedAtSeconds: Long = 0,
+        val signerKind: String = "LOCAL_KEY",
+        /** `{"bunkerPubkeyHex","relays":[…],"label"?,"connectionVersion"}` or null. */
+        val nip46Json: String? = null,
+        /** `{"signerPackage","protocolVersion"}` or null. */
+        val nip55Json: String? = null,
     )
 
     fun accountRegistryDecode(json: String): List<RegisteredAccountWire> =
         space.bitos.core.identity.AccountRegistry.decode(json).map {
-            RegisteredAccountWire(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+            RegisteredAccountWire(
+                it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds,
+                it.signerKind.name,
+                it.nip46?.let { meta ->
+                    buildJsonObject {
+                        put("bunkerPubkeyHex", meta.bunkerPubkeyHex)
+                        put("relays", buildJsonArray { meta.relays.forEach { relay -> add(JsonPrimitive(relay)) } })
+                        meta.label?.let { label -> put("label", label) }
+                        put("connectionVersion", meta.connectionVersion)
+                    }.toString()
+                },
+                it.nip55?.let { meta ->
+                    buildJsonObject {
+                        put("signerPackage", meta.signerPackage)
+                        put("protocolVersion", meta.protocolVersion)
+                    }.toString()
+                },
+            )
         }
 
     fun accountRegistryEncode(accounts: List<RegisteredAccountWire>): String =
         space.bitos.core.identity.AccountRegistry.encode(
             accounts.map {
-                space.bitos.core.identity.RegisteredAccount(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+                space.bitos.core.identity.RegisteredAccount(
+                    it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds,
+                    signerKind = when (it.signerKind) {
+                        space.bitos.core.identity.SignerKind.LOCAL_KEY.name -> space.bitos.core.identity.SignerKind.LOCAL_KEY
+                        space.bitos.core.identity.SignerKind.REMOTE_NIP46.name -> space.bitos.core.identity.SignerKind.REMOTE_NIP46
+                        space.bitos.core.identity.SignerKind.EXTERNAL_NIP55.name -> space.bitos.core.identity.SignerKind.EXTERNAL_NIP55
+                        // Unknown kind strings stay browse-only, never guessed as local.
+                        else -> space.bitos.core.identity.SignerKind.READ_ONLY
+                    },
+                    nip46 = it.nip46Json?.let { json -> decodeNip46Meta(json) },
+                    nip55 = it.nip55Json?.let { json -> decodeNip55Meta(json) },
+                )
             },
         )
+
+    private fun decodeNip46Meta(json: String): space.bitos.core.identity.Nip46AccountMetadata? = try {
+        val root = Json.parseToJsonElement(json).jsonObject
+        space.bitos.core.identity.Nip46AccountMetadata(
+            bunkerPubkeyHex = root["bunkerPubkeyHex"]?.jsonPrimitive?.contentOrNull ?: return null,
+            relays = root["relays"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: return null,
+            label = root["label"]?.jsonPrimitive?.contentOrNull,
+            connectionVersion = root["connectionVersion"]?.jsonPrimitive?.intOrNull ?: 1,
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun decodeNip55Meta(json: String): space.bitos.core.identity.Nip55AccountMetadata? = try {
+        val root = Json.parseToJsonElement(json).jsonObject
+        space.bitos.core.identity.Nip55AccountMetadata(
+            signerPackage = root["signerPackage"]?.jsonPrimitive?.contentOrNull ?: return null,
+            protocolVersion = root["protocolVersion"]?.jsonPrimitive?.intOrNull ?: 1,
+        )
+    } catch (_: Exception) {
+        null
+    }
 
     // ── Interaction gates (APP-018a row 2) ──────────────────────
 
