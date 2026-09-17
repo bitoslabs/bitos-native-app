@@ -79,9 +79,22 @@ platforms as the identity onboarding flow (docs/ui/app-01-onboarding-identity.ht
 shared copy contract `IdentityOnboardingContent`, replacing the APP-002
 carousel): Welcome → Add identity → Import/Backup gate → npub confirmation,
 exiting into the feed either as guest (Browse now) or with the confirmed
-identity. NIP-46 and NIP-55 render as visible "Soon" method cards (the
-signer port already reserves them); tapping explains they arrive in a future
-build — never a dead link, never a hidden option.
+identity. NIP-46 and NIP-55 ship behind the identity feature flags
+(docs/native/identity-nip46-nip55-plan.md): when a flag is ON its method
+card routes to the remote-signer setup flow — NIP-46 paste-a-`bunker://`
+(iOS + Android) or NIP-55 pick-a-signer-app (Android) — which connects,
+shows the npub THE SIGNER ITSELF returned, and saves nothing until the
+user confirms it. When a flag is OFF the card renders as a visible "Soon"
+card — never a dead link, never a hidden option.
+
+Remote-signer wait states (both protocols): while an action awaits
+approval the shell shows the awaiting-signer banner — it names the
+selected signer, offers **Open signer** (NIP-55 relaunches the pinned
+app) and **Cancel wait**. Cancellation is not an error: the draft, upload
+or durable publish job is preserved exactly, and denial sends no relay
+frame. External-signer accounts never offer an nsec backup reveal — BitOS
+never holds the key. Account removal names the account and wipes its
+native signer configuration (transport key, pinned package).
 
 ### 4.1 Secret-key login field rules (ID-004, shared `KeyImportForm`)
 

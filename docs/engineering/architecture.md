@@ -173,7 +173,38 @@ fan-out above therefore fires on the provisional account and self-corrects
 when restore replaces or clears it — the same `.task(id: pubkey)` race
 window, now explicitly bounded by the registry pointer.
 
-### 6.2 Profile / "You" content and follow-scope rules (2026-09 audit)
+### 6.2 Signer session boundary and registry schema v2 (2026-09, NIP-46/NIP-55)
+
+Feature code signs exclusively through the typed event-approval port
+(`EventApprovalSigner.approveEvent(SignEventRequest): SignEventResult`,
+SBC-008a) — `sign(message32)` survives only as the low-level local-key
+helper. Three implementations sit behind it: local key (Keystore/
+Keychain-sealed secret, shared `LocalKeyEventSigner` math), NIP-46
+bunker session and NIP-55 signer client. Every returned event — including
+local-key results' remote counterparts — passes the independent
+`SignedEventValidator` gate (exact payload match, canonical id, BIP-340)
+before it can reach the publisher; a changed payload, different pubkey or
+bad signature is never published.
+
+The NIP-46 lane (ID-006a) is a dedicated relay budget: its own sockets,
+never the feed `RelayPool`. Signer relays come from the connection URI
+(wss-only, ≤5), sockets exist only inside a deadline-driven request
+window, and approval/denial/timeout/cancel/switch all end with CLOSE +
+teardown. The pure protocol (URI codec, JSON-RPC envelopes, NIP-44 wrap,
+correlation reducer) lives in `shared/business-core/identity/nip46`;
+Android consumes the typed reducer directly, iOS drives the same machine
+through String-only bridge state tokens. The client transport key is
+sealed per account (Keystore/Keychain) and wiped on account removal.
+
+Registry schema v2 (SBC-008c) adds `signerKind` plus public per-kind
+metadata (bunker pubkey, relay set, label; NIP-55 pinned package). v1
+wires decode as LOCAL_KEY; unknown kinds or corrupt remote metadata
+degrade a row to READ_ONLY — never LOCAL_KEY, never cross-account signer
+use. Secrets never enter the registry. Rollout is dark behind
+`identity_nip46_enabled` / `identity_nip55_enabled` (ADR 0001); blocking
+affects new setup and new requests only.
+
+### 6.3 Profile / "You" content and follow-scope rules (2026-09 audit)
 
 - The You tabs (Notes · Replies · Bitz) come from a dedicated author-scoped
   REQ (`authorRequest`: kind-0 head + split media/text filters on

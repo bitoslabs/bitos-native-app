@@ -2,6 +2,24 @@
 
 ## Progress log
 
+- 2026-09-17 — SBC-008 delivered + ID-006a-d/ID-007a-b implemented behind
+  dark flags (docs/native/identity-nip46-nip55-plan.md; ADR 0001). Typed
+  event-approval signer contract (`SignEventRequest`/`SignEventResult`/
+  `SignedEventValidator`) replaces `sign(message32)` at the feature
+  boundary; registry schema v2 adds signer kind + public NIP-46/NIP-55
+  metadata with v1 migration and READ_ONLY degradation; NIP-46 pure
+  protocol + correlation reducer in shared core with spec fixtures;
+  dedicated relay-lane sessions on both platforms (Android OkHttp
+  transports, iOS URLSessionWebSocketTask actor) with fixture-bunker
+  adapter tests; NIP-55 pinned-package intent client with pure result
+  contracts; every publish/upload path (notes, profile/social, Blossom
+  auth, zaps) routes through the validated contract; setup flows confirm
+  the signer-returned npub before saving; awaiting-signer banner (Open
+  signer / Cancel wait — drafts preserved); lifecycle cleanup wipes
+  transport secrets on account removal. Kill-switches
+  `identity_nip46_enabled`/`identity_nip55_enabled` default off; QR camera
+  scanning, Content-Resolver pre-auth (ID-007c), NIP-44 DM ops (ID-007d)
+  and the ID-009 threat-review gate remain open.
 - 2026-08-27 — Foundation slice: NIP-01 codec + ID verification, bounded
   decode, feed normalization/aggregation, relay pools and five-tab UI on
   both apps; verified read-only feed.
