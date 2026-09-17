@@ -37,6 +37,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        // Identity kill-switches (plan §feature flags): off by default;
+        // internal builds flip these to exercise NIP-46/NIP-55 end to end.
+        // Blocking setup/requests only — never account or draft deletion.
+        buildConfigField("boolean", "IDENTITY_NIP46_ENABLED", "false")
+        buildConfigField("boolean", "IDENTITY_NIP55_ENABLED", "false")
     }
 
     buildFeatures {

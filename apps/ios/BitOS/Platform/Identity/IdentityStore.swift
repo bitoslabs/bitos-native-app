@@ -390,6 +390,75 @@ final class IdentityStore {
         return await Self.signDetached(messageHex: messageHex, secretHex: secret)
     }
 
+    // MARK: - Publishing signer seam (ID-006c)
+
+    /// Active NIP-46 session handle for the awaiting-signer UI and ID-006d cleanup.
+    private(set) var activeNip46Session: Nip46SignerSession?
+
+    /// The active account's registry row.
+    private func activeRow() -> RegisteredAccountRow? {
+        activeRegistryPubkey.flatMap { active in registeredAccounts.first { $0.pubkeyHex == active } }
+    }
+
+    /**
+     * One signing seam for every publish site: local accounts sign the
+     * message hash; NIP-46 accounts route the SAME canonical event
+     * (supplied as the placeholder-signed frame the site just composed)
+     * through the remote signer's validation gate. Returns the signature
+     * hex or nil (refusal/timeout — the caller must not send any frame).
+     */
+    func signForPublishing(messageHex: String, unsignedFrame: String?) async -> String? {
+        guard let row = activeRow() else { return nil }
+        guard row.signerKind == "REMOTE_NIP46", IdentityFlags.nip46Enabled else {
+            return await signLocally(messageHex)
+        }
+        guard let frame = unsignedFrame,
+              let wire = BusinessCoreBridge().unsignedWireFromEventJson(eventJson: frame) else { return nil }
+        let session = nip46Session(for: row)
+        activeNip46Session = session
+        let outcome = await session.approveEvent(
+            requestId: "ios-" + messageHex.prefix(16),
+            accountPubkeyHex: row.pubkeyHex,
+            createdAtSeconds: Int64(wire["createdAtSeconds"] ?? "") ?? 0,
+            kind: Int(wire["kind"] ?? "") ?? 0,
+            tagsJson: wire["tagsJson"] ?? "[]",
+            content: wire["content"] ?? ""
+        )
+        if case .signed(_, _, let sig) = outcome { return sig }
+        return nil
+    }
+
+    /// Lazily builds the NIP-46 session for a registry row (rebuilt when
+    /// the active account changes — ID-006d invalidation).
+    func nip46Session(for row: RegisteredAccountRow) -> Nip46SignerSession {
+        if let existing = activeNip46Session, nip46SessionAccount == row.pubkeyHex {
+            return existing
+        }
+        let session = Nip46SignerSession(config: Nip46SessionConfig(
+            bunkerPubkeyHex: Self.decodeBunkerPubkey(from: row.nip46Json) ?? row.pubkeyHex,
+            relays: Self.decodeRelays(from: row.nip46Json),
+            label: nil,
+            accountPubkeyHex: row.pubkeyHex
+        ))
+        nip46SessionAccount = row.pubkeyHex
+        return session
+    }
+
+    private var nip46SessionAccount: String?
+
+    private static func decodeBunkerPubkey(from json: String?) -> String? {
+        guard let json, let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return dict["bunkerPubkeyHex"] as? String
+    }
+
+    private static func decodeRelays(from json: String?) -> [RelayURL] {
+        guard let json, let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = dict["relays"] as? [String] else { return [] }
+        return raw.compactMap(RelayURL.init(rawValue:))
+    }
+
     // MARK: - Helpers
 
     /// Off-main signing, same executor rule as `deriveIdentity`: fresh bridge

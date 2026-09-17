@@ -56,7 +56,16 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
             expirationSeconds: expiration,
             nowSeconds: nowSeconds
         ) else { throw UploadFailure(message: "auth event rejected") }
-        guard let signature = await identity.signLocally(authId) else { throw UploadFailure(message: "signing refused") }
+        let unsignedAuthFrame = bridge.uploadAuthEventJson(
+            authorPubkey: account.pubkeyHex,
+            serverUrl: serverUrl,
+            fileHashHex: localHash,
+            sizeBytes: Int64(bytes.count),
+            expirationSeconds: expiration,
+            createdAtSeconds: nowSeconds,
+            signatureHex: String(repeating: "0", count: 128)
+        )
+        guard let signature = await identity.signForPublishing(messageHex: authId, unsignedFrame: unsignedAuthFrame) else { throw UploadFailure(message: "signing refused") }
         guard let authHeader = bridge.uploadAuthHeader(
             authorPubkey: account.pubkeyHex,
             serverUrl: serverUrl,

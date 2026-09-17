@@ -305,10 +305,66 @@ class IdentityViewModel(
         mutableProfileEdit.value = ProfileEditState()
     }
 
-    /** Transient signer from the active account's sealed slot; null when none. */
-    suspend fun createSigner(): LocalKeySigner? = withContext(Dispatchers.IO) {
-        (registry.activePubkey.value?.let { store.loadSecret(slotPubkey = it) } ?: store.loadSecret())
-            ?.let(::LocalKeySigner)
+    /** Transient signer for the active account; null when none (ID-006c). */
+    suspend fun createSigner(): space.bitos.core.identity.EventApprovalSigner? = withContext(Dispatchers.IO) {
+        val active = registry.activePubkey.value
+            ?: registry.accounts.value.firstOrNull()?.pubkeyHex
+        val row = registry.accounts.value.firstOrNull { it.pubkeyHex == active }
+        val kind = row?.signerKind ?: SignerKind.LOCAL_KEY
+        when (kind) {
+            SignerKind.LOCAL_KEY ->
+                (active?.let { store.loadSecret(slotPubkey = it) } ?: store.loadSecret())
+                    ?.let { secret ->
+                        space.bitos.core.identity.LocalKeyEventSigner(
+                            secretHex = secret,
+                            random32 = {
+                                ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                            },
+                        )
+                    }
+            SignerKind.REMOTE_NIP46 -> {
+                // Kill-switch (plan §feature flags): requests are blocked,
+                // the account and its drafts are not deleted.
+                if (!IdentityFeatureFlags.nip46Enabled || row == null) return@withContext null
+                nip46Session(row)()
+            }
+            SignerKind.EXTERNAL_NIP55 -> {
+                if (!IdentityFeatureFlags.nip55Enabled || row == null) return@withContext null
+                row.nip55?.let { meta ->
+                    space.bitos.app.identity.nip55.Nip55SignerClient(
+                        accountPubkeyHex = row.pubkeyHex,
+                        pinnedPackage = meta.signerPackage,
+                    ).also { _activeNip55Client.value = it }
+                }
+            }
+            SignerKind.READ_ONLY -> null
+        }
+    }
+
+    /** Live handles for the awaiting-signer UI and ID-006d cleanup. */
+    private val _activeNip46Session = kotlinx.coroutines.flow.MutableStateFlow<space.bitos.app.identity.nip46.Nip46SignerSession?>(null)
+    val activeNip46Session: kotlinx.coroutines.flow.StateFlow<space.bitos.app.identity.nip46.Nip46SignerSession?> = _activeNip46Session.asStateFlow()
+
+    private val _activeNip55Client = kotlinx.coroutines.flow.MutableStateFlow<space.bitos.app.identity.nip55.Nip55SignerClient?>(null)
+    val activeNip55Client: kotlinx.coroutines.flow.StateFlow<space.bitos.app.identity.nip55.Nip55SignerClient?> = _activeNip55Client.asStateFlow()
+
+    /** Builds (and remembers) the NIP-46 session for a registry row. */
+    private fun nip46Session(row: space.bitos.core.identity.RegisteredAccount?): () -> space.bitos.app.identity.nip46.Nip46SignerSession? {
+        val metadata = row?.nip46 ?: return { null }
+        val scope = (getApplication() as? space.bitos.app.BitOsApplication)?.applicationScope ?: viewModelScope
+        return {
+            space.bitos.app.identity.nip46.Nip46SignerSession(
+                scope = scope,
+                metadata = metadata,
+                accountPubkeyHex = row.pubkeyHex,
+                secretStore = space.bitos.app.identity.nip46.SecureNip46TransportSecretStore(store),
+                transportFactory = { relay, _ ->
+                    space.bitos.app.data.relay.OkHttpRelayTransport(
+                        relay, space.bitos.app.data.relay.relayHttpClient(),
+                    ) { }
+                },
+            ).also { _activeNip46Session.value = it }
+        }
     }
 
     /**

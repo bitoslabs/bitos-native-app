@@ -62,7 +62,9 @@ final class NotePublisher {
         }
         let now = Int64(Date.now.timeIntervalSince1970)
         guard let eventId = bridge.composeEventId(content: content, pubkeyHex: account.pubkeyHex, nowSeconds: now),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.publishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.publishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
               ) else {
@@ -116,7 +118,10 @@ final class NotePublisher {
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.powTextNotePublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.powTextNotePublishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signature
@@ -141,7 +146,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeTextNoteWithTagsEventId(
                   content: content, pubkeyHex: account.pubkeyHex, nowSeconds: now, tagsJson: tagsJson
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.textNoteWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now,
+                  signatureHex: String(repeating: "0", count: 128), tagsJson: tagsJson
+              )),
               let frame = bridge.textNoteWithTagsPublishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now,
                   signatureHex: signature, tagsJson: tagsJson
@@ -166,7 +174,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeCommentWithTagsEventId(
                   content: content, pubkeyHex: account.pubkeyHex, nowSeconds: now, tagsJson: tagsJson
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.commentWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now,
+                  signatureHex: String(repeating: "0", count: 128), tagsJson: tagsJson
+              )),
               let frame = bridge.commentWithTagsPublishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: now,
                   signatureHex: signature, tagsJson: tagsJson
@@ -225,7 +236,10 @@ final class NotePublisher {
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty, tagsJson: tagsJson
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.powTextNoteWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: String(repeating: "0", count: 128), tagsJson: tagsJson
+              )),
               let frame = bridge.powTextNoteWithTagsPublishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signature, tagsJson: tagsJson
@@ -284,7 +298,10 @@ final class NotePublisher {
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty, tagsJson: tagsJson
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.powCommentWithTagsPublishMessage(
+                  content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
+                  nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: String(repeating: "0", count: 128), tagsJson: tagsJson
+              )),
               let frame = bridge.powCommentWithTagsPublishMessage(
                   content: content, pubkeyHex: account.pubkeyHex, createdAtSeconds: createdAt,
                   nonce: nonce, targetDifficulty: targetDifficulty, signatureHex: signature, tagsJson: tagsJson
@@ -308,7 +325,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeReactionEventId(
                   targetEventId: targetEventId, targetPubkey: targetPubkey, authorPubkey: account.pubkeyHex, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.reactionPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey, authorPubkey: account.pubkeyHex,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.reactionPublishMessage(
                   targetEventId: targetEventId, targetPubkey: targetPubkey, authorPubkey: account.pubkeyHex,
                   createdAtSeconds: now, signatureHex: signature
@@ -333,7 +353,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeReactionWithTagsEventId(
                   emoji: emoji, tagsJson: tagsJson, authorPubkey: account.pubkeyHex, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.reactionWithTagsPublishMessage(
+                  emoji: emoji, tagsJson: tagsJson, authorPubkey: account.pubkeyHex,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.reactionWithTagsPublishMessage(
                   emoji: emoji, tagsJson: tagsJson, authorPubkey: account.pubkeyHex,
                   createdAtSeconds: now, signatureHex: signature
@@ -373,7 +396,12 @@ final class NotePublisher {
                   dTag: dTag, nowSeconds: now,
                   videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.storyPublishMessage(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128),
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
+              )),
               let frame = bridge.storyPublishMessage(
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
@@ -456,7 +484,13 @@ final class NotePublisher {
                   createdAtSeconds: createdAt,
                   videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.powStoryPublishMessage(
+                  pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
+                  background: background, altText: altText, sensitive: sensitive,
+                  dTag: dTag, nonce: nonce, targetDifficulty: targetDifficulty,
+                  createdAtSeconds: createdAt, signatureHex: String(repeating: "0", count: 128),
+                  videoUrl: videoUrl, videoMime: videoMime, videoDurationMs: videoDurationMs, videoPoster: videoPoster
+              )),
               let frame = bridge.powStoryPublishMessage(
                   pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                   background: background, altText: altText, sensitive: sensitive,
@@ -484,7 +518,11 @@ final class NotePublisher {
                   content: content, targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, relayHint: "", nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.replyPublishMessage(
+                  content: content, targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, relayHint: "",
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.replyPublishMessage(
                   content: content, targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, relayHint: "",
@@ -509,7 +547,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeFollowListEventId(
                   authorPubkey: account.pubkeyHex, follows: follows, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.followListPublishMessage(
+                  authorPubkey: account.pubkeyHex, follows: follows,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.followListPublishMessage(
                   authorPubkey: account.pubkeyHex, follows: follows,
                   createdAtSeconds: now, signatureHex: signature
@@ -535,7 +576,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeRelayListEventId(
                   authorPubkey: account.pubkeyHex, relayListJson: relayListJson, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.relayListPublishMessage(
+                  authorPubkey: account.pubkeyHex, relayListJson: relayListJson,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.relayListPublishMessage(
                   authorPubkey: account.pubkeyHex, relayListJson: relayListJson,
                   createdAtSeconds: now, signatureHex: signature
@@ -560,7 +604,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeBlockListEventId(
                   authorPubkey: account.pubkeyHex, blocked: blocked, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.blockListPublishMessage(
+                  authorPubkey: account.pubkeyHex, blocked: blocked,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.blockListPublishMessage(
                   authorPubkey: account.pubkeyHex, blocked: blocked,
                   createdAtSeconds: now, signatureHex: signature
@@ -585,7 +632,10 @@ final class NotePublisher {
                   targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.repostPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.repostPublishMessage(
                   targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
@@ -609,7 +659,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeInterestSetEventId(
                   authorPubkey: account.pubkeyHex, hashtags: hashtags, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.interestSetPublishMessage(
+                  authorPubkey: account.pubkeyHex, hashtags: hashtags,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.interestSetPublishMessage(
                   authorPubkey: account.pubkeyHex, hashtags: hashtags,
                   createdAtSeconds: now, signatureHex: signature
@@ -634,7 +687,10 @@ final class NotePublisher {
                   targetEventId: targetEventId, optionIndex: Int64(optionIndex),
                   authorPubkey: account.pubkeyHex, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.pollVotePublishMessage(
+                  targetEventId: targetEventId, optionIndex: Int64(optionIndex),
+                  authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.pollVotePublishMessage(
                   targetEventId: targetEventId, optionIndex: Int64(optionIndex),
                   authorPubkey: account.pubkeyHex, createdAtSeconds: now, signatureHex: signature
@@ -659,7 +715,10 @@ final class NotePublisher {
                   targetEventIds: targetEventIds, authorPubkey: account.pubkeyHex,
                   reason: reason, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.deletionPublishMessage(
+                  targetEventIds: targetEventIds, authorPubkey: account.pubkeyHex,
+                  reason: reason, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.deletionPublishMessage(
                   targetEventIds: targetEventIds, authorPubkey: account.pubkeyHex,
                   reason: reason, createdAtSeconds: now, signatureHex: signature
@@ -683,7 +742,10 @@ final class NotePublisher {
         guard let eventId = bridge.composeBookmarkListEventId(
                   authorPubkey: account.pubkeyHex, eventIds: eventIds, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.bookmarkListPublishMessage(
+                  authorPubkey: account.pubkeyHex, eventIds: eventIds,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.bookmarkListPublishMessage(
                   authorPubkey: account.pubkeyHex, eventIds: eventIds,
                   createdAtSeconds: now, signatureHex: signature
@@ -717,7 +779,14 @@ final class NotePublisher {
                   nowSeconds: now, altText: altText, contentWarningReason: contentWarningReason,
                   includeClientTag: includeClientTag
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.mediaNotePublishMessage(
+                  authorPubkey: account.pubkeyHex, caption: caption,
+                  url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
+                  width: Int64(width ?? 0), height: Int64(height ?? 0), durationMs: durationMs ?? 0,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128),
+                  altText: altText, contentWarningReason: contentWarningReason,
+                  includeClientTag: includeClientTag
+              )),
               let frame = bridge.mediaNotePublishMessage(
                   authorPubkey: account.pubkeyHex, caption: caption,
                   url: url, sha256Hex: hash, mimeType: mime, sizeBytes: Int64(size),
@@ -799,7 +868,15 @@ final class NotePublisher {
                       size: size, width: width, height: height,
                       extraTagsJson: remixTagsJson, target: powBits
                   ),
-                  let signature = await identity.signLocally(pow.idHex),
+                  let signature = await identity.signForPublishing(messageHex: pow.idHex, unsignedFrame: bridge.powMemePicturePublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      url: url, sha256Hex: hash, mimeType: "image/png",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      createdAtSeconds: pow.createdAt, nonce: pow.nonce,
+                      targetDifficulty: powBits, signatureHex: String(repeating: "0", count: 128),
+                      extraTagsJson: remixTagsJson, includeClientTag: includeClientTag
+                  )),
                   let message = bridge.powMemePicturePublishMessage(
                       authorPubkey: account.pubkeyHex, caption: caption,
                       altText: altText, contentWarningReason: contentWarningReason,
@@ -823,7 +900,15 @@ final class NotePublisher {
                       nowSeconds: now, extraTagsJson: remixTagsJson,
                       includeClientTag: includeClientTag
                   ),
-                  let signature = await identity.signLocally(plainId),
+                  let signature = await identity.signForPublishing(messageHex: plainId, unsignedFrame: bridge.memePicturePublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      url: url, sha256Hex: hash, mimeType: "image/png",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128),
+                      extraTagsJson: remixTagsJson,
+                      includeClientTag: includeClientTag
+                  )),
                   let message = bridge.memePicturePublishMessage(
                       authorPubkey: account.pubkeyHex, caption: caption,
                       altText: altText, contentWarningReason: contentWarningReason,
@@ -879,7 +964,16 @@ final class NotePublisher {
                       durationMs: durationMs, thumbUrl: thumbUrl,
                       extraTagsJson: extraTagsJson, target: powBits
                   ),
-                  let signature = await identity.signLocally(pow.idHex),
+                  let signature = await identity.signForPublishing(messageHex: pow.idHex, unsignedFrame: bridge.powMemeVideoPublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption, altText: altText,
+                      contentWarningReason: contentWarningReason, portrait: portrait,
+                      url: url, sha256Hex: hash, mimeType: "video/mp4",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      durationMs: durationMs, createdAtSeconds: pow.createdAt,
+                      nonce: pow.nonce, targetDifficulty: powBits,
+                      signatureHex: String(repeating: "0", count: 128), thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson, includeClientTag: includeClientTag
+                  )),
                   let message = bridge.powMemeVideoPublishMessage(
                       authorPubkey: account.pubkeyHex, caption: caption, altText: altText,
                       contentWarningReason: contentWarningReason, portrait: portrait,
@@ -909,7 +1003,17 @@ final class NotePublisher {
                       extraTagsJson: extraTagsJson,
                       includeClientTag: includeClientTag
                   ),
-                  let signature = await identity.signLocally(plainId),
+                  let signature = await identity.signForPublishing(messageHex: plainId, unsignedFrame: bridge.memeVideoPublishMessage(
+                      authorPubkey: account.pubkeyHex, caption: caption,
+                      altText: altText, contentWarningReason: contentWarningReason,
+                      portrait: portrait,
+                      url: url, sha256Hex: hash, mimeType: "video/mp4",
+                      sizeBytes: Int64(size), width: Int64(width), height: Int64(height),
+                      durationMs: durationMs, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128),
+                      thumbUrl: thumbUrl,
+                      extraTagsJson: extraTagsJson,
+                      includeClientTag: includeClientTag
+                  )),
                   let message = bridge.memeVideoPublishMessage(
                       authorPubkey: account.pubkeyHex, caption: caption,
                       altText: altText, contentWarningReason: contentWarningReason,
@@ -958,7 +1062,11 @@ final class NotePublisher {
                   icon: icon, priceSats: priceSats, category: category,
                   projectJson: projectJson, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.memeSharedTemplatePublishMessage(
+                  authorPubkey: account.pubkeyHex, templateId: templateId, label: label,
+                  icon: icon, priceSats: priceSats, category: category,
+                  projectJson: projectJson, createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.memeSharedTemplatePublishMessage(
                   authorPubkey: account.pubkeyHex, templateId: templateId, label: label,
                   icon: icon, priceSats: priceSats, category: category,
@@ -1005,7 +1113,14 @@ final class NotePublisher {
                   attribution: nil, description: description,
                   topicsCsv: topicsCsv, imageUrl: nil, nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.memeSharedSoundPublishMessage(
+                  authorPubkey: account.pubkeyHex, soundId: soundId, label: label,
+                  url: url, sha256Hex: hash, license: license,
+                  durationSec: Int32(durationSec), mime: mime,
+                  attribution: nil, description: description,
+                  topicsCsv: topicsCsv, imageUrl: nil,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.memeSharedSoundPublishMessage(
                   authorPubkey: account.pubkeyHex, soundId: soundId, label: label,
                   url: url, sha256Hex: hash, license: license,
@@ -1078,7 +1193,12 @@ final class NotePublisher {
                   about: about, picture: picture, nip05: nip05, lud16: lud16, nowSeconds: now,
                   banner: banner, website: website
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.profilePublishMessage(
+                  authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
+                  about: about, picture: picture, nip05: nip05, lud16: lud16,
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128),
+                  banner: banner, website: website
+              )),
               let frame = bridge.profilePublishMessage(
                   authorPubkey: account.pubkeyHex, name: name, displayName: displayName,
                   about: about, picture: picture, nip05: nip05, lud16: lud16,
@@ -1105,7 +1225,11 @@ final class NotePublisher {
                   targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, reason: reason, relayHint: "", nowSeconds: now
               ),
-              let signature = await identity.signLocally(eventId),
+              let signature = await identity.signForPublishing(messageHex: eventId, unsignedFrame: bridge.reportPublishMessage(
+                  targetEventId: targetEventId, targetPubkey: targetPubkey,
+                  authorPubkey: account.pubkeyHex, reason: reason, relayHint: "",
+                  createdAtSeconds: now, signatureHex: String(repeating: "0", count: 128)
+              )),
               let frame = bridge.reportPublishMessage(
                   targetEventId: targetEventId, targetPubkey: targetPubkey,
                   authorPubkey: account.pubkeyHex, reason: reason, relayHint: "",

@@ -4832,6 +4832,19 @@ class BusinessCoreBridge {
         expirationSeconds: Long,
         createdAtSeconds: Long,
         signatureHex: String,
+    ): String? = uploadAuthEventJson(
+        authorPubkey, serverUrl, fileHashHex, sizeBytes, expirationSeconds, createdAtSeconds, signatureHex,
+    )?.let(space.bitos.core.model.Blossom::authorizationHeaderValue)
+
+    /** The signed kind-24242 event JSON (before Base64url wrapping). */
+    fun uploadAuthEventJson(
+        authorPubkey: String,
+        serverUrl: String,
+        fileHashHex: String,
+        sizeBytes: Long,
+        expirationSeconds: Long,
+        createdAtSeconds: Long,
+        signatureHex: String,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeUploadAuth(
@@ -4839,8 +4852,7 @@ class BusinessCoreBridge {
         ) ?: return null
         // BUD-11: the Authorization token is the signed event object `{...}`
         // under Base64url — never the `["EVENT", {...}]` relay frame.
-        val eventJson = composer.signedEventJson(unsigned, signatureHex) ?: return null
-        return space.bitos.core.model.Blossom.authorizationHeaderValue(eventJson)
+        return composer.signedEventJson(unsigned, signatureHex)
     }
 
     /** Parses a WWW-Authenticate challenge's expiration, or null. */
@@ -5644,6 +5656,31 @@ class BusinessCoreBridge {
         return space.bitos.core.identity.SignEventRequest(
             requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content,
         ).unsignedEventJson()
+    }
+
+    /**
+     * Extracts the signer-request fields from a composed event frame (the
+     * publisher passes its own frame built with a placeholder signature):
+     * `{"wire","kind","tagsJson","content","createdAtSeconds","pubkey"}`.
+     * The wire is exactly `{"kind","content","tags","created_at"}`.
+     */
+    fun unsignedWireFromEventJson(eventJson: String): Map<String, String>? {
+        val event = space.bitos.core.identity.SignedEventValidator.parseSignedEvent(eventJson) ?: return null
+        return mapOf(
+            "wire" to space.bitos.core.identity.SignEventRequest(
+                requestId = "wire",
+                accountPubkeyHex = event.pubkeyHex,
+                createdAtSeconds = event.createdAtSeconds,
+                kind = event.kind,
+                tags = event.tags,
+                content = event.content,
+            ).unsignedEventJson(),
+            "kind" to event.kind.toString(),
+            "tagsJson" to space.bitos.core.store.TagsCodec.encode(event.tags),
+            "content" to event.content,
+            "createdAtSeconds" to event.createdAtSeconds.toString(),
+            "pubkey" to event.pubkeyHex,
+        )
     }
 
     /** Independent validator gate for any signer-returned event (SBC-008a). */
