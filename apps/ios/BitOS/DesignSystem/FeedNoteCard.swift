@@ -111,7 +111,7 @@ struct FeedNoteCard: View {
                 .accessibilityLabel("Open \(profile?.bestDisplayName ?? FeedFormat.shortPubkey(note.pubkey))'s profile")
                 Spacer()
                 if let onMore {
-                    AppMenuAnchorButton(symbol: AppIcons.more, tint: BitOSTheme.textSecondary, label: "More options", action: onMore)
+                    AppMenuAnchorButton(symbol: AppIcons.more, tint: BitOSTheme.textSecondary, chrome: .plain, label: "More options", action: onMore)
                 }
             }
             if note.contentWarning && !revealed && settings.state.sensitiveMedia != .show {

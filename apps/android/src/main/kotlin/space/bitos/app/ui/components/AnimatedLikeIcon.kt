@@ -3,10 +3,9 @@ package space.bitos.app.ui.components
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
-import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -50,20 +49,22 @@ fun AnimatedLikeIcon(
         }
     }
     val label = if (liked) "Unlike" else "Like"
-    Icon(
-        painter = painterResource(
-            if (liked) R.drawable.solar_heart_bold else R.drawable.solar_heart_linear
-        ),
-        contentDescription = null,
-        tint = tint,
-        modifier = modifier
-            .minimumInteractiveComponentSize()
-            .size(iconSize)
-            .scale(scale.value)
-            .clickable(onClickLabel = label) {
-                if (!liked) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                onClick()
-            }
-            .semantics { contentDescription = label },
-    )
+    // Same chrome as NoteCardAction (IconButton circle ripple + 48dp touch
+    // target); the spec §2.4 bounce/haptic stay on the inner icon.
+    IconButton(
+        onClick = {
+            if (!liked) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            onClick()
+        },
+        modifier = modifier.semantics { contentDescription = label },
+    ) {
+        Icon(
+            painter = painterResource(
+                if (liked) R.drawable.solar_heart_bold else R.drawable.solar_heart_linear
+            ),
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(iconSize).scale(scale.value),
+        )
+    }
 }

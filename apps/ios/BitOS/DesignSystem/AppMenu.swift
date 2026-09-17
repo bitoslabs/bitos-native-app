@@ -345,17 +345,21 @@ struct AppBottomSheetMenu: View {
 /// Icon button that reports its global top-right anchor on tap, so the
 /// hosting screen can open `AppMenu` clamped at the trigger.
 struct AppMenuAnchorButton: View {
+    /// Visual chrome: `scrimmed` floats the icon on a translucent circle for
+    /// media overlays; `plain` renders the bare feed-card action style.
+    enum Chrome {
+        case scrimmed
+        case plain
+    }
+
     var symbol: String = AppIcons.more
     var tint: Color = .white
+    var chrome: Chrome = .scrimmed
     let label: String
     let action: (CGPoint) -> Void
 
     var body: some View {
-        AppIcons.image(for: symbol)
-            .font(.system(size: 22, weight: .medium))
-            .foregroundStyle(tint)
-            .padding(10)
-            .background(Circle().fill(.black.opacity(0.2)))
+        content
             .overlay {
                 GeometryReader { geo in
                     Color.clear
@@ -368,6 +372,25 @@ struct AppMenuAnchorButton: View {
             }
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
+    }
+
+    /// `plain` mirrors `FeedNoteCard.cardAction` (16pt medium icon in a
+    /// 36×36 hit area) so the ⋯ anchor reads as one of the action buttons.
+    @ViewBuilder
+    private var content: some View {
+        switch chrome {
+        case .scrimmed:
+            AppIcons.image(for: symbol)
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(tint)
+                .padding(10)
+                .background(Circle().fill(.black.opacity(0.2)))
+        case .plain:
+            AppIcons.image(for: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 36, height: 36)
+        }
     }
 }
 

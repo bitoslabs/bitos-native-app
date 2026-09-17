@@ -454,9 +454,11 @@ fun NoteMoreMenuButton(
     }
     androidx.compose.material3.IconButton(
         onClick = { showSheet = true },
-        modifier = Modifier.size(36.dp).semantics { contentDescription = "More options" },
+        modifier = Modifier.semantics { contentDescription = "More options" },
     ) {
-        SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
+        // Same chrome as NoteCardAction (18dp icon in a default IconButton)
+        // so the ⋯ anchor reads as one of the card's action buttons.
+        SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(18.dp))
     }
     if (showSheet) {
         // Web PostCard menu parity: attachment actions when media rides along.
