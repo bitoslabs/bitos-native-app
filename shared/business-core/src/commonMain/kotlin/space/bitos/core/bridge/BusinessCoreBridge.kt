@@ -5430,6 +5430,271 @@ class BusinessCoreBridge {
         signature = signature,
         receivedFromRelay = RelayUrl.parse(relayUrl ?: ""),
     )
+
+    // ------------------------------------------------------------------
+    // NIP-46 remote signer seam (SBC-008a/b): String-only surface for the
+    // iOS session. Secrets cross ONLY as function arguments — the same
+    // rule as signDetached; no secret ever enters bridge state.
+    // ------------------------------------------------------------------
+
+    /** Parses `bunker://`/`nostrconnect://` into a JSON connection target; null when out of bounds. */
+    fun nip46ParseUri(uri: String): String? {
+        val connection = space.bitos.core.identity.nip46.Nip46Uri.parseBunker(uri)
+            ?: space.bitos.core.identity.nip46.Nip46Uri.parseNostrconnect(uri)
+            ?: return null
+        return buildJsonObject {
+            put("v", 1)
+            put("pubkey", connection.remotePubkeyHex)
+            put("relays", buildJsonArray { connection.relays.forEach { add(JsonPrimitive(it.value)) } })
+            connection.secret?.let { put("secret", it) }
+            connection.perms?.let { put("perms", it) }
+        }.toString()
+    }
+
+    /** Builds the `nostrconnect://` pairing URI for the QR flow; null on bad inputs. */
+    fun nip46BuildPairingUri(pubkeyHex: String, relaysJson: String, secret: String, appName: String?): String? {
+        val relays = try {
+            Json.parseToJsonElement(relaysJson).jsonArray.mapNotNull {
+                space.bitos.core.model.RelayUrl.parse(it.jsonPrimitive.content)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46Uri.buildNostrconnect(
+            pubkeyHex, relays, secret, perms = null, appName = appName,
+        )
+    }
+
+    /** NIP-44 transport encrypt (nonce hex injected by the platform CSPRNG). */
+    fun nip46Encrypt(plainEnvelope: String, transportSecretHex: String, peerPubkeyHex: String, nonceHex: String): String? {
+        val nonce = hexToBytes32(nonceHex) ?: return null
+        return space.bitos.core.identity.nip46.Nip46Crypto.encrypt(
+            plainEnvelope, transportSecretHex, peerPubkeyHex, { nonce },
+        )
+    }
+
+    /** NIP-44 transport decrypt; null when undecryptable. */
+    fun nip46Decrypt(payload: String, transportSecretHex: String, peerPubkeyHex: String): String? =
+        space.bitos.core.identity.nip46.Nip46Crypto.decrypt(payload, transportSecretHex, peerPubkeyHex)
+
+    /** Request envelope JSON (`{"id","method","params"}`); null outside bounds/allowlist. */
+    fun nip46EncodeRequest(requestId: String, method: String, paramsJson: String): String? {
+        val params = try {
+            Json.parseToJsonElement(paramsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46Wire.encodeRequest(requestId, method, params)
+    }
+
+    /** Response envelope decode → `{"id","result"?,"error"?}`; null when malformed. */
+    fun nip46DecodeResponse(plainEnvelope: String): Map<String, String>? {
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope) ?: return null
+        val map = mutableMapOf("id" to envelope.id)
+        envelope.result?.let { map["result"] = it }
+        envelope.error?.let { map["error"] = it }
+        return map
+    }
+
+    /** Unsigned kind-24133 request event → `{"json","id"}`; null outside bounds. */
+    fun nip46BuildRequestEvent(
+        fromPubkeyHex: String,
+        toSignerPubkeyHex: String,
+        encryptedContent: String,
+        createdAtSeconds: Long,
+    ): Map<String, String>? {
+        val event = space.bitos.core.identity.nip46.Nip46Wire.buildRequestEvent(
+            fromPubkeyHex, toSignerPubkeyHex, encryptedContent, createdAtSeconds,
+        ) ?: return null
+        return mapOf("json" to event.json, "id" to event.idHex)
+    }
+
+    /** Decodes an inbound kind-24133 event after the relay trust gate → `{"pubkey","ptag","created_at","content"}`. */
+    fun nip46ParseTransportEvent(eventJson: String): Map<String, String>? {
+        val event = space.bitos.core.identity.nip46.Nip46Wire.parseTransportEvent(eventJson) ?: return null
+        return mapOf(
+            "pubkey" to event.pubkeyHex,
+            "ptag" to (event.pTagHex ?: ""),
+            "created_at" to event.createdAtSeconds.toString(),
+            "content" to event.content,
+        )
+    }
+
+    /** `["EVENT", {...}]` frame from an unsigned transport event + its signature. */
+    fun nip46EventFrame(unsignedEventJson: String, eventIdHex: String, signatureHex: String): String? {
+        if (eventIdHex.length != 64 || signatureHex.length != 128) return null
+        if (!unsignedEventJson.startsWith("{")) return null
+        return """["EVENT",{"id":"$eventIdHex""" + unsignedEventJson.removePrefix("{") +
+            ""","sig":"$signatureHex"}]"""
+    }
+
+    /** Response-lane REQ filter (authors pinned when the signer is known). */
+    fun nip46ResponseFilter(clientPubkeyHex: String, signerPubkeyHex: String?): String? =
+        space.bitos.core.identity.nip46.Nip46Wire.responseFilter(clientPubkeyHex, signerPubkeyHex?.takeIf { it.isNotEmpty() })
+
+    fun nip46RequestFrame(subscriptionId: String, filterJson: String): String =
+        space.bitos.core.identity.nip46.Nip46Wire.requestFrame(subscriptionId, filterJson)
+
+    fun nip46CloseFrame(subscriptionId: String): String =
+        space.bitos.core.identity.nip46.Nip46Wire.closeFrame(subscriptionId)
+
+    // ── Reducer surface (state token + commands JSON) ────────────────
+
+    /** Fresh session state token. */
+    fun nip46StateInit(): String =
+        space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(space.bitos.core.identity.nip46.Nip46SessionState())
+
+    /** Canonical SignEventRequest wire (originating payload for sign_event). */
+    fun signEventRequestJson(
+        requestId: String,
+        accountPubkeyHex: String,
+        createdAtSeconds: Long,
+        kind: Int,
+        tagsJson: String,
+        content: String,
+    ): String? {
+        val tags = try {
+            Json.parseToJsonElement(tagsJson).jsonArray.map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46SessionCodec.encodeRequestJson(
+            space.bitos.core.identity.SignEventRequest(requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content),
+        )
+    }
+
+    /** Independent validator gate for any signer-returned event (SBC-008a). */
+    fun validateSignedEventJson(originJson: String, signedEventJson: String): Map<String, String> {
+        val origin = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeRequestJson(originJson)
+            ?: return mapOf("code" to "malformed_request")
+        val (signed, reason) = space.bitos.core.identity.SignedEventValidator.validateJson(origin, signedEventJson)
+        if (reason != null) return mapOf("code" to reason)
+        return mapOf("code" to "signed", "id" to signed.idHex, "sig" to signed.signatureHex, "event" to signedEventJson)
+    }
+
+    /**
+     * Reducer `begin` → `{"state","commands","outcome"?}`; null when the
+     * lane is busy or the inputs are out of bounds.
+     */
+    fun nip46Begin(
+        stateJson: String,
+        requestId: String,
+        method: String,
+        deadlineMs: Long,
+        signerPubkeyHex: String,
+        originJson: String,
+        envelopePlainJson: String,
+        encryptedContent: String,
+        createdAtSeconds: Long,
+        clientPubkeyHex: String,
+        subscriptionId: String,
+    ): String? {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return null
+        val unsigned = space.bitos.core.identity.nip46.Nip46Wire.buildRequestEvent(
+            clientPubkeyHex, signerPubkeyHex.takeIf { it.isNotEmpty() } ?: return null,
+            encryptedContent, createdAtSeconds,
+        ) ?: return null
+        val origin = originJson.takeIf { it.isNotEmpty() }?.let {
+            space.bitos.core.identity.nip46.Nip46SessionCodec.decodeRequestJson(it)
+        }
+        val step = space.bitos.core.identity.nip46.Nip46SessionReducer.begin(
+            state,
+            space.bitos.core.identity.nip46.Nip46Rpc(
+                requestId = requestId,
+                method = method,
+                deadlineMs = deadlineMs,
+                expectedSignerPubkeyHex = signerPubkeyHex.takeIf { it.isNotEmpty() },
+                originating = origin,
+            ),
+            unsigned,
+            subscriptionId,
+            clientPubkeyHex,
+        ) ?: return null
+        return stepJson(step.first, step.second)
+    }
+
+    /** Reducer response handling → step JSON; noise decodes to a no-op step. */
+    fun nip46OnResponse(stateJson: String, fromPubkeyHex: String, plainEnvelope: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson)
+            ?: return noOpStep(stateJson)
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope)
+            ?: return noOpStep(stateJson)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onResponse(state, fromPubkeyHex, envelope)
+        return stepJson(next, commands)
+    }
+
+    /** auth_url challenge notice (spec §auth): stays in-flight. */
+    fun nip46OnAuthUrl(stateJson: String, plainEnvelope: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope) ?: return stateJson
+        return space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(
+            space.bitos.core.identity.nip46.Nip46SessionReducer.onAuthUrlChallenge(state, envelope),
+        )
+    }
+
+    fun nip46OnExpired(stateJson: String, nowMs: Long): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onExpired(state, nowMs)
+        return stepJson(next, commands)
+    }
+
+    fun nip46OnCancelled(stateJson: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onCancelled(state)
+        return stepJson(next, commands)
+    }
+
+    /** Relay switch: resend the SAME request on the new lane. */
+    fun nip46OnRelaysSwitched(
+        stateJson: String,
+        unsignedEventJson: String,
+        eventIdHex: String,
+        subscriptionId: String,
+        clientPubkeyHex: String,
+    ): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val unsigned = space.bitos.core.identity.nip46.Nip46UnsignedEvent(unsignedEventJson, eventIdHex)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onRelaysSwitched(
+            state, unsigned, subscriptionId, clientPubkeyHex,
+        )
+        return stepJson(next, commands)
+    }
+
+    /** Pairing: inbound signer `connect` request → ack + learned signer. */
+    fun nip46OnSignerConnect(stateJson: String, fromPubkeyHex: String, plainRequestEnvelope: String, clientPubkeyHex: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return noOpStep(stateJson)
+        val request = space.bitos.core.identity.nip46.Nip46Wire.decodeRequest(plainRequestEnvelope)
+            ?: return noOpStep(stateJson)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onSignerConnectRequest(
+            state, fromPubkeyHex, request, clientPubkeyHex,
+        )
+        return stepJson(next, commands)
+    }
+
+    private fun stepJson(
+        state: space.bitos.core.identity.nip46.Nip46SessionState,
+        commands: List<space.bitos.core.identity.nip46.Nip46Command>,
+    ): String = buildJsonObject {
+        put("state", space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(state))
+        put("commands", Json.parseToJsonElement(space.bitos.core.identity.nip46.Nip46SessionCodec.encodeCommands(commands)))
+        state.finished?.let {
+            put("outcome", space.bitos.core.identity.nip46.Nip46SessionCodec.encodeOutcomeJson(it))
+        }
+    }.toString()
+
+    private fun noOpStep(stateJson: String): String = buildJsonObject {
+        put("state", stateJson)
+        put("commands", Json.parseToJsonElement("[]"))
+    }.toString()
+
+    private fun hexToBytes32(hex: String): ByteArray? {
+        if (hex.length != 64) return null
+        return try {
+            ByteArray(32) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+        } catch (_: NumberFormatException) {
+            null
+        }
+    }
 }
 
 /**
