@@ -81,6 +81,20 @@ object MemeCommandCodec {
                 put("look", command.lookId)
             }
 
+            is MemeCommand.SetCrop -> {
+                val crop = command.crop
+                if (crop == null) {
+                    put("op", "crop-del")
+                } else {
+                    put("op", "crop")
+                    if (crop.rotationDeg != 0) put("rot", crop.rotationDeg)
+                    if (crop.flipH) put("flip", true)
+                    if (crop.zoom != 1f) put("zoom", crop.zoom)
+                    if (crop.panX != 0f) put("panx", crop.panX)
+                    if (crop.panY != 0f) put("pany", crop.panY)
+                }
+            }
+
             is MemeCommand.SetAdjust -> {
                 put("op", "adjust")
                 put("bri", command.adjust.brightness)
@@ -204,6 +218,18 @@ object MemeCommandCodec {
 
                 "look" -> obj["look"]?.jsonPrimitive?.content
                     ?.let(MemeCommand::SetLook)
+
+                "crop" -> MemeCommand.SetCrop(
+                    MemeCrop.clamp(
+                        rotationDeg = intOf(obj, "rot") ?: 0,
+                        flipH = obj["flip"]?.jsonPrimitive?.content == "true",
+                        zoom = floatOf(obj, "zoom") ?: 1f,
+                        panX = floatOf(obj, "panx") ?: 0f,
+                        panY = floatOf(obj, "pany") ?: 0f,
+                    ),
+                )
+
+                "crop-del" -> MemeCommand.SetCrop(null)
 
                 "adjust" -> MemeCommand.SetAdjust(
                     MemeAdjust(

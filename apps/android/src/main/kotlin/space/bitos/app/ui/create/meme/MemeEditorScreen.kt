@@ -1824,6 +1824,13 @@ fun MemeEditorScreen(
     LaunchedEffect(activePanel) {
         if (activePanel != MemeEditorPanel.FX) adjustPreview = null
     }
+    // EUI-02 §3: the Crop sheet's uncommitted draft previews on the stage;
+    // Apply commits ONE undoable SetCrop, Cancel discards.
+    var cropPreview by remember { mutableStateOf<space.bitos.core.studio.MemeCrop?>(null) }
+    val effectiveCrop = cropPreview ?: state.project.crop
+    LaunchedEffect(showCanvas) {
+        if (!showCanvas) cropPreview = null
+    }
 
     /** MUX-01: draft persistence is acknowledged, never assumed. */
     var draftSaveState by remember { mutableStateOf<DraftSaveState>(DraftSaveState.IDLE) }
@@ -3099,12 +3106,26 @@ fun MemeEditorScreen(
             } else if (gifMode) {
                 val frame = gifFrames[gifPreviewIndex.coerceIn(0, gifFrames.size - 1)]
                 val frameAspect = frame.width.toFloat() / frame.height
+                // EUI-02 §3: a cover crop re-frames the stage and swaps the
+                // media for its placed preview (the exact export draw).
+                val stagePlace = space.bitos.core.studio.MemeCanvas.placement(
+                    frame.width, frame.height, state.project.canvasRatio, effectiveCrop,
+                )
+                val placedFrame = if (stagePlace.cover) {
+                    val sig = stagePlace.let {
+                        "${it.frameWidth}x${it.frameHeight}|${it.drawX},${it.drawY}," +
+                            "${it.drawWidth}x${it.drawHeight}|${it.rotationDeg}|${it.flipH}"
+                    }
+                    remember(gifPreviewIndex, sig) { MemeRaster.placeMedia(frame, stagePlace, 1440) }
+                } else {
+                    null
+                }
                 val canvasTerms = state.project.canvasRatio
                     ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
-                val stageAspect = if (canvasTerms != null) {
-                    canvasTerms.first.toFloat() / canvasTerms.second
-                } else {
-                    frameAspect
+                val stageAspect = when {
+                    stagePlace.cover -> stagePlace.frameWidth.toFloat() / stagePlace.frameHeight
+                    canvasTerms != null -> canvasTerms.first.toFloat() / canvasTerms.second
+                    else -> frameAspect
                 }
                 Box(
                     modifier = Modifier
@@ -3114,7 +3135,7 @@ fun MemeEditorScreen(
                         .onSizeChanged { stagePx = it },
                 ) {
                     androidx.compose.foundation.Image(
-                        bitmap = frame.asImageBitmap(),
+                        bitmap = (placedFrame ?: frame).asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.FillBounds,
@@ -3182,12 +3203,35 @@ fun MemeEditorScreen(
                     }
                 }
             } else if (current != null || pinnedCanvasTerms != null) {
+                // EUI-02 §3 (image mode): cover crop preview via the placed
+                // bitmap — the same draw the raster export burns.
+                val cropPlace = current?.let {
+                    space.bitos.core.studio.MemeCanvas.placement(
+                        (it.aspect * 1000).toInt().coerceAtLeast(1), 1000,
+                        state.project.canvasRatio, effectiveCrop,
+                    )
+                }
+                val placedImage = if (cropPlace?.cover == true && current != null) {
+                    val sig = cropPlace.let {
+                        "${it.frameWidth}x${it.frameHeight}|${it.drawX},${it.drawY}," +
+                            "${it.drawWidth}x${it.drawHeight}|${it.rotationDeg}|${it.flipH}"
+                    }
+                    remember(current.uri, sig) {
+                        MemeRaster.decodeForExport(context.contentResolver, current.uri)
+                            ?.let { src -> MemeRaster.placeMedia(src, cropPlace, 1440) }
+                    }
+                } else {
+                    null
+                }
+                val cropStageAspect = cropPlace?.takeIf { it.cover }?.let {
+                    it.frameWidth.toFloat() / it.frameHeight
+                }
                 // Blank design: no pick, a pinned canvas — the stage keeps
                 // the full overlay/gesture surface over the background fill.
-                val stageAspect = if (pinnedCanvasTerms != null) {
-                    pinnedCanvasTerms.first.toFloat() / pinnedCanvasTerms.second
-                } else {
-                    current!!.aspect
+                val stageAspect = when {
+                    cropStageAspect != null -> cropStageAspect
+                    pinnedCanvasTerms != null -> pinnedCanvasTerms.first.toFloat() / pinnedCanvasTerms.second
+                    else -> current!!.aspect
                 }
                 Box(
                     modifier = Modifier
@@ -3196,7 +3240,16 @@ fun MemeEditorScreen(
                         .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
                         .onSizeChanged { stagePx = it },
                 ) {
-                    current?.let { picked ->
+                    val placedImageBitmap = placedImage?.asImageBitmap()
+                    if (placedImageBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = placedImageBitmap,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds,
+                        )
+                    }
+                    if (placedImage == null) current?.let { picked ->
                         AsyncImage(
                             model = picked.uri,
                             contentDescription = null,
@@ -4481,10 +4534,31 @@ fun MemeEditorScreen(
                     },
                 )
             } else {
-            CanvasSheetContent(
+            CropSheetContent(
                 ratio = state.project.canvasRatio ?: space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
                 bg = state.project.canvasBg,
-                onPick = { ratio, bg -> state.setCanvas(ratio, bg) },
+                crop = state.project.crop,
+                previewCrop = cropPreview,
+                legacyPad = state.project.crop == null &&
+                    state.project.canvasRatio != null &&
+                    state.project.canvasRatio != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
+                onPickRatio = { picked ->
+                    state.setCanvas(picked, state.project.canvasBg)
+                    // "Original" restores the uncropped frame (spec §3).
+                    if (picked == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) {
+                        state.setCrop(null)
+                        cropPreview = null
+                    }
+                },
+                onPickBg = {
+                    state.setCanvas(state.project.canvasRatio?.takeIf { r -> r != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, it)
+                },
+                onPreviewCrop = { cropPreview = it },
+                onApplyCrop = {
+                    state.setCrop(it)
+                    cropPreview = null
+                },
+                onCancelCrop = { cropPreview = null },
             )
             }
         }
@@ -5845,8 +5919,6 @@ private fun ClipToolButton(
     }
 }
 
-/** Canvas settings (image/GIF): ratio preset + background color (shared
- *  [space.bitos.core.studio.MemeCanvas] rules; the media letterboxes). */
 /**
  * Blank-video creation/re-style sheet (plan §3.2/§3.3, MST-071/073):
  * ratio · background · duration → the synthesized solid canvas clip. On
@@ -5983,11 +6055,19 @@ private fun BlankCanvasSheetContent(
 }
 
 @Composable
-private fun CanvasSheetContent(
+private fun CropSheetContent(
     ratio: String,
     bg: String?,
-    onPick: (ratio: String?, bg: String?) -> Unit,
+    crop: space.bitos.core.studio.MemeCrop?,
+    previewCrop: space.bitos.core.studio.MemeCrop?,
+    legacyPad: Boolean,
+    onPickRatio: (String) -> Unit,
+    onPickBg: (String?) -> Unit,
+    onPreviewCrop: (space.bitos.core.studio.MemeCrop) -> Unit,
+    onApplyCrop: (space.bitos.core.studio.MemeCrop) -> Unit,
+    onCancelCrop: () -> Unit,
 ) {
+    val draft = previewCrop ?: crop ?: space.bitos.core.studio.MemeCrop()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -5995,15 +6075,32 @@ private fun CanvasSheetContent(
             .padding(bottom = BitOSSpacing.lg),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        Text("Canvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
-        Text("Size", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+        Text("Crop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text(
+            space.bitos.core.studio.StudioOnboarding.CROP_HINT,
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+        )
+        if (legacyPad) {
+            // The spec's padding disclosure: this project letterboxes today;
+            // touching the crop switches it to crop-to-fill.
+            Text(
+                "This project pads the media to fit the canvas. Any crop change below switches it to crop-to-fill.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textTertiary,
+            )
+        }
+        Text("Aspect ratio", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
             space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
-                val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Source" else id
+                val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Original" else id
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = if (ratio == id) BitOSColors.primary else BitOSColors.surfaceElevated,
-                    modifier = Modifier.clickable(onClickLabel = label) { onPick(id, bg) },
+                    modifier = Modifier.clickable(onClickLabel = label) { onPickRatio(id) },
                 ) {
                     Text(
                         short,
@@ -6015,6 +6112,56 @@ private fun CanvasSheetContent(
                 }
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(rotationDeg = (draft.rotationDeg + 270) % 360))
+            }) { Text("Rotate left") }
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(rotationDeg = (draft.rotationDeg + 90) % 360))
+            }) { Text("Rotate right") }
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(flipH = !draft.flipH))
+            }) { Text("Flip") }
+        }
+        // Accessible pan/zoom — the spec requires the crop be operable
+        // without pinch gestures; these sliders preview live on the stage.
+        BitosAdjustmentSlider(
+            label = "Zoom",
+            value = draft.zoom,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_ZOOM..space.bitos.core.studio.MemeCrop.MAX_ZOOM,
+            valueText = "${(draft.zoom * 100).toInt()}%",
+            onValueChange = { onPreviewCrop(draft.copy(zoom = it)) },
+            step = 0.05f,
+        )
+        BitosAdjustmentSlider(
+            label = "Position X",
+            value = draft.panX,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_PAN..space.bitos.core.studio.MemeCrop.MAX_PAN,
+            valueText = "${(draft.panX * 100).toInt()}",
+            onValueChange = { onPreviewCrop(draft.copy(panX = it)) },
+            step = 0.05f,
+        )
+        BitosAdjustmentSlider(
+            label = "Position Y",
+            value = draft.panY,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_PAN..space.bitos.core.studio.MemeCrop.MAX_PAN,
+            valueText = "${(draft.panY * 100).toInt()}",
+            onValueChange = { onPreviewCrop(draft.copy(panY = it)) },
+            step = 0.05f,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm, Alignment.End),
+        ) {
+            TextButton(onClick = onCancelCrop, enabled = previewCrop != null) { Text("Cancel") }
+            Button(onClick = { onApplyCrop(previewCrop ?: return@Button) }, enabled = previewCrop != null) {
+                Text("Apply")
+            }
+        }
+        HorizontalDivider(
+            color = BitOSColors.border,
+            modifier = Modifier.padding(vertical = BitOSSpacing.xs),
+        )
         Text("Background", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
         Row(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
@@ -6033,14 +6180,9 @@ private fun CanvasSheetContent(
                                 if (selected) BitOSColors.primary else BitOSColors.border,
                                 androidx.compose.foundation.shape.CircleShape,
                             )
-                            .clickable(onClickLabel = "Background $hex") { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex) },
+                            .clickable(onClickLabel = "Background $hex") { onPickBg(hex) },
                     )
                 }
-            if (bg != null) {
-                TextButton(onClick = { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, null) }) {
-                    Text("Clear", color = BitOSColors.textSecondary)
-                }
-            }
         }
         var hex by remember { mutableStateOf(bg ?: "") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
@@ -6050,7 +6192,7 @@ private fun CanvasSheetContent(
                     hex = value.take(7)
                     // Apply as typed when it completes a valid #rrggbb.
                     if (space.bitos.core.studio.MemeCanvas.isValidBackground(hex)) {
-                        onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex)
+                        onPickBg(hex)
                     }
                 },
                 placeholder = "#rrggbb custom",
@@ -6066,9 +6208,9 @@ private fun CanvasSheetContent(
             )
         }
         Text(
-            "The media letterboxes onto the canvas; captions and layers keep their positions.",
+            "Pads letterboxed projects — a crop fills the frame instead.",
             style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textSecondary,
+            color = BitOSColors.textTertiary,
         )
     }
 }

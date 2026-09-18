@@ -385,6 +385,17 @@ class MemeEditorState(
         commit(MemeCommand.SetSpeed(clamped))
     }
 
+    /** EUI-02 §3 crop draft commit; null returns to the legacy letterbox. */
+    fun setCrop(crop: space.bitos.core.studio.MemeCrop?) {
+        val next = crop?.let {
+            space.bitos.core.studio.MemeCrop.clamp(it.rotationDeg, it.flipH, it.zoom, it.panX, it.panY)
+        }
+        if (project.crop == next) return
+        beginClipsEdit()
+        project = project.copy(crop = next)
+        revision += 1
+    }
+
     /**
      * Canvas ratio/background (image/GIF). Undoable through the direct
      * project-edit stack; invalid values are ignored by the shared rules.

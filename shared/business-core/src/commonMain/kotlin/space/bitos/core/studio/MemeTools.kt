@@ -66,8 +66,8 @@ object MemeTools {
         // ── Advanced (More overflow) ────────────────────────────────────
         /** Classic top/bottom meme captions (the "Meme generator" sheet). */
         CAPTIONS("Captions", "captions"),
-        /** Canvas ratio + background. */
-        CANVAS("Canvas", "canvas"),
+        /** Crop treatment (ratio + rotate/flip + pan/zoom) + background. */
+        CANVAS("Crop", "canvas"),
         /** Image / GIF layers. */
         LAYERS("Layers", "layers"),
         /** Freehand pen. */
@@ -148,7 +148,9 @@ object MemeTools {
     /** Advanced tools by mode (More overflow). */
     private val advancedModes: Map<ToolId, Set<MemeMode>> = mapOf(
         ToolId.CAPTIONS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
-        ToolId.CANVAS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
+        // VIDEO keeps its source frame in this release (a re-frame is a
+        // re-encode) — the crop tool is image/GIF only, stated honestly.
+        ToolId.CANVAS to setOf(MemeMode.IMAGE, MemeMode.GIF),
         ToolId.LAYERS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
         ToolId.DRAW to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
         ToolId.TRIM to setOf(MemeMode.VIDEO),

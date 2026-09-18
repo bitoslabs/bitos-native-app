@@ -48,6 +48,22 @@ enum MemeGifExportIos {
         }
         guard !steps.isEmpty else { throw ExportError(message: "The GIF plan is empty") }
 
+        // EUI-02 §3: the crop treatment re-frames every frame BEFORE the
+        // ladder — the placed frame is the export source (the same draw
+        // the stage previews).
+        var frames = frames
+        if let first = frames.first,
+           let place = MemeEditorStore.PlacementUi.decode(
+             client.memeCropPlacement(
+               projectJson,
+               sourceWidth: Int(first.size.width),
+               sourceHeight: Int(first.size.height),
+               cropOverrideJson: ""
+             )
+           ), place.cover {
+            frames = frames.map { MemeRaster.placeMedia($0, place) }
+        }
+
         let source = frames[0]
         let sourceWidth = Int(source.size.width)
         let sourceHeight = Int(source.size.height)

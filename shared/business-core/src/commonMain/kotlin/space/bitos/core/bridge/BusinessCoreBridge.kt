@@ -3823,6 +3823,78 @@ class BusinessCoreBridge {
      */
     fun memeAdjustControls(): String = space.bitos.core.studio.MemeAdjustControl.catalogJson()
 
+    /**
+     * EUI-02 §3: the ratio catalogue both crop sheets render from —
+     * `{"ratios":[{"id","label"}]}` in display order (the `MemeTools`
+     * pattern; DESIGN_SYSTEM §0). Never throws.
+     */
+    fun memeCanvasRatios(): String = buildJsonObject {
+        put("ratios", buildJsonArray {
+            space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
+                add(buildJsonObject {
+                    put("id", id)
+                    put("label", label)
+                })
+            }
+        })
+    }.toString()
+
+    /**
+     * EUI-02 §3: studio guidance copy keyed by surface —
+     * `{"crop": …}`. One shared source so the platforms never drift.
+     */
+    fun memeStudioHints(): String = buildJsonObject {
+        put("crop", space.bitos.core.studio.StudioOnboarding.CROP_HINT)
+    }.toString()
+
+    /**
+     * EUI-02 §3: the project's canonical crop (`{"rot":..,"flip":..,
+     * "zoom":..,"panx":..,"pany":..}`) or "" when absent (legacy
+     * letterbox), so the native UI never parses wire fields.
+     */
+    fun memeCropOf(projectJson: String): String {
+        val crop = space.bitos.core.studio.MemeProjectContract.decode(projectJson)?.crop ?: return ""
+        return buildJsonObject {
+            if (crop.rotationDeg != 0) put("rot", crop.rotationDeg)
+            if (crop.flipH) put("flip", crop.flipH)
+            if (crop.zoom != 1f) put("zoom", crop.zoom)
+            if (crop.panX != 0f) put("panx", crop.panX)
+            if (crop.panY != 0f) put("pany", crop.panY)
+        }.toString()
+    }
+
+    /**
+     * EUI-02 §3: the shared placement (frame + media draw rect + rotation/
+     * flip + cover flag) for a source size under the project's ratio and
+     * crop — the ONE geometry previews and burns share. Junk → identity.
+     */
+    fun memeCropPlacement(
+        projectJson: String,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        cropOverrideJson: String = "",
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+        // The sheet previews an UNCOMMITTED draft through the same math —
+        // the override rides the canonical crop JSON shape.
+        val cropOverride = cropOverrideJson.takeIf { it.isNotEmpty() }
+            ?.let { space.bitos.core.studio.MemeProjectContract.decodeCropJson(it) }
+        val place = space.bitos.core.studio.MemeCanvas.placement(
+            sourceWidth, sourceHeight, project?.canvasRatio, cropOverride ?: project?.crop,
+        )
+        return buildJsonObject {
+            put("frameW", place.frameWidth)
+            put("frameH", place.frameHeight)
+            put("drawW", place.drawWidth)
+            put("drawH", place.drawHeight)
+            put("drawX", place.drawX)
+            put("drawY", place.drawY)
+            put("rot", place.rotationDeg)
+            put("flip", place.flipH)
+            put("cover", place.cover)
+        }.toString()
+    }
+
     /** One `{"matrix":[20],"blur":px}` envelope builder for the look seams. */
     private fun matrixEnvelope(
         lookId: String?,

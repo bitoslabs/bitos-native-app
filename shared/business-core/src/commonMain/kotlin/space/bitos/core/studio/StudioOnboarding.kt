@@ -165,6 +165,10 @@ object StudioOnboarding {
     /** The line shown once media exists but nothing is on it yet. */
     const val ADD_SOMETHING_HINT = "Add text, a sticker or a look — everything autosaves."
 
+    /** Crop sheet (EUI-02 spec §3): the pan/zoom affordance is the sliders —
+     *  operable without pinch gestures, previewing live on the stage. */
+    const val CROP_HINT = "Zoom and reposition with the sliders — the stage previews live."
+
     /**
      * Undo/redo discoverability (MSU-033): shown as a one-time notice the
      * first time an edit is undone, naming redo so the pair is learnt

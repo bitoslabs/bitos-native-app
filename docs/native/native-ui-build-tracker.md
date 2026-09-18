@@ -603,6 +603,63 @@ V2 suite).
     type-check exit 0.
   - [ ] EUI-03 — Crop sheet (greenfield: ratio + rotate + flip +
     position/scale with accessible fields; video keeps canvas-level framing).
+  - [x] **EUI-03 — CROP SHEET (2026-09-18, COMPLETE for image + GIF; VIDEO
+    re-frame honestly deferred).** SHARED: `MemeCrop` (rotation CW 0/90/
+    180/270 · flipH mirrored in output space · zoom 1–3 · pan ±1 with slack
+    only where zoom overflows) rides the project wire as an additive root
+    `crop` object (`rot/flip/zoom/panx/pany`, junk clamped to the nearest
+    quarter turn); `MemeCanvas.placement()` is the ONE geometry — tri-state
+    (crop null = v1 letterbox for pinned-ratio projects, untouched media
+    otherwise; crop present even untouched = cover crop-to-fill, the frame
+    being the ratio window INSIDE the rotated media so the visible window
+    stays at source resolution); `RATIOS` gained 3:4; `SetCrop` command
+    (undoable, gesture-coalesced later-wins, explicit null clears back to
+    letterbox); `MemeCropTest` 9 cases (identity, center-crop goldens,
+    rotation frame swap, zoom/pan slack, clamps, wire tri-state round-trip,
+    command coalescing, legacy treatment, bridge seams `memeCropOf` +
+    `memeCropPlacement(project, w, h, cropOverride)` — the override lets
+    sheets preview UNCOMMITTED drafts through the shared math).
+    Tool `CANVAS` relabelled **Crop** and removed from VIDEO's advanced set
+    (the v1 honesty line holds: a video re-frame is a re-encode — deferred,
+    stated in the catalogue instead of a lying control). ANDROID: the crop
+    sheet (ex-Canvas) = Original/1:1/4:5/3:4/9:16/16:9 chips + rotate L/R +
+    Flip + Zoom/Position X/Y sliders (`BitosAdjustmentSlider` nudges — the
+    spec's no-pinch operation path) + the padding disclosure for legacy
+    letterbox projects + Cancel/Apply draft (`cropPreview` on the screen;
+    stage previews uncommitted); `MemeRaster.drawPlacedMedia`/
+    `placeMedia` are the ONE crop draw — stills (`render`), GIF frames
+    (`renderFrameRgba`), and stage previews (downsampled `remember`-cached
+    bitmap) share it, so preview IS the export by construction; the GIF
+    size ladder re-frames to the crop frame when cover. Background swatches
+    stay (letterbox/blank use). IOS mirror: `MemeCropUi`/`PlacementUi`
+    decoded from the seams (no wire parsing in the view), `MemeRaster.
+    placeMedia` (CGContext; negated angle — CGContext is CCW-positive),
+    `renderPngData` pre-places the graded media before the export plan, the
+    GIF exporter pre-places frames before the ladder, the stage swaps in
+    the placed preview + frame aspect (grade burns first, then crop — the
+    export order), CanvasSheet rewritten to the same crop sheet with the
+    Cancel/Apply draft via `store.cropPreview`/`effectiveCrop`. TOOL
+    routing: crop gated to image/GIF on both platforms' `toolEnabled`.
+    CODE-REVIEW ROUND: the ratio chips + crop hint now ride shared seams
+    (`memeCanvasRatios()`, `memeStudioHints()`) — no per-platform taxonomy
+    or copy; **Original** now also CLEARS the crop (`SetCrop(null)` — the
+    spec's "returning to Original restores the uncropped frame"); the
+    Android custom-hex background field lost in the rewrite is restored;
+    redundant platform tool gates removed (the shared catalogue is the
+    gate); a lost swatch-row brace (caught by the suite, fixed) and an
+    orphaned KDoc cleaned up. KNOWN LIMITS: video re-frame (spec QA
+    scenario 1's rotate+crop export) waits on verified video-encoder
+    transforms on both platforms — the catalogue/sheet say so instead of
+    pretending; stage pinch/drag manipulation lands after device QA of the
+    slider path (sliders are the a11y-complete operation path today); the
+    hint shows every open (first-time-only coach flag is device-QA polish);
+    ratio chips are text-only (shape glyphs + "Original 4:5"-style naming
+    are polish); ratio/background taps stay immediate-commit (one tap = one
+    undoable step) so Cancel covers the slider draft only.
+    Verified: shared
+    `testAndroidHostTest` green (MemeCropTest 9 + all prior); Android
+    meme/studio tests green; iOS full-app Swift 6 strict-concurrency
+    type-check exit 0.
   - [ ] EUI-04 — Timeline selection/actions polish (Replace action,
     context-retention polish).
   - [ ] EUI-05 — Sound browser/local audio availability states.

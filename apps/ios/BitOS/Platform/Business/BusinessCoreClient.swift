@@ -377,6 +377,18 @@ protocol BusinessCoreClient: Sendable {
     /// The Adjust-section catalogue (sections, labels, bounds, neutrals,
     /// signed flags) the Look UIs render from — shared with Android.
     func memeAdjustControls() -> String
+    /// The project's canonical crop JSON ("" = absent / legacy letterbox).
+    func memeCropOf(_ projectJson: String) -> String
+    /// The shared ratio catalogue for the crop sheets.
+    func memeCanvasRatios() -> String
+    /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
+    func memeStudioHints() -> String
+    /// The shared crop placement (frame + media rect + rot/flip + cover);
+    /// [cropOverrideJson] previews an uncommitted draft through the same
+    /// math (canonical crop JSON, "" = read the project).
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
+    ) -> String
 
     // APP-019 video cut policy: long clips are CUT with a message, never
     // rejected (shared MemeVideoCutRules, both apps).
@@ -960,6 +972,25 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func memeAdjustControls() -> String {
         bridge.memeAdjustControls()
     }
+    func memeCropOf(_ projectJson: String) -> String {
+        bridge.memeCropOf(projectJson: projectJson)
+    }
+    func memeCanvasRatios() -> String {
+        bridge.memeCanvasRatios()
+    }
+    func memeStudioHints() -> String {
+        bridge.memeStudioHints()
+    }
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
+    ) -> String {
+        bridge.memeCropPlacement(
+            projectJson: projectJson,
+            sourceWidth: Int32(sourceWidth),
+            sourceHeight: Int32(sourceHeight),
+            cropOverrideJson: cropOverrideJson
+        )
+    }
 
     func memeVideoCutFor(durationMs: Int64) -> String {
         bridge.memeVideoCutFor(durationMs: durationMs)
@@ -1515,6 +1546,23 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeAdjustControls() -> String {
         FrameworkBusinessCoreClient().memeAdjustControls()
+    }
+    func memeCropOf(_ projectJson: String) -> String {
+        FrameworkBusinessCoreClient().memeCropOf(projectJson)
+    }
+    func memeCanvasRatios() -> String {
+        FrameworkBusinessCoreClient().memeCanvasRatios()
+    }
+    func memeStudioHints() -> String {
+        FrameworkBusinessCoreClient().memeStudioHints()
+    }
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
+    ) -> String {
+        FrameworkBusinessCoreClient().memeCropPlacement(
+            projectJson, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+            cropOverrideJson: cropOverrideJson
+        )
     }
     func memeVideoCutFor(durationMs: Int64) -> String {
         FrameworkBusinessCoreClient().memeVideoCutFor(durationMs: durationMs)

@@ -1003,6 +1003,22 @@ final class MemeEditorStore {
 
     var hasAdjust: Bool { !adjust.isDefault }
 
+    private(set) var crop: MemeCropUi?
+
+    /// EUI-02 §3: commits the crop draft as one undoable command; null
+    /// returns to the legacy letterbox treatment.
+    func setCrop(_ newValue: MemeCropUi?) {
+        let command: String
+        if let newValue {
+            // The shared codec clamps; an identity crop rides as a bare op.
+            let body = newValue.canonicalJson.dropFirst().dropLast()
+            command = body.isEmpty ? "{\"op\":\"crop\"}" : "{\"op\":\"crop\",\(body)}"
+        } else {
+            command = "{\"op\":\"crop-del\"}"
+        }
+        apply(commandJson: command)
+    }
+
     func setAdjust(_ newValue: MemeAdjustUi) {
         let before = projectJson
         apply(commandJson: Self.encode([
@@ -1074,6 +1090,108 @@ final class MemeEditorStore {
         }
     }
 
+    /// EUI-02 §3 crop treatment decoded from the `memeCropOf` seam — the
+    /// UI never parses wire fields. Null = the legacy letterbox treatment.
+    struct MemeCropUi: Equatable, Sendable {
+        var rotationDeg: Int = 0
+        var flipH: Bool = false
+        var zoom: Float = 1
+        var panX: Float = 0
+        var panY: Float = 0
+
+        /// Decodes the canonical crop JSON; "" (absent) = null.
+        static func decode(_ json: String) -> MemeCropUi? {
+            guard !json.isEmpty,
+                  let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            func value(_ key: String, _ default: Float) -> Float {
+                (root[key] as? NSNumber)?.floatValue ?? `default`
+            }
+            return MemeCropUi(
+                rotationDeg: (root["rot"] as? NSNumber)?.intValue ?? 0,
+                flipH: (root["flip"] as? NSNumber)?.boolValue ?? false,
+                zoom: value("zoom", 1),
+                panX: value("panx", 0),
+                panY: value("pany", 0)
+            )
+        }
+
+        /// Canonical JSON for the crop command; neutrals omitted.
+        var canonicalJson: String {
+            var parts: [String] = []
+            if rotationDeg != 0 { parts.append("\"rot\":\(rotationDeg)") }
+            if flipH { parts.append("\"flip\":true") }
+            if zoom != 1 { parts.append("\"zoom\":\(zoom)") }
+            if panX != 0 { parts.append("\"panx\":\(panX)") }
+            if panY != 0 { parts.append("\"pany\":\(panY)") }
+            return "{\(parts.joined(separator: ","))}"
+        }
+    }
+
+    /// The shared placement for a source size under the project's ratio +
+    /// effective crop — decoded from `memeCropPlacement`.
+    struct PlacementUi: Equatable, Sendable {
+        let frameWidth: Int, frameHeight: Int
+        let drawWidth: Float, drawHeight: Float
+        let drawX: Float, drawY: Float
+        let rotationDeg: Int
+        let flipH: Bool
+        let cover: Bool
+
+        static func decode(_ json: String) -> PlacementUi? {
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let frameW = (root["frameW"] as? NSNumber)?.intValue,
+                  let frameH = (root["frameH"] as? NSNumber)?.intValue else { return nil }
+            return PlacementUi(
+                frameWidth: frameW,
+                frameHeight: frameH,
+                drawWidth: (root["drawW"] as? NSNumber)?.floatValue ?? 0,
+                drawHeight: (root["drawH"] as? NSNumber)?.floatValue ?? 0,
+                drawX: (root["drawX"] as? NSNumber)?.floatValue ?? 0,
+                drawY: (root["drawY"] as? NSNumber)?.floatValue ?? 0,
+                rotationDeg: (root["rot"] as? NSNumber)?.intValue ?? 0,
+                flipH: (root["flip"] as? NSNumber)?.boolValue ?? false,
+                cover: (root["cover"] as? NSNumber)?.boolValue ?? false
+            )
+        }
+
+        var signature: String {
+            "\(frameWidth)x\(frameHeight)|\(drawX),\(drawY)|\(drawWidth)x\(drawHeight)|\(rotationDeg)|\(flipH)"
+        }
+        var frameAspect: CGFloat { CGFloat(frameWidth) / CGFloat(max(1, frameHeight)) }
+    }
+
+    /// The Crop sheet's uncommitted draft; the stage previews it, Apply
+    /// commits ONE undoable SetCrop, Cancel drops it.
+    var cropPreview: MemeCropUi?
+    var effectiveCrop: MemeCropUi? { cropPreview ?? crop }
+
+    /// The stage's crop placement for a source size, when the COVER
+    /// treatment is active (draft-aware); nil = the legacy paths draw.
+    func stageCropPlacement(width: Int, height: Int) -> PlacementUi? {
+        guard let place = PlacementUi.decode(
+            client.memeCropPlacement(
+                projectJson,
+                sourceWidth: width,
+                sourceHeight: height,
+                cropOverrideJson: cropPreview?.canonicalJson ?? ""
+            )
+        ), place.cover else { return nil }
+        return place
+    }
+
+    /// The graded media drawn into its crop frame — the exact export
+    /// draw, cached like the grade so slider drags stay smooth.
+    func placedStageImage(_ image: UIImage, cacheKey: String) -> (image: UIImage, place: PlacementUi)? {
+        guard let place = stageCropPlacement(
+            width: Int(image.size.width), height: Int(image.size.height)
+        ) else { return nil }
+        let graded = gradedImage(image, cacheKey: "\(cacheKey)|crop|\(place.signature)")
+        return (MemeRaster.placeMedia(graded, place), place)
+    }
+
     /// Stage-preview image with the grade applied (cached per asset/look).
     func gradedImage(_ image: UIImage, cacheKey: String) -> UIImage {
         let effective = gradePreview ?? adjust
@@ -1116,6 +1234,11 @@ final class MemeEditorStore {
             let nextAdjust = MemeAdjustUi.decode(client.memeAdjustOf(projectJson))
             if nextAdjust != adjust {
                 adjust = nextAdjust
+                gradeCache.removeAll()
+            }
+            let nextCrop = MemeCropUi.decode(client.memeCropOf(projectJson))
+            if nextCrop != crop {
+                crop = nextCrop
                 gradeCache.removeAll()
             }
             let nextSpeed = (root["speed"] as? NSNumber)?.floatValue ?? 1
@@ -4737,12 +4860,16 @@ struct MemeEditorView: View {
                         }
                     }
                 } else if store.isGifMode, let frame = store.gifActiveFrame {
-                    let aspect = frame.image.size.width / max(1, frame.image.size.height)
+                    // EUI-02 §3: a cover crop previews through the placed
+                    // frame — the exact draw the GIF export burns.
+                    let cropPlaced = store.placedStageImage(frame.image, cacheKey: frame.id)
+                    let aspect = cropPlaced?.place.frameAspect
+                        ?? frame.image.size.width / max(1, frame.image.size.height)
                     let fitted = fittedStageSize(container: container, aspect: aspect)
                     ZStack {
                         // WYSIWYG: the frame previews through the same
                         // grade cache the export burns (look + adjust).
-                        Image(uiImage: store.gradedImage(frame.image, cacheKey: frame.id))
+                        Image(uiImage: cropPlaced?.image ?? store.gradedImage(frame.image, cacheKey: frame.id))
                             .resizable()
                             .scaledToFill()
                             .frame(width: fitted.width, height: fitted.height)
@@ -4786,11 +4913,15 @@ struct MemeEditorView: View {
                 } else if store.activeAsset != nil || store.canvasAspect != nil {
                     // Blank design: a pinned canvas with no pick keeps the
                     // full overlay/gesture surface over the background fill.
-                    let stageAspect = store.activeAsset?.aspect ?? store.canvasAspect ?? 1
+                    let cropPlaced = store.activeAsset.flatMap {
+                        store.placedStageImage($0.image, cacheKey: $0.id)
+                    }
+                    let stageAspect = cropPlaced?.place.frameAspect
+                        ?? store.activeAsset?.aspect ?? store.canvasAspect ?? 1
                     let fitted = fittedStageSize(container: container, aspect: stageAspect)
                     ZStack {
                         if let asset = store.activeAsset {
-                            Image(uiImage: store.gradedImage(asset.image, cacheKey: asset.id))
+                            Image(uiImage: cropPlaced?.image ?? store.gradedImage(asset.image, cacheKey: asset.id))
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: fitted.width, height: fitted.height)
@@ -8520,6 +8651,46 @@ enum MemeRaster {
     }
 
     /// Renders asset + project to PNG bytes at the export resolution.
+    /**
+     * EUI-02 §3: the ONE crop draw for stills, GIF frames and stage
+     * previews — rotate clockwise (CGContext is CCW-positive, hence the
+     * negated angle), mirror in output space, scale to the placement rect,
+     * clip to the frame. Same math as Android `drawPlacedMedia`.
+     */
+    static func placeMedia(_ source: UIImage, _ place: MemeEditorStore.PlacementUi) -> UIImage {
+        let size = CGSize(width: place.frameWidth, height: place.frameHeight)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            let cg = context.cgContext
+            cg.clip(to: CGRect(origin: .zero, size: size))
+            if place.flipH {
+                // Mirror in OUTPUT space about the frame's vertical center.
+                cg.translateBy(x: size.width / 2, y: size.height / 2)
+                cg.scaleBy(x: -1, y: 1)
+                cg.translateBy(x: -size.width / 2, y: -size.height / 2)
+            }
+            let cx = CGFloat(place.drawX) + CGFloat(place.drawWidth) / 2
+            let cy = CGFloat(place.drawY) + CGFloat(place.drawHeight) / 2
+            if place.rotationDeg != 0 {
+                // CGContext rotates CCW for positive angles; the contract
+                // is clockwise.
+                cg.translateBy(x: cx, y: cy)
+                cg.rotate(by: -CGFloat(place.rotationDeg) * .pi / 180)
+                cg.translateBy(x: -cx, y: -cy)
+            }
+            let quarter = place.rotationDeg == 90 || place.rotationDeg == 270
+            let preW = quarter ? CGFloat(place.drawHeight) : CGFloat(place.drawWidth)
+            let preH = quarter ? CGFloat(place.drawWidth) : CGFloat(place.drawHeight)
+            source.draw(
+                in: CGRect(
+                    x: cx - preW / 2, y: cy - preH / 2,
+                    width: preW, height: preH
+                )
+            )
+        }
+    }
+
     static func renderPngData(
         asset: UIImage,
         projectJson: String,
@@ -8541,11 +8712,23 @@ enum MemeRaster {
                 media = graded
             }
         }
+        // EUI-02 §3: the crop treatment re-frames the media FIRST — the
+        // plan then normalizes against the crop frame like any source.
+        if let place = MemeEditorStore.PlacementUi.decode(
+            client.memeCropPlacement(
+                projectJson,
+                sourceWidth: Int(asset.size.width),
+                sourceHeight: Int(asset.size.height),
+                cropOverrideJson: ""
+            )
+        ), place.cover {
+            media = placeMedia(media, place)
+        }
         // The shared envelope owns the evened, long-edge-capped canvas.
         let envelopeJson = client.memeExportPlan(
             projectJson,
-            sourceWidth: Int(asset.size.width),
-            sourceHeight: Int(asset.size.height)
+            sourceWidth: Int(media.size.width),
+            sourceHeight: Int(media.size.height)
         )
         guard envelopeJson.contains("\"width\""),
               let envelopeData = envelopeJson.data(using: .utf8),
@@ -9874,82 +10057,191 @@ private struct CanvasSheet: View {
         )
     }
 
+    /// Shared guidance copy via the `memeStudioHints` seam (DESIGN_SYSTEM
+    /// §0 — one source, never hand-rolled per platform).
+    private static let cropHint: String = {
+        guard let data = FrameworkBusinessCoreClient().memeStudioHints().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hint = root["crop"] as? String, !hint.isEmpty else {
+            return "Zoom and reposition with the sliders — the stage previews live."
+        }
+        return hint
+    }()
+
+    /// The shared ratio catalogue via the bridge seam (DESIGN_SYSTEM §0 —
+    /// never hand-rolled per platform). `{"ratios":[{"id","label"}]}`.
+    private static let ratioIds: [(id: String, label: String)] = {
+        guard let data = FrameworkBusinessCoreClient().memeCanvasRatios().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = root["ratios"] as? [[String: Any]] else { return [("source", "Original")] }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            return (id, (row["label"] as? String) ?? id)
+        }
+    }()
+
+    /// Swift has no data-class `copy()` — one helper for the draft edits.
+    private func with(
+        _ crop: MemeEditorStore.MemeCropUi,
+        rotationDeg: Int? = nil,
+        flipH: Bool? = nil,
+        zoom: Float? = nil,
+        panX: Float? = nil,
+        panY: Float? = nil
+    ) -> MemeEditorStore.MemeCropUi {
+        var out = crop
+        if let rotationDeg { out.rotationDeg = rotationDeg }
+        if let flipH { out.flipH = flipH }
+        if let zoom { out.zoom = zoom }
+        if let panX { out.panX = panX }
+        if let panY { out.panY = panY }
+        return out
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            Text("Canvas").font(.headline)
-            if store.isVideoMode {
-                Text("Video keeps its source frame in V1 — canvas settings apply to image and GIF memes.")
+        let draft = store.cropPreview ?? store.crop ?? MemeEditorStore.MemeCropUi()
+        let legacyPad = store.crop == nil &&
+            store.canvasRatio != nil && store.canvasRatio != "source"
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Crop").font(.headline)
+            Text(Self.cropHint)
+                .font(.caption)
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if legacyPad {
+                Text("This project pads the media to fit the canvas. Any crop change below switches it to crop-to-fill.")
                     .font(.caption)
-                    .foregroundStyle(BitOSTheme.textSecondary)
-            } else {
-                Text("Size")
-                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BitOSTheme.textTertiary)
+            }
+            Text("Aspect ratio")
+                .font(.subheadline.weight(.semibold))
+            ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(
-                        ["source", "1:1", "4:5", "9:16", "16:9"],
-                        id: \.self
-                    ) { ratio in
-                        let label = ratio == "source" ? "Source" : ratio
+                    ForEach(Self.ratioIds, id: \.id) { ratio in
+                        let id = ratio.id
+                        let label = id == "source" ? "Original" : id
                         Button(label) {
-                            store.setCanvas(ratio: ratio, bg: store.canvasBg)
+                            store.setCanvas(ratio: id, bg: store.canvasBg)
+                            // "Original" restores the uncropped frame (spec §3).
+                            if id == "source" {
+                                store.setCrop(nil)
+                                store.cropPreview = nil
+                            }
                         }
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(
-                            (store.canvasRatio ?? "source") == ratio
+                            (store.canvasRatio ?? "source") == id
                                 ? BitOSTheme.accent : BitOSTheme.surface
                         )
                         .foregroundStyle(
-                            (store.canvasRatio ?? "source") == ratio ? Color.black : BitOSTheme.textPrimary
+                            (store.canvasRatio ?? "source") == id ? Color.black : BitOSTheme.textPrimary
                         )
                         .clipShape(Capsule())
                     }
                 }
-                Text("Background")
-                    .font(.subheadline.weight(.semibold))
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(swatches, id: \.self) { hex in
-                        Button {
-                            store.setCanvas(ratio: store.canvasRatio, bg: hex)
-                        } label: {
-                            Circle()
-                                .fill(Self.color(fromHex: hex) ?? .white)
-                                .frame(width: 28, height: 28)
-                                .overlay(
-                                    Circle().strokeBorder(
-                                        store.canvasBg == hex ? BitOSTheme.accent : BitOSTheme.border,
-                                        lineWidth: store.canvasBg == hex ? 2 : 1
-                                    )
-                                )
-                                .background(Self.color(fromHex: hex) ?? .clear)
-                        }
-                        .accessibilityLabel("Background \(hex)")
-                    }
-                    ColorPicker("Custom", selection: $picked, supportsOpacity: false)
-                        .labelsHidden()
-                        .onChange(of: picked) { _, color in
-                            store.setCanvas(ratio: store.canvasRatio, bg: Self.hex(color))
-                        }
-                    if store.canvasBg != nil {
-                        Button("Clear") {
-                            store.setCanvas(ratio: store.canvasRatio, bg: nil)
-                        }
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                Button("Rotate left") {
+                    store.cropPreview = with(draft, rotationDeg: (draft.rotationDeg + 270) % 360)
+                }
+                Button("Rotate right") {
+                    store.cropPreview = with(draft, rotationDeg: (draft.rotationDeg + 90) % 360)
+                }
+                Button("Flip") {
+                    store.cropPreview = with(draft, flipH: !draft.flipH)
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(BitOSTheme.accent)
+            cropSlider(label: "Zoom", value: draft.zoom, in: 1...3, format: { "\(Int(($0 * 100).rounded()))%" }) {
+                store.cropPreview = with(draft, zoom: $0)
+            }
+            cropSlider(label: "Position X", value: draft.panX, in: -1...1, format: { "\(Int(($0 * 100).rounded()))" }) {
+                store.cropPreview = with(draft, panX: $0)
+            }
+            cropSlider(label: "Position Y", value: draft.panY, in: -1...1, format: { "\(Int(($0 * 100).rounded()))" }) {
+                store.cropPreview = with(draft, panY: $0)
+            }
+            HStack {
+                Spacer(minLength: 0)
+                Button("Cancel") {
+                    store.cropPreview = nil
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .disabled(store.cropPreview == nil)
+                Button("Apply") {
+                    if let preview = store.cropPreview {
+                        store.setCrop(preview)
+                        store.cropPreview = nil
                     }
                 }
-                Text("The media letterboxes onto the canvas; captions and layers keep their positions.")
-                    .font(.caption2)
-                    .foregroundStyle(BitOSTheme.textSecondary)
-            }
-            Button("Done") { dismiss() }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(BitOSTheme.accent)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .disabled(store.cropPreview == nil)
+            }
+            Text("Background")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(swatches, id: \.self) { hex in
+                    let selected = store.canvasBg == hex
+                    Button {
+                        store.setCanvas(ratio: store.canvasRatio, bg: hex)
+                    } label: {
+                        Circle()
+                            .fill(Self.color(fromHex: hex) ?? .white)
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                Circle().strokeBorder(
+                                    selected ? BitOSTheme.accent : BitOSTheme.border,
+                                    lineWidth: selected ? 2 : 1
+                                )
+                            )
+                    }
+                    .accessibilityLabel("Background \(hex)")
+                }
+            }
+            Text("Pads letterboxed projects — a crop fills the frame instead.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textTertiary)
         }
-        .padding(.horizontal, BitOSTheme.Spacing.md)
-        .padding(.top, BitOSTheme.Spacing.sm)
-        .padding(.bottom, BitOSTheme.Spacing.lg)
+        .onDisappear {
+            store.cropPreview = nil
+        }
+    }
+
+    /// One labelled, accessibility-adjustable crop slider (the spec's
+    /// no-pinch operation path).
+    private func cropSlider(
+        label: String,
+        value: Float,
+        in range: ClosedRange<Float>,
+        format: @escaping (Float) -> String,
+        onChange: @escaping (Float) -> Void
+    ) -> some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 84, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value) },
+                set: { onChange(Float($0)) }
+            ), in: Double(range.lowerBound)...Double(range.upperBound))
+            Text(format(value))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(BitOSTheme.accent)
+                .frame(width: 42, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(format(value))")
+        .accessibilityAdjustableAction { direction in
+            let step = (range.upperBound - range.lowerBound) / 20
+            let next = direction == .increment
+                ? min(range.upperBound, value + step)
+                : max(range.lowerBound, value - step)
+            onChange(next)
+        }
     }
 }
 
