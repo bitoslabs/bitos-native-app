@@ -535,9 +535,72 @@ V2 suite).
     tests green (1 pre-existing unrelated `SearchRepositoryTest` failure on
     clean tree too); iOS full-app Swift 6 strict-concurrency type-check
     exit 0.
-  - [ ] EUI-02 — Look sheet consolidation + accessible adjustments (Motion
-    section, Tone/Colour/Details taxonomy beyond the current
-    brightness/contrast/saturation trio — needs shared matrix work).
+  - [x] **EUI-02 — LOOK SHEET CONSOLIDATION + ACCESSIBLE ADJUSTMENTS
+    (2026-09-18, COMPLETE for the matrix-expressible taxonomy).** SHARED
+    `MemeAdjust` grew from the v1 bri/con/sat triple to the reference
+    editor's Tone/Colour axes the ONE 4×5 matrix pipeline renders exactly:
+    **Lightness** (lerp to white/black — a distinct axis from exposure) ·
+    **Warmth** (R/B split, ±32-step at full) · **Tint** (green↔magenta) ·
+    **Fade** (black-point lift to 45 + 0.75 scale at full); exposure IS the
+    v1 brightness field (same pure-scale math — no duplicate knob). New
+    axes compose after look → brightness → contrast → saturation in one
+    fixed order; neutral fields contribute exact identity matrices, so v1
+    triples compose to the identical v1 matrix (exports unchanged). Wire +
+    `SetAdjust` command carry `lig/warm/tint/fade` as additive keys
+    (neutral fields never serialize — v1 wires byte-identical, old wires
+    decode neutral); `MemeRules.apply` clamps all 7 (signed axes ±1, fade
+    0–1). NEW BRIDGE SEAMS: `memeAdjustOf(projectJson)` — canonical
+    all-keys adjust JSON so the native UI never parses wire fields or
+    reimplements clamps; `memeAdjustMatrix(lookId, adjustJson)` — the
+    matrix seam now takes that canonical object (lenient keys, clamped)
+    instead of the bri/con/sat floats; `memeAdjustMatrixFor(projectJson)`.
+    `MemeAdjustTest` extended (+5 cases: reference pixels per axis, clamps,
+    additive wire round-trip incl. v1-wire compat, command round-trip,
+    seam composition). Details (sharpness/grain/vignette) + vibrance +
+    highlights/shadows stay OUT — they need tone-curve/spatial rendering
+    the shared matrix can't do (spec's "available only when the renderer
+    supports it" rule; QA scenario 4's vignette waits on renderer work).
+    ANDROID `LooksSheetContent`: Tone | Colour tabs, control chips (• marks
+    non-default — colour is never the only changed-signal), ONE labelled
+    slider (`BitosAdjustmentSlider` keeps its ± nudge buttons for
+    non-dragging access), Reset current + Reset all (AlertDialog when it
+    discards >1 non-default), and a **Cancel/Apply draft transaction**: the
+    slider draft lives in a screen-level `adjustPreview` that the stage +
+    `VideoStage` project render live; Apply commits ONE coalesced
+    `SetAdjust`, Cancel drops it; switching panels discards the draft.
+    Grade pills stay immediate (one tap = one undoable `SetLook`).
+    IOS mirror in `FxPanelContent` (the live Look panel): same tabs/chips/
+    slider/reset/Cancel-Apply via a store-level `gradePreview` +
+    `effectiveAdjust` feeding `gradedImage`; store state is now one
+    `MemeAdjustUi` struct decoded from `memeAdjustOf` (the hand-rolled
+    `adjustTriple` wire parsing is deleted); the UNREACHABLE `LooksSheet`
+    (its `showLooks` was never set true) is deleted; all export paths
+    (`captureCoverJpeg`, `MemeRaster.renderPngData`, GIF export,
+    `gradeClip`/`composeClips`, `applyGrade`) migrated to the canonical
+    adjustJson seam — per-clip look + project adjust still compose
+    identically. Accessibility: sliders expose labels + value text +
+    adjustable actions; chips carry text labels. CODE-REVIEW ROUND: the
+    Tone/Colour taxonomy itself now lives in SHARED `MemeAdjustControl`
+    (+ `Section`, labels, slider bounds = the clamp bounds, neutral
+    values, "+30"/"120%" readouts, `catalogJson()`) behind the
+    `memeAdjustControls()` seam — neither platform hand-rolls it
+    (DESIGN_SYSTEM §0); Android renders the shared enum directly, iOS
+    decodes the catalog (field→keyPath mapping stays platform-side).
+    The iOS VIDEO stage now previews the draft too (`applyGrade` reads
+    `store.effectiveAdjust` + an extra onChange trigger) — preview and
+    export share one matrix. Both platforms' unreachable `showLooks`
+    sheets are deleted (one carried a draft-leak path). The unused
+    `memeAdjustMatrixFor` seam was removed; the bridge builds its matrix
+    envelope once. KNOWN DEFERRALS: grade presets commit immediately
+    (one tap = one undoable SetLook) rather than joining the Cancel/Apply
+    draft — extending the draft to cover grade taps is follow-up work;
+    the spec's vignette QA scenario waits on spatial renderer support;
+    i18n keying of the new strings follows the editor's existing
+    hardcoded-copy pattern (project-wide i18n is a separate epic).
+    Verified: shared
+    `testAndroidHostTest` green (831+ incl. 5 new adjust cases); Android
+    meme/studio tests green; iOS full-app Swift 6 strict-concurrency
+    type-check exit 0.
   - [ ] EUI-03 — Crop sheet (greenfield: ratio + rotate + flip +
     position/scale with accessible fields; video keeps canvas-level framing).
   - [ ] EUI-04 — Timeline selection/actions polish (Replace action,
@@ -662,6 +725,20 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-18 — **Look sheet EUI-02** (spec
+  `mobile-video-image-editor-reference-spec.md`): the shared adjust grew
+  from the v1 brightness/contrast/saturation triple to the reference
+  Tone/Colour axes the one 4×5 matrix renders exactly (lightness, warmth,
+  tint, fade — brightness doubles as Exposure; highlights/shadows/
+  sharpness/grain/vignette stay out until a renderer can burn them
+  honestly). Both platforms' Look surfaces became Tone|Colour tabs →
+  control chips → ONE labelled slider with Reset current/all and a
+  Cancel/Apply draft that previews uncommitted on the stage and commits as
+  ONE undoable SetAdjust. Wire/command keys `lig/warm/tint/fade` are
+  additive (v1 wires byte-identical); new canonical seams
+  `memeAdjustOf`/`memeAdjustMatrix(lookId, adjustJson)` replaced the iOS
+  hand-rolled triple parsing (`adjustTriple` deleted; unreachable
+  `LooksSheet` deleted). Found en route: —. Next: EUI-03 crop sheet.
 - 2026-09-18 — **Editor shell/chrome alignment EUI-01** (spec
   `mobile-video-image-editor-reference-spec.md`): iOS gained the on-screen
   Redo beside Undo (MSU-013 parity gap — it was keyboard-only while Android

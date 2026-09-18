@@ -103,9 +103,8 @@ enum MemeGifExportIos {
         // same way the still rasterizer paints it (identity = fast path,
         // applyLook returns nil and the raw frame draws).
         let lookId = MemeEditorStore.lookId(ofProject: projectJson)
-        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
         let matrixJson = client.memeAdjustMatrix(
-            lookId, brightness: adjust.bri, contrast: adjust.con, saturation: adjust.sat
+            lookId, adjustJson: client.memeAdjustOf(projectJson)
         )
         let size = CGSize(width: width, height: height)
         let format = UIGraphicsImageRendererFormat()

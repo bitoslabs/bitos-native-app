@@ -321,22 +321,31 @@ final class BusinessCoreClientTests: XCTestCase {
         // Defaults reduce to the plain look envelope (byte-identical).
         XCTAssertEqual(
             client.memeLookMatrix("vhs"),
-            client.memeAdjustMatrix("vhs", brightness: 1, contrast: 1, saturation: 1)
+            client.memeAdjustMatrix("vhs", adjustJson: "{}")
         )
-        // A real slider moves the matrix away from the plain look.
-        let composed = client.memeAdjustMatrix("vhs", brightness: 1.5, contrast: 1, saturation: 1)
+        // A real slider moves the matrix away from the plain look; the
+        // canonical adjust JSON is lenient about absent keys.
+        let composed = client.memeAdjustMatrix("vhs", adjustJson: "{\"bri\":1.5}")
         XCTAssertTrue(composed.contains("\"matrix\":"), composed)
         XCTAssertNotEqual(client.memeLookMatrix("vhs"), composed)
+        // The wire seam decodes a project's adjust canonically (clamped).
+        let wire = "{\"v\":1,\"mode\":\"image\",\"adjust\":{\"bri\":1.2,\"warm\":0.5}}"
+        XCTAssertEqual(
+            MemeEditorStore.MemeAdjustUi(
+                brightness: 1.2, contrast: 1, saturation: 1, warmth: 0.5
+            ),
+            MemeEditorStore.MemeAdjustUi.decode(client.memeAdjustOf(wire))
+        )
 
-        // Store loop: the triple rides the wire, and a slider burst
+        // Store loop: the adjust rides the wire, and a slider burst
         // collapses to ONE undo step back to the pre-adjust state.
         let store = MemeEditorStore(client: FixtureBusinessCoreClient())
         XCTAssertFalse(store.hasAdjust)
-        store.setAdjust(brightness: 1.2, contrast: 1, saturation: 0.5)
+        store.setAdjust(MemeEditorStore.MemeAdjustUi(brightness: 1.2, saturation: 0.5))
         XCTAssertTrue(store.hasAdjust)
         XCTAssertTrue(store.projectJson.contains("\"adjust\""), store.projectJson)
-        store.setAdjust(brightness: 1.4, contrast: 1, saturation: 0.5)
-        XCTAssertEqual(1.4, store.adjustBrightness, accuracy: 0.001)
+        store.setAdjust(MemeEditorStore.MemeAdjustUi(brightness: 1.4, saturation: 0.5))
+        XCTAssertEqual(1.4, store.adjust.brightness, accuracy: 0.001)
         store.undo()
         XCTAssertFalse(store.hasAdjust, "one burst = one step back to pre-adjust")
 

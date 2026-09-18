@@ -295,6 +295,10 @@ object MemeRules {
                 command.adjust.brightness,
                 command.adjust.contrast,
                 command.adjust.saturation,
+                command.adjust.lightness,
+                command.adjust.warmth,
+                command.adjust.tint,
+                command.adjust.fade,
             )
             project.copy(adjust = if (clamped.isDefault) null else clamped)
         }

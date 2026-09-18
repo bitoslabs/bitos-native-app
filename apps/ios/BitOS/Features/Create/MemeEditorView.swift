@@ -988,21 +988,28 @@ final class MemeEditorStore {
         apply(commandJson: Self.encode(["op": "look", "look": id]))
     }
 
-    /// Manual fine-tune (prototype FX sliders): brightness/contrast/
-    /// saturation multipliers over the look preset; a slider burst within
-    /// 300 ms collapses into ONE undo step (EDT-004).
-    private(set) var adjustBrightness: Float = 1
-    private(set) var adjustContrast: Float = 1
-    private(set) var adjustSaturation: Float = 1
+    /// EUI-02: the Look panel's uncommitted slider draft — renders on the
+    /// stage and nowhere else; Apply commits it via `setAdjust`, Cancel
+    /// drops it. The panel owns the lifecycle (clears on disappear).
+    var gradePreview: MemeAdjustUi?
+    /// What the stage grades with: the draft while the panel drafts, the
+    /// committed wire otherwise. Export never reads this.
+    var effectiveAdjust: MemeAdjustUi { gradePreview ?? adjust }
 
-    var hasAdjust: Bool {
-        adjustBrightness != 1 || adjustContrast != 1 || adjustSaturation != 1
-    }
+    /// Manual fine-tune (v1 FX sliders + EUI-02 Tone/Colour axes) over the
+    /// look preset; a slider burst within 300 ms collapses into ONE undo
+    /// step (EDT-004).
+    private(set) var adjust = MemeAdjustUi()
 
-    func setAdjust(brightness: Float, contrast: Float, saturation: Float) {
+    var hasAdjust: Bool { !adjust.isDefault }
+
+    func setAdjust(_ newValue: MemeAdjustUi) {
         let before = projectJson
         apply(commandJson: Self.encode([
-            "op": "adjust", "bri": brightness, "con": contrast, "sat": saturation,
+            "op": "adjust",
+            "bri": newValue.brightness, "con": newValue.contrast, "sat": newValue.saturation,
+            "lig": newValue.lightness, "warm": newValue.warmth,
+            "tint": newValue.tint, "fade": newValue.fade,
         ]))
         guard projectJson != before else { return }
         let now = Date()
@@ -1024,31 +1031,59 @@ final class MemeEditorStore {
     }
 
     /// Adjust triple parse for the detached export tasks (1/1/1 = default).
-    nonisolated static func adjustTriple(ofProject projectJson: String) -> (bri: Float, con: Float, sat: Float) {
-        guard let data = projectJson.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let adjust = root["adjust"] as? [String: Any] else { return (1, 1, 1) }
-        return (
-            (adjust["bri"] as? NSNumber)?.floatValue ?? 1,
-            (adjust["con"] as? NSNumber)?.floatValue ?? 1,
-            (adjust["sat"] as? NSNumber)?.floatValue ?? 1
-        )
+    /// EUI-02 adjust values (v1 triple + the Tone/Colour axes the shared
+    /// matrix pipeline renders exactly). Decoded from the canonical
+    /// `memeAdjustOf` seam — the UI never parses wire fields or clamps.
+    struct MemeAdjustUi: Equatable, Sendable {
+        var brightness: Float = 1
+        var contrast: Float = 1
+        var saturation: Float = 1
+        var lightness: Float = 0
+        var warmth: Float = 0
+        var tint: Float = 0
+        var fade: Float = 0
+
+        var isDefault: Bool { self == MemeAdjustUi() }
+        var cacheKey: String {
+            "\(brightness)-\(contrast)-\(saturation)-\(lightness)-\(warmth)-\(tint)-\(fade)"
+        }
+
+        static func decode(_ json: String) -> MemeAdjustUi {
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return MemeAdjustUi() }
+            func value(_ key: String, _ default: Float) -> Float {
+                (root[key] as? NSNumber)?.floatValue ?? `default`
+            }
+            return MemeAdjustUi(
+                brightness: value("bri", 1), contrast: value("con", 1),
+                saturation: value("sat", 1), lightness: value("lig", 0),
+                warmth: value("warm", 0), tint: value("tint", 0), fade: value("fade", 0)
+            )
+        }
+
+        /// Canonical all-keys JSON for the `memeAdjustMatrix` seam.
+        var canonicalJson: String {
+            let dict: [String: Float] = [
+                "bri": brightness, "con": contrast, "sat": saturation,
+                "lig": lightness, "warm": warmth, "tint": tint, "fade": fade,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: dict),
+                  let json = String(data: data, encoding: .utf8) else { return "{}" }
+            return json
+        }
     }
 
     /// Stage-preview image with the grade applied (cached per asset/look).
     func gradedImage(_ image: UIImage, cacheKey: String) -> UIImage {
-        let key = "\(cacheKey)|\(lookId ?? "none")|\(adjustBrightness)-\(adjustContrast)-\(adjustSaturation)"
+        let effective = gradePreview ?? adjust
+        let key = "\(cacheKey)|\(lookId ?? "none")|\(effective.cacheKey)"
         if let cached = gradeCache[key] { return cached }
         // The seam composes look + adjust into one matrix; identity (no
         // look, default adjust) returns nil from applyLook — raw image.
         guard let graded = MemeRaster.applyLook(
             image,
-            matrixJson: client.memeAdjustMatrix(
-                lookId,
-                brightness: adjustBrightness,
-                contrast: adjustContrast,
-                saturation: adjustSaturation
-            )
+            matrixJson: client.memeAdjustMatrix(lookId, adjustJson: effective.canonicalJson)
         ) else { return image }
         gradeCache[key] = graded
         return graded
@@ -1078,14 +1113,9 @@ final class MemeEditorStore {
         if nextLook != lookId { lookId = nextLook; gradeCache.removeAll() }
         if let data = projectJson.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let adjust = root["adjust"] as? [String: Any]
-            let nextBri = (adjust?["bri"] as? NSNumber)?.floatValue ?? 1
-            let nextCon = (adjust?["con"] as? NSNumber)?.floatValue ?? 1
-            let nextSat = (adjust?["sat"] as? NSNumber)?.floatValue ?? 1
-            if nextBri != adjustBrightness || nextCon != adjustContrast || nextSat != adjustSaturation {
-                adjustBrightness = nextBri
-                adjustContrast = nextCon
-                adjustSaturation = nextSat
+            let nextAdjust = MemeAdjustUi.decode(client.memeAdjustOf(projectJson))
+            if nextAdjust != adjust {
+                adjust = nextAdjust
                 gradeCache.removeAll()
             }
             let nextSpeed = (root["speed"] as? NSNumber)?.floatValue ?? 1
@@ -2368,7 +2398,7 @@ final class MemeEditorStore {
         }
         let url = try await MemeVideoExportIos.composeClips(
             clips, rate: rate, projectLookId: lookId,
-            projectAdjust: (adjustBrightness, adjustContrast, adjustSaturation),
+            projectAdjustJson: adjust.canonicalJson,
             client: client
         )
         let probe = MemeVideoExportIos.Probe(
@@ -3221,7 +3251,6 @@ struct MemeEditorView: View {
     @State private var showMore = false
     /** MSU-012: timing sheet for a SELECTED (not composing) overlay. */
     @State private var advancedTextId: IdentifiableId?
-    @State private var showLooks = false
     @State private var showSfx = false
     /// Selected overlay's visibility window (startMs, endMs) — the SFX
     /// sheet's cue anchors when a timed element is selected.
@@ -3693,10 +3722,6 @@ struct MemeEditorView: View {
         }
         .onChange(of: showAdvancedText) { _, shown in
             if !shown { finishTextEditing() }
-        }
-        .sheet(isPresented: $showLooks) {
-            LooksSheet(store: store)
-                .presentationDetents([.medium])
         }
         .sheet(isPresented: $showSfx) {
             // Per-overlay sound windows: a selected overlay WITH a visibility
@@ -8201,10 +8226,84 @@ private struct VideoSoundsBrowseSheet: View {
     }
 }
 
-/// Effects panel (prototype fx panel): the 8 look presets as horizontal
-/// chips + the brightness/contrast/saturation sliders over the look.
+/// EUI-02 Look panel: the 8 shared grade presets (immediate, one undoable
+/// step per tap) plus the reference editor's Adjust structure — Tone |
+/// Colour tabs, control chips, ONE labelled slider for the selected
+/// control, reset current/all, and a Cancel/Apply draft transaction: the
+/// slider draft previews on the stage via `gradePreview`, Apply commits it
+/// as ONE undoable SetAdjust, Cancel restores the entry values.
+///
+/// Tone = Exposure · Lightness · Contrast; Colour = Saturation · Warmth ·
+/// Tint · Fade — exactly the axes the shared one-matrix pipeline burns
+/// identically in preview and export. Details (sharpness/grain/vignette)
+/// needs spatial rendering and stays out until a renderer supports it.
 private struct FxPanelContent: View {
     @Bindable var store: MemeEditorStore
+
+    /// One decoded `memeAdjustControls` row — labels, sections, bounds and
+    /// neutrals come from the SHARED catalogue, never hand-rolled here.
+    private struct AdjustControlRow: Identifiable {
+        let id: String
+        let section: String
+        let label: String
+        let min: Double
+        let max: Double
+        let neutral: Float
+        let signed: Bool
+        var range: ClosedRange<Double> { min...max }
+
+        /// Slider readout: "120%" for multipliers, "+30"/"-30" for axes.
+        func text(_ v: Float) -> String {
+            let pct = Int((v * 100).rounded())
+            return signed ? (pct > 0 ? "+\(pct)" : "\(pct)") : "\(pct)%"
+        }
+    }
+
+    /// EXPOSURE rides the v1 brightness field — same pure-scale math.
+    private static let wirePaths: [String: WritableKeyPath<MemeEditorStore.MemeAdjustUi, Float>] = [
+        "exposure": \.brightness,
+        "lightness": \.lightness,
+        "contrast": \.contrast,
+        "saturation": \.saturation,
+        "warmth": \.warmth,
+        "tint": \.tint,
+        "fade": \.fade,
+    ]
+
+    private static func decodeControls() -> (sections: [(id: String, label: String)], controls: [AdjustControlRow]) {
+        guard let data = FrameworkBusinessCoreClient().memeAdjustControls().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sections = root["sections"] as? [[String: Any]],
+              let controls = root["controls"] as? [[String: Any]] else { return ([], []) }
+        let sectionRows: [(id: String, label: String)] = sections.compactMap { row in
+            guard let id = row["id"] as? String, let label = row["label"] as? String else { return nil }
+            return (id, label)
+        }
+        let controlRows: [AdjustControlRow] = controls.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let section = row["section"] as? String,
+                  let label = row["label"] as? String,
+                  let min = (row["min"] as? NSNumber)?.doubleValue,
+                  let max = (row["max"] as? NSNumber)?.doubleValue,
+                  let neutral = (row["neutral"] as? NSNumber)?.floatValue,
+                  let signed = (row["signed"] as? NSNumber)?.boolValue,
+                  Self.wirePaths[id] != nil else { return nil }
+            return AdjustControlRow(
+                id: id, section: section, label: label,
+                min: min, max: max, neutral: neutral, signed: signed
+            )
+        }
+        return (sectionRows, controlRows)
+    }
+
+    private func value(_ control: AdjustControlRow, _ a: MemeEditorStore.MemeAdjustUi) -> Float {
+        a[keyPath: Self.wirePaths[control.id]!]
+    }
+    private func with(_ control: AdjustControlRow, _ a: MemeEditorStore.MemeAdjustUi, _ v: Float) -> MemeEditorStore.MemeAdjustUi {
+        var out = a
+        out[keyPath: Self.wirePaths[control.id]!] = v
+        return out
+    }
 
     private struct LookRow: Identifiable { let id: String, label: String }
 
@@ -8219,7 +8318,15 @@ private struct FxPanelContent: View {
         }
     }
 
+    private let catalog = Self.decodeControls()
+    @State private var sectionId = "tone"
+    @State private var controlId = "exposure"
+    @State private var confirmResetAll = false
+
     var body: some View {
+        let entry = store.adjust
+        let effective = store.effectiveAdjust
+        let control = catalog.controls.first { $0.id == controlId } ?? catalog.controls.first
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
@@ -8233,53 +8340,130 @@ private struct FxPanelContent: View {
                     }
                 }
             }
-            adjustSlider(
-                label: "Brightness", value: Binding(
-                    get: { Double(store.adjustBrightness) },
-                    set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
-                ),
-                in: 0.4...1.6
-            )
-            adjustSlider(
-                label: "Contrast", value: Binding(
-                    get: { Double(store.adjustContrast) },
-                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
-                ),
-                in: 0.4...1.6
-            )
-            adjustSlider(
-                label: "Saturation", value: Binding(
-                    get: { Double(store.adjustSaturation) },
-                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
-                ),
-                in: 0...2
-            )
-            if store.hasAdjust {
-                Button {
-                    store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
-                } label: {
-                    Text("Reset adjust")
+            Divider()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Adjust").font(.subheadline.weight(.semibold))
+                Text("Fine-tune over the look — Apply burns it into the export like the preset.")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Picker("Adjust section", selection: $sectionId) {
+                ForEach(catalog.sections, id: \.id) { tab in
+                    Text(tab.label).tag(tab.id)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(catalog.controls) { candidate in
+                        if candidate.section == sectionId {
+                            // A non-default control keeps its dot — colour
+                            // alone is never the only changed-signal.
+                            let changed = value(candidate, effective) != candidate.neutral
+                            ChipButton(
+                                label: changed ? "\(candidate.label) •" : candidate.label,
+                                active: control?.id == candidate.id
+                            ) {
+                                controlId = candidate.id
+                            }
+                        }
+                    }
+                }
+            }
+            if let control {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    Text(control.label)
                         .font(.caption.weight(.semibold))
+                        .frame(width: 84, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(value(control, effective)) },
+                        set: { store.gradePreview = with(control, effective, Float($0)) }
+                    ), in: control.range)
+                    Text(control.text(value(control, effective)))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.accent)
+                        .frame(width: 42, alignment: .trailing)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(control.label) \(control.text(value(control, effective)))")
+                .accessibilityAdjustableAction { direction in
+                    let step = (control.range.upperBound - control.range.lowerBound) / 20
+                    let current = Double(value(control, effective))
+                    let next = direction == .increment
+                        ? min(control.range.upperBound, current + step)
+                        : max(control.range.lowerBound, current - step)
+                    store.gradePreview = with(control, effective, Float(next))
+                }
+            }
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                if let control, value(control, effective) != control.neutral {
+                    Button {
+                        store.gradePreview = with(control, effective, control.neutral)
+                    } label: {
+                        Text("Reset \(control.label)")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.accent)
+                }
+                if !effective.isDefault {
+                    Button {
+                        // Resetting ONE value is a tap; discarding several
+                        // non-default ones names the cost first (spec rule).
+                        let count = catalog.controls.filter { value($0, effective) != $0.neutral }.count
+                        if count > 1 {
+                            confirmResetAll = true
+                        } else {
+                            store.gradePreview = MemeEditorStore.MemeAdjustUi()
+                        }
+                    } label: {
+                        Text("Reset all")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.accent)
+                }
+            }
+            // Draft transaction: Cancel restores the entry values; Apply
+            // commits the whole slider burst as one undoable command.
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    store.gradePreview = nil
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                .disabled(store.gradePreview == nil)
+                Button {
+                    if let draft = store.gradePreview {
+                        store.setAdjust(draft)
+                        store.gradePreview = nil
+                    }
+                } label: {
+                    Text("Apply")
+                        .font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(BitOSTheme.accent)
+                .disabled(store.gradePreview == nil || store.gradePreview == entry)
             }
         }
-    }
-
-    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .frame(width: 84, alignment: .leading)
-            Slider(value: value, in: range)
-            Text("\(Int((value.wrappedValue * 100).rounded()))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(BitOSTheme.accent)
-                .frame(width: 42, alignment: .trailing)
+        .onChange(of: sectionId) { _, newValue in
+            controlId = catalog.controls.first { $0.section == newValue }?.id ?? controlId
+        }
+        .onDisappear {
+            store.gradePreview = nil
+        }
+        .alert("Reset all adjustments?", isPresented: $confirmResetAll) {
+            Button("Reset", role: .destructive) {
+                store.gradePreview = MemeEditorStore.MemeAdjustUi()
+            }
+            Button("Keep", role: .cancel) {}
+        } message: {
+            Text("This discards every non-default adjustment. Undo brings them back.")
         }
     }
 }
-
 
 // MARK: - Export raster (MST-016)
 
@@ -8347,17 +8531,12 @@ enum MemeRaster {
         // uses); overlays draw unfiltered.
         var media = asset
         let projectLookId = MemeEditorStore.lookId(ofProject: projectJson)
-        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
-        let hasAdjust = adjust.bri != 1 || adjust.con != 1 || adjust.sat != 1
+        let adjustJson = client.memeAdjustOf(projectJson)
+        let hasAdjust = !MemeEditorStore.MemeAdjustUi.decode(adjustJson).isDefault
         if projectLookId != nil || hasAdjust {
             if let graded = applyLook(
                 asset,
-                matrixJson: client.memeAdjustMatrix(
-                    projectLookId,
-                    brightness: adjust.bri,
-                    contrast: adjust.con,
-                    saturation: adjust.sat
-                )
+                matrixJson: client.memeAdjustMatrix(projectLookId, adjustJson: adjustJson)
             ) {
                 media = graded
             }
@@ -8743,127 +8922,6 @@ enum MemeRaster {
     }
 }
 
-/// Color-grade picker (MST-043): the 8 web presets, media-only, undoable.
-/// The Adjust section (prototype `create-edit` FX panel) adds manual
-/// brightness/contrast/saturation sliders composed over the preset.
-private struct LooksSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var store: MemeEditorStore
-    private let columns = [GridItem(.adaptive(minimum: 88), spacing: BitOSTheme.Spacing.sm)]
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Color look").font(.subheadline.weight(.semibold))
-                    Text("Applies to the media only — captions stay crisp. Undo works.")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                LazyVGrid(columns: columns, spacing: BitOSTheme.Spacing.sm) {
-                    ForEach(lookRows, id: \.id) { look in
-                        lookButton(look)
-                    }
-                }
-                Divider()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Adjust").font(.subheadline.weight(.semibold))
-                    Text("Fine-tune over the look — burns into the export like the preset.")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                adjustSlider(
-                    label: "Brightness", value: Binding(
-                        get: { Double(store.adjustBrightness) },
-                        set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
-                    ),
-                    in: 0.4...1.6
-                )
-                adjustSlider(
-                    label: "Contrast", value: Binding(
-                        get: { Double(store.adjustContrast) },
-                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
-                    ),
-                    in: 0.4...1.6
-                )
-                adjustSlider(
-                    label: "Saturation", value: Binding(
-                        get: { Double(store.adjustSaturation) },
-                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
-                    ),
-                    in: 0...2
-                )
-                if store.hasAdjust {
-                    Button {
-                        store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
-                    } label: {
-                        Text("Reset adjust")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .foregroundStyle(BitOSTheme.accent)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(BitOSTheme.Spacing.md)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-    }
-
-    /// One labeled slider with the % readout (prototype FX panel shape).
-    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .frame(width: 84, alignment: .leading)
-            Slider(value: value, in: range)
-            Text("\(Int((value.wrappedValue * 100).rounded()))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(BitOSTheme.accent)
-                .frame(width: 42, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) \(Int((value.wrappedValue * 100).rounded())) percent")
-        .accessibilityAdjustableAction { direction in
-            let step = (range.upperBound - range.lowerBound) / 20
-            let next = direction == .increment
-                ? min(range.upperBound, value.wrappedValue + step)
-                : max(range.lowerBound, value.wrappedValue - step)
-            value.wrappedValue = next
-        }
-    }
-
-    /// Split out of `body` — the grid button chain exceeded the type-checker's
-    /// expression budget (the module compiled green again once extracted).
-    private func lookButton(_ look: LookRow) -> some View {
-        Button {
-            store.setLook(look.id)
-        } label: {
-            let active = look.id == (store.lookId ?? "none")
-            return Text(look.label)
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, BitOSTheme.Spacing.sm)
-                .background(active ? BitOSTheme.accent : BitOSTheme.surface)
-                .foregroundStyle(active ? Color.black : BitOSTheme.textPrimary)
-                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Catalog rows from the shared seam (id order, `none` first).
-    private struct LookRow: Identifiable { let id: String, label: String }
-
-    private var lookRows: [LookRow] {
-        guard let data = FrameworkBusinessCoreClient().memeLooks().data(using: .utf8),
-              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return [LookRow(id: "none", label: "None")]
-        }
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            return LookRow(id: id, label: (row["label"] as? String) ?? id)
-        }
-    }
-}
 
 /// SFX sheet (MST-041): buckets × 31 synth sounds — tap previews (base64
 /// WAV through the shared renderer), ＋ schedules a cue at the playhead.

@@ -366,11 +366,17 @@ protocol BusinessCoreClient: Sendable {
     func memeLooks() -> String
     /// Composed 4×5 matrix (20 floats) + `"blur"` px for a look id.
     func memeLookMatrix(_ lookId: String?) -> String
-    /// Look + manual adjust (prototype FX sliders) composed into one
-    /// 4×5 matrix; defaults (1/1/1) reduce to the plain look matrix.
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
-    ) -> String
+    /// Look + manual adjust (EUI-02 Tone/Colour axes) composed into one
+    /// 4×5 matrix. [adjustJson] is the `memeAdjustOf` canonical object —
+    /// lenient keys, clamped values; all-neutral reduces to the plain look
+    /// matrix.
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String
+    /// The project's normalized adjust as canonical all-keys JSON (never
+    /// throws; junk → all neutral), so the UI never parses wire fields.
+    func memeAdjustOf(_ projectJson: String) -> String
+    /// The Adjust-section catalogue (sections, labels, bounds, neutrals,
+    /// signed flags) the Look UIs render from — shared with Android.
+    func memeAdjustControls() -> String
 
     // APP-019 video cut policy: long clips are CUT with a message, never
     // rejected (shared MemeVideoCutRules, both apps).
@@ -945,12 +951,14 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeLookMatrix(lookId: lookId)
     }
 
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
-    ) -> String {
-        bridge.memeAdjustMatrix(
-            lookId: lookId, brightness: brightness, contrast: contrast, saturation: saturation
-        )
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String {
+        bridge.memeAdjustMatrix(lookId: lookId, adjustJson: adjustJson)
+    }
+    func memeAdjustOf(_ projectJson: String) -> String {
+        bridge.memeAdjustOf(projectJson: projectJson)
+    }
+    func memeAdjustControls() -> String {
+        bridge.memeAdjustControls()
     }
 
     func memeVideoCutFor(durationMs: Int64) -> String {
@@ -1499,12 +1507,14 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeLookMatrix(_ lookId: String?) -> String {
         FrameworkBusinessCoreClient().memeLookMatrix(lookId)
     }
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
-    ) -> String {
-        FrameworkBusinessCoreClient().memeAdjustMatrix(
-            lookId, brightness: brightness, contrast: contrast, saturation: saturation
-        )
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String {
+        FrameworkBusinessCoreClient().memeAdjustMatrix(lookId, adjustJson: adjustJson)
+    }
+    func memeAdjustOf(_ projectJson: String) -> String {
+        FrameworkBusinessCoreClient().memeAdjustOf(projectJson)
+    }
+    func memeAdjustControls() -> String {
+        FrameworkBusinessCoreClient().memeAdjustControls()
     }
     func memeVideoCutFor(durationMs: Int64) -> String {
         FrameworkBusinessCoreClient().memeVideoCutFor(durationMs: durationMs)

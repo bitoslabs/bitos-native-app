@@ -1782,7 +1782,6 @@ fun MemeEditorScreen(
     // Advanced sheet over compose mode (outline strength, fx, timing,
     // delete) — opened from the compose bar's More button.
     var showAdvancedText by remember { mutableStateOf(false) }
-    var showLooks by remember { mutableStateOf(false) }
     /** Classic meme generator (prototype "Meme" hot tool). */
     var showSfx by remember { mutableStateOf(false) }
     var showLayers by remember { mutableStateOf(false) }
@@ -1817,6 +1816,14 @@ fun MemeEditorScreen(
     var showPublish by remember { mutableStateOf(false) }
     /** Inline tool panel (prototype tool panels open under the chips). */
     var activePanel by remember { mutableStateOf<MemeEditorPanel?>(null) }
+
+    // EUI-02: the Look sheet's uncommitted slider draft previews on the
+    // stage; Apply commits it as ONE undoable SetAdjust, Cancel discards.
+    var adjustPreview by remember { mutableStateOf<space.bitos.core.studio.MemeAdjust?>(null) }
+    val effectiveAdjust = adjustPreview ?: state.project.adjust
+    LaunchedEffect(activePanel) {
+        if (activePanel != MemeEditorPanel.FX) adjustPreview = null
+    }
 
     /** MUX-01: draft persistence is acknowledged, never assumed. */
     var draftSaveState by remember { mutableStateOf<DraftSaveState>(DraftSaveState.IDLE) }
@@ -2921,7 +2928,9 @@ fun MemeEditorScreen(
                 Box(Modifier.fillMaxSize()) {
                 VideoStage(
                     clips = videoClips.toList(),
-                    project = state.project,
+                    // EUI-02: the stage previews the Look sheet's uncommitted
+                    // slider draft; export keeps reading the committed wire.
+                    project = state.project.copy(adjust = effectiveAdjust),
                     gifFrameAt = { id, atMs -> gifReels[id]?.frameAt(atMs) },
                     soundtrack = state.project.soundtrack,
                     soundtrackBytes = soundtrackM4a,
@@ -3109,21 +3118,22 @@ fun MemeEditorScreen(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.FillBounds,
-                        // WYSIWYG: the frame previews the same composed
-                        // look + adjust grade the encoder burns per frame.
-                        colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
-                            androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-                                androidx.compose.ui.graphics.ColorMatrix(
-                                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
-                                        state.project.lookId,
-                                        state.project.adjust,
+                            // WYSIWYG: the frame previews the same composed
+                            // look + adjust grade the encoder burns per frame
+                            // (incl. the Look sheet's uncommitted draft).
+                            colorFilter = if (state.project.lookId != null || effectiveAdjust != null) {
+                                androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                                    androidx.compose.ui.graphics.ColorMatrix(
+                                        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                            state.project.lookId,
+                                            effectiveAdjust,
+                                        ),
                                     ),
-                                ),
-                            )
-                        } else {
-                            null
-                        },
-                    )
+                                )
+                            } else {
+                                null
+                            },
+                        )
                     // Picked-GIF preview goes kinetic too (MST-077 stage
                     // honesty): overlays render at the CURRENT frame's
                     // loop time — the same transforms the exporter burns.
@@ -3193,13 +3203,14 @@ fun MemeEditorScreen(
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.FillBounds,
                             // WYSIWYG: the stage shows the same composed look +
-                            // adjust grade the rasterizer burns (MST-043 + FX).
-                            colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
+                            // adjust grade the rasterizer burns (MST-043 + FX,
+                            // incl. the Look sheet's uncommitted draft).
+                            colorFilter = if (state.project.lookId != null || effectiveAdjust != null) {
                                 androidx.compose.ui.graphics.ColorFilter.colorMatrix(
                                     androidx.compose.ui.graphics.ColorMatrix(
                                         space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
                                             state.project.lookId,
-                                            state.project.adjust,
+                                            effectiveAdjust,
                                         ),
                                     ),
                                 )
@@ -3899,14 +3910,26 @@ fun MemeEditorScreen(
                                         }
                                     },
                                     adjust = state.project.adjust,
-                                    onAdjust = { state.setAdjust(it) },
+                                    previewAdjust = adjustPreview,
+                                    onPreviewAdjust = { adjustPreview = it },
+                                    onApplyAdjust = {
+                                        state.setAdjust(it)
+                                        adjustPreview = null
+                                    },
+                                    onCancelAdjust = { adjustPreview = null },
                                 )
                             } else {
                                 LooksSheetContent(
                                     active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
                                     onPick = { id -> state.setLook(id) },
                                     adjust = state.project.adjust,
-                                    onAdjust = { state.setAdjust(it) },
+                                    previewAdjust = adjustPreview,
+                                    onPreviewAdjust = { adjustPreview = it },
+                                    onApplyAdjust = {
+                                        state.setAdjust(it)
+                                        adjustPreview = null
+                                    },
+                                    onCancelAdjust = { adjustPreview = null },
                                 )
                             }
                         }
@@ -4212,53 +4235,6 @@ fun MemeEditorScreen(
         return
     }
 
-    if (showLooks) {
-        ModalBottomSheet(onDismissRequest = { showLooks = false }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = BitOSSpacing.base)
-                    .padding(bottom = BitOSSpacing.lg),
-                verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-            ) {
-                Text("Color look", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
-                if (videoMode && hasVideo) {
-                    // M5: the grade applies to the SELECTED clip; "none" clears
-                    // the override (the project grade shows through again). The
-                    // adjust sliders stay project-wide (prototype semantics).
-                    val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
-                    LooksSheetContent(
-                        active = clip.lookId ?: state.project.lookId
-                            ?: space.bitos.core.studio.MemeLooks.NONE,
-                        onPick = { id ->
-                            val index = videoClips.indexOf(clip)
-                            if (index >= 0) {
-                                state.beginClipsEdit()
-                                            videoClips[index] = clip.copy(
-                                                lookId = space.bitos.core.studio.MemeLooks.normalize(id),
-                                            )
-                                            syncWireClips()
-                                            exportStatus = "Look applies to vdo ${index + 1}"
-                            }
-                            showLooks = false
-                        },
-                        adjust = state.project.adjust,
-                        onAdjust = { state.setAdjust(it) },
-                    )
-                } else {
-                    LooksSheetContent(
-                        active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
-                        onPick = { id ->
-                            state.setLook(id)
-                            showLooks = false
-                        },
-                        adjust = state.project.adjust,
-                        onAdjust = { state.setAdjust(it) },
-                    )
-                }
-            }
-        }
-    }
 
     if (showSfx) {
         // Per-overlay sound windows: a selected overlay WITH a visibility
@@ -9234,18 +9210,47 @@ private fun PostPreflightRow(done: Boolean, label: String, meta: String) {
     }
 }
 
-/** Color-grade picker (MST-043): the 8 web presets, media-only, undoable. */
+/**
+ * EUI-02 Look sheet: the 8 shared grade presets (immediate, one undoable
+ * step per tap) plus the reference editor's Adjust structure — Tone |
+ * Colour tabs, control chips, ONE labelled slider for the selected
+ * control, reset current/all, and a Cancel/Apply draft transaction: slider
+ * drags preview on the stage uncommitted, Apply lands them as ONE
+ * undoable SetAdjust, Cancel restores the entry values.
+ *
+ * Tone = Exposure · Lightness · Contrast; Colour = Saturation · Warmth ·
+ * Tint · Fade — exactly the axes the shared one-matrix pipeline burns
+ * identically in preview and export. Details (sharpness/grain/vignette)
+ * needs spatial rendering and stays out until a renderer supports it
+ * (spec: an honest absent control beats a lying slider).
+ */
+
+
 @Composable
 private fun LooksSheetContent(
     active: String,
     onPick: (String) -> Unit,
-    adjust: space.bitos.core.studio.MemeAdjust? = null,
-    onAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit = {},
+    adjust: space.bitos.core.studio.MemeAdjust?,
+    previewAdjust: space.bitos.core.studio.MemeAdjust?,
+    onPreviewAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
+    onApplyAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
+    onCancelAdjust: () -> Unit,
 ) {
+    val entry = adjust ?: space.bitos.core.studio.MemeAdjust()
+    // The uncommitted draft (null = nothing to apply or cancel yet).
+    val draft = previewAdjust
+    val effective = draft ?: entry
+    var section by remember {
+        mutableStateOf(space.bitos.core.studio.MemeAdjustControl.Section.TONE)
+    }
+    var control by remember {
+        mutableStateOf(space.bitos.core.studio.MemeAdjustControl.EXPOSURE)
+    }
+    var confirmResetAll by remember { mutableStateOf(false) }
     // No outer padding/title here — the presenting sheet provides both.
     Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
         Text(
-            "Applies to the media only — captions stay crisp. Undo works.",
+            "Applies to the media only — captions stay crisp.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )
@@ -9284,70 +9289,109 @@ private fun LooksSheetContent(
                 repeat(4 - rowLooks.size) { Spacer(Modifier.weight(1f)) }
             }
         }
-        // ── Adjust (prototype `create-edit` FX sliders): manual fine-tune
-        // composed over the preset into the same burn-in matrix.
+        // ── Adjust: section tabs → control chips → one labelled slider ──
         HorizontalDivider(
             color = BitOSColors.border,
             modifier = Modifier.padding(vertical = BitOSSpacing.sm),
         )
         Text("Adjust", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
         Text(
-            "Fine-tune over the look — burns into the export like the preset.",
+            "Fine-tune over the look — Apply burns it into the export like the preset.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
-            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
+            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.xs),
         )
-        val current = adjust ?: space.bitos.core.studio.MemeAdjust()
-        AdjustSliderRow(
-            label = "Brightness",
-            value = current.brightness,
-            range = space.bitos.core.studio.MemeAdjust.MIN_BRIGHTNESS..
-                space.bitos.core.studio.MemeAdjust.MAX_BRIGHTNESS,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(value, current.contrast, current.saturation))
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            space.bitos.core.studio.MemeAdjustControl.Section.entries.forEach { tab ->
+                FilterChip(
+                    selected = section == tab,
+                    onClick = {
+                        section = tab
+                        control = space.bitos.core.studio.MemeAdjustControl.entries
+                            .first { it.section == tab }
+                    },
+                    label = { Text(tab.label) },
+                )
+            }
         }
-        AdjustSliderRow(
-            label = "Contrast",
-            value = current.contrast,
-            range = space.bitos.core.studio.MemeAdjust.MIN_CONTRAST..
-                space.bitos.core.studio.MemeAdjust.MAX_CONTRAST,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, value, current.saturation))
+        val controls = space.bitos.core.studio.MemeAdjustControl.entries
+            .filter { it.section == section }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
+            controls.forEach { candidate ->
+                // A non-default control keeps its dot — colour alone is never
+                // the only signal of a changed setting (EUI-01 spec rule).
+                val changed = candidate.isNonDefault(effective)
+                FilterChip(
+                    selected = control == candidate,
+                    onClick = { control = candidate },
+                    label = {
+                        Text(if (changed) "${candidate.label} •" else candidate.label)
+                    },
+                )
+            }
         }
-        AdjustSliderRow(
-            label = "Saturation",
-            value = current.saturation,
-            range = space.bitos.core.studio.MemeAdjust.MIN_SATURATION..
-                space.bitos.core.studio.MemeAdjust.MAX_SATURATION,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, current.contrast, value))
+        BitosAdjustmentSlider(
+            label = control.label,
+            value = control.value(effective),
+            valueRange = control.range,
+            valueText = control.text(control.value(effective)),
+            onValueChange = { v -> onPreviewAdjust(control.with(effective, v)) },
+            step = 0.05f,
+            modifier = Modifier.padding(vertical = BitOSSpacing.xs),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            if (control.isNonDefault(effective)) {
+                TextButton(onClick = {
+                    onPreviewAdjust(control.with(effective, control.neutral))
+                }) { Text("Reset ${control.label}", color = BitOSColors.primary) }
+            }
+            val nonDefaultCount =
+                space.bitos.core.studio.MemeAdjustControl.entries.count { it.isNonDefault(effective) }
+            if (nonDefaultCount > 0) {
+                TextButton(onClick = {
+                    // Resetting ONE value is a tap; discarding several
+                    // non-default ones names the cost first (spec rule).
+                    if (nonDefaultCount > 1) confirmResetAll = true else onPreviewAdjust(space.bitos.core.studio.MemeAdjust())
+                }) { Text("Reset all", color = BitOSColors.primary) }
+            }
         }
-        if (!current.isDefault) {
+        // Draft transaction: Cancel restores the entry values; Apply
+        // commits the whole slider burst as one undoable command.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm, Alignment.End),
+        ) {
             TextButton(
-                onClick = { onAdjust(space.bitos.core.studio.MemeAdjust()) },
-                modifier = Modifier.padding(top = BitOSSpacing.xs),
-            ) { Text("Reset adjust", color = BitOSColors.primary) }
+                onClick = onCancelAdjust,
+                enabled = draft != null,
+            ) { Text("Cancel") }
+            Button(
+                onClick = {
+                    draft?.let(onApplyAdjust)
+                },
+                enabled = draft != null && draft != entry,
+            ) { Text("Apply") }
         }
     }
-}
-
-/** One labeled adjust slider with the % readout (prototype FX shape). */
-@Composable
-private fun AdjustSliderRow(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-) {
-    BitosAdjustmentSlider(
-        label = label,
-        value = value,
-        valueRange = range,
-        valueText = "${(value * 100).toInt()}%",
-        onValueChange = onValueChange,
-        step = 0.01f,
-        modifier = Modifier.padding(vertical = BitOSSpacing.xs),
-    )
+    if (confirmResetAll) {
+        AlertDialog(
+            onDismissRequest = { confirmResetAll = false },
+            title = { Text("Reset all adjustments?") },
+            text = { Text("This discards every non-default adjustment. Undo brings them back.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmResetAll = false
+                    onPreviewAdjust(space.bitos.core.studio.MemeAdjust())
+                }) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmResetAll = false }) { Text("Keep") }
+            },
+        )
+    }
 }
 
 /**

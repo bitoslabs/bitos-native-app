@@ -3788,23 +3788,51 @@ class BusinessCoreBridge {
     }.toString()
 
     /**
-     * Look preset + manual adjust (prototype FX sliders) composed into ONE
-     * 4×5 matrix — same envelope as [memeLookMatrix]; defaults (1/1/1)
-     * reduce to the plain look matrix.
+     * Look + manual adjust composed into ONE 4×5 matrix — same envelope as
+     * [memeLookMatrix]. [adjustJson] is the canonical all-keys adjust
+     * object ([memeAdjustOf] shape); missing/junk keys stay neutral and
+     * values clamp, so the caller never reimplements bounds. All-neutral
+     * reduces to the plain look matrix.
      */
-    fun memeAdjustMatrix(
+    fun memeAdjustMatrix(lookId: String?, adjustJson: String): String =
+        matrixEnvelope(lookId, space.bitos.core.studio.MemeAdjust.fromCanonical(adjustJson))
+
+    /**
+     * EUI-02: the project's FULL normalized adjust (v1 triple + the new
+     * Tone/Colour axes) as canonical JSON with every key present and
+     * defaults filled — the native UI decodes this instead of parsing wire
+     * fields or reimplementing clamps. Never throws; junk → all defaults.
+     */
+    fun memeAdjustOf(projectJson: String): String {
+        val adjust = space.bitos.core.studio.MemeProjectContract.decode(projectJson)?.adjust ?: space.bitos.core.studio.MemeAdjust()
+        return buildJsonObject {
+            put("bri", adjust.brightness)
+            put("con", adjust.contrast)
+            put("sat", adjust.saturation)
+            put("lig", adjust.lightness)
+            put("warm", adjust.warmth)
+            put("tint", adjust.tint)
+            put("fade", adjust.fade)
+        }.toString()
+    }
+
+    /**
+     * EUI-02: the Adjust-section catalogue (sections, labels, bounds,
+     * neutrals, signed flags) both platforms render their slider UI from —
+     * the `MemeTools.catalogJson()` pattern. Never throws.
+     */
+    fun memeAdjustControls(): String = space.bitos.core.studio.MemeAdjustControl.catalogJson()
+
+    /** One `{"matrix":[20],"blur":px}` envelope builder for the look seams. */
+    private fun matrixEnvelope(
         lookId: String?,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float,
+        adjust: space.bitos.core.studio.MemeAdjust,
     ): String = buildJsonObject {
-        val look = space.bitos.core.studio.MemeLooks.lookOf(lookId)
-        val adjust = space.bitos.core.studio.MemeAdjust.clamp(brightness, contrast, saturation)
         put("matrix", buildJsonArray {
             space.bitos.core.studio.MemeLooks.adjustedMatrixFor(lookId, adjust)
                 .forEach { value -> add(value) }
         })
-        put("blur", look.blurPx)
+        put("blur", space.bitos.core.studio.MemeLooks.lookOf(lookId).blurPx)
     }.toString()
 
     /**

@@ -298,13 +298,18 @@ object MemeProjectContract {
         // Optional grade (MST-043): written only when set, so older wires
         // (and `none`) stay byte-identical.
         MemeLooks.normalize(project.lookId)?.let { put("look", it) }
-        // Manual adjust (prototype FX sliders): same additive-key rule.
+        // Manual adjust (v1 prototype FX sliders + EUI-02 axes): same
+        // additive-key rule — neutral fields never serialize.
         val adjust = project.adjust
         if (adjust != null && !adjust.isDefault) {
             put("adjust", buildJsonObject {
                 put("bri", adjust.brightness)
                 put("con", adjust.contrast)
                 put("sat", adjust.saturation)
+                if (adjust.lightness != 0f) put("lig", adjust.lightness)
+                if (adjust.warmth != 0f) put("warm", adjust.warmth)
+                if (adjust.tint != 0f) put("tint", adjust.tint)
+                if (adjust.fade != 0f) put("fade", adjust.fade)
             })
         }
         if (project.sfxCues.isNotEmpty()) {
@@ -533,8 +538,9 @@ object MemeProjectContract {
     }
 
     /**
-     * Adjust triple decode (prototype FX sliders): lenient + clamped; a
-     * default/all-junk row decodes to null (missing = untouched).
+     * Adjust decode (v1 prototype FX sliders + EUI-02 axes): lenient +
+     * clamped; unknown/missing keys stay neutral; a default/all-junk row
+     * decodes to null (missing = untouched).
      */
     internal fun decodeAdjust(element: JsonElement?): MemeAdjust? {
         val obj = (element as? kotlinx.serialization.json.JsonObject) ?: return null
@@ -544,6 +550,10 @@ object MemeProjectContract {
             brightness = valueOf("bri") ?: 1f,
             contrast = valueOf("con") ?: 1f,
             saturation = valueOf("sat") ?: 1f,
+            lightness = valueOf("lig") ?: 0f,
+            warmth = valueOf("warm") ?: 0f,
+            tint = valueOf("tint") ?: 0f,
+            fade = valueOf("fade") ?: 0f,
         )
         return if (adjust.isDefault) null else adjust
     }

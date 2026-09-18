@@ -86,6 +86,10 @@ object MemeCommandCodec {
                 put("bri", command.adjust.brightness)
                 put("con", command.adjust.contrast)
                 put("sat", command.adjust.saturation)
+                if (command.adjust.lightness != 0f) put("lig", command.adjust.lightness)
+                if (command.adjust.warmth != 0f) put("warm", command.adjust.warmth)
+                if (command.adjust.tint != 0f) put("tint", command.adjust.tint)
+                if (command.adjust.fade != 0f) put("fade", command.adjust.fade)
             }
 
             is MemeCommand.AddSfxCue -> {
@@ -206,6 +210,10 @@ object MemeCommandCodec {
                         brightness = floatOf(obj, "bri") ?: 1f,
                         contrast = floatOf(obj, "con") ?: 1f,
                         saturation = floatOf(obj, "sat") ?: 1f,
+                        lightness = floatOf(obj, "lig") ?: 0f,
+                        warmth = floatOf(obj, "warm") ?: 0f,
+                        tint = floatOf(obj, "tint") ?: 0f,
+                        fade = floatOf(obj, "fade") ?: 0f,
                     ),
                 )
 
