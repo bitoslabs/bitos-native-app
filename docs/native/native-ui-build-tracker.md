@@ -507,6 +507,45 @@ V2 suite).
     this tracker carries W0–W7. Plan flipped to **COMPLETE** (W4 MSU-042/043
     documented as the only deferrals). Verified: structure check green.
 
+- [ ] **Editor UX reference-spec slices — `EUI-01..07`
+  (`docs/product/mobile-video-image-editor-reference-spec.md`, started
+  2026-09-18).** Small native slices against the existing one-shell/timeline
+  plans; no parallel editor.
+  - [x] **EUI-01 — SHELL/CHROME ALIGNMENT (2026-09-18, COMPLETE).** Truthful
+    draft state was already shipped (MUX-01 — `DraftSaveState` driven only by
+    the awaited slot write; close-with-failed-save offers Retry, never a
+    silent exit). This slice closed the rest: IOS `modePillsRow` gained the
+    on-screen **Redo** beside Undo (was keyboard-only — an MSU-013 parity
+    gap; Android's `ModePillsRow` already had the pair; new `AppIcons.redo`
+    SF Symbol token, no Solar redo asset bundled). BOTH platforms: the header
+    secondary is a **labelled** "Save a copy" text button (was icon-only;
+    spec: controls carry visible labels where space permits, so device export
+    and Nostr publish are distinguishable without glyph recognition).
+    SHARED `StudioOnboarding.PUBLISH_EXPLAINER` + coach "next" step now name
+    the secondary by its real label ("Publish posts to Nostr. Save a copy
+    creates a file on this device." — was "Export saves a file…", a control
+    the header no longer shows); iOS/Android decode fallbacks aligned;
+    `StudioOnboardingTest` now asserts the explainer and coach line contain
+    `EXPORT_ACTION`. TOOL ROUTING AUDIT: both platforms render the bar from
+    `MemeTools.primaryFor(mode)` and the More sheet from
+    `advancedFor(mode)` + `selectionFor(kind)` only — the one-tier-per-id and
+    mode-validity invariants are enforced by `MemeToolsTest`, so More cannot
+    repeat a primary tool or list a mode-invalid entry by construction.
+    Verified: shared `testAndroidHostTest` green; Android meme/studio unit
+    tests green (1 pre-existing unrelated `SearchRepositoryTest` failure on
+    clean tree too); iOS full-app Swift 6 strict-concurrency type-check
+    exit 0.
+  - [ ] EUI-02 — Look sheet consolidation + accessible adjustments (Motion
+    section, Tone/Colour/Details taxonomy beyond the current
+    brightness/contrast/saturation trio — needs shared matrix work).
+  - [ ] EUI-03 — Crop sheet (greenfield: ratio + rotate + flip +
+    position/scale with accessible fields; video keeps canvas-level framing).
+  - [ ] EUI-04 — Timeline selection/actions polish (Replace action,
+    context-retention polish).
+  - [ ] EUI-05 — Sound browser/local audio availability states.
+  - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
+  - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
+
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.
 
 - [x] Camera capture + preview + trim + media publish (W0, CAP/PUB epics)
@@ -622,6 +661,21 @@ V2 suite).
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-09-18 — **Editor shell/chrome alignment EUI-01** (spec
+  `mobile-video-image-editor-reference-spec.md`): iOS gained the on-screen
+  Redo beside Undo (MSU-013 parity gap — it was keyboard-only while Android
+  shipped the pair); both platforms' header secondary became a labelled
+  "Save a copy" text button instead of an icon; the shared first-use
+  explainer and coach step now say "Save a copy" (they referenced "Export",
+  a label the header no longer shows), with the iOS/Android fallbacks
+  aligned and the shared test asserting explainer/coach name the real
+  `EXPORT_ACTION`. Tool-routing audit: bar/More render straight from
+  `MemeTools.primaryFor/advancedFor/selectionFor`, so no-repeat and
+  mode-validity hold by construction (`MemeToolsTest`). Found en route:
+  `SearchRepositoryTest.searchesNormalVerifiedRelayEventsWithoutCreatingARequest`
+  fails on a clean tree (pre-existing, feed/search domain, unrelated).
+  Next: EUI-02 (Look taxonomy needs shared matrix work), EUI-03 crop sheet.
 
 - 2026-09-17 — **Create-hub sound/remix source pickers** (MEM-003a-c,
   MEM-005a-c, plan `create-hub-sound-remix-plan.md`): the two stale

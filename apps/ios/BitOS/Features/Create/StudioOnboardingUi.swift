@@ -188,7 +188,7 @@ struct StudioPublishCopy: Equatable {
     }
 
     static let fallback = StudioPublishCopy(
-        publishExplainer: "Publish posts to Nostr · Export saves a file to this device.",
+        publishExplainer: "Publish posts to Nostr. Save a copy creates a file on this device.",
         primaryAction: "Next",
         exportAction: "Save a copy",
         posted: "Posted",

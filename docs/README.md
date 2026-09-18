@@ -28,6 +28,7 @@ Start with [Native Platform Blueprint](./native/README.md).
 - [End-to-end UX/UI flows](./product/ux-ui-flows.md)
 - [Studio mass-production system](./product/studio-mass-production.md)
 - [MemeEditor UX/UI audit and implementation plan](./product/meme-editor-ux-ui-audit-and-plan.md)
+- [Mobile image & video editor reference UX/UI specification](./product/mobile-video-image-editor-reference-spec.md)
 
 Legacy web/Flutter-era plans and HTML mockups were removed from this repo
 (2026-08) after being merged into the unified feature spec and the

@@ -66,7 +66,7 @@ object StudioOnboarding {
             anchor = "next",
             iconToken = "send",
             title = "Next publishes",
-            body = "Next posts to Nostr. Export saves a rendered file to this device.",
+            body = "Next posts to Nostr. Save a copy creates a rendered file on this device.",
         ),
     )
 
@@ -184,10 +184,12 @@ object StudioOnboarding {
      * The one-line mental model. The shipped editor showed `Next` and
      * `Export` with equal weight and no explanation, so the two "I'm done"
      * verbs were indistinguishable. [PUBLISH_EXPLAINER] is shown once, the
-     * first time the creator reaches the publish entry.
+     * first time the creator reaches the publish entry. It must name the
+     * secondary action by its real label ([EXPORT_ACTION]) so the words
+     * always match a visible control (EUI-01).
      */
     const val PUBLISH_EXPLAINER =
-        "Publish posts to Nostr · Export saves a file to this device."
+        "Publish posts to Nostr. Save a copy creates a file on this device."
 
     /** The single primary action label (publish flow entry). */
     const val PRIMARY_ACTION = "Next"

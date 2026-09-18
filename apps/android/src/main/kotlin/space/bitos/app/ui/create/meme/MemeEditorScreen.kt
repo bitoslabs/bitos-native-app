@@ -2672,20 +2672,21 @@ fun MemeEditorScreen(
             ) {
                 Text(publishCopy.primaryAction, fontWeight = FontWeight.W600)
             }
-            // MSU-050: Export is no longer a peer of the primary. It is a
-            // labelled secondary that saves a rendered FILE (the copy says
-            // so), reachable here and from More; the explainer above states
-            // the difference the first time the creator publishes.
-            IconButton(
+            // MSU-050/EUI-01: Save a copy is a LABELLED secondary next to
+            // the one primary — the visible words separate device export
+            // from Nostr publish without relying on glyph recognition or
+            // the first-use explainer. Reachable here and from More.
+            TextButton(
                 onClick = { showExportSheet = true },
                 enabled = (activeAssetId != null || blankDesignActive ||
                     (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
                     (hasVideo && blankVideoHasContent)) && !exporting,
+                colors = ButtonDefaults.textButtonColors(contentColor = BitOSColors.textSecondary),
                 modifier = Modifier.semantics {
                     contentDescription = "${publishCopy.exportAction} — save a rendered file to this device"
                 },
             ) {
-                Icon(AppIcons.Download, contentDescription = null, tint = BitOSColors.textSecondary)
+                Text(publishCopy.exportAction)
             }
             IconButton(
                 onClick = { exportStatus = when (draftSaveState) {

@@ -4540,6 +4540,17 @@ struct MemeEditorView: View {
             }
             .disabled(!store.canUndo)
             .accessibilityLabel("Undo")
+            // EUI-01: redo is a persistent on-screen sibling of undo (the
+            // pair lives in exactly one place, mirroring Android's row), not
+            // a keyboard-only shortcut.
+            Button {
+                store.redo()
+            } label: {
+                AppIcons.image(for: AppIcons.redo)
+                    .foregroundStyle(store.canRedo ? BitOSTheme.textPrimary : BitOSTheme.textSecondary.opacity(0.4))
+            }
+            .disabled(!store.canRedo)
+            .accessibilityLabel("Redo")
         }
     }
 
@@ -6047,10 +6058,10 @@ struct MemeEditorView: View {
         .accessibilityLabel("Next — review and publish to Nostr")
     }
 
-    /// MSU-050: Export is no longer a peer of the primary. It is a labelled
-    /// secondary that saves a rendered FILE (the copy says so), reachable
-    /// here and from More; the explainer above states the difference the
-    /// first time the creator publishes.
+    /// MSU-050/EUI-01: Save a copy is a LABELLED secondary next to the one
+    /// primary — the visible words separate device export from Nostr
+    /// publish without relying on glyph recognition or the first-use
+    /// explainer. It saves a rendered FILE; the draft autosaves separately.
     private var headerExportButton: some View {
         let hasMedia = store.activeAsset != nil || store.isBlankDesign ||
             (store.gifFramesCount > 0 || (store.isBlankGif && store.blankGifHasContent)) ||
@@ -6058,7 +6069,8 @@ struct MemeEditorView: View {
         return Button {
             showExportSheet = true
         } label: {
-            AppIcons.image(for: AppIcons.save)
+            Text(publishCopy.exportAction)
+                .font(.subheadline)
                 .foregroundStyle(BitOSTheme.textSecondary)
         }
         .disabled(!hasMedia || store.exportState == .saving)

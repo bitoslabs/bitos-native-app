@@ -108,6 +108,7 @@ enum AppIcons {
     static let pen = "pencil"                         // compose / new note
     static let refresh = "arrow.clockwise"            // Solar: refresh
     static let undo = "arrow.uturn.backward"          // Solar: undo (editor history)
+    static let redo = "arrow.uturn.forward"           // editor history (SF Symbol; no Solar redo asset bundled)
     static let save = "square.and.arrow.down"         // Solar: save (editor export to Photos)
     // ── Studio / Create hub (spec §3.17/§3.19) ───────────────────────
     static let musicNote = "musicNote"             // Solar: music (sound library)

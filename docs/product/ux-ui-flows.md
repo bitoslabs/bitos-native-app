@@ -524,8 +524,12 @@ Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-detai
 → `#/create-review` parity): the editor screen follows the prototype layout —
 "Editor" header with draft save and the "Next" publish entry inline with it
 (the bottom stack stays tool-only; a slim notice replaces the bottom button
-while no source exists), VIDEO/GIF/IMAGE pills with source-add buttons
-(frame/image/clip per mode, Solar icons) beside undo, circular quick tools
+while no source exists), plus the labelled "Save a copy" text secondary
+(EUI-01, 2026-09-18 — device export is named in words next to the one
+primary, never a glyph-only button), VIDEO/GIF/IMAGE pills with source-add buttons
+(frame/image/clip per mode, Solar icons) beside the undo/redo pair (both
+on-screen on both platforms — iOS redo was keyboard-only before EUI-01),
+circular quick tools
 (Meme · Text · Stickers · Sound · Effects) opening native BOTTOM SHEETS
 (panel contents per the prototype; sheets are the platform idiom and keep
 the canvas visible above; each sheet shows exactly one title — the sheet
