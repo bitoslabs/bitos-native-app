@@ -226,6 +226,7 @@ enum AppIcons {
         case "edit": return pen
         case "time": return schedule
         case "duplicate": return "square.on.square"
+        case "replace": return "arrow.triangle.2.circlepath"
         case "forward": return "square.2.layers.3d.top.filled"
         case "backward": return "square.2.layers.3d.bottom.filled"
         case "split": return split

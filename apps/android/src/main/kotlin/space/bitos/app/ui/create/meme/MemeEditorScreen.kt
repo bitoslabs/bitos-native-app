@@ -443,8 +443,8 @@ fun MemeEditorScreen(
      * Fresh unique clip ids survive splits/removals (never reuse a wire id).
      * Declared before its callers among the local helpers below.
      */
-    fun maxClipCounter(): Int = videoClips.maxOfOrNull {
-        it.id.removePrefix("v").takeWhile(Char::isDigit).toIntOrNull() ?: 0
+    fun maxClipCounter(): Int = (videoClips.map { it.id } + clipArchive.keys).maxOfOrNull {
+        it.removePrefix("v").takeWhile(Char::isDigit).toIntOrNull() ?: 0
     } ?: 0
 
     // Clip-import progress (camera handoff / picker insert / blank-canvas
@@ -2100,7 +2100,59 @@ fun MemeEditorScreen(
         }
     }
 
-    /** M3: pick a bounded source clip, hand it through the existing trim screen. */
+    /** EUI-04: clip index awaiting a replacement pick (null = none). */
+    var pendingReplaceClipIndex by remember { mutableStateOf<Int?>(null) }
+    val replacePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        val targetIndex = pendingReplaceClipIndex
+        pendingReplaceClipIndex = null
+        if (uri == null || targetIndex == null) return@rememberLauncherForActivityResult
+        if (!videoClips.indices.contains(targetIndex)) return@rememberLauncherForActivityResult
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) { readAssetBytes(context, uri) }
+            if (picked == null) {
+                exportStatus = "Could not read this video. Try another file or grant Photos access."
+                return@launch
+            }
+            if (picked.size.toLong() > MemeVideoExport.MAX_SOURCE_BYTES) {
+                exportStatus = "This source video is larger than 256 MB. Trim it first, then try again."
+                return@launch
+            }
+            val probe = withContext(Dispatchers.IO) {
+                MemeVideoExport.probe(context.contentResolver, uri)
+            }
+            if (probe == null) {
+                exportStatus = "Not a readable video"
+                return@launch
+            }
+            val old = videoClips[targetIndex]
+            val (start, end, shortened) = space.bitos.core.studio.MemeVideoCutRules.replaceWindow(
+                old.startMs, old.endMs, probe.durationMs,
+            )
+            state.beginClipsEdit()
+            // A FRESH id: undo rebuilds sessions by id from the archive, so
+            // reusing the old id would resurrect the NEW media on undo.
+            // Overlays key on timeline TIME, not clip id — the swap is
+            // invisible to everything but the archive.
+            val replacement = old.copy(
+                id = if (old.id.startsWith("blank")) {
+                    "blank${System.nanoTime()}"
+                } else {
+                    "v${maxClipCounter() + 1}"
+                },
+                bytes = picked, probe = probe, startMs = start, endMs = end,
+            )
+            videoClips[targetIndex] = replacement
+            archiveClip(replacement)
+            syncWireClips()
+            exportStatus = if (shortened) {
+                "Clip ${targetIndex + 1} replaced — window shortened to fit the shorter clip"
+            } else {
+                "Clip ${targetIndex + 1} replaced — trim, volume and look kept"
+            }
+        }
+    }
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -2808,6 +2860,7 @@ fun MemeEditorScreen(
                 space.bitos.core.studio.MemeTools.ToolId.CLIPS,
                 space.bitos.core.studio.MemeTools.ToolId.SPLIT,
                 space.bitos.core.studio.MemeTools.ToolId.MUTE,
+                space.bitos.core.studio.MemeTools.ToolId.REPLACE,
                 -> hasVideo
                 space.bitos.core.studio.MemeTools.ToolId.DURATION -> gifMode
                 space.bitos.core.studio.MemeTools.ToolId.BATCH -> onMakeVariations != null
@@ -2861,6 +2914,17 @@ fun MemeEditorScreen(
                             volume = if (clip.volume == 0f) 1f else 0f,
                         )
                         syncWireClips()
+                    }
+                }
+                // EUI-04: replace keeps timing/settings where they fit; the
+                // pick result clamps through the shared window rule.
+                space.bitos.core.studio.MemeTools.ToolId.REPLACE -> {
+                    showMore = false
+                    if (videoClips.indices.contains(selectedClipIndex)) {
+                        pendingReplaceClipIndex = selectedClipIndex
+                        replacePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                        )
                     }
                 }
                 space.bitos.core.studio.MemeTools.ToolId.BATCH -> {
@@ -5760,7 +5824,11 @@ private fun TimelineClipSegment(
                 if (selected) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.45f),
                 RoundedCornerShape(6.dp),
             )
-            .clickable { onSelect() },
+            .clickable { onSelect() }
+            .semantics {
+                contentDescription = "Clip ${index + 1}" +
+                    (if (selected) ", selected" else "") + ", $outSec seconds"
+            },
     ) {
         Text(
             label,
@@ -6896,6 +6964,7 @@ private fun toolIcon(
     space.bitos.core.studio.MemeTools.ToolId.EDIT -> AppIcons.Pen
     space.bitos.core.studio.MemeTools.ToolId.TIME_WINDOW -> AppIcons.Schedule
     space.bitos.core.studio.MemeTools.ToolId.DUPLICATE -> AppIcons.Copy
+    space.bitos.core.studio.MemeTools.ToolId.REPLACE -> AppIcons.Refresh
     space.bitos.core.studio.MemeTools.ToolId.FORWARD -> AppIcons.FlipToFront
     space.bitos.core.studio.MemeTools.ToolId.BACKWARD -> AppIcons.FlipToBack
     space.bitos.core.studio.MemeTools.ToolId.SPLIT -> AppIcons.CallSplit

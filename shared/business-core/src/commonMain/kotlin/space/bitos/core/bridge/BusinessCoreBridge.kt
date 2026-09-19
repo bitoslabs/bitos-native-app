@@ -3824,6 +3824,22 @@ class BusinessCoreBridge {
     fun memeAdjustControls(): String = space.bitos.core.studio.MemeAdjustControl.catalogJson()
 
     /**
+     * EUI-04: the replacement window for a clip whose media changed —
+     * `{"start","end","shortened"}` from the shared rule, so the native
+     * replace flows keep timing identically.
+     */
+    fun memeReplaceWindow(oldStartMs: Long, oldEndMs: Long, newDurationMs: Long): String {
+        val (start, end, shortened) = space.bitos.core.studio.MemeVideoCutRules.replaceWindow(
+            oldStartMs, oldEndMs, newDurationMs,
+        )
+        return buildJsonObject {
+            put("start", start)
+            put("end", end)
+            put("shortened", shortened)
+        }.toString()
+    }
+
+    /**
      * EUI-02 §3: the ratio catalogue both crop sheets render from —
      * `{"ratios":[{"id","label"}]}` in display order (the `MemeTools`
      * pattern; DESIGN_SYSTEM §0). Never throws.

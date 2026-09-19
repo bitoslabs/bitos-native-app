@@ -381,6 +381,9 @@ protocol BusinessCoreClient: Sendable {
     func memeCropOf(_ projectJson: String) -> String
     /// The shared ratio catalogue for the crop sheets.
     func memeCanvasRatios() -> String
+    /// EUI-04 replacement window `{"start","end","shortened"}` from the
+    /// shared rule — replace flows keep timing identically on both apps.
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String
     /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
     func memeStudioHints() -> String
     /// The shared crop placement (frame + media rect + rot/flip + cover);
@@ -978,6 +981,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func memeCanvasRatios() -> String {
         bridge.memeCanvasRatios()
     }
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
+        bridge.memeReplaceWindow(oldStartMs: oldStartMs, oldEndMs: oldEndMs, newDurationMs: newDurationMs)
+    }
     func memeStudioHints() -> String {
         bridge.memeStudioHints()
     }
@@ -1552,6 +1558,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeCanvasRatios() -> String {
         FrameworkBusinessCoreClient().memeCanvasRatios()
+    }
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
+        FrameworkBusinessCoreClient().memeReplaceWindow(oldStartMs, oldEndMs, newDurationMs)
     }
     func memeStudioHints() -> String {
         FrameworkBusinessCoreClient().memeStudioHints()

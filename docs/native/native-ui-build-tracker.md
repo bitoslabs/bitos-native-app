@@ -660,8 +660,45 @@ V2 suite).
     `testAndroidHostTest` green (MemeCropTest 9 + all prior); Android
     meme/studio tests green; iOS full-app Swift 6 strict-concurrency
     type-check exit 0.
-  - [ ] EUI-04 — Timeline selection/actions polish (Replace action,
-    context-retention polish).
+  - [x] **EUI-04 — TIMELINE SELECTION/ACTIONS: REPLACE (2026-09-18,
+    COMPLETE).** SHARED: `MemeVideoCutRules.replaceWindow(oldStart,
+    oldEnd, newDuration)` — retains the trim window where it fits, clamps
+    the out-point (then in-point) to shorter media, degrades to the full
+    new clip; returns `(start, end, shortened)` so the UI can say WHY
+    timing changed (common-tested). `MemeTools.REPLACE` joined the CLIP
+    selection actions in spec order (… Duplicate, **Replace**, Delete) —
+    rendered automatically by the catalogue-driven surfaces (selection
+    row + More) on both platforms; bridge seam `memeReplaceWindow`.
+    ANDROID: dedicated replace picker (NOT the trim screen — that flow
+    sets a fresh window; replace must retain timing); replaces the
+    selected clip's bytes+probe with the shared window applied, volume/
+    look/speed kept; a FRESH clip id (blank prefix preserved) — undo
+    rebuilds sessions by id from the clip archive, so id reuse would
+    resurrect the NEW media on undo; honest notices ("trim, volume and
+    look kept" / "window shortened to fit the shorter clip"); clip
+    segments gained selection+duration semantics ("Clip 2, selected,
+    4 seconds"). IOS mirror: `store.replaceClip(at:)` (same fresh-id rule
+    through `clipArchive`, same shared window via the seam, same notices),
+    photosPicker + captured target index (selection can move while the
+    picker opens), Replace button in the timeline strip action row,
+    `AppIcons` catalog glyph, gate joined the trim tier. EUI-04's
+    remaining gate items were already shipped by MSU/M5: split/trim/
+    speed/mute/reorder/delete unambiguous, Back-to-editor retains
+    selection (screen state) and playhead; clip a11y now states
+    "Clip N of M, X seconds" on iOS (Android: per-segment selected +
+    seconds; the strip header already says "clip N of M").
+    CODE-REVIEW ROUND (caught a real delivery failure): the first iOS
+    application script aborted mid-batch, leaving `replaceClip` dead
+    (catalogue rendered Replace with no handler) while the tracker claimed
+    completion — the review's audit surfaced it; the full iOS wiring
+    (onTool case, photosPicker + captured target, strip Replace button,
+    `AppIcons` glyph) is now present and verified. Also fixed from the
+    review: a seam failure now degrades to the FULL new clip (not a
+    silently kept over-long window), fresh ids count the clip ARCHIVE on
+    both platforms (delete-highest → replace → multi-undo could resurrect
+    wrong media), and two orphaned KDocs restored to their functions.
+    Verified: shared `testAndroidHostTest` green (replaceWindow 6-case);
+    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
   - [ ] EUI-05 — Sound browser/local audio availability states.
   - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
   - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).

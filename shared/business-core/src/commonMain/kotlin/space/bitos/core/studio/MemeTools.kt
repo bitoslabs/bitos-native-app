@@ -101,6 +101,9 @@ object MemeTools {
         TIME_WINDOW("Timing", "time"),
         /** Clone the selection. */
         DUPLICATE("Duplicate", "duplicate"),
+        /** Swap the selected clip's media, keeping timing/settings where
+         *  they still fit (EUI-04 reference spec §1). */
+        REPLACE("Replace", "replace"),
         /** Bring forward in the layer stack. */
         FORWARD("Forward", "forward"),
         /** Send backward in the layer stack. */
@@ -182,7 +185,8 @@ object MemeTools {
         ),
         SelectionKind.CLIP to listOf(
             ToolId.OPEN_TIMELINE, ToolId.TRIM, ToolId.SPLIT, ToolId.SPEED,
-            ToolId.VOLUME, ToolId.MUTE, ToolId.DUPLICATE, ToolId.DELETE,
+            ToolId.VOLUME, ToolId.MUTE, ToolId.DUPLICATE, ToolId.REPLACE,
+            ToolId.DELETE,
         ),
         SelectionKind.GIF_FRAME to listOf(
             ToolId.HOLD, ToolId.MOVE_LEFT, ToolId.MOVE_RIGHT, ToolId.DELETE,

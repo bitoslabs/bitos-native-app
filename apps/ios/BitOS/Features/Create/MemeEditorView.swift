@@ -1788,8 +1788,10 @@ final class MemeEditorStore {
     }
 
     /** Fresh unique clip ids survive splits/removals. */
-    private func maxClipCounter() -> Int {
-        clips.compactMap { Int($0.id.dropFirst().prefix { $0.isNumber }) }.max() ?? 0
+    private func maxClipCounter(overlapping archive: [String: EditorClip] = [:]) -> Int {
+        (clips.map(\.id) + archive.keys).compactMap {
+            Int($0.dropFirst().prefix { $0.isNumber })
+        }.max() ?? 0
     }
 
     /// Appends a source as a new timeline clip (cut rules applied; the
@@ -1963,6 +1965,50 @@ final class MemeEditorStore {
         selectedClipIndex = min(selectedClipIndex, max(0, clips.count - 1))
         videoRevision += 1
         syncWireClips()
+    }
+
+    /**
+     * EUI-04: swaps the clip's MEDIA, keeping trim/volume/look where they
+     * still fit (the shared window rule clamps honestly). A FRESH id: undo
+     * rebuilds sessions by id from the archive, so reusing the old id would
+     * resurrect the NEW media on undo; overlays key on timeline time, not
+     * clip id, so the swap is invisible to everything but the archive.
+     */
+    func replaceClip(at index: Int, data: Data, url: URL, probe: MemeVideoExportIos.Probe) {
+        guard clips.indices.contains(index) else { return }
+        let old = clips[index]
+        var start = old.startMs
+        var end = old.endMs
+        var shortened = false
+        if let seamData = client.memeReplaceWindow(old.startMs, old.endMs, probe.durationMs).data(using: .utf8),
+           let row = try? JSONSerialization.jsonObject(with: seamData) as? [String: Any],
+           let s = (row["start"] as? NSNumber)?.int64Value,
+           let e = (row["end"] as? NSNumber)?.int64Value {
+            start = s
+            end = e
+            shortened = (row["shortened"] as? NSNumber)?.boolValue ?? false
+        } else {
+            // Seam failure must degrade to the full new clip — keeping the
+            // old window could exceed the new media's duration.
+            start = 0
+            end = max(1, probe.durationMs)
+            shortened = true
+        }
+        pushHistory(projectJson)
+        let replacement = EditorClip(
+            id: old.id.hasPrefix("blank")
+                ? "blank\(UInt64.random(in: 0..<UInt64.max))"
+                : "v\(maxClipCounter(overlapping: clipArchive) + 1)",
+            data: data, url: url, probe: probe,
+            startMs: start, endMs: end, volume: old.volume, lookId: old.lookId
+        )
+        clips[index] = replacement
+        clipArchive[replacement.id] = replacement
+        videoRevision += 1
+        syncWireClips()
+        setNotice(shortened
+            ? "Clip \(index + 1) replaced — window shortened to fit the shorter clip"
+            : "Clip \(index + 1) replaced — trim, volume and look kept")
     }
 
     /** Selects a timeline clip (dock lanes, Clips sheet). */
@@ -4144,6 +4190,27 @@ struct MemeEditorView: View {
             selection: $soundPickItem,
             matching: .videos
         )
+        .photosPicker(
+            isPresented: $isPickingReplaceClip,
+            selection: $replacePickItem,
+            matching: .videos
+        )
+        .onChange(of: replacePickItem) { _, item in
+            guard let item else { return }
+            replacePickItem = nil
+            let target = replaceTargetIndex
+            replaceTargetIndex = nil
+            guard let target, store.clips.indices.contains(target) else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let url = MemeVideoExportIos.writeTempClip(data),
+                      let probe = MemeVideoExportIos.probe(url: url) else {
+                    store.setNotice("Clip unreadable — the original stays")
+                    return
+                }
+                store.replaceClip(at: target, data: data, url: url, probe: probe)
+            }
+        }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
@@ -5210,6 +5277,10 @@ struct MemeEditorView: View {
     /// MST-083: video export format — MP4 (default) or GIF.
     @State private var exportVideoAsGif = false
     @State private var isPickingVideo = false
+    /** EUI-04: clip index awaiting a replacement pick (nil = none). */
+    @State private var isPickingReplaceClip = false
+    @State private var replacePickItem: PhotosPickerItem?
+    @State private var replaceTargetIndex: Int?
     /// "Use this sound" (MST-050 Wave B): video picker → audio extraction.
     @State private var isPickingSound = false
     @State private var soundPickItem: PhotosPickerItem?
@@ -5501,7 +5572,7 @@ struct MemeEditorView: View {
         case "look":
             return store.activeAsset != nil || store.gifFramesCount > 0 ||
                 (store.isVideoMode && !store.clips.isEmpty)
-        case "trim", "speed", "volume", "clips", "split", "mute":
+        case "trim", "speed", "volume", "clips", "split", "mute", "replace":
             return store.isVideoMode && store.videoClipData != nil
         case "duration": return store.isGifMode
         case "batch": return onMakeVariations != nil
@@ -5554,6 +5625,13 @@ struct MemeEditorView: View {
             let current = store.clips[store.selectedClipIndex].volume
             store.setClipVolume(index: store.selectedClipIndex, volume: current == 0 ? 1 : 0)
             store.setNotice(current == 0 ? "Clip sound on" : "Clip muted")
+        case "replace":
+            // EUI-04: capture the target now — the pick is async and the
+            // creator may tap elsewhere while it opens.
+            showMore = false
+            guard store.clips.indices.contains(store.selectedClipIndex) else { return }
+            replaceTargetIndex = store.selectedClipIndex
+            isPickingReplaceClip = true
         case "batch":
             showMore = false
             startBatchFromDesign()
@@ -5934,7 +6012,10 @@ struct MemeEditorView: View {
                                 )
                             }
                             .frame(width: max(0, (geo.size.width - gaps) * fraction))
-                            .accessibilityLabel("Clip \(index + 1)")
+                            .accessibilityLabel(
+                                "Clip \(index + 1) of \(store.clips.count), " +
+                                String(format: "%.1f seconds", Double(store.clipOutputMs(clip)) / 1000)
+                            )
                         }
                     }
                     Rectangle()
@@ -5968,6 +6049,12 @@ struct MemeEditorView: View {
                     } else {
                         store.setNotice("Keep at least one clip")
                     }
+                }
+                Spacer()
+                ClipTool(icon: "arrow.triangle.2.circlepath", label: "Replace") {
+                    guard store.clips.indices.contains(store.selectedClipIndex) else { return }
+                    replaceTargetIndex = store.selectedClipIndex
+                    isPickingReplaceClip = true
                 }
                 Spacer()
                 ClipTool(icon: "mic.slash", label: "Mute") {
