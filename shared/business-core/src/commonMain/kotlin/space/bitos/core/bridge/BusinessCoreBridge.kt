@@ -3824,6 +3824,38 @@ class BusinessCoreBridge {
     fun memeAdjustControls(): String = space.bitos.core.studio.MemeAdjustControl.catalogJson()
 
     /**
+     * EUI-05: the sound-row labels + loop copy from the shared
+     * availability rule (`{"add","needsConnection","downloading",
+     * "downloadingHint","added","loopCovers","loopFill","loopOnce"}`) —
+     * one copy source for both platforms (DESIGN_SYSTEM §0).
+     */
+    fun memeSoundRowCopy(): String = buildJsonObject {
+        put("add", space.bitos.core.studio.MemeSoundAvailability.RowState.AVAILABLE.actionLabel)
+        put("needsConnection", space.bitos.core.studio.MemeSoundAvailability.RowState.NEEDS_CONNECTION.hint)
+        put("downloading", space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING.actionLabel)
+        put(
+            "downloadingHint",
+            space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING.hint,
+        )
+        put("added", space.bitos.core.studio.MemeSoundAvailability.RowState.ADDED.actionLabel)
+        put("loopCovers", "Covers the whole video")
+        put("loopFill", "repeats to fill")
+        put("loopOnce", "plays once, then silence")
+    }.toString()
+
+    /**
+     * EUI-05: the resolved row-state token (`available|needs_connection|
+     * downloading|added`) from the shared precedence — platforms map the
+     * token to the labels in [memeSoundRowCopy].
+     */
+    fun memeSoundRowState(added: Boolean, downloading: Boolean, loadFailed: Boolean): String =
+        space.bitos.core.studio.MemeSoundAvailability.rowState(added, downloading, loadFailed).name.lowercase()
+
+    /** EUI-05: the loop line for the current durations ("" = unknown). */
+    fun memeSoundLoopCopy(trackMs: Long, videoMs: Long, loop: Boolean): String =
+        space.bitos.core.studio.MemeSoundAvailability.loopCopy(trackMs, videoMs, loop)
+
+    /**
      * EUI-04: the replacement window for a clip whose media changed —
      * `{"start","end","shortened"}` from the shared rule, so the native
      * replace flows keep timing identically.

@@ -699,7 +699,39 @@ V2 suite).
     wrong media), and two orphaned KDocs restored to their functions.
     Verified: shared `testAndroidHostTest` green (replaceWindow 6-case);
     Android meme/studio tests green; iOS Swift 6 type-check exit 0.
-  - [ ] EUI-05 — Sound browser/local audio availability states.
+  - [x] **EUI-05 — SOUND BROWSER HONEST AVAILABILITY STATES (2026-09-18,
+    COMPLETE for the editor Sound panel).** SHARED `MemeSoundAvailability`
+    (+ `MemeSoundAvailabilityTest` 3 cases): the row-state machine —
+    Added only when the row IS the current soundtrack (precedence Added >
+    Downloading > NeedsConnection > Available), Downloading never
+    represented as attached, a failed load explains its connection need
+    ("Needs a connection to load") while **Add** stays one tap away; and
+    the honest loop copy (nothing claimed while the video length is
+    unknown; "Covers the whole video" when it does; "Track 6 s < video
+    12 s — repeats to fill / plays once, then silence" naming both
+    durations). Seams: `memeSoundRowCopy` (labels), `memeSoundRowState`
+    (resolved token), `memeSoundLoopCopy`. ANDROID: the Sound panel's
+    online + library rows render through one `SoundRowEui` — per-row
+    preview (▶/⏸, single-row MediaPlayer controller; `library:<id>`
+    plays the saved local bytes, https streams; a new preview stops the
+    prior one; errors say "check your connection" and key the row), state
+    action chip (Add / Downloading… / Added, hint line under the meta),
+    Add disabled unless Available/NeedsConnection (preview available in
+    EVERY state); both url-attach paths set downloading/failed keys and
+    clear them on completion; the loop toggle's caption now states the
+    real relationship. IOS mirror: store preview controller (AVAudioPlayer
+    for library bytes via a small delegate box, AVPlayer streaming, end-
+    observer cleanup), the same states on the store
+    (`previewingSoundKey`/`downloadingSoundUrl`/`failedSoundUrls` with
+    @Observable auto-notify), both attach paths wired, panel rows through
+    `soundRowEui` with labels decoded from the seams
+    (`MemeSoundAvailabilityUi`), loop caption via the seam. KNOWN LIMITS:
+    proactive connectivity sensing (rows explain AFTER a failed load, not
+    from a live network monitor — a connectivity epic exists elsewhere);
+    the trending screen's own rows keep their shipped preview treatment.
+    Verified: shared `testAndroidHostTest` green (availability 3 cases);
+    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
+  - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
   - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
   - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
 

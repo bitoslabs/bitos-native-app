@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import PhotosUI
 import Photos
@@ -466,8 +467,11 @@ final class MemeEditorStore {
             setNotice("Remove the current soundtrack first")
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         setNotice("Loading sound…")
         Task { @MainActor in
+            defer { downloadingSoundUrl = nil }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard data.count <= 64 * 1024 * 1024 else {
@@ -484,6 +488,7 @@ final class MemeEditorStore {
             } catch {
                 setNotice(nil)
                 setExportFailure("Sound source could not be loaded")
+                failedSoundUrls.insert(mediaUrl)
             }
         }
     }
@@ -492,6 +497,72 @@ final class MemeEditorStore {
     /// artifact — bounded download, hash-verify, decode, attach with the
     /// URL pre-filled so publish stamps it WITHOUT re-uploading (Wave D
     /// semantics). Named failures surface as a notice/export failure.
+    // EUI-05: sound rows — one preview at a time (key = row identity),
+    // the url downloading, and urls whose load failed (honest row states).
+    private var soundPreviewFilePlayer: AVAudioPlayer?
+    private var soundPreviewStreamPlayer: AVPlayer?
+    private var soundPreviewEndObserver: Any?
+    private let previewDelegateBox = SoundPreviewDelegateBox()
+    private(set) var previewingSoundKey: String?
+    private(set) var downloadingSoundUrl: String?
+    var failedSoundUrls: Set<String> = []
+
+    /// EUI-05: single-row preview. `library:<id>` plays saved local bytes;
+    /// an https source streams. A new preview stops the prior one.
+    func toggleSoundPreview(key: String, source: String, label: String) {
+        if previewingSoundKey == key {
+            stopSoundPreview()
+            return
+        }
+        stopSoundPreview()
+        if source.hasPrefix("library:") {
+            let id = String(source.dropFirst("library:".count))
+            guard let data = soundLibrary.bytes(id: id) else {
+                setNotice("That saved sound is missing its file")
+                return
+            }
+            do {
+                let player = try AVAudioPlayer(data: data)
+                previewDelegateBox.onEnd = { [weak self] in
+                    Task { @MainActor in self?.stopSoundPreview() }
+                }
+                player.delegate = previewDelegateBox
+                soundPreviewFilePlayer = player
+                previewingSoundKey = key
+                player.play()
+            } catch {
+                setNotice("Could not preview \(label)")
+            }
+        } else if let url = URL(string: source) {
+            let player = AVPlayer(url: url)
+            soundPreviewStreamPlayer = player
+            previewingSoundKey = key
+            soundPreviewEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.stopSoundPreview() }
+            }
+            player.play()
+        } else {
+            setNotice("Could not preview \(label) — check your connection")
+            failedSoundUrls.insert(source)
+        }
+    }
+
+    func stopSoundPreview() {
+        soundPreviewFilePlayer?.stop()
+        soundPreviewFilePlayer = nil
+        soundPreviewStreamPlayer?.pause()
+        soundPreviewStreamPlayer = nil
+        if let observer = soundPreviewEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            soundPreviewEndObserver = nil
+        }
+        previewingSoundKey = nil
+    }
+
     func attachAudioFromUrl(
         mediaUrl: String,
         sha256: String,
@@ -513,8 +584,11 @@ final class MemeEditorStore {
             setNotice("Remove the current soundtrack first")
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         setNotice("Loading sound…")
         Task { @MainActor in
+            defer { downloadingSoundUrl = nil }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard data.count <= 64 * 1024 * 1024 else {
@@ -547,6 +621,7 @@ final class MemeEditorStore {
             } catch {
                 setNotice(nil)
                 setExportFailure("Sound source could not be loaded")
+                failedSoundUrls.insert(mediaUrl)
             }
         }
     }
@@ -5922,6 +5997,14 @@ struct MemeEditorView: View {
                             author: row.authorPubkey
                         )
                     },
+                    currentSoundUrl: store.soundtrackRow?.url ?? "",
+                    downloadingSoundUrl: store.downloadingSoundUrl ?? "",
+                    failedSoundUrls: store.failedSoundUrls,
+                    videoDurationMs: store.timelineDurationMs,
+                    previewingSoundKey: store.previewingSoundKey ?? "",
+                    onTogglePreview: { key, source, label in
+                        store.toggleSoundPreview(key: key, source: source, label: label)
+                    },
                     onPickSound: { isPickingSound = true },
                     onOpenStudio: {
                         activePanel = nil
@@ -8049,6 +8132,35 @@ private struct StickerPanelContent: View {
 
 /// Sound panel (prototype sound row): current synth cue summary + a jump
 /// into the full cue studio sheet.
+/// EUI-05: the shared row state (labels from the `memeSoundRowCopy`
+/// seam; precedence from `memeSoundRowState` — never hand-rolled here).
+private enum MemeSoundAvailabilityUi {
+    struct RowStateUi {
+        let token: String
+        let actionLabel: String
+        let hint: String?
+    }
+
+    private static let labels: [String: String] = {
+        guard let data = FrameworkBusinessCoreClient().memeSoundRowCopy().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return root.compactMapValues { $0 as? String }
+    }()
+
+    static func rowState(added: Bool, downloading: Bool, loadFailed: Bool) -> RowStateUi {
+        let token = FrameworkBusinessCoreClient().memeSoundRowState(added, downloading, loadFailed)
+        let actionKey = ["available": "add", "needs_connection": "add", "downloading": "downloading", "added": "added"][token] ?? "add"
+        return RowStateUi(
+            token: token,
+            actionLabel: Self.labels[actionKey] ?? "Add",
+            hint: token == "needs_connection"
+                ? Self.labels["needsConnection"]
+                : token == "downloading" ? Self.labels["downloadingHint"] : nil
+        )
+    }
+}
+
 private struct SoundPanelContent: View {
     @Bindable var store: MemeEditorStore
     var hasSourceAudio = true
@@ -8058,6 +8170,13 @@ private struct SoundPanelContent: View {
     var onOpenTrending: () -> Void = {}
     var onOpenVideos: () -> Void = {}
     var onUseOnlineSound: (SharedSoundStore.Row) -> Void = { _ in }
+    // EUI-05 honest row states + single-row preview.
+    var currentSoundUrl = ""
+    var downloadingSoundUrl = ""
+    var failedSoundUrls: Set<String> = []
+    var videoDurationMs: Int64 = 0
+    var previewingSoundKey = ""
+    var onTogglePreview: (String, String, String) -> Void = { _, _, _ in }
     var onPickSound: () -> Void = {}
     var onOpenStudio: () -> Void
     var onPublishSound: () -> Void = {}
@@ -8125,6 +8244,67 @@ private struct SoundPanelContent: View {
     }
 
 
+    /// EUI-05: one sound row — preview (single-row), title/meta, and the
+    /// shared availability state's action + hint; preview available in
+    /// every state, Add offered unless Added/Downloading.
+    private func soundRowEui(
+        title: String, meta: String, key: String, source: String,
+        added: Bool, downloading: Bool, loadFailed: Bool
+    ) -> some View {
+        let state = MemeSoundAvailabilityUi.rowState(added: added, downloading: downloading, loadFailed: loadFailed)
+        return HStack(spacing: BitOSTheme.Spacing.sm) {
+            Button {
+                onTogglePreview(key, source, title)
+            } label: {
+                Image(systemName: previewingSoundKey == key ? "pause.circle" : "play.circle")
+                    .font(.title3)
+                    .foregroundStyle(previewingSoundKey == key ? BitOSTheme.accent : BitOSTheme.textSecondary)
+            }
+            .accessibilityLabel(previewingSoundKey == key ? "Stop previewing \(title)" : "Preview \(title)")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                Text(state.hint.map { "\(meta) · \($0)" } ?? meta)
+                    .font(.caption2)
+                    .foregroundStyle(state.hint != nil ? BitOSTheme.warning : BitOSTheme.textSecondary)
+            }
+            Spacer()
+            Text(state.actionLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(added || downloading ? BitOSTheme.textSecondary : BitOSTheme.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(
+                        added || downloading ? BitOSTheme.surface : BitOSTheme.accent.opacity(0.14)
+                    )
+                )
+        }
+        .padding(BitOSTheme.Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                .fill(BitOSTheme.surface)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !added && !downloading { onAddRow(key, source, title) }
+        }
+    }
+
+    private func onAddRow(_ key: String, _ source: String, _ title: String) {
+        // The Add tap routes through the same online-use entry the old
+        // rows used; library keys carry their entry identity.
+        if let row = online.first(where: { $0.url == key }) {
+            onUseOnlineSound(row)
+        } else if source.hasPrefix("library:"), let entry = store.soundLibraryEntries.first(where: {
+            $0.url == key || "library:\($0.id)" == source
+        }) {
+            store.attachLibrarySound(entry)
+        }
+    }
+
     @ViewBuilder private var onlineSection: some View {
         // ── Shared sounds (kind-30078 online rail; query-filtered) ──
         let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -8139,34 +8319,17 @@ private struct SoundPanelContent: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BitOSTheme.textSecondary)
                 ForEach(Array(rows)) { row in
-                    Button {
-                        onUseOnlineSound(row)
-                    } label: {
-                        HStack(spacing: BitOSTheme.Spacing.sm) {
-                            Text("♪").font(.title3)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(row.label)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                    .foregroundStyle(BitOSTheme.textPrimary)
-                                Text(row.durationMs > 0
-                                     ? "\(row.durationMs / 1000)s · \(row.license)"
-                                     : row.license)
-                                    .font(.caption2)
-                                    .foregroundStyle(BitOSTheme.textSecondary)
-                            }
-                            Spacer()
-                            Text("Use")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(BitOSTheme.accent)
-                        }
-                        .padding(BitOSTheme.Spacing.sm)
-                        .background(
-                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
-                                .fill(BitOSTheme.surface)
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    soundRowEui(
+                        title: row.label,
+                        meta: row.durationMs > 0
+                            ? "\(row.durationMs / 1000)s · \(row.license)"
+                            : row.license,
+                        key: row.url,
+                        source: row.url,
+                        added: row.url == currentSoundUrl,
+                        downloading: row.url == downloadingSoundUrl,
+                        loadFailed: failedSoundUrls.contains(row.url)
+                    )
                 }
             }
         }
@@ -8193,32 +8356,16 @@ private struct SoundPanelContent: View {
     }
 
     private func libraryRow(_ entry: SharedSoundLibraryStore.Entry) -> some View {
-        Button {
-            store.attachLibrarySound(entry)
-        } label: {
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                Text("♪").font(.title3)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.label)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(BitOSTheme.textPrimary)
-                    Text("\(entry.durationMs / 1000)s · saved for offline use")
-                        .font(.caption2)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                Spacer()
-                Text("Attach")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(BitOSTheme.accent)
-            }
-            .padding(BitOSTheme.Spacing.sm)
-            .background(
-                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
-                    .fill(BitOSTheme.surface)
-            )
-        }
-        .buttonStyle(.plain)
+        let key = entry.url.isEmpty ? entry.id : entry.url
+        return soundRowEui(
+            title: entry.label,
+            meta: "\(entry.durationMs / 1000)s · saved for offline use",
+            key: key,
+            source: "library:\(entry.id)",
+            added: !entry.url.isEmpty && entry.url == currentSoundUrl,
+            downloading: entry.url == downloadingSoundUrl,
+            loadFailed: false // local bytes never need a connection
+        )
     }
 
     @ViewBuilder private var publishSection: some View {
@@ -8328,7 +8475,15 @@ private struct SoundPanelContent: View {
                         HStack {
                             Text("Loop to fill").font(.caption)
                             Spacer()
-                            Text(sound.loop ? "repeats to the end" : "plays once")
+                            // EUI-05: the shared rule states the REAL
+                            // duration relationship (nothing claimed while
+                            // the video length is unknown).
+                            Text({
+                                let copy = FrameworkBusinessCoreClient().memeSoundLoopCopy(
+                                    sound.durationMs, videoDurationMs, sound.loop
+                                )
+                                return copy.isEmpty ? (sound.loop ? "repeats" : "plays once") : copy
+                            }())
                                 .font(.caption2)
                                 .foregroundStyle(BitOSTheme.textSecondary)
                         }
@@ -10813,5 +10968,14 @@ private struct PenControlsRowIos: View {
         }
         .padding(.horizontal, BitOSTheme.Spacing.md)
         .padding(.vertical, BitOSTheme.Spacing.xs)
+    }
+}
+
+/// EUI-05: forwards AVAudioPlayer completion into the store's preview
+/// lifecycle (one small NSObject bridge; the delegate method is optional).
+private final class SoundPreviewDelegateBox: NSObject, AVAudioPlayerDelegate {
+    var onEnd: (() -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onEnd?()
     }
 }

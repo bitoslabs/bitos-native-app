@@ -384,6 +384,13 @@ protocol BusinessCoreClient: Sendable {
     /// EUI-04 replacement window `{"start","end","shortened"}` from the
     /// shared rule — replace flows keep timing identically on both apps.
     func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String
+    /// EUI-05 sound-row labels + loop-copy fragments (one shared source).
+    func memeSoundRowCopy() -> String
+    /// EUI-05 resolved row-state token (available|needs_connection|
+    /// downloading|added) from the shared precedence.
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String
+    /// EUI-05 loop line for the current durations ("" = unknown length).
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String
     /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
     func memeStudioHints() -> String
     /// The shared crop placement (frame + media rect + rot/flip + cover);
@@ -984,6 +991,15 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
         bridge.memeReplaceWindow(oldStartMs: oldStartMs, oldEndMs: oldEndMs, newDurationMs: newDurationMs)
     }
+    func memeSoundRowCopy() -> String {
+        bridge.memeSoundRowCopy()
+    }
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
+        bridge.memeSoundRowState(added: added, downloading: downloading, loadFailed: loadFailed)
+    }
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
+        bridge.memeSoundLoopCopy(trackMs: trackMs, videoMs: videoMs, loop: loop)
+    }
     func memeStudioHints() -> String {
         bridge.memeStudioHints()
     }
@@ -1561,6 +1577,15 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
         FrameworkBusinessCoreClient().memeReplaceWindow(oldStartMs, oldEndMs, newDurationMs)
+    }
+    func memeSoundRowCopy() -> String {
+        FrameworkBusinessCoreClient().memeSoundRowCopy()
+    }
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
+        FrameworkBusinessCoreClient().memeSoundRowState(added, downloading, loadFailed)
+    }
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
+        FrameworkBusinessCoreClient().memeSoundLoopCopy(trackMs, videoMs, loop)
     }
     func memeStudioHints() -> String {
         FrameworkBusinessCoreClient().memeStudioHints()

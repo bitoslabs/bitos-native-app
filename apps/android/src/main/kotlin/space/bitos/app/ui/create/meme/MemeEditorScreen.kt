@@ -101,6 +101,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -1131,6 +1132,61 @@ fun MemeEditorScreen(
      * download, hash-verify, decode, attach with the URL pre-filled so
      * publish stamps it WITHOUT re-uploading (Wave D semantics).
      */
+    // EUI-05: sound rows — one preview at a time (key = row identity), the
+    // url downloading, and urls whose load failed (honest row states).
+    var previewingSoundKey by remember { mutableStateOf<String?>(null) }
+    var downloadingSoundUrl by remember { mutableStateOf<String?>(null) }
+    val failedSoundUrls = remember { mutableStateListOf<String>() }
+    val soundPreviewPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    fun stopSoundPreview() {
+        soundPreviewPlayer.value?.release()
+        soundPreviewPlayer.value = null
+        previewingSoundKey = null
+    }
+    fun toggleSoundPreview(key: String, source: String, label: String) {
+        if (previewingSoundKey == key) {
+            stopSoundPreview()
+            return
+        }
+        stopSoundPreview()
+        val player = android.media.MediaPlayer()
+        runCatching {
+            if (source.startsWith("library:")) {
+                val bytes = soundLibrary.bytes(source.removePrefix("library:"))
+                if (bytes == null) {
+                    exportStatus = "That saved sound is missing its file"
+                    return
+                }
+                player.setDataSource(
+                    java.io.File(context.cacheDir, "sound-preview-${System.nanoTime()}.m4a")
+                        .apply { writeBytes(bytes) }
+                        .absolutePath,
+                )
+            } else {
+                player.setDataSource(source)
+            }
+            soundPreviewPlayer.value = player
+            player.setOnCompletionListener { stopSoundPreview() }
+            player.setOnErrorListener { _, _, _ ->
+                stopSoundPreview()
+                exportStatus = "Could not preview $label — check your connection"
+                true
+            }
+            player.prepareAsync()
+            player.setOnPreparedListener {
+                previewingSoundKey = key
+                it.start()
+            }
+        }.onFailure {
+            player.release()
+            exportStatus = "Could not preview $label — check your connection"
+            failedSoundUrls += source
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { stopSoundPreview() }
+    }
+
     fun attachSoundFromUrl(
         mediaUrl: String,
         expectedSha256: String,
@@ -1152,6 +1208,8 @@ fun MemeEditorScreen(
             exportStatus = "Remove the current soundtrack first"
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         seedingProgress = 0 to 1
         scope.launch {
             try {
@@ -1208,7 +1266,9 @@ fun MemeEditorScreen(
                 exportStatus = null
             } catch (error: IllegalStateException) {
                 exportStatus = "Sound source could not be loaded (${error.message})"
+                failedSoundUrls.add(mediaUrl)
             } finally {
+                downloadingSoundUrl = null
                 seedingProgress = null
             }
         }
@@ -1449,6 +1509,8 @@ fun MemeEditorScreen(
             exportStatus = "Remove the current soundtrack first"
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         seedingProgress = 0 to 1
         scope.launch {
             try {
@@ -1506,7 +1568,9 @@ fun MemeEditorScreen(
                 exportStatus = null
             } catch (error: IllegalStateException) {
                 exportStatus = "Sound source could not be loaded (${error.message})"
+                failedSoundUrls.add(mediaUrl)
             } finally {
+                downloadingSoundUrl = null
                 seedingProgress = null
             }
         }
@@ -1835,6 +1899,7 @@ fun MemeEditorScreen(
     // EUI-02 §3: the Crop sheet's uncommitted draft previews on the stage;
     // Apply commits ONE undoable SetCrop, Cancel discards.
     var cropPreview by remember { mutableStateOf<space.bitos.core.studio.MemeCrop?>(null) }
+
     val effectiveCrop = cropPreview ?: state.project.crop
     LaunchedEffect(showCanvas) {
         if (!showCanvas) cropPreview = null
@@ -3975,6 +4040,12 @@ fun MemeEditorScreen(
                                 extracting = extractingSound,
                                 library = libraryEntries,
                                 online = onlineSoundRows,
+                                currentSoundUrl = state.project.soundtrack?.url ?: "",
+                                downloadingSoundUrl = downloadingSoundUrl ?: "",
+                                failedSoundUrls = failedSoundUrls.toSet(),
+                                videoDurationMs = timelineDurationMs,
+                                previewingSoundKey = previewingSoundKey ?: "",
+                                onTogglePreview = ::toggleSoundPreview,
                                 query = soundQuery,
                                 onQueryChange = { soundQuery = it.take(80) },
                                 onOpenTrending = { showTrendingSounds = true },
@@ -5437,6 +5508,77 @@ private fun VerticalSizeSlider(
 }
 
 /** Sound panel (prototype sound row): cue summary + jump to the studio. */
+/**
+ * EUI-05: one sound row — preview (one row at a time), title/creator/
+ * duration, and the shared availability state's action + hint. Preview
+ * stays available in EVERY state; Add is the only state-gated action.
+ */
+@Composable
+private fun SoundRowEui(
+    title: String,
+    meta: String,
+    url: String,
+    added: Boolean,
+    downloading: Boolean,
+    loadFailed: Boolean,
+    previewing: Boolean,
+    onTogglePreview: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    val state = space.bitos.core.studio.MemeSoundAvailability.rowState(added, downloading, loadFailed)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = BitOSColors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+        ) {
+            IconButton(onClick = onTogglePreview) {
+                Icon(
+                    if (previewing) AppIcons.Pause else AppIcons.Play,
+                    contentDescription = if (previewing) "Stop previewing $title" else "Preview $title",
+                    tint = if (previewing) BitOSColors.primary else BitOSColors.textSecondary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.W600,
+                    maxLines = 1,
+                )
+                Text(
+                    if (state.hint != null) "$meta · ${state.hint}" else meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.hint != null) BitOSColors.warning else BitOSColors.textSecondary,
+                )
+            }
+            Text(
+                state.actionLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.W600,
+                color = when (state) {
+                    space.bitos.core.studio.MemeSoundAvailability.RowState.ADDED -> BitOSColors.textSecondary
+                    space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING -> BitOSColors.textSecondary
+                    else -> BitOSColors.primary
+                },
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(
+                        enabled = state == space.bitos.core.studio.MemeSoundAvailability.RowState.AVAILABLE ||
+                            state == space.bitos.core.studio.MemeSoundAvailability.RowState.NEEDS_CONNECTION,
+                        onClickLabel = state.actionLabel,
+                    ) { onAdd() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun SoundPanelContent(
     cueCount: Int,
@@ -5448,6 +5590,19 @@ private fun SoundPanelContent(
     query: String = "",
     publishBusy: Boolean = false,
     publishMessage: String? = null,
+    /** EUI-05: the current soundtrack's url — its row reads Added. */
+    currentSoundUrl: String = "",
+    /** EUI-05: url actively downloading (row reads Downloading…). */
+    downloadingSoundUrl: String = "",
+    /** EUI-05: urls whose load failed (row explains the connection need). */
+    failedSoundUrls: Set<String> = emptySet(),
+    /** EUI-05: the video's output length, for the honest loop copy. */
+    videoDurationMs: Long = 0,
+    /** EUI-05: row key currently previewing (one row at a time). */
+    previewingSoundKey: String = "",
+    /** Preview toggle: [key] identifies the row; [source] is an https URL
+     *  or `library:<id>` for saved local bytes (the caller resolves). */
+    onTogglePreview: (key: String, source: String, label: String) -> Unit = { _, _, _ -> },
     onQueryChange: (String) -> Unit = {},
     onOpenTrending: () -> Unit = {},
     onOpenVideos: () -> Unit = {},
@@ -5555,8 +5710,13 @@ private fun SoundPanelContent(
                                 onCheckedChange = onSoundLoop,
                             )
                             Spacer(Modifier.weight(1f))
+                            // EUI-05: the shared rule states the REAL
+                            // duration relationship (nothing claimed while
+                            // the video length is unknown).
                             Text(
-                                if (soundtrack.loop) "repeats to the end" else "plays once",
+                                space.bitos.core.studio.MemeSoundAvailability.loopCopy(
+                                    soundtrack.durationMs, videoDurationMs, soundtrack.loop,
+                                ).ifBlank { if (soundtrack.loop) "repeats" else "plays once" },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = BitOSColors.textSecondary,
                             )
@@ -5681,41 +5841,17 @@ private fun SoundPanelContent(
                     color = BitOSColors.textSecondary,
                 )
                 onlineRows.forEach { row ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = BitOSColors.surface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = "Use ${row.label}") { onUseOnlineSound(row) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-                        ) {
-                            Text("♪", style = MaterialTheme.typography.titleSmall)
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    row.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.W600,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = BitOSColors.textSecondary,
-                                )
-                            }
-                            Text(
-                                "Use",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.W600,
-                                color = BitOSColors.primary,
-                            )
-                        }
-                    }
+                    SoundRowEui(
+                        title = row.label,
+                        meta = if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
+                        url = row.url,
+                        added = row.url == currentSoundUrl,
+                        downloading = row.url == downloadingSoundUrl,
+                        loadFailed = row.url in failedSoundUrls,
+                        previewing = row.url == previewingSoundKey,
+                        onTogglePreview = { onTogglePreview(row.url, row.url, row.label) },
+                        onAdd = { onUseOnlineSound(row) },
+                    )
                 }
             }
 
@@ -5729,41 +5865,19 @@ private fun SoundPanelContent(
                     color = BitOSColors.textSecondary,
                 )
                 libraryRows.forEach { entry ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = BitOSColors.surface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = "Use ${entry.label}") { onPickLibrarySound(entry) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-                        ) {
-                            Text("♪", style = MaterialTheme.typography.titleSmall)
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    entry.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.W600,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    "${entry.durationMs / 1000}s · saved for offline use",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = BitOSColors.textSecondary,
-                                )
-                            }
-                            Text(
-                                "Attach",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.W600,
-                                color = BitOSColors.primary,
-                            )
-                        }
-                    }
+                    SoundRowEui(
+                        title = entry.label,
+                        meta = "${entry.durationMs / 1000}s · saved for offline use",
+                        url = entry.url,
+                        added = entry.url == currentSoundUrl && entry.url.isNotEmpty(),
+                        downloading = entry.url == downloadingSoundUrl,
+                        loadFailed = false, // local bytes never need a connection
+                        previewing = entry.url.ifEmpty { entry.id } == previewingSoundKey,
+                        onTogglePreview = {
+                            onTogglePreview(entry.url.ifEmpty { entry.id }, "library:${entry.id}", entry.label)
+                        },
+                        onAdd = { onPickLibrarySound(entry) },
+                    )
                 }
             }
             if (needle.isNotEmpty() && onlineRows.isEmpty() && libraryRows.isEmpty()) {
