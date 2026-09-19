@@ -145,15 +145,17 @@ enum class MemeAdjustControl(
     val label: String,
     /** Canonical JSON key in `MemeAdjust.fromCanonical`/`memeAdjustOf`. */
     val wireKey: String,
+    /** Semantic icon token both platforms resolve (visual parity pass). */
+    val icon: String,
     private val get: (MemeAdjust) -> Float,
 ) {
-    EXPOSURE(Section.TONE, "Exposure", "bri", { it.brightness }),
-    LIGHTNESS(Section.TONE, "Lightness", "lig", { it.lightness }),
-    CONTRAST(Section.TONE, "Contrast", "con", { it.contrast }),
-    SATURATION(Section.COLOUR, "Saturation", "sat", { it.saturation }),
-    WARMTH(Section.COLOUR, "Warmth", "warm", { it.warmth }),
-    TINT(Section.COLOUR, "Tint", "tint", { it.tint }),
-    FADE(Section.COLOUR, "Fade", "fade", { it.fade });
+    EXPOSURE(Section.TONE, "Exposure", "bri", "exposure", { it.brightness }),
+    LIGHTNESS(Section.TONE, "Lightness", "lig", "lightness", { it.lightness }),
+    CONTRAST(Section.TONE, "Contrast", "con", "contrast", { it.contrast }),
+    SATURATION(Section.COLOUR, "Saturation", "sat", "saturation", { it.saturation }),
+    WARMTH(Section.COLOUR, "Warmth", "warm", "warmth", { it.warmth }),
+    TINT(Section.COLOUR, "Tint", "tint", "tint", { it.tint }),
+    FADE(Section.COLOUR, "Fade", "fade", "fade", { it.fade });
 
     enum class Section(val label: String) { TONE("Tone"), COLOUR("Colour") }
 
@@ -223,6 +225,7 @@ enum class MemeAdjustControl(
                         put("max", control.range.endInclusive)
                         put("neutral", control.neutral)
                         put("signed", control.neutral == 0f)
+                        put("icon", control.icon)
                     })
                 }
             })

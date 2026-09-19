@@ -74,6 +74,14 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Contrast
+import androidx.compose.material.icons.rounded.DeviceThermostat
+import androidx.compose.material.icons.rounded.Exposure
+import androidx.compose.material.icons.rounded.Gradient
+import androidx.compose.material.icons.rounded.Opacity
+import androidx.compose.material.icons.rounded.Tonality
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -3983,6 +3991,13 @@ fun MemeEditorScreen(
                                         adjustPreview = null
                                     },
                                     onCancelAdjust = { adjustPreview = null },
+                                    swatchSource = remember(activeAssetId) {
+                                        activeAssetId?.let { id ->
+                                            imageAssetMap[id]?.first?.let { uri ->
+                                                MemeRaster.decodeScaled(context.contentResolver, uri, 144)
+                                            }
+                                        }
+                                    } ?: gifFrames.lastOrNull(),
                                 )
                             }
                         }
@@ -4542,6 +4557,11 @@ fun MemeEditorScreen(
                 legacyPad = state.project.crop == null &&
                     state.project.canvasRatio != null &&
                     state.project.canvasRatio != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
+                mediaAspect = when {
+                    gifMode && gifFrames.isNotEmpty() ->
+                        gifFrames.first().width.toFloat() / gifFrames.first().height
+                    else -> imageAssetMap[activeAssetId]?.second ?: 1f
+                },
                 onPickRatio = { picked ->
                     state.setCanvas(picked, state.project.canvasBg)
                     // "Original" restores the uncropped frame (spec §3).
@@ -5736,7 +5756,7 @@ private fun TimelineClipSegment(
                 else BitOSColors.surfaceElevated,
             )
             .border(
-                1.5.dp,
+                if (selected) 2.dp else 1.dp,
                 if (selected) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.45f),
                 RoundedCornerShape(6.dp),
             )
@@ -6061,6 +6081,8 @@ private fun CropSheetContent(
     crop: space.bitos.core.studio.MemeCrop?,
     previewCrop: space.bitos.core.studio.MemeCrop?,
     legacyPad: Boolean,
+    /** Visual parity: "Original" chip shows the media's own shape. */
+    mediaAspect: Float = 1f,
     onPickRatio: (String) -> Unit,
     onPickBg: (String?) -> Unit,
     onPreviewCrop: (space.bitos.core.studio.MemeCrop) -> Unit,
@@ -6097,18 +6119,42 @@ private fun CropSheetContent(
         ) {
             space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
                 val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Original" else id
+                // Visual parity: each chip carries the ratio's SHAPE, not
+                // just its name (spec §3 "label and shape").
+                val terms = space.bitos.core.studio.MemeCanvas.ratioTerms(id)
+                val shapeAspect = when {
+                    id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE -> mediaAspect
+                    terms != null -> terms.first.toFloat() / terms.second
+                    else -> 1f
+                }.coerceIn(0.4f, 2.5f)
+                val selectedRatio = ratio == id
                 Surface(
-                    shape = RoundedCornerShape(50),
-                    color = if (ratio == id) BitOSColors.primary else BitOSColors.surfaceElevated,
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (selectedRatio) BitOSColors.primary else BitOSColors.surfaceElevated,
                     modifier = Modifier.clickable(onClickLabel = label) { onPickRatio(id) },
                 ) {
-                    Text(
-                        short,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.W600,
-                        color = if (ratio == id) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .height(14.dp)
+                                .aspectRatio(shapeAspect)
+                                .clip(RoundedCornerShape(2.dp))
+                                .border(
+                                    1.5.dp,
+                                    if (selectedRatio) androidx.compose.ui.graphics.Color.Black else BitOSColors.textSecondary,
+                                    RoundedCornerShape(2.dp),
+                                ),
+                        )
+                        Text(
+                            short,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (selectedRatio) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                        )
+                    }
                 }
             }
         }
@@ -9352,8 +9398,20 @@ private fun PostPreflightRow(done: Boolean, label: String, meta: String) {
     }
 }
 
-/**
- * EUI-02 Look sheet: the 8 shared grade presets (immediate, one undoable
+/** Visual parity: the shared control `icon` token → the platform glyph. */
+private fun adjustControlIcon(token: String): androidx.compose.ui.graphics.vector.ImageVector =
+    when (token) {
+        "exposure" -> Icons.Rounded.Exposure
+        "lightness" -> Icons.Rounded.WbSunny
+        "contrast" -> Icons.Rounded.Contrast
+        "saturation" -> Icons.Rounded.Tonality
+        "warmth" -> Icons.Rounded.DeviceThermostat
+        "tint" -> Icons.Rounded.Opacity
+        "fade" -> Icons.Rounded.Gradient
+        else -> Icons.Rounded.Tonality
+    }
+
+/** EUI-02 Look sheet: the 8 shared grade presets (immediate, one undoable
  * step per tap) plus the reference editor's Adjust structure — Tone |
  * Colour tabs, control chips, ONE labelled slider for the selected
  * control, reset current/all, and a Cancel/Apply draft transaction: slider
@@ -9377,6 +9435,10 @@ private fun LooksSheetContent(
     onPreviewAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
     onApplyAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
     onCancelAdjust: () -> Unit,
+    /** Visual parity: the current media frame — grade previews render it
+     *  through each preset (the reference editor's filter thumbnails);
+     *  null degrades to the text pills. */
+    swatchSource: android.graphics.Bitmap? = null,
 ) {
     val entry = adjust ?: space.bitos.core.studio.MemeAdjust()
     // The uncommitted draft (null = nothing to apply or cancel yet).
@@ -9396,6 +9458,15 @@ private fun LooksSheetContent(
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )
+        // Visual parity: grade previews render the CURRENT media through
+        // each preset — never unrelated stock imagery (spec §2 rule).
+        val swatches = swatchSource?.let { src ->
+            remember(src.generationId) {
+                space.bitos.core.studio.MemeLooks.ALL.associate { look ->
+                    look.id to MemeRaster.lookSwatch(src, look.id, 96)
+                }
+            }
+        }
         space.bitos.core.studio.MemeLooks.ALL.chunked(4).forEach { rowLooks ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
@@ -9403,27 +9474,64 @@ private fun LooksSheetContent(
             ) {
                 rowLooks.forEach { look ->
                     val selected = look.id == active
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(onClickLabel = look.label) { onPick(look.id) },
-                    ) {
+                    val swatch = swatches?.get(look.id)
+                    if (swatch != null) {
                         Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
-                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .border(
+                                    if (selected) 2.dp else 1.dp,
+                                    if (selected) BitOSColors.primary else BitOSColors.border,
+                                    RoundedCornerShape(10.dp),
+                                )
+                                .clickable(onClickLabel = look.label) { onPick(look.id) },
                         ) {
+                            androidx.compose.foundation.Image(
+                                swatch.asImageBitmap(),
+                                contentDescription = "Look ${look.label}",
+                                modifier = Modifier.matchParentSize(),
+                                contentScale = ContentScale.Crop,
+                            )
                             Text(
                                 look.label,
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.W700,
-                                color = if (selected) {
-                                    androidx.compose.ui.graphics.Color.Black
-                                } else {
-                                    BitOSColors.textPrimary
-                                },
+                                color = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(3.dp)
+                                    .background(
+                                        androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                                        RoundedCornerShape(4.dp),
+                                    )
+                                    .padding(horizontal = 4.dp),
                             )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClickLabel = look.label) { onPick(look.id) },
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    look.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.W700,
+                                    color = if (selected) {
+                                        androidx.compose.ui.graphics.Color.Black
+                                    } else {
+                                        BitOSColors.textPrimary
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -9469,6 +9577,13 @@ private fun LooksSheetContent(
                 FilterChip(
                     selected = control == candidate,
                     onClick = { control = candidate },
+                    leadingIcon = {
+                        Icon(
+                            adjustControlIcon(candidate.icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    },
                     label = {
                         Text(if (changed) "${candidate.label} •" else candidate.label)
                     },

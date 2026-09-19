@@ -782,6 +782,22 @@ V2 suite).
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
 
+- 2026-09-18 — **Visual parity pass** (reference-spec polish, no behavior
+  changes): grade previews render the CURRENT media through each preset as
+  image thumbnails (Android `MemeRaster.lookSwatch` + iOS `buildSwatches`
+  through the shared look matrix — text pills remain the fallback where no
+  frame exists, e.g. the video per-clip picker); adjust control chips gain
+  the reference editor's icons via new shared `icon` tokens on
+  `MemeAdjustControl` (catalog `memeAdjustControls()` extended; platform
+  maps: Material Exposure/WbSunny/Contrast/Tonality/DeviceThermostat/
+  Opacity/Gradient ↔ SF plusminus.circle/sun.max/circle.lefthalf.filled/
+  paintpalette/thermometer.medium/drop/gradient.on.rectangle); ratio chips
+  carry each ratio's SHAPE with Original showing the media's own aspect
+  (spec §3 "label and shape"); the Android selected-clip outline
+  strengthened to 2 dp (iOS already 2 pt). Verified: shared + Android
+  meme/studio tests green; iOS Swift 6 type-check exit 0. Deferred: filter
+  CATEGORY tabs need a wider preset catalog (8 presets don't group); chip
+  shape glyphs for the reference's 4:3 (not a BitOS ratio).
 - 2026-09-18 — **Look sheet EUI-02** (spec
   `mobile-video-image-editor-reference-spec.md`): the shared adjust grew
   from the v1 brightness/contrast/saturation triple to the reference

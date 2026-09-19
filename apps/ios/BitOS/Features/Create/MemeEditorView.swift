@@ -8438,6 +8438,56 @@ private struct FxPanelContent: View {
 
     private struct LookRow: Identifiable { let id: String, label: String }
 
+    /// Visual parity: grade previews render the CURRENT media through each
+    /// preset — never unrelated stock imagery (spec §2 rule).
+    @State private var swatches: [String: UIImage] = [:]
+    @State private var swatchSourceId = ""
+
+    private var swatchSource: (image: UIImage, id: String)? {
+        if let frame = store.gifActiveFrame { return (frame.image, frame.id) }
+        if let asset = store.activeAsset { return (asset.image, asset.id) }
+        return nil
+    }
+
+    private static func buildSwatches(_ source: UIImage, rows: [LookRow]) -> [String: UIImage] {
+        let side: CGFloat = 96
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let square = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+            .image { _ in
+                let scale = max(side / max(1, source.size.width), side / max(1, source.size.height))
+                let drawSize = CGSize(width: source.size.width * scale, height: source.size.height * scale)
+                source.draw(in: CGRect(
+                    x: (side - drawSize.width) / 2,
+                    y: (side - drawSize.height) / 2,
+                    width: drawSize.width,
+                    height: drawSize.height
+                ))
+            }
+        let client = FrameworkBusinessCoreClient()
+        var out: [String: UIImage] = [:]
+        for row in rows {
+            if let graded = MemeRaster.applyLook(square, matrixJson: client.memeLookMatrix(row.id)) {
+                out[row.id] = graded
+            }
+        }
+        return out
+    }
+
+    /// The shared control `icon` token → the platform glyph.
+    private static func controlIcon(_ token: String) -> String {
+        switch token {
+        case "exposure": return "plusminus.circle"
+        case "lightness": return "sun.max"
+        case "contrast": return "circle.lefthalf.filled"
+        case "saturation": return "paintpalette"
+        case "warmth": return "thermometer.medium"
+        case "tint": return "drop"
+        case "fade": return "gradient.on.rectangle"
+        default: return "circle"
+        }
+    }
+
     private var lookRows: [LookRow] {
         guard let data = FrameworkBusinessCoreClient().memeLooks().data(using: .utf8),
               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
@@ -8461,15 +8511,46 @@ private struct FxPanelContent: View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(lookRows, id: \.id) { look in
-                        ChipButton(
-                            label: look.label,
-                            active: look.id == (store.lookId ?? "none")
-                        ) {
-                            store.setLook(look.id)
+                    ForEach(lookRows) { look in
+                        let active = look.id == (store.lookId ?? "none")
+                        if let swatch = swatches[look.id] {
+                            Button {
+                                store.setLook(look.id)
+                            } label: {
+                                VStack(spacing: 0) {
+                                    Image(uiImage: swatch)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 64, height: 44)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .strokeBorder(
+                                                    active ? BitOSTheme.accent : BitOSTheme.border,
+                                                    lineWidth: active ? 2 : 1
+                                                )
+                                        )
+                                    Text(look.label)
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 4))
+                                        .padding(3)
+                                }
+                            }
+                            .accessibilityLabel("Look \(look.label)")
+                        } else {
+                            ChipButton(label: look.label, active: active) {
+                                store.setLook(look.id)
+                            }
                         }
                     }
                 }
+            }
+            .task(id: swatchSource?.id) {
+                guard let source = swatchSource, source.id != swatchSourceId else { return }
+                swatchSourceId = source.id
+                swatches = Self.buildSwatches(source.image, rows: lookRows)
             }
             Divider()
             VStack(alignment: .leading, spacing: 2) {
@@ -8492,12 +8573,23 @@ private struct FxPanelContent: View {
                             // A non-default control keeps its dot — colour
                             // alone is never the only changed-signal.
                             let changed = value(candidate, effective) != candidate.neutral
-                            ChipButton(
-                                label: changed ? "\(candidate.label) •" : candidate.label,
-                                active: control?.id == candidate.id
-                            ) {
+                            let activeChip = control?.id == candidate.id
+                            Button {
                                 controlId = candidate.id
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: Self.controlIcon(candidate.id))
+                                        .font(.system(size: 12))
+                                    Text(changed ? "\(candidate.label) •" : candidate.label)
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(activeChip ? BitOSTheme.accent.opacity(0.18) : BitOSTheme.surface))
+                                .overlay(Capsule().strokeBorder(activeChip ? BitOSTheme.accent : BitOSTheme.border, lineWidth: 1))
+                                .foregroundStyle(activeChip ? BitOSTheme.accent : BitOSTheme.textSecondary)
                             }
+                            .accessibilityLabel(candidate.label)
                         }
                     }
                 }
@@ -10119,24 +10211,47 @@ private struct CanvasSheet: View {
                     ForEach(Self.ratioIds, id: \.id) { ratio in
                         let id = ratio.id
                         let label = id == "source" ? "Original" : id
-                        Button(label) {
+                        // Visual parity: each chip carries the ratio's SHAPE
+                        // (spec §3 "label and shape"); Original shows the
+                        // media's own shape.
+                        let terms = id.split(separator: ":").compactMap { Int($0) }
+                        let mediaAspect = store.gifActiveFrame.map {
+                            $0.image.size.width / max(1, $0.image.size.height)
+                        } ?? store.activeAsset?.aspect ?? 1
+                        let shapeAspect: CGFloat = terms.count == 2
+                            ? min(2.5, max(0.4, CGFloat(terms[0]) / CGFloat(terms[1])))
+                            : min(2.5, max(0.4, mediaAspect))
+                        let selectedRatio = (store.canvasRatio ?? "source") == id
+                        Button {
                             store.setCanvas(ratio: id, bg: store.canvasBg)
                             // "Original" restores the uncropped frame (spec §3).
                             if id == "source" {
                                 store.setCrop(nil)
                                 store.cropPreview = nil
                             }
+                        } label: {
+                            VStack(spacing: 3) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(
+                                        selectedRatio ? Color.black : BitOSTheme.textSecondary,
+                                        lineWidth: 1.5
+                                    )
+                                    .frame(height: 14)
+                                    .aspectRatio(shapeAspect, contentMode: .fit)
+                                Text(label)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(
+                                        selectedRatio ? Color.black : BitOSTheme.textPrimary
+                                    )
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(selectedRatio ? BitOSTheme.accent : BitOSTheme.surface)
+                            )
                         }
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(
-                            (store.canvasRatio ?? "source") == id
-                                ? BitOSTheme.accent : BitOSTheme.surface
-                        )
-                        .foregroundStyle(
-                            (store.canvasRatio ?? "source") == id ? Color.black : BitOSTheme.textPrimary
-                        )
-                        .clipShape(Capsule())
+                        .accessibilityLabel("Aspect ratio \(label)")
                     }
                 }
             }

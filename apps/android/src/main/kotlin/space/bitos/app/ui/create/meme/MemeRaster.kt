@@ -184,6 +184,36 @@ object MemeRaster {
         return out
     }
 
+    /** Small decode for UI swatches (inSampleSize toward [maxEdge]). */
+    fun decodeScaled(resolver: android.content.ContentResolver, uri: android.net.Uri, maxEdge: Int): Bitmap? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Visual parity: one grade swatch — the source center-cropped square
+     * through the look's matrix (no adjust), the reference editor's
+     * filter-thumbnail treatment. Cheap: callers cache per source.
+     */
+    fun lookSwatch(source: Bitmap, lookId: String, sizePx: Int): Bitmap {
+        val crop = android.media.ThumbnailUtils.extractThumbnail(source, sizePx, sizePx)
+        val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(
+                android.graphics.ColorMatrix(space.bitos.core.studio.MemeLooks.matrixFor(lookId)),
+            )
+        }
+        canvas.drawBitmap(crop, null, RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat()), paint)
+        return out
+    }
+
     /** Canvas background fill from the wire hex (invalid/absent = transparent). */
     private fun fillBackground(canvas: Canvas, project: MemeProject) {
         project.canvasBg?.let { hex ->
