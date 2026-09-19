@@ -3838,9 +3838,6 @@ class BusinessCoreBridge {
             space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING.hint,
         )
         put("added", space.bitos.core.studio.MemeSoundAvailability.RowState.ADDED.actionLabel)
-        put("loopCovers", "Covers the whole video")
-        put("loopFill", "repeats to fill")
-        put("loopOnce", "plays once, then silence")
     }.toString()
 
     /**

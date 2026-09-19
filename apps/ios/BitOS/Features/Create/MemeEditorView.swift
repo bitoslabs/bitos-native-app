@@ -502,6 +502,7 @@ final class MemeEditorStore {
     private var soundPreviewFilePlayer: AVAudioPlayer?
     private var soundPreviewStreamPlayer: AVPlayer?
     private var soundPreviewEndObserver: Any?
+    private var soundPreviewStatusObserver: NSKeyValueObservation?
     private let previewDelegateBox = SoundPreviewDelegateBox()
     private(set) var previewingSoundKey: String?
     private(set) var downloadingSoundUrl: String?
@@ -536,10 +537,31 @@ final class MemeEditorStore {
         } else if let url = URL(string: source) {
             let player = AVPlayer(url: url)
             soundPreviewStreamPlayer = player
-            previewingSoundKey = key
+            // HONEST preview state: the row only reads "previewing" once
+            // the item is actually readyToPlay; a failed load stops the
+            // preview, says why, and keys the row for the state machine.
+            let item = player.currentItem
+            soundPreviewStatusObserver = item?.observe(
+                \.status, options: [.new]
+            ) { [weak self] observed, _ in
+                let status = observed.status
+                Task { @MainActor [weak self] in
+                    guard let self, self.previewingSoundKey == key || self.soundPreviewStreamPlayer === player else { return }
+                    switch status {
+                    case .readyToPlay:
+                        self.previewingSoundKey = key
+                    case .failed:
+                        self.stopSoundPreview()
+                        self.setNotice("Could not preview \(label) — check your connection")
+                        self.failedSoundUrls.insert(source)
+                    default:
+                        break
+                    }
+                }
+            }
             soundPreviewEndObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
-                object: player.currentItem,
+                object: item,
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in self?.stopSoundPreview() }
@@ -560,6 +582,8 @@ final class MemeEditorStore {
             NotificationCenter.default.removeObserver(observer)
             soundPreviewEndObserver = nil
         }
+        soundPreviewStatusObserver?.invalidate()
+        soundPreviewStatusObserver = nil
         previewingSoundKey = nil
     }
 

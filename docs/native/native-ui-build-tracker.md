@@ -729,9 +729,16 @@ V2 suite).
     proactive connectivity sensing (rows explain AFTER a failed load, not
     from a live network monitor — a connectivity epic exists elsewhere);
     the trending screen's own rows keep their shipped preview treatment.
-    Verified: shared `testAndroidHostTest` green (availability 3 cases);
-    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
-  - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
+    CODE-REVIEW ROUND: the iOS STREAM preview no longer fakes a playing
+    state — the row reads "previewing" only once the AVPlayerItem is
+    `readyToPlay` (KVO on status; `.failed` stops, notices, and keys the
+    row into the failed set); the status observer is invalidated with the
+    preview; Android's ASYNC preview failures now key the row too (http
+    sources only) and the library-preview temp file is deleted on every
+    exit path; the dead loop-fragment seam keys and the dead row param
+    are removed. Verified: shared `testAndroidHostTest` green
+    (availability 3 cases); Android meme/studio tests green; iOS Swift 6
+    type-check exit 0.
   - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
   - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
 

@@ -1138,9 +1138,12 @@ fun MemeEditorScreen(
     var downloadingSoundUrl by remember { mutableStateOf<String?>(null) }
     val failedSoundUrls = remember { mutableStateListOf<String>() }
     val soundPreviewPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var soundPreviewTempFile: java.io.File? = null
     fun stopSoundPreview() {
         soundPreviewPlayer.value?.release()
         soundPreviewPlayer.value = null
+        runCatching { soundPreviewTempFile?.delete() }
+        soundPreviewTempFile = null
         previewingSoundKey = null
     }
     fun toggleSoundPreview(key: String, source: String, label: String) {
@@ -1150,6 +1153,14 @@ fun MemeEditorScreen(
         }
         stopSoundPreview()
         val player = android.media.MediaPlayer()
+        var tempFile: java.io.File? = null
+        fun previewFailed() {
+            stopSoundPreview()
+            exportStatus = "Could not preview $label — check your connection"
+            // Key the row honestly (http sources only — local bytes never
+            // need a connection).
+            if (source.startsWith("http")) failedSoundUrls += source
+        }
         runCatching {
             if (source.startsWith("library:")) {
                 val bytes = soundLibrary.bytes(source.removePrefix("library:"))
@@ -1157,19 +1168,16 @@ fun MemeEditorScreen(
                     exportStatus = "That saved sound is missing its file"
                     return
                 }
-                player.setDataSource(
-                    java.io.File(context.cacheDir, "sound-preview-${System.nanoTime()}.m4a")
-                        .apply { writeBytes(bytes) }
-                        .absolutePath,
-                )
+                tempFile = java.io.File(context.cacheDir, "sound-preview-${System.nanoTime()}.m4a")
+                    .apply { writeBytes(bytes) }
+                player.setDataSource(tempFile!!.absolutePath)
             } else {
                 player.setDataSource(source)
             }
             soundPreviewPlayer.value = player
             player.setOnCompletionListener { stopSoundPreview() }
             player.setOnErrorListener { _, _, _ ->
-                stopSoundPreview()
-                exportStatus = "Could not preview $label — check your connection"
+                previewFailed()
                 true
             }
             player.prepareAsync()
@@ -1179,8 +1187,7 @@ fun MemeEditorScreen(
             }
         }.onFailure {
             player.release()
-            exportStatus = "Could not preview $label — check your connection"
-            failedSoundUrls += source
+            previewFailed()
         }
     }
     DisposableEffect(Unit) {
@@ -5517,7 +5524,6 @@ private fun VerticalSizeSlider(
 private fun SoundRowEui(
     title: String,
     meta: String,
-    url: String,
     added: Boolean,
     downloading: Boolean,
     loadFailed: Boolean,
@@ -5844,7 +5850,6 @@ private fun SoundPanelContent(
                     SoundRowEui(
                         title = row.label,
                         meta = if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
-                        url = row.url,
                         added = row.url == currentSoundUrl,
                         downloading = row.url == downloadingSoundUrl,
                         loadFailed = row.url in failedSoundUrls,
@@ -5868,7 +5873,6 @@ private fun SoundPanelContent(
                     SoundRowEui(
                         title = entry.label,
                         meta = "${entry.durationMs / 1000}s · saved for offline use",
-                        url = entry.url,
                         added = entry.url == currentSoundUrl && entry.url.isNotEmpty(),
                         downloading = entry.url == downloadingSoundUrl,
                         loadFailed = false, // local bytes never need a connection
