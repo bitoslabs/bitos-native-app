@@ -201,7 +201,7 @@ final class MemeEditorStore {
 
     var canAddOverlay: Bool { overlays.count < Self.maxOverlays }
 
-    private static let maxOverlays = 48
+    static let maxOverlays = 48
     private static let maxHistory = 60
     private static let maxRecentStickers = 16
 
@@ -1602,6 +1602,81 @@ final class MemeEditorStore {
      * (impact-style font, heavy outline, caps) — landing as ONE undo step
      * for the pair. Empty halves are skipped.
      */
+    /// EUI-06: imported timed cues as caption-styled TEXT overlays — the
+    /// shared parser via the seam, shared placement (overlaps stagger),
+    /// ONE undo step for the whole import. Returns (added, dropped,
+    /// truncated, error).
+    @discardableResult
+    func addCaptionCues(fromFile raw: String) -> (added: Int, dropped: Int, truncated: Bool, error: String?) {
+        guard canAddOverlay else { return (0, 0, false, "Caption limit reached") }
+        guard let data = client.memeCaptionImport(raw).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cueRows = root["cues"] as? [[String: Any]] else {
+            return (0, 0, false, "Captions could not be parsed here")
+        }
+        if let error = root["error"] as? String {
+            return (0, root["dropped"] as? Int ?? 0, false, error)
+        }
+        let before = projectJson
+        var addedCount = 0
+        var overlapRow = 0
+        var previousEnd: Int64 = -1
+        for row in cueRows {
+            guard overlays.count + 1 <= Self.maxOverlays,
+                  let start = (row["start"] as? NSNumber)?.int64Value,
+                  let end = (row["end"] as? NSNumber)?.int64Value,
+                  let text = row["text"] as? String, !text.isEmpty else { continue }
+            if previousEnd >= 0 {
+                overlapRow = previousEnd >= start ? (overlapRow + 1) % 2 : 0
+            }
+            let placeY: Float = overlapRow % 2 == 0 ? 0.86 : 0.74
+            let overlayJson = client.memeDefaultOverlay(projectJson, kind: "text", text: text)
+            guard !overlayJson.isEmpty,
+                  let overlayData = overlayJson.data(using: .utf8),
+                  var object = (try? JSONSerialization.jsonObject(with: overlayData)) as? [String: Any]
+            else { continue }
+            object["x"] = 0.5
+            object["y"] = placeY
+            object["size"] = 48
+            object["outline"] = 3
+            object["startMs"] = start
+            object["endMs"] = end
+            apply(commandJson: Self.encode(["op": "add", "overlay": object]))
+            if projectJson != before {
+                addedCount += 1
+                previousEnd = end
+                selectedId = Self.parseOverlays(projectJson).last?.id
+            }
+        }
+        if projectJson != before {
+            pushHistory(before)
+        }
+        return (
+            addedCount,
+            root["dropped"] as? Int ?? 0,
+            (root["truncated"] as? NSNumber)?.boolValue ?? false,
+            nil
+        )
+    }
+
+    /// EUI-06: one editable caption at the playhead (2 s default window).
+    @discardableResult
+    func addCaptionAtPlayhead(atMs: Int64) -> Bool {
+        let result = addCaptionCues(
+            fromFile: "1\n00:00:00,000 --> 00:00:02,000\nCaption\n"
+                .replacingOccurrences(of: "00:00:00,000", with: clockString(atMs))
+                .replacingOccurrences(of: "00:00:02,000", with: clockString(atMs + 2_000))
+        )
+        return result.added > 0 && result.error == nil
+    }
+
+    private func clockString(_ ms: Int64) -> String {
+        let total = Int(max(0, ms))
+        let h = total / 3_600_000, m = (total % 3_600_000) / 60_000,
+            sec = (total % 60_000) / 1000, frac = total % 1000
+        return String(format: "%02d:%02d:%02d,%03d", h, m, sec, frac)
+    }
+
     func addMemeCaptions(top: String, bottom: String, fontSlot: String) {
         guard canAddOverlay else { return }
         let before = projectJson
@@ -4310,6 +4385,20 @@ struct MemeEditorView: View {
                 store.replaceClip(at: target, data: data, url: url, probe: probe)
             }
         }
+        .fileImporter(
+            isPresented: $isImportingCaptions,
+            allowedContentTypes: [.plainText, .text],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                captionsImportUrl = url
+            }
+        }
+        .onChange(of: captionsImportUrl) { _, url in
+            guard let url else { return }
+            captionsImportUrl = nil
+            handleCaptionsImport(url: url)
+        }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
@@ -5376,6 +5465,9 @@ struct MemeEditorView: View {
     /// MST-083: video export format — MP4 (default) or GIF.
     @State private var exportVideoAsGif = false
     @State private var isPickingVideo = false
+    /** EUI-06: timed-caption file import (.srt/.vtt). */
+    @State private var isImportingCaptions = false
+    @State private var captionsImportUrl: URL?
     /** EUI-04: clip index awaiting a replacement pick (nil = none). */
     @State private var isPickingReplaceClip = false
     @State private var replacePickItem: PhotosPickerItem?
@@ -5996,7 +6088,17 @@ struct MemeEditorView: View {
                         publishTemplatePrice = 0
                         publishTemplateCategory = "meme"
                         showPublishTemplateDialog = true
-                    }
+                    },
+                    onImportTimed: { isImportingCaptions = true },
+                    onAddAtPlayhead: store.isVideoMode && !store.clips.isEmpty
+                        ? {
+                            if store.addCaptionAtPlayhead(atMs: Int64(videoPositionSec * 1000)) {
+                                store.setNotice("Caption added at the playhead — type on the stage")
+                            } else {
+                                store.setNotice("Caption limit reached")
+                            }
+                        }
+                        : nil
                 )
             case .stickers:
                 StickerPanelContent(store: store)
@@ -6425,6 +6527,36 @@ struct MemeEditorView: View {
         }
         .disabled(!hasMedia || store.exportState == .saving)
         .accessibilityLabel("\(publishCopy.exportAction) — save a rendered file to this device")
+    }
+
+    /// EUI-06: read + import a timed-caption file with honest notices.
+    private func handleCaptionsImport(url: URL) {
+        let secured = url.startAccessingSecurityScopedResource()
+        defer { if secured { url.stopAccessingSecurityScopedResource() } }
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+            store.setNotice("Could not read that file — nothing was added")
+            return
+        }
+        if raw.utf8.count > 512 * 1024 {
+            store.setNotice("Caption file too large (over 512 KB) — nothing was added")
+            return
+        }
+        let result = store.addCaptionCues(fromFile: raw)
+        if let error = result.error {
+            store.setNotice("\(error) — nothing was added")
+            return
+        }
+        var copy = "Imported \(result.added) timed caption"
+        if result.added != 1 { copy += "s" }
+        if result.dropped > 0 {
+            copy += " · \(result.dropped) unparseable cue"
+            if result.dropped > 1 { copy += "s" }
+            copy += " skipped"
+        }
+        if result.truncated {
+            copy += " · file held more (editor cap \(MemeEditorStore.maxOverlays))"
+        }
+        store.setNotice(copy)
     }
 
     private func loadPicked(_ items: [PhotosPickerItem]) async {
@@ -7830,6 +7962,10 @@ enum EditorPanel: String, CaseIterable, Identifiable {
 private struct MemePanelContent: View {
     let store: MemeEditorStore
     var onPublishTemplate: () -> Void = {}
+    /** EUI-06: timed captions — import an .srt/.vtt file. */
+    var onImportTimed: () -> Void = {}
+    /** EUI-06: one caption at the playhead (video mode). */
+    var onAddAtPlayhead: (() -> Void)?
     @State private var top = ""
     @State private var bottom = ""
     @State private var fontSlot = "impact"
@@ -7846,6 +7982,33 @@ private struct MemePanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Button(action: onImportTimed) {
+                Label("Import timed captions (.srt / .vtt)…", systemImage: "square.and.arrow.down")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                            .fill(BitOSTheme.surface)
+                    )
+            }
+            .buttonStyle(.plain)
+            if let onAddAtPlayhead {
+                Button(action: onAddAtPlayhead) {
+                    Label("Add caption at playhead", systemImage: "text.bubble")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                                .fill(BitOSTheme.surface)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Text("Imported captions keep their file timing; select one on the stage to retime it.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textTertiary)
             BitosField("TOP TEXT", text: $top)
                 
                 .autocorrectionDisabled()

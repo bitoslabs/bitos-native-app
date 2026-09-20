@@ -2172,6 +2172,63 @@ fun MemeEditorScreen(
         }
     }
 
+    /** EUI-06: timed-caption import — read, parse (shared rule), land. */
+    val captionFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val raw = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.readBytes().toString(Charsets.UTF_8)
+                    }
+                }.getOrNull()
+            }
+            if (raw == null) {
+                exportStatus = "Could not read that file — nothing was added"
+                return@launch
+            }
+            if (raw.length > 512 * 1024) {
+                exportStatus = "Caption file too large (over 512 KB) — nothing was added"
+                return@launch
+            }
+            val parsed = space.bitos.core.studio.MemeCaptionImport.parse(raw)
+            parsed.error?.let {
+                exportStatus = "$it — nothing was added"
+                return@launch
+            }
+            val added = state.addCaptionCues(parsed.cues)
+            exportStatus = buildString {
+                append("Imported $added timed caption")
+                if (added != 1) append("s")
+                if (parsed.dropped > 0) append(" · ${parsed.dropped} unparseable cue")
+                if (parsed.dropped > 1) append("s")
+                if (parsed.dropped > 0) append(" skipped")
+                if (parsed.truncated) append(" · file held more (editor cap ${space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS})")
+            }
+        }
+    }
+
+    /** EUI-06: one editable caption at the playhead (2 s default window). */
+    fun addCaptionAtPlayhead() {
+        val at = videoPositionMs.coerceAtLeast(0L)
+        val added = state.addCaptionCues(
+            listOf(
+                space.bitos.core.studio.MemeCaptionImport.CaptionCue(
+                    startMs = at,
+                    endMs = at + 2_000L,
+                    text = "Caption",
+                ),
+            ),
+        )
+        exportStatus = if (added > 0) {
+            "Caption added at the playhead — type on the stage"
+        } else {
+            "Caption limit reached (${space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS})"
+        }
+    }
+
     /** EUI-04: clip index awaiting a replacement pick (null = none). */
     var pendingReplaceClipIndex by remember { mutableStateOf<Int?>(null) }
     val replacePicker = rememberLauncherForActivityResult(
@@ -4026,6 +4083,15 @@ fun MemeEditorScreen(
                                     state.addMemeCaptions(top, bottom, slot)
                                     exportStatus = "Captions added — drag to fine-tune"
                                 },
+                                onImportTimed = {
+                                    captionFilePicker.launch(
+                                        arrayOf("application/x-subrip", "text/vtt", "text/plain"),
+                                    )
+                                },
+                                onAddAtPlayhead = {
+                                    addCaptionAtPlayhead()
+                                },
+                                hasPlayhead = videoMode && videoClips.isNotEmpty(),
                             )
                             MemeEditorPanel.STICKERS -> StickerSheetContent(
                                 recents = recentStickers.toList(),
@@ -9851,6 +9917,12 @@ private fun MemeCaptionSheetContent(
     templatePublishMessage: String? = null,
     onPublishTemplate: () -> Unit = {},
     onAdd: (top: String, bottom: String, slot: MemeFontSlot) -> Unit,
+    /** EUI-06: timed captions — import an .srt/.vtt file. */
+    onImportTimed: () -> Unit = {},
+    /** EUI-06: one caption at the playhead, ready to type. */
+    onAddAtPlayhead: () -> Unit = {},
+    /** True when a playhead exists (video mode). */
+    hasPlayhead: Boolean = false,
 ) {
     var top by remember { mutableStateOf("") }
     var bottom by remember { mutableStateOf("") }
@@ -9866,6 +9938,20 @@ private fun MemeCaptionSheetContent(
             "Classic top/bottom captions. Drag on the stage to fine-tune.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
+        )
+        // ── EUI-06 timed captions: import + at-playhead ────────────────
+        OutlinedButton(onClick = onImportTimed, modifier = Modifier.fillMaxWidth()) {
+            Text("Import timed captions (.srt / .vtt)…")
+        }
+        if (hasPlayhead) {
+            OutlinedButton(onClick = onAddAtPlayhead, modifier = Modifier.fillMaxWidth()) {
+                Text("Add caption at playhead")
+            }
+        }
+        Text(
+            "Imported captions keep their file timing; select one on the stage to retime it.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textTertiary,
         )
         space.bitos.app.ui.components.BitosTextField(
             value = top,

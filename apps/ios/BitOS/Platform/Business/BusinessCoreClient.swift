@@ -389,6 +389,9 @@ protocol BusinessCoreClient: Sendable {
     /// EUI-05 resolved row-state token (available|needs_connection|
     /// downloading|added) from the shared precedence.
     func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String
+    /// EUI-06 timed-caption import through the shared parser —
+    /// `{"cues":[{"start","end","text"}],"dropped","truncated","error"?}`.
+    func memeCaptionImport(_ raw: String) -> String
     /// EUI-05 loop line for the current durations ("" = unknown length).
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String
     /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
@@ -997,6 +1000,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
         bridge.memeSoundRowState(added: added, downloading: downloading, loadFailed: loadFailed)
     }
+    func memeCaptionImport(_ raw: String) -> String {
+        bridge.memeCaptionImport(raw: raw)
+    }
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
         bridge.memeSoundLoopCopy(trackMs: trackMs, videoMs: videoMs, loop: loop)
     }
@@ -1583,6 +1589,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
         FrameworkBusinessCoreClient().memeSoundRowState(added, downloading, loadFailed)
+    }
+    func memeCaptionImport(_ raw: String) -> String {
+        FrameworkBusinessCoreClient().memeCaptionImport(raw)
     }
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
         FrameworkBusinessCoreClient().memeSoundLoopCopy(trackMs, videoMs, loop)

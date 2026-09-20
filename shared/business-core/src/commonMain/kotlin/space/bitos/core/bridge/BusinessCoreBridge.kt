@@ -3841,6 +3841,29 @@ class BusinessCoreBridge {
     }.toString()
 
     /**
+     * EUI-06: timed-caption import through the shared parser —
+     * `{"cues":[{"start","end","text"}],"dropped":n,"truncated":bool,
+     * "error":str|null}`. Deterministic: same bytes → same cues.
+     */
+    fun memeCaptionImport(raw: String): String {
+        val parsed = space.bitos.core.studio.MemeCaptionImport.parse(raw)
+        return buildJsonObject {
+            put("cues", buildJsonArray {
+                parsed.cues.forEach { cue ->
+                    add(buildJsonObject {
+                        put("start", cue.startMs)
+                        put("end", cue.endMs)
+                        put("text", cue.text)
+                    })
+                }
+            })
+            put("dropped", parsed.dropped)
+            put("truncated", parsed.truncated)
+            parsed.error?.let { put("error", it) }
+        }.toString()
+    }
+
+    /**
      * EUI-05: the resolved row-state token (`available|needs_connection|
      * downloading|added`) from the shared precedence — platforms map the
      * token to the labels in [memeSoundRowCopy].

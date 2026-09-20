@@ -739,7 +739,39 @@ V2 suite).
     are removed. Verified: shared `testAndroidHostTest` green
     (availability 3 cases); Android meme/studio tests green; iOS Swift 6
     type-check exit 0.
-  - [ ] EUI-06 — Captions workflow (import/generated paths are greenfield).
+  - [x] **EUI-06 — TIMED-CAPTION WORKFLOW: IMPORT + AT-PLAYHEAD (2026-09-20,
+    COMPLETE for manual + import; speech generation honestly deferred).**
+    SHARED `MemeCaptionImport` (+ 6-case test): one bounded, tolerant,
+    DETERMINISTIC SRT/WebVTT parser (CRLF/BOM tolerant; SRT comma + VTT
+    dot decimals; index lines, `WEBVTT`/`NOTE` blocks skipped; junk cues
+    DROPPED-WITH-COUNT, never silently eaten; text clamps to the wire
+    bound; the overlay cap truncates loudly; an unparseable file reports
+    an error instead of empty success) and the caption placement rule
+    (centered bottom safe area 0.86; overlapping cues stagger a
+    deterministic row to 0.74; heavy-outline style preset). Import runs
+    through the shared seam on iOS (`memeCaptionImport(raw)` →
+    cues/dropped/truncated/error JSON) — same bytes, same cues, so export
+    timing cannot drift between apps. ANDROID: `addCaptionCues` lands the
+    cues as caption-styled TIMED text overlays in ONE undo step (the
+    addMemeCaptions composite pattern); the Captions panel gains "Import
+    timed captions (.srt/.vtt)…" (document picker; 512 KB read bound;
+    honest notices — imported count, skipped-cue count, cap truncation,
+    or "nothing was added" on error) and "Add caption at playhead"
+    (video mode; 2 s default window, selected for typing). IOS mirror:
+    `store.addCaptionCues(fromFile:)` (one history step, shared
+    placement) + `addCaptionAtPlayhead`; panel buttons + `fileImporter`
+    with security-scoped read + the same honest notices; the modifier
+    body lives in a helper so the view chain type-checks. Selecting an
+    imported caption uses the EXISTING timing tools (TIME_WINDOW action,
+    timeline overlay lanes already render caption spans); style editing
+    via the existing Text sheet. DEFERRALS (honest): speech-to-text
+    generation is NOT offered anywhere — no transcription engine exists
+    in this codebase (the spec's "where available"); caption STYLE
+    presets (as a named preset row) build on the existing Text sheet
+    knobs — a dedicated style section is polish after device QA.
+    Verified: shared `testAndroidHostTest` green (6 caption cases);
+    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
+  - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
   - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
 
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.
