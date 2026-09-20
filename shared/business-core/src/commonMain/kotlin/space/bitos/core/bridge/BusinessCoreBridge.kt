@@ -3864,6 +3864,25 @@ class BusinessCoreBridge {
     }
 
     /**
+     * EUI-06: the caption LAYOUT contract (placement rows, style preset,
+     * overlay cap) so no platform re-inlines the constants —
+     * `{"x","rowY0","rowY1","size","outline","maxOverlays"}`.
+     */
+    fun memeCaptionLayout(): String {
+        val a = space.bitos.core.studio.MemeCaptionImport.placement(0)
+        val b = space.bitos.core.studio.MemeCaptionImport.placement(1)
+        val style = space.bitos.core.studio.MemeCaptionImport.STYLE
+        return buildJsonObject {
+            put("x", a.x)
+            put("rowY0", a.y)
+            put("rowY1", b.y)
+            put("size", style.size)
+            put("outline", style.outline)
+            put("maxOverlays", space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS)
+        }.toString()
+    }
+
+    /**
      * EUI-05: the resolved row-state token (`available|needs_connection|
      * downloading|added`) from the shared precedence — platforms map the
      * token to the labels in [memeSoundRowCopy].

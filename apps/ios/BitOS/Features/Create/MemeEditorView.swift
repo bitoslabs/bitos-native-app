@@ -1596,18 +1596,42 @@ final class MemeEditorStore {
         }
     }
 
-    /**
-     * Classic meme captions (prototype `create-edit` "Meme" hot tool):
-     * TOP/BOTTOM text overlays at the canonical positions — classic look
-     * (impact-style font, heavy outline, caps) — landing as ONE undo step
-     * for the pair. Empty halves are skipped.
-     */
+    /// EUI-06 caption layout contract (shared placement rows, style
+    /// preset, overlay cap) — decoded from the seam, never re-inlined.
+    struct CaptionLayoutUi {
+        let x: Float
+        let rowY0: Float
+        let rowY1: Float
+        let size: Int
+        let outline: Int
+        let maxOverlays: Int
+
+        static let shared: CaptionLayoutUi = {
+            guard let data = FrameworkBusinessCoreClient().memeCaptionLayout().data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let x = (root["x"] as? NSNumber)?.floatValue,
+                  let rowY0 = (root["rowY0"] as? NSNumber)?.floatValue,
+                  let rowY1 = (root["rowY1"] as? NSNumber)?.floatValue,
+                  let size = (root["size"] as? NSNumber)?.intValue,
+                  let outline = (root["outline"] as? NSNumber)?.intValue,
+                  let maxOverlays = (root["maxOverlays"] as? NSNumber)?.intValue
+            else {
+                return CaptionLayoutUi(x: 0.5, rowY0: 0.86, rowY1: 0.74, size: 48, outline: 3, maxOverlays: 48)
+            }
+            return CaptionLayoutUi(
+                x: x, rowY0: rowY0, rowY1: rowY1,
+                size: size, outline: outline, maxOverlays: maxOverlays
+            )
+        }()
+    }
+
     /// EUI-06: imported timed cues as caption-styled TEXT overlays — the
-    /// shared parser via the seam, shared placement (overlaps stagger),
-    /// ONE undo step for the whole import. Returns (added, dropped,
-    /// truncated, error).
+    /// shared parser + LAYOUT via the seams (overlaps stagger), ONE undo
+    /// step for the whole import. Returns (added, dropped, truncated,
+    /// error).
     @discardableResult
     func addCaptionCues(fromFile raw: String) -> (added: Int, dropped: Int, truncated: Bool, error: String?) {
+        let layout = CaptionLayoutUi.shared
         guard canAddOverlay else { return (0, 0, false, "Caption limit reached") }
         guard let data = client.memeCaptionImport(raw).data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1622,23 +1646,22 @@ final class MemeEditorStore {
         var overlapRow = 0
         var previousEnd: Int64 = -1
         for row in cueRows {
-            guard overlays.count + 1 <= Self.maxOverlays,
+            guard overlays.count + 1 <= layout.maxOverlays,
                   let start = (row["start"] as? NSNumber)?.int64Value,
                   let end = (row["end"] as? NSNumber)?.int64Value,
                   let text = row["text"] as? String, !text.isEmpty else { continue }
             if previousEnd >= 0 {
                 overlapRow = previousEnd >= start ? (overlapRow + 1) % 2 : 0
             }
-            let placeY: Float = overlapRow % 2 == 0 ? 0.86 : 0.74
             let overlayJson = client.memeDefaultOverlay(projectJson, kind: "text", text: text)
             guard !overlayJson.isEmpty,
                   let overlayData = overlayJson.data(using: .utf8),
                   var object = (try? JSONSerialization.jsonObject(with: overlayData)) as? [String: Any]
             else { continue }
-            object["x"] = 0.5
-            object["y"] = placeY
-            object["size"] = 48
-            object["outline"] = 3
+            object["x"] = layout.x
+            object["y"] = overlapRow % 2 == 0 ? layout.rowY0 : layout.rowY1
+            object["size"] = layout.size
+            object["outline"] = layout.outline
             object["startMs"] = start
             object["endMs"] = end
             apply(commandJson: Self.encode(["op": "add", "overlay": object]))
@@ -1660,13 +1683,15 @@ final class MemeEditorStore {
     }
 
     /// EUI-06: one editable caption at the playhead (2 s default window).
+    /// A single-cue import through the SAME parse path — but built with
+    /// distinct timestamps (never string-replaced; an identical-pair
+    /// replacement once collapsed the window and lied "limit reached").
     @discardableResult
     func addCaptionAtPlayhead(atMs: Int64) -> Bool {
-        let result = addCaptionCues(
-            fromFile: "1\n00:00:00,000 --> 00:00:02,000\nCaption\n"
-                .replacingOccurrences(of: "00:00:00,000", with: clockString(atMs))
-                .replacingOccurrences(of: "00:00:02,000", with: clockString(atMs + 2_000))
-        )
+        let start = max(0, atMs)
+        let end = start + 2_000
+        let srt = "1\n\(clockString(start)) --> \(clockString(end))\nCaption\n"
+        let result = addCaptionCues(fromFile: srt)
         return result.added > 0 && result.error == nil
     }
 
@@ -1677,6 +1702,12 @@ final class MemeEditorStore {
         return String(format: "%02d:%02d:%02d,%03d", h, m, sec, frac)
     }
 
+    /**
+     * Classic meme captions (prototype `create-edit` "Meme" hot tool):
+     * TOP/BOTTOM text overlays at the canonical positions — classic look
+     * (impact-style font, heavy outline, caps) — landing as ONE undo step
+     * for the pair. Empty halves are skipped.
+     */
     func addMemeCaptions(top: String, bottom: String, fontSlot: String) {
         guard canAddOverlay else { return }
         let before = projectJson
@@ -6530,17 +6561,22 @@ struct MemeEditorView: View {
     }
 
     /// EUI-06: read + import a timed-caption file with honest notices.
+    /// The read is BOUNDED — an oversized file is rejected without ever
+    /// being fully materialized.
     private func handleCaptionsImport(url: URL) {
         let secured = url.startAccessingSecurityScopedResource()
         defer { if secured { url.stopAccessingSecurityScopedResource() } }
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+        switch Self.readBoundedText(url: url, limit: 512 * 1024) {
+        case .none:
             store.setNotice("Could not read that file — nothing was added")
-            return
-        }
-        if raw.utf8.count > 512 * 1024 {
+        case .tooLarge:
             store.setNotice("Caption file too large (over 512 KB) — nothing was added")
-            return
+        case .text(let raw):
+            importCaptionsText(raw)
         }
+    }
+
+    private func importCaptionsText(_ raw: String) {
         let result = store.addCaptionCues(fromFile: raw)
         if let error = result.error {
             store.setNotice("\(error) — nothing was added")
@@ -6554,9 +6590,25 @@ struct MemeEditorView: View {
             copy += " skipped"
         }
         if result.truncated {
-            copy += " · file held more (editor cap \(MemeEditorStore.maxOverlays))"
+            copy += " · file held more (editor cap \(MemeEditorStore.CaptionLayoutUi.shared.maxOverlays))"
         }
         store.setNotice(copy)
+    }
+
+    /// Bounded UTF-8 text read: nil = unreadable, tooLarge = over the
+    /// limit (the file is never fully materialized).
+    private static func readBoundedText(url: URL, limit: Int) -> BoundedText? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: limit + 1) else { return nil }
+        guard head.count <= limit else { return .tooLarge }
+        guard let text = String(data: head, encoding: .utf8) else { return nil }
+        return .text(text)
+    }
+
+    private enum BoundedText {
+        case text(String)
+        case tooLarge
     }
 
     private func loadPicked(_ items: [PhotosPickerItem]) async {

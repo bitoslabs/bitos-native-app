@@ -103,7 +103,7 @@ object MemeCaptionImport {
                 ),
             )
         }
-        if (!sawAnyCueLine && cues.isEmpty()) {
+        if (!sawAnyCueLine) {
             return Parsed(emptyList(), dropped, false, "No timed cues found in that file")
         }
         cues.sortBy { it.startMs }

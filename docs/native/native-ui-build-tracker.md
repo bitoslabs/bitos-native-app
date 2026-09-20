@@ -758,10 +758,19 @@ V2 suite).
     honest notices — imported count, skipped-cue count, cap truncation,
     or "nothing was added" on error) and "Add caption at playhead"
     (video mode; 2 s default window, selected for typing). IOS mirror:
-    `store.addCaptionCues(fromFile:)` (one history step, shared
-    placement) + `addCaptionAtPlayhead`; panel buttons + `fileImporter`
-    with security-scoped read + the same honest notices; the modifier
-    body lives in a helper so the view chain type-checks. Selecting an
+    `store.addCaptionCues(fromFile:)` (one history step) +
+    `addCaptionAtPlayhead`; panel buttons + `fileImporter` with
+    security-scoped read + the same honest notices; the modifier body
+    lives in a helper so the view chain type-checks. CODE-REVIEW ROUND:
+    iOS placement/style/cap now decode from a new `memeCaptionLayout()`
+    seam (the "shared placement" claim only held by copy-paste before);
+    `addCaptionAtPlayhead` builds its single-cue SRT with DISTINCT
+    timestamps (the string-replacement first cut could collapse the
+    window at a 2 s playhead and then blame "Caption limit reached" — a
+    lying notice caught in review); BOTH platforms read caption files
+    through a BOUNDED read (oversize rejected without materializing);
+    orphaned KDocs re-attached; the parser's dead condition removed.
+    Selecting an
     imported caption uses the EXISTING timing tools (TIME_WINDOW action,
     timeline overlay lanes already render caption spans); style editing
     via the existing Text sheet. DEFERRALS (honest): speech-to-text
@@ -771,7 +780,6 @@ V2 suite).
     knobs — a dedicated style section is polish after device QA.
     Verified: shared `testAndroidHostTest` green (6 caption cases);
     Android meme/studio tests green; iOS Swift 6 type-check exit 0.
-  - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
   - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
 
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.

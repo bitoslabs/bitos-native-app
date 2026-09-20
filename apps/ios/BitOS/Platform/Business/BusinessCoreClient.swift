@@ -392,6 +392,9 @@ protocol BusinessCoreClient: Sendable {
     /// EUI-06 timed-caption import through the shared parser —
     /// `{"cues":[{"start","end","text"}],"dropped","truncated","error"?}`.
     func memeCaptionImport(_ raw: String) -> String
+    /// EUI-06 caption layout contract (rows, style, cap) — no re-inlined
+    /// constants in Swift.
+    func memeCaptionLayout() -> String
     /// EUI-05 loop line for the current durations ("" = unknown length).
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String
     /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
@@ -1003,6 +1006,9 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
     func memeCaptionImport(_ raw: String) -> String {
         bridge.memeCaptionImport(raw: raw)
     }
+    func memeCaptionLayout() -> String {
+        bridge.memeCaptionLayout()
+    }
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
         bridge.memeSoundLoopCopy(trackMs: trackMs, videoMs: videoMs, loop: loop)
     }
@@ -1592,6 +1598,9 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     }
     func memeCaptionImport(_ raw: String) -> String {
         FrameworkBusinessCoreClient().memeCaptionImport(raw)
+    }
+    func memeCaptionLayout() -> String {
+        FrameworkBusinessCoreClient().memeCaptionLayout()
     }
     func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
         FrameworkBusinessCoreClient().memeSoundLoopCopy(trackMs, videoMs, loop)

@@ -2178,19 +2178,29 @@ fun MemeEditorScreen(
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
+            // BOUNDED read: an oversized file is rejected without ever
+            // being fully materialized.
+            val limit = 512 * 1024
             val raw = withContext(Dispatchers.IO) {
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.use { stream ->
-                        stream.readBytes().toString(Charsets.UTF_8)
+                        val head = ByteArray(limit + 1)
+                        var filled = 0
+                        while (filled < head.size) {
+                            val read = stream.read(head, filled, head.size - filled)
+                            if (read < 0) break
+                            filled += read
+                        }
+                        when {
+                            filled > limit -> null
+                            else -> String(head, 0, filled, Charsets.UTF_8)
+                        }
                     }
                 }.getOrNull()
             }
             if (raw == null) {
-                exportStatus = "Could not read that file — nothing was added"
-                return@launch
-            }
-            if (raw.length > 512 * 1024) {
-                exportStatus = "Caption file too large (over 512 KB) — nothing was added"
+                // null here = unreadable OR over the bound; say both honestly.
+                exportStatus = "Could not read that file, or it is over 512 KB — nothing was added"
                 return@launch
             }
             val parsed = space.bitos.core.studio.MemeCaptionImport.parse(raw)

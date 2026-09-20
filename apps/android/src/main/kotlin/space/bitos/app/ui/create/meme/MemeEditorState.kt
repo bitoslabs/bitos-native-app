@@ -258,6 +258,51 @@ class MemeEditorState(
      * as ONE undo step for the pair. Returns the ids added (empty halves
      * are skipped; the overlay cap bounds the pair).
      */
+
+    fun addMemeCaptions(top: String, bottom: String, fontSlot: MemeFontSlot): List<String> {
+        val halves = listOf(
+            top.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.16f,
+            bottom.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.84f,
+        ).mapNotNull { (text, y) -> text?.let { it to y } }
+        if (halves.isEmpty()) return emptyList()
+        if (!canAddOverlay) return emptyList()
+        val before = project
+        val added = ArrayList<String>()
+        for ((text, y) in halves) {
+            if (project.overlays.size >= MemeProjectContract.MAX_OVERLAYS) break
+            val overlay = MemeRules.defaultOverlay(project, MemeOverlayKind.TEXT, text).copy(
+                x = 0.5f,
+                y = y,
+                font = fontSlot,
+                size = 64,
+                outline = 3,
+            )
+            project = MemeRules.apply(project, MemeCommand.AddOverlay(overlay))
+            added.add(overlay.id)
+        }
+        if (project != before) {
+            selectedOverlayId = added.lastOrNull()
+            revision += 1
+            redoStack.clear()
+            // Composite step: gesture-flavored so it never coalesces, and
+            // undo restores `projectBefore` directly (the command field is
+            // informational for replay tooling only).
+            undoStack.addLast(
+                UndoEntry(
+                    projectBefore = before,
+                    command = MemeCommand.AddOverlay(
+                        MemeRules.defaultOverlay(before, MemeOverlayKind.TEXT, ""),
+                    ),
+                    atMs = clockMs(),
+                    fromGesture = true,
+                    seq = nextSeq(),
+                ),
+            )
+            trimUndo()
+        }
+        return added
+    }
+
     /**
      * EUI-06: imports timed caption cues as TEXT overlays — bottom
      * safe-area placement, overlapping cues staggered a row (shared
@@ -294,50 +339,6 @@ class MemeEditorState(
             // Composite step (the addMemeCaptions pattern): gesture-
             // flavored so it never coalesces; undo restores the whole
             // import in one step.
-            undoStack.addLast(
-                UndoEntry(
-                    projectBefore = before,
-                    command = MemeCommand.AddOverlay(
-                        MemeRules.defaultOverlay(before, MemeOverlayKind.TEXT, ""),
-                    ),
-                    atMs = clockMs(),
-                    fromGesture = true,
-                    seq = nextSeq(),
-                ),
-            )
-            trimUndo()
-        }
-        return added
-    }
-
-    fun addMemeCaptions(top: String, bottom: String, fontSlot: MemeFontSlot): List<String> {
-        val halves = listOf(
-            top.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.16f,
-            bottom.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.84f,
-        ).mapNotNull { (text, y) -> text?.let { it to y } }
-        if (halves.isEmpty()) return emptyList()
-        if (!canAddOverlay) return emptyList()
-        val before = project
-        val added = ArrayList<String>()
-        for ((text, y) in halves) {
-            if (project.overlays.size >= MemeProjectContract.MAX_OVERLAYS) break
-            val overlay = MemeRules.defaultOverlay(project, MemeOverlayKind.TEXT, text).copy(
-                x = 0.5f,
-                y = y,
-                font = fontSlot,
-                size = 64,
-                outline = 3,
-            )
-            project = MemeRules.apply(project, MemeCommand.AddOverlay(overlay))
-            added.add(overlay.id)
-        }
-        if (project != before) {
-            selectedOverlayId = added.lastOrNull()
-            revision += 1
-            redoStack.clear()
-            // Composite step: gesture-flavored so it never coalesces, and
-            // undo restores `projectBefore` directly (the command field is
-            // informational for replay tooling only).
             undoStack.addLast(
                 UndoEntry(
                     projectBefore = before,
