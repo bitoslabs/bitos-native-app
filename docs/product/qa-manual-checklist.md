@@ -210,6 +210,26 @@ The shared invariants (tier membership, glyph uniqueness within a tier, label
 | 6   | Trigger a failed draft save and dismiss the editor                    | The discard dialog appears (irreversible: "Delete draft") — its copy matches the shared audit                     |
 | 7   | Discard camera takes                                                  | A confirm dialog appears before the takes are dropped                                                             |
 
+## S9 — Reference-spec editor UX (Android + iOS; EUI-01..06)
+
+Run after any editor UX change. The executable device form lives in
+[`../native/eui-07-device-validation.md`](../native/eui-07-device-validation.md)
+(preconditions, per-slice steps, a11y matrix, and the reference spec's
+seven non-negotiable scenarios with their honest deferrals marked).
+Quick smoke while you are already on a device:
+
+1. Header shows Next + "Save a copy"; iOS has on-screen Redo beside Undo.
+2. Look sheet: Tone/Colour tabs, one slider per control, Cancel/Apply
+   previews live on the stage (video included) and lands as ONE undo.
+3. Crop: ratio shapes incl. 3:4, rotate/flip/zoom/pan sliders, Original
+   clears the crop, PNG + GIF exports match the preview.
+4. Clip Replace keeps timing (or says "window shortened"); undo restores
+   the OLD media.
+5. Sound rows: one preview at a time; Added/Downloading/Needs-a-connection
+   states truthful offline and on.
+6. Captions: .srt import with counts/limits stated; add-at-playhead
+   editable; junk/oversize files rejected honestly.
+
 ## Run log
 
 | Date | Sections | Device / OS | Result | Notes |

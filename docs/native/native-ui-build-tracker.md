@@ -780,7 +780,16 @@ V2 suite).
     knobs — a dedicated style section is polish after device QA.
     Verified: shared `testAndroidHostTest` green (6 caption cases);
     Android meme/studio tests green; iOS Swift 6 type-check exit 0.
-  - [ ] EUI-07 — Device QA pass (overlaps MUX-10 runbook).
+  - [◐] EUI-07 — Device QA pass (overlaps MUX-10 runbook). RUNBOOK READY
+    2026-09-20 (`docs/native/eui-07-device-validation.md`): the reference
+    spec's seven non-negotiable scenarios mapped to concrete steps with
+    their honest deferrals marked (video crop, speech captions, vignette),
+    a per-slice B-matrix for EUI-01..06, an a11y matrix for the new
+    surfaces (screen-reader phrasings pinned, large-text/RTL expectations,
+    truthfulness rows marked blocker), and the product QA checklist gained
+    an S9 smoke section pointing at it. EXECUTION PENDING PHYSICAL
+    DEVICES (owner: device-holding operator); source-level gates for all
+    six slices were green at commit time.
 
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.
 
