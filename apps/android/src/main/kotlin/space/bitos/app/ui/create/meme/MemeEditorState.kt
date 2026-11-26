@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import space.bitos.core.studio.MemeAsset
+import space.bitos.core.studio.MemeCaptionImport
 import space.bitos.core.studio.MemeCommand
 import space.bitos.core.studio.MemeFontSlot
 import space.bitos.core.studio.MemeMode
@@ -257,6 +258,7 @@ class MemeEditorState(
      * as ONE undo step for the pair. Returns the ids added (empty halves
      * are skipped; the overlay cap bounds the pair).
      */
+
     fun addMemeCaptions(top: String, bottom: String, fontSlot: MemeFontSlot): List<String> {
         val halves = listOf(
             top.trim().takeIf { it.isNotEmpty() }?.uppercase() to 0.16f,
@@ -285,6 +287,58 @@ class MemeEditorState(
             // Composite step: gesture-flavored so it never coalesces, and
             // undo restores `projectBefore` directly (the command field is
             // informational for replay tooling only).
+            undoStack.addLast(
+                UndoEntry(
+                    projectBefore = before,
+                    command = MemeCommand.AddOverlay(
+                        MemeRules.defaultOverlay(before, MemeOverlayKind.TEXT, ""),
+                    ),
+                    atMs = clockMs(),
+                    fromGesture = true,
+                    seq = nextSeq(),
+                ),
+            )
+            trimUndo()
+        }
+        return added
+    }
+
+    /**
+     * EUI-06: imports timed caption cues as TEXT overlays — bottom
+     * safe-area placement, overlapping cues staggered a row (shared
+     * deterministic rule), heavy-outline caption style, ONE undo step for
+     * the whole import. Returns the number added (0 = cap/full/bad).
+     */
+    fun addCaptionCues(cues: List<MemeCaptionImport.CaptionCue>): Int {
+        if (cues.isEmpty() || !canAddOverlay) return 0
+        val before = project
+        var added = 0
+        var overlapRow = 0
+        var previousEnd = -1L
+        for (cue in cues) {
+            if (project.overlays.size >= MemeProjectContract.MAX_OVERLAYS) break
+            if (previousEnd in 0 until cue.startMs) overlapRow = 0
+            else if (previousEnd >= cue.startMs) overlapRow = (overlapRow + 1) % 2
+            val place = MemeCaptionImport.placement(overlapRow)
+            val overlay = MemeRules.defaultOverlay(project, MemeOverlayKind.TEXT, cue.text).copy(
+                x = place.x,
+                y = place.y,
+                size = MemeCaptionImport.STYLE.size,
+                outline = MemeCaptionImport.STYLE.outline,
+                startMs = cue.startMs,
+                endMs = cue.endMs,
+            )
+            project = MemeRules.apply(project, MemeCommand.AddOverlay(overlay))
+            added += 1
+            previousEnd = cue.endMs
+        }
+        if (project != before && added > 0) {
+            selectedOverlayId = project.overlays.lastOrNull()?.id
+            revision += 1
+            redoStack.clear()
+            // Composite step (the addMemeCaptions pattern): gesture-
+            // flavored so it never coalesces; undo restores the whole
+            // import in one step.
             undoStack.addLast(
                 UndoEntry(
                     projectBefore = before,
@@ -383,6 +437,17 @@ class MemeEditorState(
         val clamped = MemeProjectContract.clampSpeed(rate)
         if (project.speed == clamped) return
         commit(MemeCommand.SetSpeed(clamped))
+    }
+
+    /** EUI-02 §3 crop draft commit; null returns to the legacy letterbox. */
+    fun setCrop(crop: space.bitos.core.studio.MemeCrop?) {
+        val next = crop?.let {
+            space.bitos.core.studio.MemeCrop.clamp(it.rotationDeg, it.flipH, it.zoom, it.panX, it.panY)
+        }
+        if (project.crop == next) return
+        beginClipsEdit()
+        project = project.copy(crop = next)
+        revision += 1
     }
 
     /**

@@ -154,6 +154,9 @@ data class MemeProject(
     val sfxCues: List<MemeSfxCue> = emptyList(),
     /** Canvas ratio preset ([MemeCanvas.RATIOS] id; null/`source` = media frame). */
     val canvasRatio: String? = null,
+    /** Non-destructive crop treatment (EUI-02 spec §3; null/identity =
+     *  untouched — a pinned ratio with no crop keeps the v1 letterbox). */
+    val crop: MemeCrop? = null,
     /** Canvas background `#rrggbb` (null = platform default). */
     val canvasBg: String? = null,
     /** Blank-GIF loop length in ms (plan D3; written only for blank GIFs,
@@ -298,13 +301,18 @@ object MemeProjectContract {
         // Optional grade (MST-043): written only when set, so older wires
         // (and `none`) stay byte-identical.
         MemeLooks.normalize(project.lookId)?.let { put("look", it) }
-        // Manual adjust (prototype FX sliders): same additive-key rule.
+        // Manual adjust (v1 prototype FX sliders + EUI-02 axes): same
+        // additive-key rule — neutral fields never serialize.
         val adjust = project.adjust
         if (adjust != null && !adjust.isDefault) {
             put("adjust", buildJsonObject {
                 put("bri", adjust.brightness)
                 put("con", adjust.contrast)
                 put("sat", adjust.saturation)
+                if (adjust.lightness != 0f) put("lig", adjust.lightness)
+                if (adjust.warmth != 0f) put("warm", adjust.warmth)
+                if (adjust.tint != 0f) put("tint", adjust.tint)
+                if (adjust.fade != 0f) put("fade", adjust.fade)
             })
         }
         if (project.sfxCues.isNotEmpty()) {
@@ -349,6 +357,20 @@ object MemeProjectContract {
         val bg = project.canvasBg?.takeIf { MemeCanvas.isValidBackground(it) }
         val sec = project.canvasSec?.let { MemeCanvas.clampBlankGifMs(it) }
         val fps = project.canvasFps?.let { MemeCanvas.clampBlankGifFps(it) }
+        // Crop treatment (EUI-02 spec §3): additive root key — present
+        // whenever the cover treatment is active (an untouched `{}` = cover
+        // with defaults), absent for the v1 letterbox, so v1 wires stay
+        // byte-identical and old readers ignore it.
+        val crop = project.crop
+        if (crop != null) {
+            put("crop", buildJsonObject {
+                if (crop.rotationDeg != 0) put("rot", crop.rotationDeg)
+                if (crop.flipH) put("flip", true)
+                if (crop.zoom != 1f) put("zoom", crop.zoom)
+                if (crop.panX != 0f) put("panx", crop.panX)
+                if (crop.panY != 0f) put("pany", crop.panY)
+            })
+        }
         if (ratio != null || bg != null || sec != null || fps != null) {
             put("canvas", buildJsonObject {
                 ratio?.take(12)?.let { put("ratio", it) }
@@ -454,6 +476,7 @@ object MemeProjectContract {
                 altText = ((root["alt"] as? JsonPrimitive)?.content ?: "").take(MAX_ALT_LENGTH),
                 lookId = MemeLooks.normalize((root["look"] as? JsonPrimitive)?.content),
                 adjust = decodeAdjust(root["adjust"]),
+        crop = decodeCrop(root["crop"]),
                 sfxCues = (root["sfx"] as? kotlinx.serialization.json.JsonArray)
                     ?.mapNotNull { element ->
                         val obj = element.jsonObject
@@ -533,8 +556,9 @@ object MemeProjectContract {
     }
 
     /**
-     * Adjust triple decode (prototype FX sliders): lenient + clamped; a
-     * default/all-junk row decodes to null (missing = untouched).
+     * Adjust decode (v1 prototype FX sliders + EUI-02 axes): lenient +
+     * clamped; unknown/missing keys stay neutral; a default/all-junk row
+     * decodes to null (missing = untouched).
      */
     internal fun decodeAdjust(element: JsonElement?): MemeAdjust? {
         val obj = (element as? kotlinx.serialization.json.JsonObject) ?: return null
@@ -544,8 +568,38 @@ object MemeProjectContract {
             brightness = valueOf("bri") ?: 1f,
             contrast = valueOf("con") ?: 1f,
             saturation = valueOf("sat") ?: 1f,
+            lightness = valueOf("lig") ?: 0f,
+            warmth = valueOf("warm") ?: 0f,
+            tint = valueOf("tint") ?: 0f,
+            fade = valueOf("fade") ?: 0f,
         )
         return if (adjust.isDefault) null else adjust
+    }
+
+    /** Canonical crop JSON ("{}" shape) → clamped crop; junk → null. */
+    fun decodeCropJson(json: String): MemeCrop? = try {
+        decodeCrop(Json.parseToJsonElement(json))
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Crop decode (EUI-02 spec §3): lenient + clamped; present (even `{}`)
+     * = the cover treatment, only absence is null.
+     */
+    internal fun decodeCrop(element: JsonElement?): MemeCrop? {
+        val obj = (element as? kotlinx.serialization.json.JsonObject) ?: return null
+        fun valueOf(key: String): Float? =
+            (obj[key] as? JsonPrimitive)?.content?.toFloatOrNull()
+        fun intOf(key: String): Int? =
+            (obj[key] as? JsonPrimitive)?.content?.toIntOrNull()
+        return MemeCrop.clamp(
+            rotationDeg = intOf("rot") ?: 0,
+            flipH = (obj["flip"] as? JsonPrimitive)?.content == "true",
+            zoom = valueOf("zoom") ?: 1f,
+            panX = valueOf("panx") ?: 0f,
+            panY = valueOf("pany") ?: 0f,
+        )
     }
 
     /** Unknown kinds/fonts/colors degrade to safe defaults; junk rows drop. */

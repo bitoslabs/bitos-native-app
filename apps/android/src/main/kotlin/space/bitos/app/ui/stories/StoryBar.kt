@@ -622,8 +622,8 @@ fun StoryViewer(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        space.bitos.app.ui.theme.SolarFeedIconImage(
-                            icon = space.bitos.app.ui.theme.SolarFeedIcon.EyeClosed,
+                        androidx.compose.material3.Icon(
+                            imageVector = space.bitos.app.ui.theme.AppIcons.VisibilityOff,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier
@@ -741,8 +741,8 @@ fun StoryViewer(
                         Spacer(Modifier.weight(1f))
                         if (isMine) {
                             IconButton(onClick = { confirmDeleteOpen = true }, modifier = Modifier.size(32.dp)) {
-                                space.bitos.app.ui.theme.SolarFeedIconImage(
-                                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Trash,
+                                androidx.compose.material3.Icon(
+                                    imageVector = space.bitos.app.ui.theme.AppIcons.Delete,
                                     contentDescription = "Delete story",
                                     tint = Color.White.copy(alpha = 0.8f),
                                     modifier = Modifier.size(16.dp),
@@ -777,8 +777,8 @@ fun StoryViewer(
                         delay(430)
                         burstAt = null
                     }
-                    space.bitos.app.ui.theme.SolarFeedIconImage(
-                        icon = space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled,
+                    androidx.compose.material3.Icon(
+                        imageVector = space.bitos.app.ui.theme.AppIcons.Heart,
                         contentDescription = null,
                         tint = Color(0xFFFF4D67),
                         modifier = Modifier
@@ -900,24 +900,24 @@ fun StoryViewer(
                             },
                             modifier = Modifier.size(40.dp),
                         ) {
-                            space.bitos.app.ui.theme.SolarFeedIconImage(
-                                icon = if (replyMode == "reply") space.bitos.app.ui.theme.SolarFeedIcon.Comment else space.bitos.app.ui.theme.SolarFeedIcon.Send,
+                            androidx.compose.material3.Icon(
+                                imageVector = if (replyMode == "reply") space.bitos.app.ui.theme.AppIcons.Comment else space.bitos.app.ui.theme.AppIcons.Send,
                                 contentDescription = if (replyMode == "reply") "Reply to story" else "Message privately",
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                         IconButton(onClick = { likeCurrent() }, modifier = Modifier.size(40.dp)) {
-                            space.bitos.app.ui.theme.SolarFeedIconImage(
-                                icon = if (interaction?.likedByMe == true) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
+                            androidx.compose.material3.Icon(
+                                imageVector = if (interaction?.likedByMe == true) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                                 contentDescription = if (interaction?.likedByMe == true) "Unlike story" else "Like story",
                                 tint = if (interaction?.likedByMe == true) Color(0xFFFF4D67) else Color.White,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                         IconButton(onClick = { onZap(slide) }, modifier = Modifier.size(40.dp)) {
-                            space.bitos.app.ui.theme.SolarFeedIconImage(
-                                icon = space.bitos.app.ui.theme.SolarFeedIcon.Zap,
+                            androidx.compose.material3.Icon(
+                                imageVector = space.bitos.app.ui.theme.AppIcons.Zap,
                                 contentDescription = "Zap sats to this story",
                                 tint = Color(0xFFFFC24B),
                                 modifier = Modifier.size(20.dp),
@@ -941,8 +941,11 @@ fun StoryViewer(
                     ) {
                         StoryCountChip(
                             icon = { tint ->
-                                space.bitos.app.ui.theme.SolarFeedIconImage(
-                                    space.bitos.app.ui.theme.SolarFeedIcon.Heart, null, tint, Modifier.size(14.dp),
+                                androidx.compose.material3.Icon(
+                                    space.bitos.app.ui.theme.AppIcons.HeartOutline,
+                                    contentDescription = null,
+                                    tint = tint,
+                                    modifier = Modifier.size(14.dp),
                                 )
                             },
                             label = "${interaction?.likeCount ?: 0}",
@@ -952,8 +955,11 @@ fun StoryViewer(
                         if ((interaction?.zapSats ?: 0L) > 0L || (interaction?.zapCount ?: 0) > 0) {
                             StoryCountChip(
                                 icon = { tint ->
-                                    space.bitos.app.ui.theme.SolarFeedIconImage(
-                                        space.bitos.app.ui.theme.SolarFeedIcon.Zap, null, tint, Modifier.size(14.dp),
+                                    androidx.compose.material3.Icon(
+                                        space.bitos.app.ui.theme.AppIcons.Zap,
+                                        contentDescription = null,
+                                        tint = tint,
+                                        modifier = Modifier.size(14.dp),
                                     )
                                 },
                                 label = if ((interaction?.zapSats ?: 0L) > 0L) {
@@ -983,8 +989,11 @@ fun StoryViewer(
                         }
                         StoryCountChip(
                             icon = { tint ->
-                                space.bitos.app.ui.theme.SolarFeedIconImage(
-                                    space.bitos.app.ui.theme.SolarFeedIcon.Comment, null, tint, Modifier.size(14.dp),
+                                androidx.compose.material3.Icon(
+                                    space.bitos.app.ui.theme.AppIcons.Comment,
+                                    contentDescription = null,
+                                    tint = tint,
+                                    modifier = Modifier.size(14.dp),
                                 )
                             },
                             label = "${interaction?.replyCount ?: 0}",

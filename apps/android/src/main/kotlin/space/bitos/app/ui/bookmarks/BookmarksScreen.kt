@@ -46,8 +46,6 @@ import space.bitos.app.ui.feed.HomeViewModel
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
 
 /**
@@ -187,8 +185,8 @@ private fun SavedRow(
                 )
             }
             IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
-                SolarFeedIconImage(
-                    SolarFeedIcon.BookmarkFilled,
+                androidx.compose.material3.Icon(
+                    space.bitos.app.ui.theme.AppIcons.Bookmark,
                     contentDescription = "Remove bookmark",
                     tint = BitOSColors.bookmark,
                     modifier = Modifier.size(18.dp),
@@ -212,8 +210,8 @@ private fun BookmarksEmpty() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
         ) {
-            SolarFeedIconImage(
-                SolarFeedIcon.Bookmark,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
                 contentDescription = null,
                 tint = BitOSColors.textTertiary,
                 modifier = Modifier.size(40.dp),

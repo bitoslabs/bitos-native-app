@@ -94,6 +94,25 @@ object MemeVideoCutRules {
         )
     }
 
+    /**
+     * EUI-04 (reference spec §1 clip actions): the replacement window for
+     * new media of [newDurationMs] taking over a clip trimmed to
+     * [oldStartMs]..[oldEndMs]. Retains the window where it fits; clamps
+     * the out-point (then the in-point) to the shorter media; degrades to
+     * the full new clip when the window cannot survive — `(start, end,
+     * shortened)`; `shortened` drives the honest "window shortened" notice.
+     */
+    fun replaceWindow(oldStartMs: Long, oldEndMs: Long, newDurationMs: Long): Triple<Long, Long, Boolean> {
+        val duration = newDurationMs.coerceAtLeast(1L)
+        if (oldEndMs <= duration && oldStartMs < oldEndMs) {
+            return Triple(oldStartMs, oldEndMs, false)
+        }
+        if (oldStartMs < duration) {
+            return Triple(oldStartMs, duration, true)
+        }
+        return Triple(0L, duration, true)
+    }
+
     /** "60 s" / "34.5 s" — no locale machinery, deterministic output. */
     fun durationLabel(ms: Long): String {
         val whole = ms / 1000

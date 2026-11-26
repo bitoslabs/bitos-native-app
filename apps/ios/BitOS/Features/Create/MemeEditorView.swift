@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import PhotosUI
 import Photos
@@ -106,6 +107,10 @@ struct MemeSoundSeed: Equatable {
     var isAudioOnly: Bool = false
     /// Expected 64-hex hash for `isAudioOnly` downloads (integrity gate).
     var sha256: String? = nil
+    /// MEM-003b: local sound-library entry id — the Create-hub picker's
+    /// "My sound library" rows attach by id (local bytes + sha verify, no
+    /// network); the URL fields carry the entry's provenance values.
+    var localSoundId: String? = nil
 }
 
 /// Remix source fetch failure (bounded download / decode).
@@ -196,7 +201,7 @@ final class MemeEditorStore {
 
     var canAddOverlay: Bool { overlays.count < Self.maxOverlays }
 
-    private static let maxOverlays = 48
+    static let maxOverlays = 48
     private static let maxHistory = 60
     private static let maxRecentStickers = 16
 
@@ -462,8 +467,11 @@ final class MemeEditorStore {
             setNotice("Remove the current soundtrack first")
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         setNotice("Loading sound…")
         Task { @MainActor in
+            defer { downloadingSoundUrl = nil }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard data.count <= 64 * 1024 * 1024 else {
@@ -480,6 +488,7 @@ final class MemeEditorStore {
             } catch {
                 setNotice(nil)
                 setExportFailure("Sound source could not be loaded")
+                failedSoundUrls.insert(mediaUrl)
             }
         }
     }
@@ -488,6 +497,96 @@ final class MemeEditorStore {
     /// artifact — bounded download, hash-verify, decode, attach with the
     /// URL pre-filled so publish stamps it WITHOUT re-uploading (Wave D
     /// semantics). Named failures surface as a notice/export failure.
+    // EUI-05: sound rows — one preview at a time (key = row identity),
+    // the url downloading, and urls whose load failed (honest row states).
+    private var soundPreviewFilePlayer: AVAudioPlayer?
+    private var soundPreviewStreamPlayer: AVPlayer?
+    private var soundPreviewEndObserver: Any?
+    private var soundPreviewStatusObserver: NSKeyValueObservation?
+    private let previewDelegateBox = SoundPreviewDelegateBox()
+    private(set) var previewingSoundKey: String?
+    private(set) var downloadingSoundUrl: String?
+    var failedSoundUrls: Set<String> = []
+
+    /// EUI-05: single-row preview. `library:<id>` plays saved local bytes;
+    /// an https source streams. A new preview stops the prior one.
+    func toggleSoundPreview(key: String, source: String, label: String) {
+        if previewingSoundKey == key {
+            stopSoundPreview()
+            return
+        }
+        stopSoundPreview()
+        if source.hasPrefix("library:") {
+            let id = String(source.dropFirst("library:".count))
+            guard let data = soundLibrary.bytes(id: id) else {
+                setNotice("That saved sound is missing its file")
+                return
+            }
+            do {
+                let player = try AVAudioPlayer(data: data)
+                previewDelegateBox.onEnd = { [weak self] in
+                    Task { @MainActor in self?.stopSoundPreview() }
+                }
+                player.delegate = previewDelegateBox
+                soundPreviewFilePlayer = player
+                previewingSoundKey = key
+                player.play()
+            } catch {
+                setNotice("Could not preview \(label)")
+            }
+        } else if let url = URL(string: source) {
+            let player = AVPlayer(url: url)
+            soundPreviewStreamPlayer = player
+            // HONEST preview state: the row only reads "previewing" once
+            // the item is actually readyToPlay; a failed load stops the
+            // preview, says why, and keys the row for the state machine.
+            let item = player.currentItem
+            soundPreviewStatusObserver = item?.observe(
+                \.status, options: [.new]
+            ) { [weak self] observed, _ in
+                let status = observed.status
+                Task { @MainActor [weak self] in
+                    guard let self, self.previewingSoundKey == key || self.soundPreviewStreamPlayer === player else { return }
+                    switch status {
+                    case .readyToPlay:
+                        self.previewingSoundKey = key
+                    case .failed:
+                        self.stopSoundPreview()
+                        self.setNotice("Could not preview \(label) — check your connection")
+                        self.failedSoundUrls.insert(source)
+                    default:
+                        break
+                    }
+                }
+            }
+            soundPreviewEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.stopSoundPreview() }
+            }
+            player.play()
+        } else {
+            setNotice("Could not preview \(label) — check your connection")
+            failedSoundUrls.insert(source)
+        }
+    }
+
+    func stopSoundPreview() {
+        soundPreviewFilePlayer?.stop()
+        soundPreviewFilePlayer = nil
+        soundPreviewStreamPlayer?.pause()
+        soundPreviewStreamPlayer = nil
+        if let observer = soundPreviewEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            soundPreviewEndObserver = nil
+        }
+        soundPreviewStatusObserver?.invalidate()
+        soundPreviewStatusObserver = nil
+        previewingSoundKey = nil
+    }
+
     func attachAudioFromUrl(
         mediaUrl: String,
         sha256: String,
@@ -509,8 +608,11 @@ final class MemeEditorStore {
             setNotice("Remove the current soundtrack first")
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         setNotice("Loading sound…")
         Task { @MainActor in
+            defer { downloadingSoundUrl = nil }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard data.count <= 64 * 1024 * 1024 else {
@@ -543,6 +645,7 @@ final class MemeEditorStore {
             } catch {
                 setNotice(nil)
                 setExportFailure("Sound source could not be loaded")
+                failedSoundUrls.insert(mediaUrl)
             }
         }
     }
@@ -984,21 +1087,44 @@ final class MemeEditorStore {
         apply(commandJson: Self.encode(["op": "look", "look": id]))
     }
 
-    /// Manual fine-tune (prototype FX sliders): brightness/contrast/
-    /// saturation multipliers over the look preset; a slider burst within
-    /// 300 ms collapses into ONE undo step (EDT-004).
-    private(set) var adjustBrightness: Float = 1
-    private(set) var adjustContrast: Float = 1
-    private(set) var adjustSaturation: Float = 1
+    /// EUI-02: the Look panel's uncommitted slider draft — renders on the
+    /// stage and nowhere else; Apply commits it via `setAdjust`, Cancel
+    /// drops it. The panel owns the lifecycle (clears on disappear).
+    var gradePreview: MemeAdjustUi?
+    /// What the stage grades with: the draft while the panel drafts, the
+    /// committed wire otherwise. Export never reads this.
+    var effectiveAdjust: MemeAdjustUi { gradePreview ?? adjust }
 
-    var hasAdjust: Bool {
-        adjustBrightness != 1 || adjustContrast != 1 || adjustSaturation != 1
+    /// Manual fine-tune (v1 FX sliders + EUI-02 Tone/Colour axes) over the
+    /// look preset; a slider burst within 300 ms collapses into ONE undo
+    /// step (EDT-004).
+    private(set) var adjust = MemeAdjustUi()
+
+    var hasAdjust: Bool { !adjust.isDefault }
+
+    private(set) var crop: MemeCropUi?
+
+    /// EUI-02 §3: commits the crop draft as one undoable command; null
+    /// returns to the legacy letterbox treatment.
+    func setCrop(_ newValue: MemeCropUi?) {
+        let command: String
+        if let newValue {
+            // The shared codec clamps; an identity crop rides as a bare op.
+            let body = newValue.canonicalJson.dropFirst().dropLast()
+            command = body.isEmpty ? "{\"op\":\"crop\"}" : "{\"op\":\"crop\",\(body)}"
+        } else {
+            command = "{\"op\":\"crop-del\"}"
+        }
+        apply(commandJson: command)
     }
 
-    func setAdjust(brightness: Float, contrast: Float, saturation: Float) {
+    func setAdjust(_ newValue: MemeAdjustUi) {
         let before = projectJson
         apply(commandJson: Self.encode([
-            "op": "adjust", "bri": brightness, "con": contrast, "sat": saturation,
+            "op": "adjust",
+            "bri": newValue.brightness, "con": newValue.contrast, "sat": newValue.saturation,
+            "lig": newValue.lightness, "warm": newValue.warmth,
+            "tint": newValue.tint, "fade": newValue.fade,
         ]))
         guard projectJson != before else { return }
         let now = Date()
@@ -1020,31 +1146,161 @@ final class MemeEditorStore {
     }
 
     /// Adjust triple parse for the detached export tasks (1/1/1 = default).
-    nonisolated static func adjustTriple(ofProject projectJson: String) -> (bri: Float, con: Float, sat: Float) {
-        guard let data = projectJson.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let adjust = root["adjust"] as? [String: Any] else { return (1, 1, 1) }
-        return (
-            (adjust["bri"] as? NSNumber)?.floatValue ?? 1,
-            (adjust["con"] as? NSNumber)?.floatValue ?? 1,
-            (adjust["sat"] as? NSNumber)?.floatValue ?? 1
-        )
+    /// EUI-02 adjust values (v1 triple + the Tone/Colour axes the shared
+    /// matrix pipeline renders exactly). Decoded from the canonical
+    /// `memeAdjustOf` seam — the UI never parses wire fields or clamps.
+    struct MemeAdjustUi: Equatable, Sendable {
+        var brightness: Float = 1
+        var contrast: Float = 1
+        var saturation: Float = 1
+        var lightness: Float = 0
+        var warmth: Float = 0
+        var tint: Float = 0
+        var fade: Float = 0
+
+        var isDefault: Bool { self == MemeAdjustUi() }
+        var cacheKey: String {
+            "\(brightness)-\(contrast)-\(saturation)-\(lightness)-\(warmth)-\(tint)-\(fade)"
+        }
+
+        static func decode(_ json: String) -> MemeAdjustUi {
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return MemeAdjustUi() }
+            func value(_ key: String, _ default: Float) -> Float {
+                (root[key] as? NSNumber)?.floatValue ?? `default`
+            }
+            return MemeAdjustUi(
+                brightness: value("bri", 1), contrast: value("con", 1),
+                saturation: value("sat", 1), lightness: value("lig", 0),
+                warmth: value("warm", 0), tint: value("tint", 0), fade: value("fade", 0)
+            )
+        }
+
+        /// Canonical all-keys JSON for the `memeAdjustMatrix` seam.
+        var canonicalJson: String {
+            let dict: [String: Float] = [
+                "bri": brightness, "con": contrast, "sat": saturation,
+                "lig": lightness, "warm": warmth, "tint": tint, "fade": fade,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: dict),
+                  let json = String(data: data, encoding: .utf8) else { return "{}" }
+            return json
+        }
+    }
+
+    /// EUI-02 §3 crop treatment decoded from the `memeCropOf` seam — the
+    /// UI never parses wire fields. Null = the legacy letterbox treatment.
+    struct MemeCropUi: Equatable, Sendable {
+        var rotationDeg: Int = 0
+        var flipH: Bool = false
+        var zoom: Float = 1
+        var panX: Float = 0
+        var panY: Float = 0
+
+        /// Decodes the canonical crop JSON; "" (absent) = null.
+        static func decode(_ json: String) -> MemeCropUi? {
+            guard !json.isEmpty,
+                  let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            func value(_ key: String, _ default: Float) -> Float {
+                (root[key] as? NSNumber)?.floatValue ?? `default`
+            }
+            return MemeCropUi(
+                rotationDeg: (root["rot"] as? NSNumber)?.intValue ?? 0,
+                flipH: (root["flip"] as? NSNumber)?.boolValue ?? false,
+                zoom: value("zoom", 1),
+                panX: value("panx", 0),
+                panY: value("pany", 0)
+            )
+        }
+
+        /// Canonical JSON for the crop command; neutrals omitted.
+        var canonicalJson: String {
+            var parts: [String] = []
+            if rotationDeg != 0 { parts.append("\"rot\":\(rotationDeg)") }
+            if flipH { parts.append("\"flip\":true") }
+            if zoom != 1 { parts.append("\"zoom\":\(zoom)") }
+            if panX != 0 { parts.append("\"panx\":\(panX)") }
+            if panY != 0 { parts.append("\"pany\":\(panY)") }
+            return "{\(parts.joined(separator: ","))}"
+        }
+    }
+
+    /// The shared placement for a source size under the project's ratio +
+    /// effective crop — decoded from `memeCropPlacement`.
+    struct PlacementUi: Equatable, Sendable {
+        let frameWidth: Int, frameHeight: Int
+        let drawWidth: Float, drawHeight: Float
+        let drawX: Float, drawY: Float
+        let rotationDeg: Int
+        let flipH: Bool
+        let cover: Bool
+
+        static func decode(_ json: String) -> PlacementUi? {
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let frameW = (root["frameW"] as? NSNumber)?.intValue,
+                  let frameH = (root["frameH"] as? NSNumber)?.intValue else { return nil }
+            return PlacementUi(
+                frameWidth: frameW,
+                frameHeight: frameH,
+                drawWidth: (root["drawW"] as? NSNumber)?.floatValue ?? 0,
+                drawHeight: (root["drawH"] as? NSNumber)?.floatValue ?? 0,
+                drawX: (root["drawX"] as? NSNumber)?.floatValue ?? 0,
+                drawY: (root["drawY"] as? NSNumber)?.floatValue ?? 0,
+                rotationDeg: (root["rot"] as? NSNumber)?.intValue ?? 0,
+                flipH: (root["flip"] as? NSNumber)?.boolValue ?? false,
+                cover: (root["cover"] as? NSNumber)?.boolValue ?? false
+            )
+        }
+
+        var signature: String {
+            "\(frameWidth)x\(frameHeight)|\(drawX),\(drawY)|\(drawWidth)x\(drawHeight)|\(rotationDeg)|\(flipH)"
+        }
+        var frameAspect: CGFloat { CGFloat(frameWidth) / CGFloat(max(1, frameHeight)) }
+    }
+
+    /// The Crop sheet's uncommitted draft; the stage previews it, Apply
+    /// commits ONE undoable SetCrop, Cancel drops it.
+    var cropPreview: MemeCropUi?
+    var effectiveCrop: MemeCropUi? { cropPreview ?? crop }
+
+    /// The stage's crop placement for a source size, when the COVER
+    /// treatment is active (draft-aware); nil = the legacy paths draw.
+    func stageCropPlacement(width: Int, height: Int) -> PlacementUi? {
+        guard let place = PlacementUi.decode(
+            client.memeCropPlacement(
+                projectJson,
+                sourceWidth: width,
+                sourceHeight: height,
+                cropOverrideJson: cropPreview?.canonicalJson ?? ""
+            )
+        ), place.cover else { return nil }
+        return place
+    }
+
+    /// The graded media drawn into its crop frame — the exact export
+    /// draw, cached like the grade so slider drags stay smooth.
+    func placedStageImage(_ image: UIImage, cacheKey: String) -> (image: UIImage, place: PlacementUi)? {
+        guard let place = stageCropPlacement(
+            width: Int(image.size.width), height: Int(image.size.height)
+        ) else { return nil }
+        let graded = gradedImage(image, cacheKey: "\(cacheKey)|crop|\(place.signature)")
+        return (MemeRaster.placeMedia(graded, place), place)
     }
 
     /// Stage-preview image with the grade applied (cached per asset/look).
     func gradedImage(_ image: UIImage, cacheKey: String) -> UIImage {
-        let key = "\(cacheKey)|\(lookId ?? "none")|\(adjustBrightness)-\(adjustContrast)-\(adjustSaturation)"
+        let effective = gradePreview ?? adjust
+        let key = "\(cacheKey)|\(lookId ?? "none")|\(effective.cacheKey)"
         if let cached = gradeCache[key] { return cached }
         // The seam composes look + adjust into one matrix; identity (no
         // look, default adjust) returns nil from applyLook — raw image.
         guard let graded = MemeRaster.applyLook(
             image,
-            matrixJson: client.memeAdjustMatrix(
-                lookId,
-                brightness: adjustBrightness,
-                contrast: adjustContrast,
-                saturation: adjustSaturation
-            )
+            matrixJson: client.memeAdjustMatrix(lookId, adjustJson: effective.canonicalJson)
         ) else { return image }
         gradeCache[key] = graded
         return graded
@@ -1074,14 +1330,14 @@ final class MemeEditorStore {
         if nextLook != lookId { lookId = nextLook; gradeCache.removeAll() }
         if let data = projectJson.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let adjust = root["adjust"] as? [String: Any]
-            let nextBri = (adjust?["bri"] as? NSNumber)?.floatValue ?? 1
-            let nextCon = (adjust?["con"] as? NSNumber)?.floatValue ?? 1
-            let nextSat = (adjust?["sat"] as? NSNumber)?.floatValue ?? 1
-            if nextBri != adjustBrightness || nextCon != adjustContrast || nextSat != adjustSaturation {
-                adjustBrightness = nextBri
-                adjustContrast = nextCon
-                adjustSaturation = nextSat
+            let nextAdjust = MemeAdjustUi.decode(client.memeAdjustOf(projectJson))
+            if nextAdjust != adjust {
+                adjust = nextAdjust
+                gradeCache.removeAll()
+            }
+            let nextCrop = MemeCropUi.decode(client.memeCropOf(projectJson))
+            if nextCrop != crop {
+                crop = nextCrop
                 gradeCache.removeAll()
             }
             let nextSpeed = (root["speed"] as? NSNumber)?.floatValue ?? 1
@@ -1338,6 +1594,112 @@ final class MemeEditorStore {
             pushHistory(before)
             selectedId = Self.parseOverlays(projectJson).last?.id
         }
+    }
+
+    /// EUI-06 caption layout contract (shared placement rows, style
+    /// preset, overlay cap) — decoded from the seam, never re-inlined.
+    struct CaptionLayoutUi {
+        let x: Float
+        let rowY0: Float
+        let rowY1: Float
+        let size: Int
+        let outline: Int
+        let maxOverlays: Int
+
+        static let shared: CaptionLayoutUi = {
+            guard let data = FrameworkBusinessCoreClient().memeCaptionLayout().data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let x = (root["x"] as? NSNumber)?.floatValue,
+                  let rowY0 = (root["rowY0"] as? NSNumber)?.floatValue,
+                  let rowY1 = (root["rowY1"] as? NSNumber)?.floatValue,
+                  let size = (root["size"] as? NSNumber)?.intValue,
+                  let outline = (root["outline"] as? NSNumber)?.intValue,
+                  let maxOverlays = (root["maxOverlays"] as? NSNumber)?.intValue
+            else {
+                return CaptionLayoutUi(x: 0.5, rowY0: 0.86, rowY1: 0.74, size: 48, outline: 3, maxOverlays: 48)
+            }
+            return CaptionLayoutUi(
+                x: x, rowY0: rowY0, rowY1: rowY1,
+                size: size, outline: outline, maxOverlays: maxOverlays
+            )
+        }()
+    }
+
+    /// EUI-06: imported timed cues as caption-styled TEXT overlays — the
+    /// shared parser + LAYOUT via the seams (overlaps stagger), ONE undo
+    /// step for the whole import. Returns (added, dropped, truncated,
+    /// error).
+    @discardableResult
+    func addCaptionCues(fromFile raw: String) -> (added: Int, dropped: Int, truncated: Bool, error: String?) {
+        let layout = CaptionLayoutUi.shared
+        guard canAddOverlay else { return (0, 0, false, "Caption limit reached") }
+        guard let data = client.memeCaptionImport(raw).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cueRows = root["cues"] as? [[String: Any]] else {
+            return (0, 0, false, "Captions could not be parsed here")
+        }
+        if let error = root["error"] as? String {
+            return (0, root["dropped"] as? Int ?? 0, false, error)
+        }
+        let before = projectJson
+        var addedCount = 0
+        var overlapRow = 0
+        var previousEnd: Int64 = -1
+        for row in cueRows {
+            guard overlays.count + 1 <= layout.maxOverlays,
+                  let start = (row["start"] as? NSNumber)?.int64Value,
+                  let end = (row["end"] as? NSNumber)?.int64Value,
+                  let text = row["text"] as? String, !text.isEmpty else { continue }
+            if previousEnd >= 0 {
+                overlapRow = previousEnd >= start ? (overlapRow + 1) % 2 : 0
+            }
+            let overlayJson = client.memeDefaultOverlay(projectJson, kind: "text", text: text)
+            guard !overlayJson.isEmpty,
+                  let overlayData = overlayJson.data(using: .utf8),
+                  var object = (try? JSONSerialization.jsonObject(with: overlayData)) as? [String: Any]
+            else { continue }
+            object["x"] = layout.x
+            object["y"] = overlapRow % 2 == 0 ? layout.rowY0 : layout.rowY1
+            object["size"] = layout.size
+            object["outline"] = layout.outline
+            object["startMs"] = start
+            object["endMs"] = end
+            apply(commandJson: Self.encode(["op": "add", "overlay": object]))
+            if projectJson != before {
+                addedCount += 1
+                previousEnd = end
+                selectedId = Self.parseOverlays(projectJson).last?.id
+            }
+        }
+        if projectJson != before {
+            pushHistory(before)
+        }
+        return (
+            addedCount,
+            root["dropped"] as? Int ?? 0,
+            (root["truncated"] as? NSNumber)?.boolValue ?? false,
+            nil
+        )
+    }
+
+    /// EUI-06: one editable caption at the playhead (2 s default window).
+    /// A single-cue import through the SAME parse path — but built with
+    /// distinct timestamps (never string-replaced; an identical-pair
+    /// replacement once collapsed the window and lied "limit reached").
+    @discardableResult
+    func addCaptionAtPlayhead(atMs: Int64) -> Bool {
+        let start = max(0, atMs)
+        let end = start + 2_000
+        let srt = "1\n\(clockString(start)) --> \(clockString(end))\nCaption\n"
+        let result = addCaptionCues(fromFile: srt)
+        return result.added > 0 && result.error == nil
+    }
+
+    private func clockString(_ ms: Int64) -> String {
+        let total = Int(max(0, ms))
+        let h = total / 3_600_000, m = (total % 3_600_000) / 60_000,
+            sec = (total % 60_000) / 1000, frac = total % 1000
+        return String(format: "%02d:%02d:%02d,%03d", h, m, sec, frac)
     }
 
     /**
@@ -1631,8 +1993,10 @@ final class MemeEditorStore {
     }
 
     /** Fresh unique clip ids survive splits/removals. */
-    private func maxClipCounter() -> Int {
-        clips.compactMap { Int($0.id.dropFirst().prefix { $0.isNumber }) }.max() ?? 0
+    private func maxClipCounter(overlapping archive: [String: EditorClip] = [:]) -> Int {
+        (clips.map(\.id) + archive.keys).compactMap {
+            Int($0.dropFirst().prefix { $0.isNumber })
+        }.max() ?? 0
     }
 
     /// Appends a source as a new timeline clip (cut rules applied; the
@@ -1806,6 +2170,50 @@ final class MemeEditorStore {
         selectedClipIndex = min(selectedClipIndex, max(0, clips.count - 1))
         videoRevision += 1
         syncWireClips()
+    }
+
+    /**
+     * EUI-04: swaps the clip's MEDIA, keeping trim/volume/look where they
+     * still fit (the shared window rule clamps honestly). A FRESH id: undo
+     * rebuilds sessions by id from the archive, so reusing the old id would
+     * resurrect the NEW media on undo; overlays key on timeline time, not
+     * clip id, so the swap is invisible to everything but the archive.
+     */
+    func replaceClip(at index: Int, data: Data, url: URL, probe: MemeVideoExportIos.Probe) {
+        guard clips.indices.contains(index) else { return }
+        let old = clips[index]
+        var start = old.startMs
+        var end = old.endMs
+        var shortened = false
+        if let seamData = client.memeReplaceWindow(old.startMs, old.endMs, probe.durationMs).data(using: .utf8),
+           let row = try? JSONSerialization.jsonObject(with: seamData) as? [String: Any],
+           let s = (row["start"] as? NSNumber)?.int64Value,
+           let e = (row["end"] as? NSNumber)?.int64Value {
+            start = s
+            end = e
+            shortened = (row["shortened"] as? NSNumber)?.boolValue ?? false
+        } else {
+            // Seam failure must degrade to the full new clip — keeping the
+            // old window could exceed the new media's duration.
+            start = 0
+            end = max(1, probe.durationMs)
+            shortened = true
+        }
+        pushHistory(projectJson)
+        let replacement = EditorClip(
+            id: old.id.hasPrefix("blank")
+                ? "blank\(UInt64.random(in: 0..<UInt64.max))"
+                : "v\(maxClipCounter(overlapping: clipArchive) + 1)",
+            data: data, url: url, probe: probe,
+            startMs: start, endMs: end, volume: old.volume, lookId: old.lookId
+        )
+        clips[index] = replacement
+        clipArchive[replacement.id] = replacement
+        videoRevision += 1
+        syncWireClips()
+        setNotice(shortened
+            ? "Clip \(index + 1) replaced — window shortened to fit the shorter clip"
+            : "Clip \(index + 1) replaced — trim, volume and look kept")
     }
 
     /** Selects a timeline clip (dock lanes, Clips sheet). */
@@ -2364,7 +2772,7 @@ final class MemeEditorStore {
         }
         let url = try await MemeVideoExportIos.composeClips(
             clips, rate: rate, projectLookId: lookId,
-            projectAdjust: (adjustBrightness, adjustContrast, adjustSaturation),
+            projectAdjustJson: adjust.canonicalJson,
             client: client
         )
         let probe = MemeVideoExportIos.Probe(
@@ -3217,7 +3625,6 @@ struct MemeEditorView: View {
     @State private var showMore = false
     /** MSU-012: timing sheet for a SELECTED (not composing) overlay. */
     @State private var advancedTextId: IdentifiableId?
-    @State private var showLooks = false
     @State private var showSfx = false
     /// Selected overlay's visibility window (startMs, endMs) — the SFX
     /// sheet's cue anchors when a timed element is selected.
@@ -3290,6 +3697,11 @@ struct MemeEditorView: View {
     let remixSeed: MemeRemixSeed?
     /// "Use this sound" handoff (Wave C): borrow THIS bitz's audio only.
     let soundSeed: MemeSoundSeed?
+    /// MEM-003b "Pick sound from a video": the Create-hub sound picker
+    /// hands the picked library video's bytes here — the editor's
+    /// existing extraction path owns extraction + failure copy. Consumed
+    /// once; nil on re-acceptance.
+    let soundFromVideo: Data?
     /// MUX-06: hand the frozen design + rendered poster to mass production.
     var onMakeVariations: ((String, Data) -> Void)? = nil
     /// MSU-061: an in-editor batch status line ("3 of 8 rendered"); nil
@@ -3309,6 +3721,7 @@ struct MemeEditorView: View {
         videoSeeds: [Data]? = nil,
         remixSeed: MemeRemixSeed? = nil,
         soundSeed: MemeSoundSeed? = nil,
+        soundFromVideo: Data? = nil,
         onSlotsChanged: @escaping () -> Void = {},
         onMakeVariations: ((String, Data) -> Void)? = nil,
         batchStatus: String? = nil,
@@ -3323,6 +3736,7 @@ struct MemeEditorView: View {
         self.videoSeeds = videoSeeds
         self.remixSeed = remixSeed
         self.soundSeed = soundSeed
+        self.soundFromVideo = soundFromVideo
         self.onSlotsChanged = onSlotsChanged
         self.onMakeVariations = onMakeVariations
         self.batchStatus = batchStatus
@@ -3429,8 +3843,9 @@ struct MemeEditorView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .task(id: "notice-clock") {
-            while !Task.isCancelled {
+        .task(id: store.notices.current?.id) {
+            guard store.notices.current != nil else { return }
+            while !Task.isCancelled && store.notices.current != nil {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 store.notices.tick(deltaMs: 100)
             }
@@ -3509,6 +3924,10 @@ struct MemeEditorView: View {
         // out as the soundtrack, enter video mode with no clip — the
         // creator adds their own.
         .task(id: "sound-seed") { await seedSoundSession() }
+        // MEM-003b "Pick sound from a video" (Create-hub sound picker):
+        // the editor's existing extraction path owns extraction, named
+        // progress and failure copy. Runs once against an empty session.
+        .task(id: "sound-from-video") { await consumeSoundFromVideoHandoff() }
 
         .confirmationDialog(
             feedbackCopy.confirms.first { $0.id == "mode-switch" }?.title
@@ -3678,10 +4097,6 @@ struct MemeEditorView: View {
         }
         .onChange(of: showAdvancedText) { _, shown in
             if !shown { finishTextEditing() }
-        }
-        .sheet(isPresented: $showLooks) {
-            LooksSheet(store: store)
-                .presentationDetents([.medium])
         }
         .sheet(isPresented: $showSfx) {
             // Per-overlay sound windows: a selected overlay WITH a visibility
@@ -3981,6 +4396,41 @@ struct MemeEditorView: View {
             selection: $soundPickItem,
             matching: .videos
         )
+        .photosPicker(
+            isPresented: $isPickingReplaceClip,
+            selection: $replacePickItem,
+            matching: .videos
+        )
+        .onChange(of: replacePickItem) { _, item in
+            guard let item else { return }
+            replacePickItem = nil
+            let target = replaceTargetIndex
+            replaceTargetIndex = nil
+            guard let target, store.clips.indices.contains(target) else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let url = MemeVideoExportIos.writeTempClip(data),
+                      let probe = MemeVideoExportIos.probe(url: url) else {
+                    store.setNotice("Clip unreadable — the original stays")
+                    return
+                }
+                store.replaceClip(at: target, data: data, url: url, probe: probe)
+            }
+        }
+        .fileImporter(
+            isPresented: $isImportingCaptions,
+            allowedContentTypes: [.plainText, .text],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                captionsImportUrl = url
+            }
+        }
+        .onChange(of: captionsImportUrl) { _, url in
+            guard let url else { return }
+            captionsImportUrl = nil
+            handleCaptionsImport(url: url)
+        }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
@@ -4231,6 +4681,17 @@ struct MemeEditorView: View {
         guard let soundSeed, store.clips.isEmpty, store.assets.isEmpty,
               store.videoClipData == nil, store.gifFramesCount == 0,
               store.soundtrackRow == nil else { return }
+        // MEM-003b local library pick: bytes + sha verify + decode, no
+        // network (the picker's "My sound library" rows hand the entry id).
+        if let localSoundId = soundSeed.localSoundId {
+            guard let entry = store.soundLibraryEntries.first(where: { $0.id == localSoundId }) else {
+                store.setNotice("That saved sound's audio is missing")
+                return
+            }
+            store.switchModeToVideo()
+            store.attachLibrarySound(entry)
+            return
+        }
         guard let url = URL(string: soundSeed.mediaUrl),
               url.scheme == "https" || url.host == "localhost" || url.host == "127.0.0.1" else {
             store.setNotice("Sound source URL is not loadable")
@@ -4268,6 +4729,17 @@ struct MemeEditorView: View {
         }
     }
 
+    /// MEM-003b: consume the Create-hub "Pick sound from a video" handoff
+    /// exactly once against an empty session — the editor's own Sound-tool
+    /// extraction (`attachSoundtrack`) owns extraction and failure copy.
+    private func consumeSoundFromVideoHandoff() async {
+        guard let soundFromVideo, store.clips.isEmpty, store.assets.isEmpty,
+              store.videoClipData == nil, store.gifFramesCount == 0,
+              store.soundtrackRow == nil else { return }
+        store.switchModeToVideo()
+        store.attachSoundtrack(pickedData: soundFromVideo)
+    }
+
     /// Expert-suite layout: full-bleed flexible stage + dock (app-15 scr-suite).
     private var suiteLayout: some View {
         VStack(spacing: 0) {
@@ -4303,27 +4775,31 @@ struct MemeEditorView: View {
                 }
             } else {
             GeometryReader { available in
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: BitOSTheme.Spacing.sm) {
-                    stageCard(height: max(180, available.size.height - (store.isVideoMode ? 240 : 190)))
-                    modePillsRow
-                    // MSU-010: the FIVE creator tools (shared catalogue) +
-                    // More. Replaces the shipped pair of overlapping bars
-                    // (quickTools' 7 chips AND perModeBar's 6).
-                    editorToolBar
-                    if drawMode { penControlsRow }
-                    // The prototype timeline is already the compact clip
-                    // strip. Video source insertion lives in Timeline so the
-                    // basic editor does not show a duplicate strip.
-                    if !store.isVideoMode { tray }
-                    if store.isVideoMode && !store.clips.isEmpty {
-                        timelineSection
+                VStack(spacing: 0) {
+                    stageCard(height: max(180, available.size.height - (store.isVideoMode ? 260 : 200)))
+                        .padding(.horizontal, BitOSTheme.Spacing.base)
+                        .padding(.top, BitOSTheme.Spacing.xs)
+                        .padding(.bottom, BitOSTheme.Spacing.sm)
+                    Spacer(minLength: 0)
+                    VStack(spacing: BitOSTheme.Spacing.xs) {
+                        modePillsRow
+                        if !store.isVideoMode { tray }
+                        if store.isVideoMode && !store.clips.isEmpty {
+                            timelineSection
+                        }
+                        if drawMode { penControlsRow }
+                        editorToolBar
+                    }
+                    .padding(.horizontal, BitOSTheme.Spacing.base)
+                    .padding(.top, BitOSTheme.Spacing.sm)
+                    .padding(.bottom, BitOSTheme.Spacing.xs)
+                    .background(BitOSTheme.surfaceElevated.opacity(0.55))
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(BitOSTheme.border.opacity(0.6))
+                            .frame(height: 0.5)
                     }
                 }
-                .padding(.horizontal, BitOSTheme.Spacing.base)
-                .padding(.top, BitOSTheme.Spacing.xs)
-                .padding(.bottom, BitOSTheme.Spacing.sm)
-            }
             }
             statusLine
             }
@@ -4400,6 +4876,8 @@ struct MemeEditorView: View {
             } label: {
                 AppIcons.image(for: AppIcons.close)
                     .foregroundStyle(BitOSTheme.textPrimary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Close editor")
             Text("Editor")
@@ -4432,6 +4910,8 @@ struct MemeEditorView: View {
                             )
                     }
                 }
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
             }
             .disabled(slotStore == nil)
             .accessibilityLabel("Save draft")
@@ -4476,7 +4956,7 @@ struct MemeEditorView: View {
                 Button {
                     showGifStickerPicker = true
                 } label: {
-                    Image(systemName: "sparkles")
+                    AppIcons.image(for: AppIcons.sparkles)
                         .foregroundStyle(BitOSTheme.textPrimary)
                 }
                 .accessibilityLabel("Add GIF sticker layer")
@@ -4503,6 +4983,17 @@ struct MemeEditorView: View {
             }
             .disabled(!store.canUndo)
             .accessibilityLabel("Undo")
+            // EUI-01: redo is a persistent on-screen sibling of undo (the
+            // pair lives in exactly one place, mirroring Android's row), not
+            // a keyboard-only shortcut.
+            Button {
+                store.redo()
+            } label: {
+                AppIcons.image(for: AppIcons.redo)
+                    .foregroundStyle(store.canRedo ? BitOSTheme.textPrimary : BitOSTheme.textSecondary.opacity(0.4))
+            }
+            .disabled(!store.canRedo)
+            .accessibilityLabel("Redo")
         }
     }
 
@@ -4664,12 +5155,16 @@ struct MemeEditorView: View {
                         }
                     }
                 } else if store.isGifMode, let frame = store.gifActiveFrame {
-                    let aspect = frame.image.size.width / max(1, frame.image.size.height)
+                    // EUI-02 §3: a cover crop previews through the placed
+                    // frame — the exact draw the GIF export burns.
+                    let cropPlaced = store.placedStageImage(frame.image, cacheKey: frame.id)
+                    let aspect = cropPlaced?.place.frameAspect
+                        ?? frame.image.size.width / max(1, frame.image.size.height)
                     let fitted = fittedStageSize(container: container, aspect: aspect)
                     ZStack {
                         // WYSIWYG: the frame previews through the same
                         // grade cache the export burns (look + adjust).
-                        Image(uiImage: store.gradedImage(frame.image, cacheKey: frame.id))
+                        Image(uiImage: cropPlaced?.image ?? store.gradedImage(frame.image, cacheKey: frame.id))
                             .resizable()
                             .scaledToFill()
                             .frame(width: fitted.width, height: fitted.height)
@@ -4713,11 +5208,15 @@ struct MemeEditorView: View {
                 } else if store.activeAsset != nil || store.canvasAspect != nil {
                     // Blank design: a pinned canvas with no pick keeps the
                     // full overlay/gesture surface over the background fill.
-                    let stageAspect = store.activeAsset?.aspect ?? store.canvasAspect ?? 1
+                    let cropPlaced = store.activeAsset.flatMap {
+                        store.placedStageImage($0.image, cacheKey: $0.id)
+                    }
+                    let stageAspect = cropPlaced?.place.frameAspect
+                        ?? store.activeAsset?.aspect ?? store.canvasAspect ?? 1
                     let fitted = fittedStageSize(container: container, aspect: stageAspect)
                     ZStack {
                         if let asset = store.activeAsset {
-                            Image(uiImage: store.gradedImage(asset.image, cacheKey: asset.id))
+                            Image(uiImage: cropPlaced?.image ?? store.gradedImage(asset.image, cacheKey: asset.id))
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: fitted.width, height: fitted.height)
@@ -4876,10 +5375,17 @@ struct MemeEditorView: View {
             }
             // Blank VIDEO (plan D1): the synthesized canvas clip is the
             // media — ratio · background · duration picked in the sheet.
+            // MEM-003c: a sound-first session's secondary action re-opens
+            // the sound sheet ("Change sound"), not blank-create.
             if store.isVideoMode {
                 Button {
-                    activePanel = nil
-                    showBlankCreate = true
+                    if isSoundFirstSession {
+                        activePanel = nil
+                        togglePanel(.sound)
+                    } else {
+                        activePanel = nil
+                        showBlankCreate = true
+                    }
                 } label: {
                     Label(copy.secondary ?? "Start blank canvas", systemImage: "rectangle.on.rectangle")
                         .font(.subheadline.weight(.semibold))
@@ -4999,6 +5505,13 @@ struct MemeEditorView: View {
     /// MST-083: video export format — MP4 (default) or GIF.
     @State private var exportVideoAsGif = false
     @State private var isPickingVideo = false
+    /** EUI-06: timed-caption file import (.srt/.vtt). */
+    @State private var isImportingCaptions = false
+    @State private var captionsImportUrl: URL?
+    /** EUI-04: clip index awaiting a replacement pick (nil = none). */
+    @State private var isPickingReplaceClip = false
+    @State private var replacePickItem: PhotosPickerItem?
+    @State private var replaceTargetIndex: Int?
     /// "Use this sound" (MST-050 Wave B): video picker → audio extraction.
     @State private var isPickingSound = false
     @State private var soundPickItem: PhotosPickerItem?
@@ -5197,8 +5710,21 @@ struct MemeEditorView: View {
     }
 
     /// MSU-031: guiding empty-state copy for the current mode (shared).
+    /// MEM-003c: a sound-first session (soundtrack attached, no clip) gets
+    /// the sound-first copy — "Add video" / "Change sound".
     private var emptyState: StudioEmptyState {
-        StudioEmptyState.decode(mode: modeKey)
+        if store.isVideoMode, store.soundtrackRow != nil,
+           store.clips.isEmpty, store.assets.isEmpty, store.videoClipData == nil {
+            return StudioEmptyState.decodeSoundFirst()
+        }
+        return StudioEmptyState.decode(mode: modeKey)
+    }
+
+    /// MEM-003c: whether the empty CTA is the sound-first one (its
+    /// secondary action re-opens the sound sheet instead of blank-create).
+    private var isSoundFirstSession: Bool {
+        store.isVideoMode && store.soundtrackRow != nil &&
+            store.clips.isEmpty && store.assets.isEmpty && store.videoClipData == nil
     }
 
     /// MSU-030: coach eligibility for THIS session (handoffs suppress it).
@@ -5277,7 +5803,7 @@ struct MemeEditorView: View {
         case "look":
             return store.activeAsset != nil || store.gifFramesCount > 0 ||
                 (store.isVideoMode && !store.clips.isEmpty)
-        case "trim", "speed", "volume", "clips", "split", "mute":
+        case "trim", "speed", "volume", "clips", "split", "mute", "replace":
             return store.isVideoMode && store.videoClipData != nil
         case "duration": return store.isGifMode
         case "batch": return onMakeVariations != nil
@@ -5330,6 +5856,13 @@ struct MemeEditorView: View {
             let current = store.clips[store.selectedClipIndex].volume
             store.setClipVolume(index: store.selectedClipIndex, volume: current == 0 ? 1 : 0)
             store.setNotice(current == 0 ? "Clip sound on" : "Clip muted")
+        case "replace":
+            // EUI-04: capture the target now — the pick is async and the
+            // creator may tap elsewhere while it opens.
+            showMore = false
+            guard store.clips.indices.contains(store.selectedClipIndex) else { return }
+            replaceTargetIndex = store.selectedClipIndex
+            isPickingReplaceClip = true
         case "batch":
             showMore = false
             startBatchFromDesign()
@@ -5595,7 +6128,17 @@ struct MemeEditorView: View {
                         publishTemplatePrice = 0
                         publishTemplateCategory = "meme"
                         showPublishTemplateDialog = true
-                    }
+                    },
+                    onImportTimed: { isImportingCaptions = true },
+                    onAddAtPlayhead: store.isVideoMode && !store.clips.isEmpty
+                        ? {
+                            if store.addCaptionAtPlayhead(atMs: Int64(videoPositionSec * 1000)) {
+                                store.setNotice("Caption added at the playhead — type on the stage")
+                            } else {
+                                store.setNotice("Caption limit reached")
+                            }
+                        }
+                        : nil
                 )
             case .stickers:
                 StickerPanelContent(store: store)
@@ -5619,6 +6162,14 @@ struct MemeEditorView: View {
                             sourceEventId: row.eventId,
                             author: row.authorPubkey
                         )
+                    },
+                    currentSoundUrl: store.soundtrackRow?.url ?? "",
+                    downloadingSoundUrl: store.downloadingSoundUrl ?? "",
+                    failedSoundUrls: store.failedSoundUrls,
+                    videoDurationMs: store.timelineDurationMs,
+                    previewingSoundKey: store.previewingSoundKey ?? "",
+                    onTogglePreview: { key, source, label in
+                        store.toggleSoundPreview(key: key, source: source, label: label)
                     },
                     onPickSound: { isPickingSound = true },
                     onOpenStudio: {
@@ -5686,7 +6237,8 @@ struct MemeEditorView: View {
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     HStack(spacing: 3) {
                                         if clip.volume == 0 {
-                                            Text("🔇").font(.system(size: 9))
+                                            Image(systemName: "speaker.slash.fill")
+                                                .font(.system(size: 8))
                                         }
                                         Text("\(Int((store.clipOutputMs(clip) + 999) / 1000))s")
                                             .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -5710,16 +6262,33 @@ struct MemeEditorView: View {
                                 )
                             }
                             .frame(width: max(0, (geo.size.width - gaps) * fraction))
-                            .accessibilityLabel("Clip \(index + 1)")
+                            .accessibilityLabel(
+                                "Clip \(index + 1) of \(store.clips.count), " +
+                                String(format: "%.1f seconds", Double(store.clipOutputMs(clip)) / 1000)
+                            )
                         }
                     }
-                    Rectangle()
-                        .fill(BitOSTheme.accent)
-                        .frame(width: 2, height: 46)
-                        .offset(x: geo.size.width * CGFloat(positionMs) / CGFloat(totalMs))
-                        .allowsHitTesting(false)
-                        .accessibilityLabel("Playhead")
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(BitOSTheme.accent)
+                            .frame(width: 8, height: 8)
+                        Rectangle()
+                            .fill(BitOSTheme.accent)
+                            .frame(width: 2.5, height: 40)
+                    }
+                    .offset(x: max(0, geo.size.width * CGFloat(positionMs) / CGFloat(totalMs) - 4))
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Playhead")
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { value in
+                            let fraction = max(0, min(1, value.location.x / max(1, geo.size.width)))
+                            let targetSec = Double(totalMs) / 1000.0 * Double(fraction)
+                            videoTransport.seekToSeconds(targetSec)
+                        }
+                )
             }
             .frame(height: 46)
             if store.rate != 1 {
@@ -5729,7 +6298,7 @@ struct MemeEditorView: View {
             }
             HStack {
                 Spacer()
-                ClipTool(icon: "film", label: "Split") {
+                ClipTool(icon: AppIcons.split, label: "Split") {
                     if store.splitClip(atTimelineMs: positionMs) {
                         store.setNotice("Clip split at the playhead")
                     } else {
@@ -5746,7 +6315,13 @@ struct MemeEditorView: View {
                     }
                 }
                 Spacer()
-                ClipTool(icon: "mic.slash", label: "Mute") {
+                ClipTool(icon: "arrow.triangle.2.circlepath", label: "Replace") {
+                    guard store.clips.indices.contains(store.selectedClipIndex) else { return }
+                    replaceTargetIndex = store.selectedClipIndex
+                    isPickingReplaceClip = true
+                }
+                Spacer()
+                ClipTool(icon: "speaker.slash", label: "Mute") {
                     guard store.clips.indices.contains(store.selectedClipIndex) else { return }
                     let current = store.clips[store.selectedClipIndex].volume
                     store.setClipVolume(
@@ -5990,10 +6565,10 @@ struct MemeEditorView: View {
         .accessibilityLabel("Next — review and publish to Nostr")
     }
 
-    /// MSU-050: Export is no longer a peer of the primary. It is a labelled
-    /// secondary that saves a rendered FILE (the copy says so), reachable
-    /// here and from More; the explainer above states the difference the
-    /// first time the creator publishes.
+    /// MSU-050/EUI-01: Save a copy is a LABELLED secondary next to the one
+    /// primary — the visible words separate device export from Nostr
+    /// publish without relying on glyph recognition or the first-use
+    /// explainer. It saves a rendered FILE; the draft autosaves separately.
     private var headerExportButton: some View {
         let hasMedia = store.activeAsset != nil || store.isBlankDesign ||
             (store.gifFramesCount > 0 || (store.isBlankGif && store.blankGifHasContent)) ||
@@ -6001,11 +6576,63 @@ struct MemeEditorView: View {
         return Button {
             showExportSheet = true
         } label: {
-            AppIcons.image(for: AppIcons.save)
+            Text(publishCopy.exportAction)
+                .font(.subheadline)
                 .foregroundStyle(BitOSTheme.textSecondary)
         }
         .disabled(!hasMedia || store.exportState == .saving)
         .accessibilityLabel("\(publishCopy.exportAction) — save a rendered file to this device")
+    }
+
+    /// EUI-06: read + import a timed-caption file with honest notices.
+    /// The read is BOUNDED — an oversized file is rejected without ever
+    /// being fully materialized.
+    private func handleCaptionsImport(url: URL) {
+        let secured = url.startAccessingSecurityScopedResource()
+        defer { if secured { url.stopAccessingSecurityScopedResource() } }
+        switch Self.readBoundedText(url: url, limit: 512 * 1024) {
+        case .none:
+            store.setNotice("Could not read that file — nothing was added")
+        case .tooLarge:
+            store.setNotice("Caption file too large (over 512 KB) — nothing was added")
+        case .text(let raw):
+            importCaptionsText(raw)
+        }
+    }
+
+    private func importCaptionsText(_ raw: String) {
+        let result = store.addCaptionCues(fromFile: raw)
+        if let error = result.error {
+            store.setNotice("\(error) — nothing was added")
+            return
+        }
+        var copy = "Imported \(result.added) timed caption"
+        if result.added != 1 { copy += "s" }
+        if result.dropped > 0 {
+            copy += " · \(result.dropped) unparseable cue"
+            if result.dropped > 1 { copy += "s" }
+            copy += " skipped"
+        }
+        if result.truncated {
+            copy += " · file held more (editor cap \(MemeEditorStore.CaptionLayoutUi.shared.maxOverlays))"
+        }
+        store.setNotice(copy)
+    }
+
+    /// Bounded UTF-8 text read: nil = unreadable, tooLarge = over the
+    /// limit (the file is never fully materialized).
+    private static func readBoundedText(url: URL, limit: Int) -> BoundedText? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: limit + 1) else { return nil }
+        guard head.count <= limit else { return .tooLarge }
+        guard let text = String(data: head, encoding: .utf8) else { return nil }
+        return .text(text)
+    }
+
+    private enum BoundedText {
+        case text(String)
+        case tooLarge
     }
 
     private func loadPicked(_ items: [PhotosPickerItem]) async {
@@ -7411,6 +8038,10 @@ enum EditorPanel: String, CaseIterable, Identifiable {
 private struct MemePanelContent: View {
     let store: MemeEditorStore
     var onPublishTemplate: () -> Void = {}
+    /** EUI-06: timed captions — import an .srt/.vtt file. */
+    var onImportTimed: () -> Void = {}
+    /** EUI-06: one caption at the playhead (video mode). */
+    var onAddAtPlayhead: (() -> Void)?
     @State private var top = ""
     @State private var bottom = ""
     @State private var fontSlot = "impact"
@@ -7427,6 +8058,33 @@ private struct MemePanelContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
+            Button(action: onImportTimed) {
+                Label("Import timed captions (.srt / .vtt)…", systemImage: "square.and.arrow.down")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                            .fill(BitOSTheme.surface)
+                    )
+            }
+            .buttonStyle(.plain)
+            if let onAddAtPlayhead {
+                Button(action: onAddAtPlayhead) {
+                    Label("Add caption at playhead", systemImage: "text.bubble")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                                .fill(BitOSTheme.surface)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Text("Imported captions keep their file timing; select one on the stage to retime it.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textTertiary)
             BitosField("TOP TEXT", text: $top)
                 
                 .autocorrectionDisabled()
@@ -7737,6 +8395,35 @@ private struct StickerPanelContent: View {
 
 /// Sound panel (prototype sound row): current synth cue summary + a jump
 /// into the full cue studio sheet.
+/// EUI-05: the shared row state (labels from the `memeSoundRowCopy`
+/// seam; precedence from `memeSoundRowState` — never hand-rolled here).
+private enum MemeSoundAvailabilityUi {
+    struct RowStateUi {
+        let token: String
+        let actionLabel: String
+        let hint: String?
+    }
+
+    private static let labels: [String: String] = {
+        guard let data = FrameworkBusinessCoreClient().memeSoundRowCopy().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return root.compactMapValues { $0 as? String }
+    }()
+
+    static func rowState(added: Bool, downloading: Bool, loadFailed: Bool) -> RowStateUi {
+        let token = FrameworkBusinessCoreClient().memeSoundRowState(added, downloading, loadFailed)
+        let actionKey = ["available": "add", "needs_connection": "add", "downloading": "downloading", "added": "added"][token] ?? "add"
+        return RowStateUi(
+            token: token,
+            actionLabel: Self.labels[actionKey] ?? "Add",
+            hint: token == "needs_connection"
+                ? Self.labels["needsConnection"]
+                : token == "downloading" ? Self.labels["downloadingHint"] : nil
+        )
+    }
+}
+
 private struct SoundPanelContent: View {
     @Bindable var store: MemeEditorStore
     var hasSourceAudio = true
@@ -7746,6 +8433,13 @@ private struct SoundPanelContent: View {
     var onOpenTrending: () -> Void = {}
     var onOpenVideos: () -> Void = {}
     var onUseOnlineSound: (SharedSoundStore.Row) -> Void = { _ in }
+    // EUI-05 honest row states + single-row preview.
+    var currentSoundUrl = ""
+    var downloadingSoundUrl = ""
+    var failedSoundUrls: Set<String> = []
+    var videoDurationMs: Int64 = 0
+    var previewingSoundKey = ""
+    var onTogglePreview: (String, String, String) -> Void = { _, _, _ in }
     var onPickSound: () -> Void = {}
     var onOpenStudio: () -> Void
     var onPublishSound: () -> Void = {}
@@ -7813,6 +8507,67 @@ private struct SoundPanelContent: View {
     }
 
 
+    /// EUI-05: one sound row — preview (single-row), title/meta, and the
+    /// shared availability state's action + hint; preview available in
+    /// every state, Add offered unless Added/Downloading.
+    private func soundRowEui(
+        title: String, meta: String, key: String, source: String,
+        added: Bool, downloading: Bool, loadFailed: Bool
+    ) -> some View {
+        let state = MemeSoundAvailabilityUi.rowState(added: added, downloading: downloading, loadFailed: loadFailed)
+        return HStack(spacing: BitOSTheme.Spacing.sm) {
+            Button {
+                onTogglePreview(key, source, title)
+            } label: {
+                Image(systemName: previewingSoundKey == key ? "pause.circle" : "play.circle")
+                    .font(.title3)
+                    .foregroundStyle(previewingSoundKey == key ? BitOSTheme.accent : BitOSTheme.textSecondary)
+            }
+            .accessibilityLabel(previewingSoundKey == key ? "Stop previewing \(title)" : "Preview \(title)")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(BitOSTheme.textPrimary)
+                Text(state.hint.map { "\(meta) · \($0)" } ?? meta)
+                    .font(.caption2)
+                    .foregroundStyle(state.hint != nil ? BitOSTheme.warning : BitOSTheme.textSecondary)
+            }
+            Spacer()
+            Text(state.actionLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(added || downloading ? BitOSTheme.textSecondary : BitOSTheme.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(
+                        added || downloading ? BitOSTheme.surface : BitOSTheme.accent.opacity(0.14)
+                    )
+                )
+        }
+        .padding(BitOSTheme.Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
+                .fill(BitOSTheme.surface)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !added && !downloading { onAddRow(key, source, title) }
+        }
+    }
+
+    private func onAddRow(_ key: String, _ source: String, _ title: String) {
+        // The Add tap routes through the same online-use entry the old
+        // rows used; library keys carry their entry identity.
+        if let row = online.first(where: { $0.url == key }) {
+            onUseOnlineSound(row)
+        } else if source.hasPrefix("library:"), let entry = store.soundLibraryEntries.first(where: {
+            $0.url == key || "library:\($0.id)" == source
+        }) {
+            store.attachLibrarySound(entry)
+        }
+    }
+
     @ViewBuilder private var onlineSection: some View {
         // ── Shared sounds (kind-30078 online rail; query-filtered) ──
         let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -7827,34 +8582,17 @@ private struct SoundPanelContent: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BitOSTheme.textSecondary)
                 ForEach(Array(rows)) { row in
-                    Button {
-                        onUseOnlineSound(row)
-                    } label: {
-                        HStack(spacing: BitOSTheme.Spacing.sm) {
-                            Text("♪").font(.title3)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(row.label)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                    .foregroundStyle(BitOSTheme.textPrimary)
-                                Text(row.durationMs > 0
-                                     ? "\(row.durationMs / 1000)s · \(row.license)"
-                                     : row.license)
-                                    .font(.caption2)
-                                    .foregroundStyle(BitOSTheme.textSecondary)
-                            }
-                            Spacer()
-                            Text("Use")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(BitOSTheme.accent)
-                        }
-                        .padding(BitOSTheme.Spacing.sm)
-                        .background(
-                            RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
-                                .fill(BitOSTheme.surface)
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    soundRowEui(
+                        title: row.label,
+                        meta: row.durationMs > 0
+                            ? "\(row.durationMs / 1000)s · \(row.license)"
+                            : row.license,
+                        key: row.url,
+                        source: row.url,
+                        added: row.url == currentSoundUrl,
+                        downloading: row.url == downloadingSoundUrl,
+                        loadFailed: failedSoundUrls.contains(row.url)
+                    )
                 }
             }
         }
@@ -7881,32 +8619,16 @@ private struct SoundPanelContent: View {
     }
 
     private func libraryRow(_ entry: SharedSoundLibraryStore.Entry) -> some View {
-        Button {
-            store.attachLibrarySound(entry)
-        } label: {
-            HStack(spacing: BitOSTheme.Spacing.sm) {
-                Text("♪").font(.title3)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.label)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(BitOSTheme.textPrimary)
-                    Text("\(entry.durationMs / 1000)s · saved for offline use")
-                        .font(.caption2)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                Spacer()
-                Text("Attach")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(BitOSTheme.accent)
-            }
-            .padding(BitOSTheme.Spacing.sm)
-            .background(
-                RoundedRectangle(cornerRadius: BitOSTheme.Radius.md)
-                    .fill(BitOSTheme.surface)
-            )
-        }
-        .buttonStyle(.plain)
+        let key = entry.url.isEmpty ? entry.id : entry.url
+        return soundRowEui(
+            title: entry.label,
+            meta: "\(entry.durationMs / 1000)s · saved for offline use",
+            key: key,
+            source: "library:\(entry.id)",
+            added: !entry.url.isEmpty && entry.url == currentSoundUrl,
+            downloading: entry.url == downloadingSoundUrl,
+            loadFailed: false // local bytes never need a connection
+        )
     }
 
     @ViewBuilder private var publishSection: some View {
@@ -8016,7 +8738,15 @@ private struct SoundPanelContent: View {
                         HStack {
                             Text("Loop to fill").font(.caption)
                             Spacer()
-                            Text(sound.loop ? "repeats to the end" : "plays once")
+                            // EUI-05: the shared rule states the REAL
+                            // duration relationship (nothing claimed while
+                            // the video length is unknown).
+                            Text({
+                                let copy = FrameworkBusinessCoreClient().memeSoundLoopCopy(
+                                    sound.durationMs, videoDurationMs, sound.loop
+                                )
+                                return copy.isEmpty ? (sound.loop ? "repeats" : "plays once") : copy
+                            }())
                                 .font(.caption2)
                                 .foregroundStyle(BitOSTheme.textSecondary)
                         }
@@ -8132,12 +8862,136 @@ private struct VideoSoundsBrowseSheet: View {
     }
 }
 
-/// Effects panel (prototype fx panel): the 8 look presets as horizontal
-/// chips + the brightness/contrast/saturation sliders over the look.
+/// EUI-02 Look panel: the 8 shared grade presets (immediate, one undoable
+/// step per tap) plus the reference editor's Adjust structure — Tone |
+/// Colour tabs, control chips, ONE labelled slider for the selected
+/// control, reset current/all, and a Cancel/Apply draft transaction: the
+/// slider draft previews on the stage via `gradePreview`, Apply commits it
+/// as ONE undoable SetAdjust, Cancel restores the entry values.
+///
+/// Tone = Exposure · Lightness · Contrast; Colour = Saturation · Warmth ·
+/// Tint · Fade — exactly the axes the shared one-matrix pipeline burns
+/// identically in preview and export. Details (sharpness/grain/vignette)
+/// needs spatial rendering and stays out until a renderer supports it.
 private struct FxPanelContent: View {
     @Bindable var store: MemeEditorStore
 
+    /// One decoded `memeAdjustControls` row — labels, sections, bounds and
+    /// neutrals come from the SHARED catalogue, never hand-rolled here.
+    private struct AdjustControlRow: Identifiable {
+        let id: String
+        let section: String
+        let label: String
+        let min: Double
+        let max: Double
+        let neutral: Float
+        let signed: Bool
+        var range: ClosedRange<Double> { min...max }
+
+        /// Slider readout: "120%" for multipliers, "+30"/"-30" for axes.
+        func text(_ v: Float) -> String {
+            let pct = Int((v * 100).rounded())
+            return signed ? (pct > 0 ? "+\(pct)" : "\(pct)") : "\(pct)%"
+        }
+    }
+
+    /// EXPOSURE rides the v1 brightness field — same pure-scale math.
+    private static let wirePaths: [String: WritableKeyPath<MemeEditorStore.MemeAdjustUi, Float>] = [
+        "exposure": \.brightness,
+        "lightness": \.lightness,
+        "contrast": \.contrast,
+        "saturation": \.saturation,
+        "warmth": \.warmth,
+        "tint": \.tint,
+        "fade": \.fade,
+    ]
+
+    private static func decodeControls() -> (sections: [(id: String, label: String)], controls: [AdjustControlRow]) {
+        guard let data = FrameworkBusinessCoreClient().memeAdjustControls().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sections = root["sections"] as? [[String: Any]],
+              let controls = root["controls"] as? [[String: Any]] else { return ([], []) }
+        let sectionRows: [(id: String, label: String)] = sections.compactMap { row in
+            guard let id = row["id"] as? String, let label = row["label"] as? String else { return nil }
+            return (id, label)
+        }
+        let controlRows: [AdjustControlRow] = controls.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let section = row["section"] as? String,
+                  let label = row["label"] as? String,
+                  let min = (row["min"] as? NSNumber)?.doubleValue,
+                  let max = (row["max"] as? NSNumber)?.doubleValue,
+                  let neutral = (row["neutral"] as? NSNumber)?.floatValue,
+                  let signed = (row["signed"] as? NSNumber)?.boolValue,
+                  Self.wirePaths[id] != nil else { return nil }
+            return AdjustControlRow(
+                id: id, section: section, label: label,
+                min: min, max: max, neutral: neutral, signed: signed
+            )
+        }
+        return (sectionRows, controlRows)
+    }
+
+    private func value(_ control: AdjustControlRow, _ a: MemeEditorStore.MemeAdjustUi) -> Float {
+        a[keyPath: Self.wirePaths[control.id]!]
+    }
+    private func with(_ control: AdjustControlRow, _ a: MemeEditorStore.MemeAdjustUi, _ v: Float) -> MemeEditorStore.MemeAdjustUi {
+        var out = a
+        out[keyPath: Self.wirePaths[control.id]!] = v
+        return out
+    }
+
     private struct LookRow: Identifiable { let id: String, label: String }
+
+    /// Visual parity: grade previews render the CURRENT media through each
+    /// preset — never unrelated stock imagery (spec §2 rule).
+    @State private var swatches: [String: UIImage] = [:]
+    @State private var swatchSourceId = ""
+
+    private var swatchSource: (image: UIImage, id: String)? {
+        if let frame = store.gifActiveFrame { return (frame.image, frame.id) }
+        if let asset = store.activeAsset { return (asset.image, asset.id) }
+        return nil
+    }
+
+    private static func buildSwatches(_ source: UIImage, rows: [LookRow]) -> [String: UIImage] {
+        let side: CGFloat = 96
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let square = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+            .image { _ in
+                let scale = max(side / max(1, source.size.width), side / max(1, source.size.height))
+                let drawSize = CGSize(width: source.size.width * scale, height: source.size.height * scale)
+                source.draw(in: CGRect(
+                    x: (side - drawSize.width) / 2,
+                    y: (side - drawSize.height) / 2,
+                    width: drawSize.width,
+                    height: drawSize.height
+                ))
+            }
+        let client = FrameworkBusinessCoreClient()
+        var out: [String: UIImage] = [:]
+        for row in rows {
+            if let graded = MemeRaster.applyLook(square, matrixJson: client.memeLookMatrix(row.id)) {
+                out[row.id] = graded
+            }
+        }
+        return out
+    }
+
+    /// The shared control `icon` token → the platform glyph.
+    private static func controlIcon(_ token: String) -> String {
+        switch token {
+        case "exposure": return "plusminus.circle"
+        case "lightness": return "sun.max"
+        case "contrast": return "circle.lefthalf.filled"
+        case "saturation": return "paintpalette"
+        case "warmth": return "thermometer.medium"
+        case "tint": return "drop"
+        case "fade": return "circle.dotted"
+        default: return "circle"
+        }
+    }
 
     private var lookRows: [LookRow] {
         guard let data = FrameworkBusinessCoreClient().memeLooks().data(using: .utf8),
@@ -8150,67 +9004,194 @@ private struct FxPanelContent: View {
         }
     }
 
+    private let catalog = Self.decodeControls()
+    @State private var sectionId = "tone"
+    @State private var controlId = "exposure"
+    @State private var confirmResetAll = false
+
     var body: some View {
+        let entry = store.adjust
+        let effective = store.effectiveAdjust
+        let control = catalog.controls.first { $0.id == controlId } ?? catalog.controls.first
         VStack(alignment: .leading, spacing: BitOSTheme.Spacing.sm) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(lookRows, id: \.id) { look in
-                        ChipButton(
-                            label: look.label,
-                            active: look.id == (store.lookId ?? "none")
-                        ) {
-                            store.setLook(look.id)
+                    ForEach(lookRows) { look in
+                        let active = look.id == (store.lookId ?? "none")
+                        if let swatch = swatches[look.id] {
+                            Button {
+                                store.setLook(look.id)
+                            } label: {
+                                VStack(spacing: 0) {
+                                    Image(uiImage: swatch)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 64, height: 44)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .strokeBorder(
+                                                    active ? BitOSTheme.accent : BitOSTheme.border,
+                                                    lineWidth: active ? 2 : 1
+                                                )
+                                        )
+                                    Text(look.label)
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 4))
+                                        .padding(3)
+                                }
+                            }
+                            .accessibilityLabel("Look \(look.label)")
+                        } else {
+                            ChipButton(label: look.label, active: active) {
+                                store.setLook(look.id)
+                            }
                         }
                     }
                 }
             }
-            adjustSlider(
-                label: "Brightness", value: Binding(
-                    get: { Double(store.adjustBrightness) },
-                    set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
-                ),
-                in: 0.4...1.6
-            )
-            adjustSlider(
-                label: "Contrast", value: Binding(
-                    get: { Double(store.adjustContrast) },
-                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
-                ),
-                in: 0.4...1.6
-            )
-            adjustSlider(
-                label: "Saturation", value: Binding(
-                    get: { Double(store.adjustSaturation) },
-                    set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
-                ),
-                in: 0...2
-            )
-            if store.hasAdjust {
-                Button {
-                    store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
-                } label: {
-                    Text("Reset adjust")
+            .task(id: swatchSource?.id) {
+                guard let source = swatchSource, source.id != swatchSourceId else { return }
+                swatchSourceId = source.id
+                swatches = Self.buildSwatches(source.image, rows: lookRows)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Adjust").font(.subheadline.weight(.semibold))
+                Text("Fine-tune over the look — Apply burns it into the export like the preset.")
+                    .font(.caption)
+                    .foregroundStyle(BitOSTheme.textSecondary)
+            }
+            Picker("Adjust section", selection: $sectionId) {
+                ForEach(catalog.sections, id: \.id) { tab in
+                    Text(tab.label).tag(tab.id)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(catalog.controls) { candidate in
+                        if candidate.section == sectionId {
+                            // A non-default control keeps its dot — colour
+                            // alone is never the only changed-signal.
+                            let changed = value(candidate, effective) != candidate.neutral
+                            let activeChip = control?.id == candidate.id
+                            Button {
+                                controlId = candidate.id
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: Self.controlIcon(candidate.id))
+                                        .font(.system(size: 12))
+                                    Text(changed ? "\(candidate.label) •" : candidate.label)
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(activeChip ? BitOSTheme.accent.opacity(0.18) : BitOSTheme.surface))
+                                .overlay(Capsule().strokeBorder(activeChip ? BitOSTheme.accent : BitOSTheme.border, lineWidth: 1))
+                                .foregroundStyle(activeChip ? BitOSTheme.accent : BitOSTheme.textSecondary)
+                            }
+                            .accessibilityLabel(candidate.label)
+                        }
+                    }
+                }
+            }
+            if let control {
+                HStack(spacing: BitOSTheme.Spacing.sm) {
+                    Text(control.label)
                         .font(.caption.weight(.semibold))
+                        .frame(width: 84, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(value(control, effective)) },
+                        set: { store.gradePreview = with(control, effective, Float($0)) }
+                    ), in: control.range)
+                    Text(control.text(value(control, effective)))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(BitOSTheme.accent)
+                        .frame(width: 42, alignment: .trailing)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(control.label) \(control.text(value(control, effective)))")
+                .accessibilityAdjustableAction { direction in
+                    let step = (control.range.upperBound - control.range.lowerBound) / 20
+                    let current = Double(value(control, effective))
+                    let next = direction == .increment
+                        ? min(control.range.upperBound, current + step)
+                        : max(control.range.lowerBound, current - step)
+                    store.gradePreview = with(control, effective, Float(next))
+                }
+            }
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                if let control, value(control, effective) != control.neutral {
+                    Button {
+                        store.gradePreview = with(control, effective, control.neutral)
+                    } label: {
+                        Text("Reset \(control.label)")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.accent)
+                }
+                if !effective.isDefault {
+                    Button {
+                        // Resetting ONE value is a tap; discarding several
+                        // non-default ones names the cost first (spec rule).
+                        let count = catalog.controls.filter { value($0, effective) != $0.neutral }.count
+                        if count > 1 {
+                            confirmResetAll = true
+                        } else {
+                            store.gradePreview = MemeEditorStore.MemeAdjustUi()
+                        }
+                    } label: {
+                        Text("Reset all")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(BitOSTheme.accent)
+                }
+            }
+            // Draft transaction: Cancel restores the entry values; Apply
+            // commits the whole slider burst as one undoable command.
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    store.gradePreview = nil
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(BitOSTheme.textSecondary)
+                }
+                .disabled(store.gradePreview == nil)
+                Button {
+                    if let draft = store.gradePreview {
+                        store.setAdjust(draft)
+                        store.gradePreview = nil
+                    }
+                } label: {
+                    Text("Apply")
+                        .font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(BitOSTheme.accent)
+                .disabled(store.gradePreview == nil || store.gradePreview == entry)
             }
         }
-    }
-
-    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .frame(width: 84, alignment: .leading)
-            Slider(value: value, in: range)
-            Text("\(Int((value.wrappedValue * 100).rounded()))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(BitOSTheme.accent)
-                .frame(width: 42, alignment: .trailing)
+        .onChange(of: sectionId) { _, newValue in
+            controlId = catalog.controls.first { $0.section == newValue }?.id ?? controlId
+        }
+        .onDisappear {
+            store.gradePreview = nil
+        }
+        .alert("Reset all adjustments?", isPresented: $confirmResetAll) {
+            Button("Reset", role: .destructive) {
+                store.gradePreview = MemeEditorStore.MemeAdjustUi()
+            }
+            Button("Keep", role: .cancel) {}
+        } message: {
+            Text("This discards every non-default adjustment. Undo brings them back.")
         }
     }
 }
-
 
 // MARK: - Export raster (MST-016)
 
@@ -8267,6 +9248,46 @@ enum MemeRaster {
     }
 
     /// Renders asset + project to PNG bytes at the export resolution.
+    /**
+     * EUI-02 §3: the ONE crop draw for stills, GIF frames and stage
+     * previews — rotate clockwise (CGContext is CCW-positive, hence the
+     * negated angle), mirror in output space, scale to the placement rect,
+     * clip to the frame. Same math as Android `drawPlacedMedia`.
+     */
+    static func placeMedia(_ source: UIImage, _ place: MemeEditorStore.PlacementUi) -> UIImage {
+        let size = CGSize(width: place.frameWidth, height: place.frameHeight)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            let cg = context.cgContext
+            cg.clip(to: CGRect(origin: .zero, size: size))
+            if place.flipH {
+                // Mirror in OUTPUT space about the frame's vertical center.
+                cg.translateBy(x: size.width / 2, y: size.height / 2)
+                cg.scaleBy(x: -1, y: 1)
+                cg.translateBy(x: -size.width / 2, y: -size.height / 2)
+            }
+            let cx = CGFloat(place.drawX) + CGFloat(place.drawWidth) / 2
+            let cy = CGFloat(place.drawY) + CGFloat(place.drawHeight) / 2
+            if place.rotationDeg != 0 {
+                // CGContext rotates CCW for positive angles; the contract
+                // is clockwise.
+                cg.translateBy(x: cx, y: cy)
+                cg.rotate(by: -CGFloat(place.rotationDeg) * .pi / 180)
+                cg.translateBy(x: -cx, y: -cy)
+            }
+            let quarter = place.rotationDeg == 90 || place.rotationDeg == 270
+            let preW = quarter ? CGFloat(place.drawHeight) : CGFloat(place.drawWidth)
+            let preH = quarter ? CGFloat(place.drawWidth) : CGFloat(place.drawHeight)
+            source.draw(
+                in: CGRect(
+                    x: cx - preW / 2, y: cy - preH / 2,
+                    width: preW, height: preH
+                )
+            )
+        }
+    }
+
     static func renderPngData(
         asset: UIImage,
         projectJson: String,
@@ -8278,26 +9299,33 @@ enum MemeRaster {
         // uses); overlays draw unfiltered.
         var media = asset
         let projectLookId = MemeEditorStore.lookId(ofProject: projectJson)
-        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
-        let hasAdjust = adjust.bri != 1 || adjust.con != 1 || adjust.sat != 1
+        let adjustJson = client.memeAdjustOf(projectJson)
+        let hasAdjust = !MemeEditorStore.MemeAdjustUi.decode(adjustJson).isDefault
         if projectLookId != nil || hasAdjust {
             if let graded = applyLook(
                 asset,
-                matrixJson: client.memeAdjustMatrix(
-                    projectLookId,
-                    brightness: adjust.bri,
-                    contrast: adjust.con,
-                    saturation: adjust.sat
-                )
+                matrixJson: client.memeAdjustMatrix(projectLookId, adjustJson: adjustJson)
             ) {
                 media = graded
             }
         }
+        // EUI-02 §3: the crop treatment re-frames the media FIRST — the
+        // plan then normalizes against the crop frame like any source.
+        if let place = MemeEditorStore.PlacementUi.decode(
+            client.memeCropPlacement(
+                projectJson,
+                sourceWidth: Int(asset.size.width),
+                sourceHeight: Int(asset.size.height),
+                cropOverrideJson: ""
+            )
+        ), place.cover {
+            media = placeMedia(media, place)
+        }
         // The shared envelope owns the evened, long-edge-capped canvas.
         let envelopeJson = client.memeExportPlan(
             projectJson,
-            sourceWidth: Int(asset.size.width),
-            sourceHeight: Int(asset.size.height)
+            sourceWidth: Int(media.size.width),
+            sourceHeight: Int(media.size.height)
         )
         guard envelopeJson.contains("\"width\""),
               let envelopeData = envelopeJson.data(using: .utf8),
@@ -8674,127 +9702,6 @@ enum MemeRaster {
     }
 }
 
-/// Color-grade picker (MST-043): the 8 web presets, media-only, undoable.
-/// The Adjust section (prototype `create-edit` FX panel) adds manual
-/// brightness/contrast/saturation sliders composed over the preset.
-private struct LooksSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var store: MemeEditorStore
-    private let columns = [GridItem(.adaptive(minimum: 88), spacing: BitOSTheme.Spacing.sm)]
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Color look").font(.subheadline.weight(.semibold))
-                    Text("Applies to the media only — captions stay crisp. Undo works.")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                LazyVGrid(columns: columns, spacing: BitOSTheme.Spacing.sm) {
-                    ForEach(lookRows, id: \.id) { look in
-                        lookButton(look)
-                    }
-                }
-                Divider()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Adjust").font(.subheadline.weight(.semibold))
-                    Text("Fine-tune over the look — burns into the export like the preset.")
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                }
-                adjustSlider(
-                    label: "Brightness", value: Binding(
-                        get: { Double(store.adjustBrightness) },
-                        set: { store.setAdjust(brightness: Float($0), contrast: store.adjustContrast, saturation: store.adjustSaturation) }
-                    ),
-                    in: 0.4...1.6
-                )
-                adjustSlider(
-                    label: "Contrast", value: Binding(
-                        get: { Double(store.adjustContrast) },
-                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: Float($0), saturation: store.adjustSaturation) }
-                    ),
-                    in: 0.4...1.6
-                )
-                adjustSlider(
-                    label: "Saturation", value: Binding(
-                        get: { Double(store.adjustSaturation) },
-                        set: { store.setAdjust(brightness: store.adjustBrightness, contrast: store.adjustContrast, saturation: Float($0)) }
-                    ),
-                    in: 0...2
-                )
-                if store.hasAdjust {
-                    Button {
-                        store.setAdjust(brightness: 1, contrast: 1, saturation: 1)
-                    } label: {
-                        Text("Reset adjust")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .foregroundStyle(BitOSTheme.accent)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(BitOSTheme.Spacing.md)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-    }
-
-    /// One labeled slider with the % readout (prototype FX panel shape).
-    private func adjustSlider(label: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
-        HStack(spacing: BitOSTheme.Spacing.sm) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .frame(width: 84, alignment: .leading)
-            Slider(value: value, in: range)
-            Text("\(Int((value.wrappedValue * 100).rounded()))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(BitOSTheme.accent)
-                .frame(width: 42, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) \(Int((value.wrappedValue * 100).rounded())) percent")
-        .accessibilityAdjustableAction { direction in
-            let step = (range.upperBound - range.lowerBound) / 20
-            let next = direction == .increment
-                ? min(range.upperBound, value.wrappedValue + step)
-                : max(range.lowerBound, value.wrappedValue - step)
-            value.wrappedValue = next
-        }
-    }
-
-    /// Split out of `body` — the grid button chain exceeded the type-checker's
-    /// expression budget (the module compiled green again once extracted).
-    private func lookButton(_ look: LookRow) -> some View {
-        Button {
-            store.setLook(look.id)
-        } label: {
-            let active = look.id == (store.lookId ?? "none")
-            return Text(look.label)
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, BitOSTheme.Spacing.sm)
-                .background(active ? BitOSTheme.accent : BitOSTheme.surface)
-                .foregroundStyle(active ? Color.black : BitOSTheme.textPrimary)
-                .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Catalog rows from the shared seam (id order, `none` first).
-    private struct LookRow: Identifiable { let id: String, label: String }
-
-    private var lookRows: [LookRow] {
-        guard let data = FrameworkBusinessCoreClient().memeLooks().data(using: .utf8),
-              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return [LookRow(id: "none", label: "None")]
-        }
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            return LookRow(id: id, label: (row["label"] as? String) ?? id)
-        }
-    }
-}
 
 /// SFX sheet (MST-041): buckets × 31 synth sounds — tap previews (base64
 /// WAV through the shared renderer), ＋ schedules a cue at the playhead.
@@ -9747,82 +10654,214 @@ private struct CanvasSheet: View {
         )
     }
 
+    /// Shared guidance copy via the `memeStudioHints` seam (DESIGN_SYSTEM
+    /// §0 — one source, never hand-rolled per platform).
+    private static let cropHint: String = {
+        guard let data = FrameworkBusinessCoreClient().memeStudioHints().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hint = root["crop"] as? String, !hint.isEmpty else {
+            return "Zoom and reposition with the sliders — the stage previews live."
+        }
+        return hint
+    }()
+
+    /// The shared ratio catalogue via the bridge seam (DESIGN_SYSTEM §0 —
+    /// never hand-rolled per platform). `{"ratios":[{"id","label"}]}`.
+    private static let ratioIds: [(id: String, label: String)] = {
+        guard let data = FrameworkBusinessCoreClient().memeCanvasRatios().data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = root["ratios"] as? [[String: Any]] else { return [("source", "Original")] }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            return (id, (row["label"] as? String) ?? id)
+        }
+    }()
+
+    /// Swift has no data-class `copy()` — one helper for the draft edits.
+    private func with(
+        _ crop: MemeEditorStore.MemeCropUi,
+        rotationDeg: Int? = nil,
+        flipH: Bool? = nil,
+        zoom: Float? = nil,
+        panX: Float? = nil,
+        panY: Float? = nil
+    ) -> MemeEditorStore.MemeCropUi {
+        var out = crop
+        if let rotationDeg { out.rotationDeg = rotationDeg }
+        if let flipH { out.flipH = flipH }
+        if let zoom { out.zoom = zoom }
+        if let panX { out.panX = panX }
+        if let panY { out.panY = panY }
+        return out
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
-            Text("Canvas").font(.headline)
-            if store.isVideoMode {
-                Text("Video keeps its source frame in V1 — canvas settings apply to image and GIF memes.")
+        let draft = store.cropPreview ?? store.crop ?? MemeEditorStore.MemeCropUi()
+        let legacyPad = store.crop == nil &&
+            store.canvasRatio != nil && store.canvasRatio != "source"
+        return VStack(alignment: .leading, spacing: BitOSTheme.Spacing.md) {
+            Text("Crop").font(.headline)
+            Text(Self.cropHint)
+                .font(.caption)
+                .foregroundStyle(BitOSTheme.textSecondary)
+            if legacyPad {
+                Text("This project pads the media to fit the canvas. Any crop change below switches it to crop-to-fill.")
                     .font(.caption)
-                    .foregroundStyle(BitOSTheme.textSecondary)
-            } else {
-                Text("Size")
-                    .font(.subheadline.weight(.semibold))
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(
-                        ["source", "1:1", "4:5", "9:16", "16:9"],
-                        id: \.self
-                    ) { ratio in
-                        let label = ratio == "source" ? "Source" : ratio
-                        Button(label) {
-                            store.setCanvas(ratio: ratio, bg: store.canvasBg)
-                        }
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(
-                            (store.canvasRatio ?? "source") == ratio
-                                ? BitOSTheme.accent : BitOSTheme.surface
-                        )
-                        .foregroundStyle(
-                            (store.canvasRatio ?? "source") == ratio ? Color.black : BitOSTheme.textPrimary
-                        )
-                        .clipShape(Capsule())
-                    }
-                }
-                Text("Background")
-                    .font(.subheadline.weight(.semibold))
-                HStack(spacing: BitOSTheme.Spacing.xs) {
-                    ForEach(swatches, id: \.self) { hex in
-                        Button {
-                            store.setCanvas(ratio: store.canvasRatio, bg: hex)
-                        } label: {
-                            Circle()
-                                .fill(Self.color(fromHex: hex) ?? .white)
-                                .frame(width: 28, height: 28)
-                                .overlay(
-                                    Circle().strokeBorder(
-                                        store.canvasBg == hex ? BitOSTheme.accent : BitOSTheme.border,
-                                        lineWidth: store.canvasBg == hex ? 2 : 1
-                                    )
-                                )
-                                .background(Self.color(fromHex: hex) ?? .clear)
-                        }
-                        .accessibilityLabel("Background \(hex)")
-                    }
-                    ColorPicker("Custom", selection: $picked, supportsOpacity: false)
-                        .labelsHidden()
-                        .onChange(of: picked) { _, color in
-                            store.setCanvas(ratio: store.canvasRatio, bg: Self.hex(color))
-                        }
-                    if store.canvasBg != nil {
-                        Button("Clear") {
-                            store.setCanvas(ratio: store.canvasRatio, bg: nil)
-                        }
-                        .font(.caption)
-                        .foregroundStyle(BitOSTheme.textSecondary)
-                    }
-                }
-                Text("The media letterboxes onto the canvas; captions and layers keep their positions.")
-                    .font(.caption2)
-                    .foregroundStyle(BitOSTheme.textSecondary)
+                    .foregroundStyle(BitOSTheme.textTertiary)
             }
-            Button("Done") { dismiss() }
+            Text("Aspect ratio")
+                .font(.subheadline.weight(.semibold))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: BitOSTheme.Spacing.xs) {
+                    ForEach(Self.ratioIds, id: \.id) { ratio in
+                        let id = ratio.id
+                        let label = id == "source" ? "Original" : id
+                        // Visual parity: each chip carries the ratio's SHAPE
+                        // (spec §3 "label and shape"); Original shows the
+                        // media's own shape.
+                        let terms = id.split(separator: ":").compactMap { Int($0) }
+                        let mediaAspect = store.gifActiveFrame.map {
+                            $0.image.size.width / max(1, $0.image.size.height)
+                        } ?? store.activeAsset?.aspect ?? 1
+                        let shapeAspect: CGFloat = terms.count == 2
+                            ? min(2.5, max(0.4, CGFloat(terms[0]) / CGFloat(terms[1])))
+                            : min(2.5, max(0.4, mediaAspect))
+                        let selectedRatio = (store.canvasRatio ?? "source") == id
+                        Button {
+                            store.setCanvas(ratio: id, bg: store.canvasBg)
+                            // "Original" restores the uncropped frame (spec §3).
+                            if id == "source" {
+                                store.setCrop(nil)
+                                store.cropPreview = nil
+                            }
+                        } label: {
+                            VStack(spacing: 3) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(
+                                        selectedRatio ? Color.black : BitOSTheme.textSecondary,
+                                        lineWidth: 1.5
+                                    )
+                                    .frame(height: 14)
+                                    .aspectRatio(shapeAspect, contentMode: .fit)
+                                Text(label)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(
+                                        selectedRatio ? Color.black : BitOSTheme.textPrimary
+                                    )
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(selectedRatio ? BitOSTheme.accent : BitOSTheme.surface)
+                            )
+                        }
+                        .accessibilityLabel("Aspect ratio \(label)")
+                    }
+                }
+            }
+            HStack(spacing: BitOSTheme.Spacing.md) {
+                Button("Rotate left") {
+                    store.cropPreview = with(draft, rotationDeg: (draft.rotationDeg + 270) % 360)
+                }
+                Button("Rotate right") {
+                    store.cropPreview = with(draft, rotationDeg: (draft.rotationDeg + 90) % 360)
+                }
+                Button("Flip") {
+                    store.cropPreview = with(draft, flipH: !draft.flipH)
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(BitOSTheme.accent)
+            cropSlider(label: "Zoom", value: draft.zoom, in: 1...3, format: { "\(Int(($0 * 100).rounded()))%" }) {
+                store.cropPreview = with(draft, zoom: $0)
+            }
+            cropSlider(label: "Position X", value: draft.panX, in: -1...1, format: { "\(Int(($0 * 100).rounded()))" }) {
+                store.cropPreview = with(draft, panX: $0)
+            }
+            cropSlider(label: "Position Y", value: draft.panY, in: -1...1, format: { "\(Int(($0 * 100).rounded()))" }) {
+                store.cropPreview = with(draft, panY: $0)
+            }
+            HStack {
+                Spacer(minLength: 0)
+                Button("Cancel") {
+                    store.cropPreview = nil
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BitOSTheme.textSecondary)
+                .disabled(store.cropPreview == nil)
+                Button("Apply") {
+                    if let preview = store.cropPreview {
+                        store.setCrop(preview)
+                        store.cropPreview = nil
+                    }
+                }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(BitOSTheme.accent)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .disabled(store.cropPreview == nil)
+            }
+            Text("Background")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: BitOSTheme.Spacing.xs) {
+                ForEach(swatches, id: \.self) { hex in
+                    let selected = store.canvasBg == hex
+                    Button {
+                        store.setCanvas(ratio: store.canvasRatio, bg: hex)
+                    } label: {
+                        Circle()
+                            .fill(Self.color(fromHex: hex) ?? .white)
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                Circle().strokeBorder(
+                                    selected ? BitOSTheme.accent : BitOSTheme.border,
+                                    lineWidth: selected ? 2 : 1
+                                )
+                            )
+                    }
+                    .accessibilityLabel("Background \(hex)")
+                }
+            }
+            Text("Pads letterboxed projects — a crop fills the frame instead.")
+                .font(.caption2)
+                .foregroundStyle(BitOSTheme.textTertiary)
         }
-        .padding(.horizontal, BitOSTheme.Spacing.md)
-        .padding(.top, BitOSTheme.Spacing.sm)
-        .padding(.bottom, BitOSTheme.Spacing.lg)
+        .onDisappear {
+            store.cropPreview = nil
+        }
+    }
+
+    /// One labelled, accessibility-adjustable crop slider (the spec's
+    /// no-pinch operation path).
+    private func cropSlider(
+        label: String,
+        value: Float,
+        in range: ClosedRange<Float>,
+        format: @escaping (Float) -> String,
+        onChange: @escaping (Float) -> Void
+    ) -> some View {
+        HStack(spacing: BitOSTheme.Spacing.sm) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 84, alignment: .leading)
+            Slider(value: Binding(
+                get: { Double(value) },
+                set: { onChange(Float($0)) }
+            ), in: Double(range.lowerBound)...Double(range.upperBound))
+            Text(format(value))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(BitOSTheme.accent)
+                .frame(width: 42, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(format(value))")
+        .accessibilityAdjustableAction { direction in
+            let step = (range.upperBound - range.lowerBound) / 20
+            let next = direction == .increment
+                ? min(range.upperBound, value + step)
+                : max(range.lowerBound, value - step)
+            onChange(next)
+        }
     }
 }
 
@@ -10192,5 +11231,14 @@ private struct PenControlsRowIos: View {
         }
         .padding(.horizontal, BitOSTheme.Spacing.md)
         .padding(.vertical, BitOSTheme.Spacing.xs)
+    }
+}
+
+/// EUI-05: forwards AVAudioPlayer completion into the store's preview
+/// lifecycle (one small NSObject bridge; the delegate method is optional).
+private final class SoundPreviewDelegateBox: NSObject, AVAudioPlayerDelegate {
+    var onEnd: (() -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onEnd?()
     }
 }

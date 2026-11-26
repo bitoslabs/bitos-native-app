@@ -66,7 +66,7 @@ object StudioOnboarding {
             anchor = "next",
             iconToken = "send",
             title = "Next publishes",
-            body = "Next posts to Nostr. Export saves a rendered file to this device.",
+            body = "Next posts to Nostr. Save a copy creates a rendered file on this device.",
         ),
     )
 
@@ -148,8 +148,26 @@ object StudioOnboarding {
         )
     }
 
+    /**
+     * Sound-first empty state (MEM-003c): VIDEO mode with a verified
+     * soundtrack attached and no clip yet. The soundtrack row stays the
+     * source of truth for label/volume/loop/remove; the secondary action
+     * re-opens the sound sheet (the "Change sound" path).
+     */
+    val SOUND_FIRST_EMPTY = EmptyState(
+        title = "Your sound is ready",
+        body = "Add a video to begin.",
+        iconToken = "sound",
+        primaryLabel = "Add video",
+        secondaryLabel = "Change sound",
+    )
+
     /** The line shown once media exists but nothing is on it yet. */
     const val ADD_SOMETHING_HINT = "Add text, a sticker or a look — everything autosaves."
+
+    /** Crop sheet (EUI-02 spec §3): the pan/zoom affordance is the sliders —
+     *  operable without pinch gestures, previewing live on the stage. */
+    const val CROP_HINT = "Zoom and reposition with the sliders — the stage previews live."
 
     /**
      * Undo/redo discoverability (MSU-033): shown as a one-time notice the
@@ -170,10 +188,12 @@ object StudioOnboarding {
      * The one-line mental model. The shipped editor showed `Next` and
      * `Export` with equal weight and no explanation, so the two "I'm done"
      * verbs were indistinguishable. [PUBLISH_EXPLAINER] is shown once, the
-     * first time the creator reaches the publish entry.
+     * first time the creator reaches the publish entry. It must name the
+     * secondary action by its real label ([EXPORT_ACTION]) so the words
+     * always match a visible control (EUI-01).
      */
     const val PUBLISH_EXPLAINER =
-        "Publish posts to Nostr · Export saves a file to this device."
+        "Publish posts to Nostr. Save a copy creates a file on this device."
 
     /** The single primary action label (publish flow entry). */
     const val PRIMARY_ACTION = "Next"

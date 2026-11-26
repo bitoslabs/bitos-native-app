@@ -2,6 +2,7 @@ package space.bitos.core.bridge
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -720,27 +721,85 @@ class BusinessCoreBridge {
     /** hex64 pubkey -> npub (display form). */
     fun npubEncode(pubkeyHex: String): String? = space.bitos.core.identity.NostrKeyCodec.npub(pubkeyHex)
 
-    // ── Multi-account registry (APP-018a row 1) ─────────────────
+    // ── Multi-account registry (APP-018a row 1; SBC-008c v2) ─────
 
-    /** Registry row wire — public projections only, never secrets. */
+    /**
+     * Registry row wire — public projections only, never secrets. v2 adds
+     * the signer kind and per-kind metadata JSON (`nip46`/`nip55` below).
+     */
     class RegisteredAccountWire(
         val pubkeyHex: String,
         val npub: String,
         val displayName: String? = null,
         val addedAtSeconds: Long = 0,
+        val signerKind: String = "LOCAL_KEY",
+        /** `{"bunkerPubkeyHex","relays":[…],"label"?,"connectionVersion"}` or null. */
+        val nip46Json: String? = null,
+        /** `{"signerPackage","protocolVersion"}` or null. */
+        val nip55Json: String? = null,
     )
 
     fun accountRegistryDecode(json: String): List<RegisteredAccountWire> =
         space.bitos.core.identity.AccountRegistry.decode(json).map {
-            RegisteredAccountWire(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+            RegisteredAccountWire(
+                it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds,
+                it.signerKind.name,
+                it.nip46?.let { meta ->
+                    buildJsonObject {
+                        put("bunkerPubkeyHex", meta.bunkerPubkeyHex)
+                        put("relays", buildJsonArray { meta.relays.forEach { relay -> add(JsonPrimitive(relay)) } })
+                        meta.label?.let { label -> put("label", label) }
+                        put("connectionVersion", meta.connectionVersion)
+                    }.toString()
+                },
+                it.nip55?.let { meta ->
+                    buildJsonObject {
+                        put("signerPackage", meta.signerPackage)
+                        put("protocolVersion", meta.protocolVersion)
+                    }.toString()
+                },
+            )
         }
 
     fun accountRegistryEncode(accounts: List<RegisteredAccountWire>): String =
         space.bitos.core.identity.AccountRegistry.encode(
             accounts.map {
-                space.bitos.core.identity.RegisteredAccount(it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds)
+                space.bitos.core.identity.RegisteredAccount(
+                    it.pubkeyHex, it.npub, it.displayName, it.addedAtSeconds,
+                    signerKind = when (it.signerKind) {
+                        space.bitos.core.identity.SignerKind.LOCAL_KEY.name -> space.bitos.core.identity.SignerKind.LOCAL_KEY
+                        space.bitos.core.identity.SignerKind.REMOTE_NIP46.name -> space.bitos.core.identity.SignerKind.REMOTE_NIP46
+                        space.bitos.core.identity.SignerKind.EXTERNAL_NIP55.name -> space.bitos.core.identity.SignerKind.EXTERNAL_NIP55
+                        // Unknown kind strings stay browse-only, never guessed as local.
+                        else -> space.bitos.core.identity.SignerKind.READ_ONLY
+                    },
+                    nip46 = it.nip46Json?.let { json -> decodeNip46Meta(json) },
+                    nip55 = it.nip55Json?.let { json -> decodeNip55Meta(json) },
+                )
             },
         )
+
+    private fun decodeNip46Meta(json: String): space.bitos.core.identity.Nip46AccountMetadata? = try {
+        val root = Json.parseToJsonElement(json).jsonObject
+        space.bitos.core.identity.Nip46AccountMetadata(
+            bunkerPubkeyHex = root["bunkerPubkeyHex"]?.jsonPrimitive?.contentOrNull ?: return null,
+            relays = root["relays"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: return null,
+            label = root["label"]?.jsonPrimitive?.contentOrNull,
+            connectionVersion = root["connectionVersion"]?.jsonPrimitive?.intOrNull ?: 1,
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun decodeNip55Meta(json: String): space.bitos.core.identity.Nip55AccountMetadata? = try {
+        val root = Json.parseToJsonElement(json).jsonObject
+        space.bitos.core.identity.Nip55AccountMetadata(
+            signerPackage = root["signerPackage"]?.jsonPrimitive?.contentOrNull ?: return null,
+            protocolVersion = root["protocolVersion"]?.jsonPrimitive?.intOrNull ?: 1,
+        )
+    } catch (_: Exception) {
+        null
+    }
 
     // ── Interaction gates (APP-018a row 2) ──────────────────────
 
@@ -1144,6 +1203,13 @@ class BusinessCoreBridge {
             "methodInfo" to content.METHOD_INFO,
             "nip46ComingSoon" to content.NIP46_COMING_SOON,
             "nip55ComingSoon" to content.NIP55_COMING_SOON,
+            "nip46SetupTitle" to content.NIP46_SETUP_TITLE,
+            "nip46SetupBody" to content.NIP46_SETUP_BODY,
+            "nip46FieldLabel" to content.NIP46_FIELD_LABEL,
+            "nip46ConnectLabel" to content.NIP46_CONNECT_LABEL,
+            "nip46ConfirmTitle" to content.NIP46_CONFIRM_TITLE,
+            "nip46ConfirmBody" to content.NIP46_CONFIRM_BODY,
+            "nip46DeniedNotice" to content.NIP46_DENIED_NOTICE,
             "methods" to content.METHODS.map { method ->
                 mapOf(
                     "id" to method.id,
@@ -2430,6 +2496,99 @@ class BusinessCoreBridge {
         }.toString()
     }
 
+    // ── Create-hub sound/remix source pickers (MEM-003/MEM-005) ────────
+
+    /**
+     * MEM-003a paste-field parser for the remix source picker. Returns
+     * `{"id":"<64-hex>","relays":["wss://…",…]}` for an accepted
+     * note/nevent/BitOS-URL target, else `{"error":"<token>","message":"…"}`.
+     * The rejection token is stable (`RemixTargetRejection.name`); the
+     * message is shared display copy. Pure — no relay or UI code.
+     */
+    fun remixSourceTargetParse(raw: String): String = buildJsonObject {
+        val parsed = space.bitos.core.studio.RemixSourceTargets.parse(raw)
+        if (parsed is space.bitos.core.studio.RemixTarget.Event) {
+            put("id", parsed.id)
+            put("relays", buildJsonArray {
+                parsed.relayHints.forEach { add(JsonPrimitive(it)) }
+            })
+        } else {
+            val rejection = space.bitos.core.studio.RemixSourceTargets.rejectionOf(raw)
+                ?: space.bitos.core.studio.RemixTargetRejection.NOT_AN_EVENT
+            put("error", rejection.name)
+            put("message", rejection.message)
+        }
+    }.toString()
+
+    /**
+     * MEM-005a/c preflight classification of one VERIFIED fetched source:
+     * `{"mediaUrl":"…","mediaKind":"video|image","license":"…"|"",
+     * "askRequired":bool,"attribution":"remix of …"}` — mediaUrl "" means
+     * "no loadable media": the picker offers the seeded credited post,
+     * never a blank studio remix. Pure over the shared rules.
+     */
+    fun remixSourcePreflight(
+        eventId: String,
+        pubkey: String,
+        kind: Long,
+        createdAt: Long,
+        content: String,
+        tagsJson: String,
+        creatorLabel: String,
+    ): String {
+        val tags = try {
+            space.bitos.core.store.TagsCodec.decode(tagsJson).orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val id = space.bitos.core.model.EventId.parse(eventId)
+        val author = space.bitos.core.model.Pubkey.parse(pubkey)
+        if (id == null || author == null) {
+            return buildJsonObject {
+                put("idMatches", false)
+                put("mediaUrl", "")
+                put("mediaKind", "")
+                put("license", "")
+                put("askRequired", false)
+                put("attribution", "")
+                put("memeTag", "")
+            }.toString()
+        }
+        val note = space.bitos.core.feed.FeedNote.from(
+            space.bitos.core.model.NostrEvent(
+                id = id,
+                pubkey = author,
+                createdAt = createdAt,
+                kind = kind.toInt(),
+                tags = tags,
+                content = content,
+                signature = null,
+                receivedFromRelay = null,
+            ),
+        )
+        val preflight = space.bitos.core.studio.RemixPreflight
+        return buildJsonObject {
+            put("idMatches", preflight.idMatches(eventId, note))
+            put("mediaUrl", preflight.mediaUrlOf(note) ?: "")
+            put("mediaKind", preflight.mediaKindOf(note) ?: "")
+            put("license", note.license ?: "")
+            put("askRequired", preflight.requiresAsk(note))
+            put("attribution", preflight.attributionPreview(creatorLabel))
+            put("memeTag", note.memeTag ?: "")
+        }.toString()
+    }
+
+    /** By-id lookup REQ for one remix target (kinds 1/20/21/22, limit 1). */
+    fun remixSourceLookupRequest(subscriptionId: String, eventId: String): String =
+        try {
+            space.bitos.core.nostr.NostrEventCodec.encodeRequest(
+                subscriptionId,
+                space.bitos.core.studio.RemixPreflight.lookupFilter(eventId),
+            )
+        } catch (_: Exception) {
+            ""
+        }
+
     // ── M2 GIF planning seams: iOS rasters/encodes natively (plan §4.2 —
     // CGImageSource decode + CGImageDestination encode) but the TIMING and
     // ladder rules stay single-sourced in the shared planner.
@@ -2832,6 +2991,28 @@ class BusinessCoreBridge {
             put("primary", state.primaryLabel)
             put("secondary", state.secondaryLabel ?: "")
             put("tertiary", state.tertiaryLabel ?: "")
+            put("hint", space.bitos.core.studio.StudioOnboarding.ADD_SOMETHING_HINT)
+            put("undoHint", space.bitos.core.studio.StudioOnboarding.UNDO_HINT)
+            put("nothingToUndo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_UNDO)
+            put("nothingToRedo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_REDO)
+        }.toString()
+    }
+
+    /**
+     * Sound-first empty state (MEM-003c): the VIDEO-mode session a
+     * `MemeSoundSeed` opens — soundtrack attached, no clip. Same shape as
+     * [memeEmptyState]; `secondary` ("Change sound") re-opens the sound
+     * sheet, `primary` ("Add video") opens the media picker.
+     */
+    fun memeSoundFirstEmptyState(): String {
+        val state = space.bitos.core.studio.StudioOnboarding.SOUND_FIRST_EMPTY
+        return buildJsonObject {
+            put("title", state.title)
+            put("body", state.body)
+            put("icon", state.iconToken)
+            put("primary", state.primaryLabel)
+            put("secondary", state.secondaryLabel ?: "")
+            put("tertiary", "")
             put("hint", space.bitos.core.studio.StudioOnboarding.ADD_SOMETHING_HINT)
             put("undoHint", space.bitos.core.studio.StudioOnboarding.UNDO_HINT)
             put("nothingToUndo", space.bitos.core.studio.StudioOnboarding.NOTHING_TO_UNDO)
@@ -3607,23 +3788,210 @@ class BusinessCoreBridge {
     }.toString()
 
     /**
-     * Look preset + manual adjust (prototype FX sliders) composed into ONE
-     * 4×5 matrix — same envelope as [memeLookMatrix]; defaults (1/1/1)
-     * reduce to the plain look matrix.
+     * Look + manual adjust composed into ONE 4×5 matrix — same envelope as
+     * [memeLookMatrix]. [adjustJson] is the canonical all-keys adjust
+     * object ([memeAdjustOf] shape); missing/junk keys stay neutral and
+     * values clamp, so the caller never reimplements bounds. All-neutral
+     * reduces to the plain look matrix.
      */
-    fun memeAdjustMatrix(
+    fun memeAdjustMatrix(lookId: String?, adjustJson: String): String =
+        matrixEnvelope(lookId, space.bitos.core.studio.MemeAdjust.fromCanonical(adjustJson))
+
+    /**
+     * EUI-02: the project's FULL normalized adjust (v1 triple + the new
+     * Tone/Colour axes) as canonical JSON with every key present and
+     * defaults filled — the native UI decodes this instead of parsing wire
+     * fields or reimplementing clamps. Never throws; junk → all defaults.
+     */
+    fun memeAdjustOf(projectJson: String): String {
+        val adjust = space.bitos.core.studio.MemeProjectContract.decode(projectJson)?.adjust ?: space.bitos.core.studio.MemeAdjust()
+        return buildJsonObject {
+            put("bri", adjust.brightness)
+            put("con", adjust.contrast)
+            put("sat", adjust.saturation)
+            put("lig", adjust.lightness)
+            put("warm", adjust.warmth)
+            put("tint", adjust.tint)
+            put("fade", adjust.fade)
+        }.toString()
+    }
+
+    /**
+     * EUI-02: the Adjust-section catalogue (sections, labels, bounds,
+     * neutrals, signed flags) both platforms render their slider UI from —
+     * the `MemeTools.catalogJson()` pattern. Never throws.
+     */
+    fun memeAdjustControls(): String = space.bitos.core.studio.MemeAdjustControl.catalogJson()
+
+    /**
+     * EUI-05: the sound-row labels + loop copy from the shared
+     * availability rule (`{"add","needsConnection","downloading",
+     * "downloadingHint","added","loopCovers","loopFill","loopOnce"}`) —
+     * one copy source for both platforms (DESIGN_SYSTEM §0).
+     */
+    fun memeSoundRowCopy(): String = buildJsonObject {
+        put("add", space.bitos.core.studio.MemeSoundAvailability.RowState.AVAILABLE.actionLabel)
+        put("needsConnection", space.bitos.core.studio.MemeSoundAvailability.RowState.NEEDS_CONNECTION.hint)
+        put("downloading", space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING.actionLabel)
+        put(
+            "downloadingHint",
+            space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING.hint,
+        )
+        put("added", space.bitos.core.studio.MemeSoundAvailability.RowState.ADDED.actionLabel)
+    }.toString()
+
+    /**
+     * EUI-06: timed-caption import through the shared parser —
+     * `{"cues":[{"start","end","text"}],"dropped":n,"truncated":bool,
+     * "error":str|null}`. Deterministic: same bytes → same cues.
+     */
+    fun memeCaptionImport(raw: String): String {
+        val parsed = space.bitos.core.studio.MemeCaptionImport.parse(raw)
+        return buildJsonObject {
+            put("cues", buildJsonArray {
+                parsed.cues.forEach { cue ->
+                    add(buildJsonObject {
+                        put("start", cue.startMs)
+                        put("end", cue.endMs)
+                        put("text", cue.text)
+                    })
+                }
+            })
+            put("dropped", parsed.dropped)
+            put("truncated", parsed.truncated)
+            parsed.error?.let { put("error", it) }
+        }.toString()
+    }
+
+    /**
+     * EUI-06: the caption LAYOUT contract (placement rows, style preset,
+     * overlay cap) so no platform re-inlines the constants —
+     * `{"x","rowY0","rowY1","size","outline","maxOverlays"}`.
+     */
+    fun memeCaptionLayout(): String {
+        val a = space.bitos.core.studio.MemeCaptionImport.placement(0)
+        val b = space.bitos.core.studio.MemeCaptionImport.placement(1)
+        val style = space.bitos.core.studio.MemeCaptionImport.STYLE
+        return buildJsonObject {
+            put("x", a.x)
+            put("rowY0", a.y)
+            put("rowY1", b.y)
+            put("size", style.size)
+            put("outline", style.outline)
+            put("maxOverlays", space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS)
+        }.toString()
+    }
+
+    /**
+     * EUI-05: the resolved row-state token (`available|needs_connection|
+     * downloading|added`) from the shared precedence — platforms map the
+     * token to the labels in [memeSoundRowCopy].
+     */
+    fun memeSoundRowState(added: Boolean, downloading: Boolean, loadFailed: Boolean): String =
+        space.bitos.core.studio.MemeSoundAvailability.rowState(added, downloading, loadFailed).name.lowercase()
+
+    /** EUI-05: the loop line for the current durations ("" = unknown). */
+    fun memeSoundLoopCopy(trackMs: Long, videoMs: Long, loop: Boolean): String =
+        space.bitos.core.studio.MemeSoundAvailability.loopCopy(trackMs, videoMs, loop)
+
+    /**
+     * EUI-04: the replacement window for a clip whose media changed —
+     * `{"start","end","shortened"}` from the shared rule, so the native
+     * replace flows keep timing identically.
+     */
+    fun memeReplaceWindow(oldStartMs: Long, oldEndMs: Long, newDurationMs: Long): String {
+        val (start, end, shortened) = space.bitos.core.studio.MemeVideoCutRules.replaceWindow(
+            oldStartMs, oldEndMs, newDurationMs,
+        )
+        return buildJsonObject {
+            put("start", start)
+            put("end", end)
+            put("shortened", shortened)
+        }.toString()
+    }
+
+    /**
+     * EUI-02 §3: the ratio catalogue both crop sheets render from —
+     * `{"ratios":[{"id","label"}]}` in display order (the `MemeTools`
+     * pattern; DESIGN_SYSTEM §0). Never throws.
+     */
+    fun memeCanvasRatios(): String = buildJsonObject {
+        put("ratios", buildJsonArray {
+            space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
+                add(buildJsonObject {
+                    put("id", id)
+                    put("label", label)
+                })
+            }
+        })
+    }.toString()
+
+    /**
+     * EUI-02 §3: studio guidance copy keyed by surface —
+     * `{"crop": …}`. One shared source so the platforms never drift.
+     */
+    fun memeStudioHints(): String = buildJsonObject {
+        put("crop", space.bitos.core.studio.StudioOnboarding.CROP_HINT)
+    }.toString()
+
+    /**
+     * EUI-02 §3: the project's canonical crop (`{"rot":..,"flip":..,
+     * "zoom":..,"panx":..,"pany":..}`) or "" when absent (legacy
+     * letterbox), so the native UI never parses wire fields.
+     */
+    fun memeCropOf(projectJson: String): String {
+        val crop = space.bitos.core.studio.MemeProjectContract.decode(projectJson)?.crop ?: return ""
+        return buildJsonObject {
+            if (crop.rotationDeg != 0) put("rot", crop.rotationDeg)
+            if (crop.flipH) put("flip", crop.flipH)
+            if (crop.zoom != 1f) put("zoom", crop.zoom)
+            if (crop.panX != 0f) put("panx", crop.panX)
+            if (crop.panY != 0f) put("pany", crop.panY)
+        }.toString()
+    }
+
+    /**
+     * EUI-02 §3: the shared placement (frame + media draw rect + rotation/
+     * flip + cover flag) for a source size under the project's ratio and
+     * crop — the ONE geometry previews and burns share. Junk → identity.
+     */
+    fun memeCropPlacement(
+        projectJson: String,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        cropOverrideJson: String = "",
+    ): String {
+        val project = space.bitos.core.studio.MemeProjectContract.decode(projectJson)
+        // The sheet previews an UNCOMMITTED draft through the same math —
+        // the override rides the canonical crop JSON shape.
+        val cropOverride = cropOverrideJson.takeIf { it.isNotEmpty() }
+            ?.let { space.bitos.core.studio.MemeProjectContract.decodeCropJson(it) }
+        val place = space.bitos.core.studio.MemeCanvas.placement(
+            sourceWidth, sourceHeight, project?.canvasRatio, cropOverride ?: project?.crop,
+        )
+        return buildJsonObject {
+            put("frameW", place.frameWidth)
+            put("frameH", place.frameHeight)
+            put("drawW", place.drawWidth)
+            put("drawH", place.drawHeight)
+            put("drawX", place.drawX)
+            put("drawY", place.drawY)
+            put("rot", place.rotationDeg)
+            put("flip", place.flipH)
+            put("cover", place.cover)
+        }.toString()
+    }
+
+    /** One `{"matrix":[20],"blur":px}` envelope builder for the look seams. */
+    private fun matrixEnvelope(
         lookId: String?,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float,
+        adjust: space.bitos.core.studio.MemeAdjust,
     ): String = buildJsonObject {
-        val look = space.bitos.core.studio.MemeLooks.lookOf(lookId)
-        val adjust = space.bitos.core.studio.MemeAdjust.clamp(brightness, contrast, saturation)
         put("matrix", buildJsonArray {
             space.bitos.core.studio.MemeLooks.adjustedMatrixFor(lookId, adjust)
                 .forEach { value -> add(value) }
         })
-        put("blur", look.blurPx)
+        put("blur", space.bitos.core.studio.MemeLooks.lookOf(lookId).blurPx)
     }.toString()
 
     /**
@@ -4773,6 +5141,19 @@ class BusinessCoreBridge {
         expirationSeconds: Long,
         createdAtSeconds: Long,
         signatureHex: String,
+    ): String? = uploadAuthEventJson(
+        authorPubkey, serverUrl, fileHashHex, sizeBytes, expirationSeconds, createdAtSeconds, signatureHex,
+    )?.let(space.bitos.core.model.Blossom::authorizationHeaderValue)
+
+    /** The signed kind-24242 event JSON (before Base64url wrapping). */
+    fun uploadAuthEventJson(
+        authorPubkey: String,
+        serverUrl: String,
+        fileHashHex: String,
+        sizeBytes: Long,
+        expirationSeconds: Long,
+        createdAtSeconds: Long,
+        signatureHex: String,
     ): String? {
         val composer = space.bitos.core.publish.NoteComposer(clock = { createdAtSeconds })
         val unsigned = composer.composeUploadAuth(
@@ -4780,8 +5161,7 @@ class BusinessCoreBridge {
         ) ?: return null
         // BUD-11: the Authorization token is the signed event object `{...}`
         // under Base64url — never the `["EVENT", {...}]` relay frame.
-        val eventJson = composer.signedEventJson(unsigned, signatureHex) ?: return null
-        return space.bitos.core.model.Blossom.authorizationHeaderValue(eventJson)
+        return composer.signedEventJson(unsigned, signatureHex)
     }
 
     /** Parses a WWW-Authenticate challenge's expiration, or null. */
@@ -5430,6 +5810,320 @@ class BusinessCoreBridge {
         signature = signature,
         receivedFromRelay = RelayUrl.parse(relayUrl ?: ""),
     )
+
+    // ------------------------------------------------------------------
+    // NIP-46 remote signer seam (SBC-008a/b): String-only surface for the
+    // iOS session. Secrets cross ONLY as function arguments — the same
+    // rule as signDetached; no secret ever enters bridge state.
+    // ------------------------------------------------------------------
+
+    /** Parses `bunker://`/`nostrconnect://` into a JSON connection target; null when out of bounds. */
+    fun nip46ParseUri(uri: String): String? {
+        val connection = space.bitos.core.identity.nip46.Nip46Uri.parseBunker(uri)
+            ?: space.bitos.core.identity.nip46.Nip46Uri.parseNostrconnect(uri)
+            ?: return null
+        return buildJsonObject {
+            put("v", 1)
+            put("pubkey", connection.remotePubkeyHex)
+            put("relays", buildJsonArray { connection.relays.forEach { add(JsonPrimitive(it.value)) } })
+            connection.secret?.let { put("secret", it) }
+            connection.perms?.let { put("perms", it) }
+        }.toString()
+    }
+
+    /** Builds the `nostrconnect://` pairing URI for the QR flow; null on bad inputs. */
+    fun nip46BuildPairingUri(pubkeyHex: String, relaysJson: String, secret: String, appName: String?): String? {
+        val relays = try {
+            Json.parseToJsonElement(relaysJson).jsonArray.mapNotNull {
+                space.bitos.core.model.RelayUrl.parse(it.jsonPrimitive.content)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46Uri.buildNostrconnect(
+            pubkeyHex, relays, secret, perms = null, appName = appName,
+        )
+    }
+
+    /** NIP-44 transport encrypt (nonce hex injected by the platform CSPRNG). */
+    fun nip46Encrypt(plainEnvelope: String, transportSecretHex: String, peerPubkeyHex: String, nonceHex: String): String? {
+        val nonce = hexToBytes32(nonceHex) ?: return null
+        return space.bitos.core.identity.nip46.Nip46Crypto.encrypt(
+            plainEnvelope, transportSecretHex, peerPubkeyHex, { nonce },
+        )
+    }
+
+    /** NIP-44 transport decrypt; null when undecryptable. */
+    fun nip46Decrypt(payload: String, transportSecretHex: String, peerPubkeyHex: String): String? =
+        space.bitos.core.identity.nip46.Nip46Crypto.decrypt(payload, transportSecretHex, peerPubkeyHex)
+
+    /** Request envelope JSON (`{"id","method","params"}`); null outside bounds/allowlist. */
+    fun nip46EncodeRequest(requestId: String, method: String, paramsJson: String): String? {
+        val params = try {
+            Json.parseToJsonElement(paramsJson).jsonArray.map { it.jsonPrimitive.content }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46Wire.encodeRequest(requestId, method, params)
+    }
+
+    /** Response envelope decode → `{"id","result"?,"error"?}`; null when malformed. */
+    fun nip46DecodeResponse(plainEnvelope: String): Map<String, String>? {
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope) ?: return null
+        val map = mutableMapOf("id" to envelope.id)
+        envelope.result?.let { map["result"] = it }
+        envelope.error?.let { map["error"] = it }
+        return map
+    }
+
+    /** Unsigned kind-24133 request event → `{"json","id"}`; null outside bounds. */
+    fun nip46BuildRequestEvent(
+        fromPubkeyHex: String,
+        toSignerPubkeyHex: String,
+        encryptedContent: String,
+        createdAtSeconds: Long,
+    ): Map<String, String>? {
+        val event = space.bitos.core.identity.nip46.Nip46Wire.buildRequestEvent(
+            fromPubkeyHex, toSignerPubkeyHex, encryptedContent, createdAtSeconds,
+        ) ?: return null
+        return mapOf("json" to event.json, "id" to event.idHex)
+    }
+
+    /** Decodes an inbound kind-24133 event after the relay trust gate → `{"pubkey","ptag","created_at","content"}`. */
+    fun nip46ParseTransportEvent(eventJson: String): Map<String, String>? {
+        val event = space.bitos.core.identity.nip46.Nip46Wire.parseTransportEvent(eventJson) ?: return null
+        return mapOf(
+            "pubkey" to event.pubkeyHex,
+            "ptag" to (event.pTagHex ?: ""),
+            "created_at" to event.createdAtSeconds.toString(),
+            "content" to event.content,
+        )
+    }
+
+    /** `["EVENT", {...}]` frame from an unsigned transport event + its signature. */
+    fun nip46EventFrame(unsignedEventJson: String, eventIdHex: String, signatureHex: String): String? {
+        if (eventIdHex.length != 64 || signatureHex.length != 128) return null
+        if (!unsignedEventJson.startsWith("{")) return null
+        return buildString(unsignedEventJson.length + 96) {
+            append("[\"EVENT\",{")
+            append("\"id\":\"").append(eventIdHex).append("\",")
+            // The inner fields of the canonical unsigned object (both braces stripped).
+            append(unsignedEventJson.substring(1, unsignedEventJson.length - 1))
+            append(",\"sig\":\"").append(signatureHex).append("\"}]")
+        }
+    }
+
+    /** Response-lane REQ filter (authors pinned when the signer is known). */
+    fun nip46ResponseFilter(clientPubkeyHex: String, signerPubkeyHex: String?): String? =
+        space.bitos.core.identity.nip46.Nip46Wire.responseFilter(clientPubkeyHex, signerPubkeyHex?.takeIf { it.isNotEmpty() })
+
+    fun nip46RequestFrame(subscriptionId: String, filterJson: String): String =
+        space.bitos.core.identity.nip46.Nip46Wire.requestFrame(subscriptionId, filterJson)
+
+    fun nip46CloseFrame(subscriptionId: String): String =
+        space.bitos.core.identity.nip46.Nip46Wire.closeFrame(subscriptionId)
+
+    // ── Reducer surface (state token + commands JSON) ────────────────
+
+    /** Fresh session state token. */
+    fun nip46StateInit(): String =
+        space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(space.bitos.core.identity.nip46.Nip46SessionState())
+
+    /** Canonical SignEventRequest wire (originating payload for sign_event). */
+    fun signEventRequestJson(
+        requestId: String,
+        accountPubkeyHex: String,
+        createdAtSeconds: Long,
+        kind: Int,
+        tagsJson: String,
+        content: String,
+    ): String? {
+        val tags = try {
+            Json.parseToJsonElement(tagsJson).jsonArray.map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.nip46.Nip46SessionCodec.encodeRequestJson(
+            space.bitos.core.identity.SignEventRequest(requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content),
+        )
+    }
+
+    /** The NIP-46/NIP-55 unsigned wire form (`{"kind","content","tags","created_at"}`) for signing. */
+    fun signEventUnsignedWire(
+        requestId: String,
+        accountPubkeyHex: String,
+        createdAtSeconds: Long,
+        kind: Int,
+        tagsJson: String,
+        content: String,
+    ): String? {
+        val tags = try {
+            Json.parseToJsonElement(tagsJson).jsonArray.map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } }
+        } catch (_: Exception) {
+            return null
+        }
+        return space.bitos.core.identity.SignEventRequest(
+            requestId, accountPubkeyHex, createdAtSeconds, kind, tags, content,
+        ).unsignedEventJson()
+    }
+
+    /**
+     * Extracts the signer-request fields from a composed event frame (the
+     * publisher passes its own frame built with a placeholder signature):
+     * `{"wire","kind","tagsJson","content","createdAtSeconds","pubkey"}`.
+     * The wire is exactly `{"kind","content","tags","created_at"}`.
+     */
+    fun unsignedWireFromEventJson(eventJson: String): Map<String, String>? {
+        val event = space.bitos.core.identity.SignedEventValidator.parseSignedEvent(eventJson) ?: return null
+        return mapOf(
+            "wire" to space.bitos.core.identity.SignEventRequest(
+                requestId = "wire",
+                accountPubkeyHex = event.pubkeyHex,
+                createdAtSeconds = event.createdAtSeconds,
+                kind = event.kind,
+                tags = event.tags,
+                content = event.content,
+            ).unsignedEventJson(),
+            "kind" to event.kind.toString(),
+            "tagsJson" to space.bitos.core.store.TagsCodec.encode(event.tags),
+            "content" to event.content,
+            "createdAtSeconds" to event.createdAtSeconds.toString(),
+            "pubkey" to event.pubkeyHex,
+        )
+    }
+
+    /** Independent validator gate for any signer-returned event (SBC-008a). */
+    fun validateSignedEventJson(originJson: String, signedEventJson: String): Map<String, String> {
+        val origin = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeRequestJson(originJson)
+            ?: return mapOf("code" to "malformed_request")
+        val (signed, reason) = space.bitos.core.identity.SignedEventValidator.validateJson(origin, signedEventJson)
+        if (reason != null) return mapOf("code" to reason)
+        return mapOf("code" to "signed", "id" to signed.idHex, "sig" to signed.signatureHex, "event" to signedEventJson)
+    }
+
+    /**
+     * Reducer `begin` → `{"state","commands","outcome"?}`; null when the
+     * lane is busy or the inputs are out of bounds.
+     */
+    fun nip46Begin(
+        stateJson: String,
+        requestId: String,
+        method: String,
+        deadlineMs: Long,
+        signerPubkeyHex: String,
+        originJson: String,
+        envelopePlainJson: String,
+        encryptedContent: String,
+        createdAtSeconds: Long,
+        clientPubkeyHex: String,
+        subscriptionId: String,
+    ): String? {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return null
+        val unsigned = space.bitos.core.identity.nip46.Nip46Wire.buildRequestEvent(
+            clientPubkeyHex, signerPubkeyHex.takeIf { it.isNotEmpty() } ?: return null,
+            encryptedContent, createdAtSeconds,
+        ) ?: return null
+        val origin = originJson.takeIf { it.isNotEmpty() }?.let {
+            space.bitos.core.identity.nip46.Nip46SessionCodec.decodeRequestJson(it)
+        }
+        val step = space.bitos.core.identity.nip46.Nip46SessionReducer.begin(
+            state,
+            space.bitos.core.identity.nip46.Nip46Rpc(
+                requestId = requestId,
+                method = method,
+                deadlineMs = deadlineMs,
+                expectedSignerPubkeyHex = signerPubkeyHex.takeIf { it.isNotEmpty() },
+                originating = origin,
+            ),
+            unsigned,
+            subscriptionId,
+            clientPubkeyHex,
+        ) ?: return null
+        return stepJson(step.first, step.second)
+    }
+
+    /** Reducer response handling → step JSON; noise decodes to a no-op step. */
+    fun nip46OnResponse(stateJson: String, fromPubkeyHex: String, plainEnvelope: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson)
+            ?: return noOpStep(stateJson)
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope)
+            ?: return noOpStep(stateJson)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onResponse(state, fromPubkeyHex, envelope)
+        return stepJson(next, commands)
+    }
+
+    /** auth_url challenge notice (spec §auth): stays in-flight. */
+    fun nip46OnAuthUrl(stateJson: String, plainEnvelope: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val envelope = space.bitos.core.identity.nip46.Nip46Wire.decodeResponse(plainEnvelope) ?: return stateJson
+        return space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(
+            space.bitos.core.identity.nip46.Nip46SessionReducer.onAuthUrlChallenge(state, envelope),
+        )
+    }
+
+    fun nip46OnExpired(stateJson: String, nowMs: Long): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onExpired(state, nowMs)
+        return stepJson(next, commands)
+    }
+
+    fun nip46OnCancelled(stateJson: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onCancelled(state)
+        return stepJson(next, commands)
+    }
+
+    /** Relay switch: resend the SAME request on the new lane. */
+    fun nip46OnRelaysSwitched(
+        stateJson: String,
+        unsignedEventJson: String,
+        eventIdHex: String,
+        subscriptionId: String,
+        clientPubkeyHex: String,
+    ): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return stateJson
+        val unsigned = space.bitos.core.identity.nip46.Nip46UnsignedEvent(unsignedEventJson, eventIdHex)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onRelaysSwitched(
+            state, unsigned, subscriptionId, clientPubkeyHex,
+        )
+        return stepJson(next, commands)
+    }
+
+    /** Pairing: inbound signer `connect` request → ack + learned signer. */
+    fun nip46OnSignerConnect(stateJson: String, fromPubkeyHex: String, plainRequestEnvelope: String, clientPubkeyHex: String): String {
+        val state = space.bitos.core.identity.nip46.Nip46SessionCodec.decodeState(stateJson) ?: return noOpStep(stateJson)
+        val request = space.bitos.core.identity.nip46.Nip46Wire.decodeRequest(plainRequestEnvelope)
+            ?: return noOpStep(stateJson)
+        val (next, commands) = space.bitos.core.identity.nip46.Nip46SessionReducer.onSignerConnectRequest(
+            state, fromPubkeyHex, request, clientPubkeyHex,
+        )
+        return stepJson(next, commands)
+    }
+
+    private fun stepJson(
+        state: space.bitos.core.identity.nip46.Nip46SessionState,
+        commands: List<space.bitos.core.identity.nip46.Nip46Command>,
+    ): String = buildJsonObject {
+        put("state", space.bitos.core.identity.nip46.Nip46SessionCodec.encodeState(state))
+        put("commands", Json.parseToJsonElement(space.bitos.core.identity.nip46.Nip46SessionCodec.encodeCommands(commands)))
+        state.finished?.let {
+            put("outcome", space.bitos.core.identity.nip46.Nip46SessionCodec.encodeOutcomeJson(it))
+        }
+    }.toString()
+
+    private fun noOpStep(stateJson: String): String = buildJsonObject {
+        put("state", stateJson)
+        put("commands", Json.parseToJsonElement("[]"))
+    }.toString()
+
+    private fun hexToBytes32(hex: String): ByteArray? {
+        if (hex.length != 64) return null
+        return try {
+            ByteArray(32) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+        } catch (_: NumberFormatException) {
+            null
+        }
+    }
 }
 
 /**

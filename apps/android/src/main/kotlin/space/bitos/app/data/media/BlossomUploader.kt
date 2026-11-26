@@ -8,7 +8,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okio.BufferedSink
-import space.bitos.core.identity.IdentitySigner
+import space.bitos.core.identity.EventApprovalSigner
+import space.bitos.core.identity.SignEventRequest
+import space.bitos.core.identity.SignEventResult
 import space.bitos.core.model.Blossom
 import space.bitos.core.model.UploadedMedia
 import space.bitos.core.nostr.Sha256EventHasher
@@ -49,7 +51,7 @@ class BlossomUploader(
     suspend fun upload(
         bytes: ByteArray,
         mimeType: String,
-        signer: IdentitySigner,
+        signer: EventApprovalSigner,
         serverUrl: String,
         nowSeconds: Long = System.currentTimeMillis() / 1000,
         onStage: ((UploadStage) -> Unit)? = null,
@@ -74,7 +76,20 @@ class BlossomUploader(
             expirationSeconds = expiration,
             nowSeconds = nowSeconds,
         ) ?: throw UploadFailure("auth event rejected")
-        val signature = signer.sign(auth.messageBytes()) ?: throw UploadFailure("signing refused")
+        // Typed event-approval contract (ID-006c): remote signers pass the
+        // same validated gate; a refused/timeout approval never uploads.
+        val approval = signer.approveEvent(
+            SignEventRequest(
+                requestId = "blossom-upload",
+                accountPubkeyHex = auth.pubkeyHex,
+                createdAtSeconds = auth.createdAtSeconds,
+                kind = auth.kind,
+                tags = auth.tags,
+                content = auth.content,
+            ),
+        )
+        val signature = (approval as? SignEventResult.Signed)?.event?.signatureHex
+            ?: throw UploadFailure("signing refused")
         val authHeader = Blossom.authorizationHeaderValue(
             composer.signedEventJson(auth, signature) ?: throw UploadFailure("auth frame rejected"),
         ) ?: throw UploadFailure("auth header rejected")

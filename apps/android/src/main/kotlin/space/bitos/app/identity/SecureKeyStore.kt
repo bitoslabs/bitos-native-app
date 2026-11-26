@@ -75,6 +75,24 @@ class SecureKeyStore(context: Context) {
 
     private fun blobKey(slotPubkey: String): String = SLOT_PREFIX + slotPubkey
 
+    // ── NIP-46 client transport key (ID-006a/d) ────────────────────
+
+    /** Slot kind prefix for the NIP-46 client transport secret. */
+    private fun nip46BlobKey(accountPubkey: String): String = SLOT_PREFIX + "nip46_" + accountPubkey
+
+    /** Seals the per-account NIP-46 client transport key (nostrconnect identity). */
+    fun storeNip46TransportSecret(secretHex: String, accountPubkey: String) {
+        seal(nip46BlobKey(accountPubkey), secretHex)
+    }
+
+    /** NIP-46 transport secret by account, or null when absent/unsealable. */
+    fun loadNip46TransportSecret(accountPubkey: String): String? = unseal(nip46BlobKey(accountPubkey))
+
+    /** ID-006d: account removal wipes the sealed transport key slot. */
+    fun removeNip46TransportSecret(accountPubkey: String) {
+        prefs.edit().remove(nip46BlobKey(accountPubkey)).apply()
+    }
+
     private fun seal(key: String, secretHex: String) {
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
         val sealed = cipher.iv + cipher.doFinal(secretHex.toByteArray(Charsets.UTF_8))

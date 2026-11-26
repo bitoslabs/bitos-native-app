@@ -79,9 +79,22 @@ platforms as the identity onboarding flow (docs/ui/app-01-onboarding-identity.ht
 shared copy contract `IdentityOnboardingContent`, replacing the APP-002
 carousel): Welcome → Add identity → Import/Backup gate → npub confirmation,
 exiting into the feed either as guest (Browse now) or with the confirmed
-identity. NIP-46 and NIP-55 render as visible "Soon" method cards (the
-signer port already reserves them); tapping explains they arrive in a future
-build — never a dead link, never a hidden option.
+identity. NIP-46 and NIP-55 ship behind the identity feature flags
+(docs/native/identity-nip46-nip55-plan.md): when a flag is ON its method
+card routes to the remote-signer setup flow — NIP-46 paste-a-`bunker://`
+(iOS + Android) or NIP-55 pick-a-signer-app (Android) — which connects,
+shows the npub THE SIGNER ITSELF returned, and saves nothing until the
+user confirms it. When a flag is OFF the card renders as a visible "Soon"
+card — never a dead link, never a hidden option.
+
+Remote-signer wait states (both protocols): while an action awaits
+approval the shell shows the awaiting-signer banner — it names the
+selected signer, offers **Open signer** (NIP-55 relaunches the pinned
+app) and **Cancel wait**. Cancellation is not an error: the draft, upload
+or durable publish job is preserved exactly, and denial sends no relay
+frame. External-signer accounts never offer an nsec backup reveal — BitOS
+never holds the key. Account removal names the account and wipes its
+native signer configuration (transport key, pinned package).
 
 ### 4.1 Secret-key login field rules (ID-004, shared `KeyImportForm`)
 
@@ -511,8 +524,12 @@ Native implementation (2026-09-05, prototype `#/create-edit` → `#/create-detai
 → `#/create-review` parity): the editor screen follows the prototype layout —
 "Editor" header with draft save and the "Next" publish entry inline with it
 (the bottom stack stays tool-only; a slim notice replaces the bottom button
-while no source exists), VIDEO/GIF/IMAGE pills with source-add buttons
-(frame/image/clip per mode, Solar icons) beside undo, circular quick tools
+while no source exists), plus the labelled "Save a copy" text secondary
+(EUI-01, 2026-09-18 — device export is named in words next to the one
+primary, never a glyph-only button), VIDEO/GIF/IMAGE pills with source-add buttons
+(frame/image/clip per mode, Solar icons) beside the undo/redo pair (both
+on-screen on both platforms — iOS redo was keyboard-only before EUI-01),
+circular quick tools
 (Meme · Text · Stickers · Sound · Effects) opening native BOTTOM SHEETS
 (panel contents per the prototype; sheets are the platform idiom and keep
 the canvas visible above; each sheet shows exactly one title — the sheet
@@ -680,15 +697,31 @@ already be live) and confirmed discard.
 ## 10. Remix and Use Sound
 
 ```text
-Bitz or Sound page -> Use this / Remix
-  -> show source creator, license, attribution, rights signal
-  -> Quick Bitz or MEM
+Create or Bitz/Sound page -> Start with a sound / Remix a Bitz
+  -> choose a verified source (sound or Bitz)
+  -> show source creator, license, attribution and rights signal
+  -> Studio sound-first project / verified remix handoff
   -> preserve parent/root/sound/template edges
-  -> review attribution/value recipients
+  -> review automatic attribution/value recipients
   -> publish
 ```
 
-Attribution does not claim legal permission. Unavailable/unsupported assets offer replace, continue without, or cancel.
+The Create hub's **Start with a sound** and **Remix a Bitz** actions are
+source-first: neither creates a misleading blank remix or a hidden soundtrack.
+Start with a sound offers verified shared/trending/local sounds and a native
+video source; it opens VIDEO mode with sound attached and no clip. Remix a
+Bitz accepts a bounded pasted/scanned Nostr target or a bounded list of the
+user's recent verified Bitz, then verifies the source before it can seed the
+editor. The Bitz rail remains the fast contextual entry for either action.
+
+The remix preflight names creator, source, license and attribution. A
+restrictive license requires explicit continuation; a valid source with no
+loadable media offers a credited note instead of claiming a Studio remix.
+Sound/remix cancellation, lookup failure, unsupported media, hash mismatch,
+or relay loss preserves the Create hub and sends nothing. Attribution does not
+claim legal permission and cannot be silently removed. Full interaction,
+state, accessibility and implementation requirements live in
+[`create-hub-sound-remix-plan.md`](../native/create-hub-sound-remix-plan.md).
 
 ## 11. Social and wallet flows
 

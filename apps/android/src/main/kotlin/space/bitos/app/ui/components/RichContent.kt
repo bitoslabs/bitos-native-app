@@ -39,13 +39,19 @@ import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import java.net.URL
 
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -55,6 +61,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import space.bitos.core.nostr.RichToken
 
 /**
@@ -162,45 +169,47 @@ fun RichText(
     )
 }
 
-/** Media tiles (≤9): images render inline; bare video links get a
- *  play-glyph tile that opens a fullscreen player. */
+/** Media tiles (≤9): Facebook-style adaptive collage for 1–5+ items;
+ *  bare video links get a play-glyph tile that opens a fullscreen player. */
 @Composable
 fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String) -> Unit) {
     val media = remember(urls) { urls.take(9) }
     if (media.isEmpty()) return
-    var playUrl by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        media.chunked(3).forEach { rowUrls ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                rowUrls.forEach { url ->
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClickLabel = if (isVideoMediaUrl(url)) "Play video" else "Open media") {
-                                if (isVideoMediaUrl(url)) playUrl = url else onOpen(url)
-                            },
-                    ) {
-                        if (isVideoMediaUrl(url)) {
-                            // Bare video link: gradient tile + play glyph.
-                            Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated), contentAlignment = Alignment.Center) {
-                                Icon(
-                                    AppIcons.Play,
-                                    contentDescription = null,
-                                    tint = BitOSColors.textSecondary,
-                                    modifier = Modifier.size(32.dp),
-                                )
-                            }
-                        } else {
-                            RemoteBitmapImage(url = url)
-                        }
-                    }
-                }
-                repeat(3 - rowUrls.size) { Box(Modifier.weight(1f)) }
+    var playUrl by remember { mutableStateOf<String?>(null) }
+    val onTileClick: (String) -> Unit = { url ->
+        if (isVideoMediaUrl(url)) playUrl = url else onOpen(url)
+    }
+    val gap = 3.dp
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp)),
+        verticalArrangement = Arrangement.spacedBy(gap),
+    ) {
+        when (media.size) {
+            1 -> SingleMediaTile(url = media[0], onClick = { onTileClick(media[0]) })
+            2 -> MediaCollageRow(urls = media, aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+            3 -> {
+                MediaTile(
+                    url = media[0],
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f),
+                    onClick = { onTileClick(media[0]) },
+                )
+                MediaCollageRow(urls = media.subList(1, 3), aspectRatio = 4f / 3f, gap = gap, onTileClick = onTileClick)
+            }
+            4 -> {
+                MediaCollageRow(urls = media.subList(0, 2), aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+                MediaCollageRow(urls = media.subList(2, 4), aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+            }
+            else -> {
+                MediaCollageRow(urls = media.subList(0, 2), aspectRatio = 4f / 3f, gap = gap, onTileClick = onTileClick)
+                MediaCollageRow(
+                    urls = media.subList(2, 5),
+                    aspectRatio = 1f,
+                    gap = gap,
+                    overflowCount = (media.size - 5).coerceAtLeast(0),
+                    onTileClick = onTileClick,
+                )
             }
         }
     }
@@ -210,6 +219,110 @@ fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String)
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         ) {
             FullscreenVideoPlayer(url = url, onDismiss = { playUrl = null })
+        }
+    }
+}
+
+@Composable
+private fun SingleMediaTile(url: String, onClick: () -> Unit) {
+    if (isVideoMediaUrl(url)) {
+        MediaTile(
+            url = url,
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            onClick = onClick,
+        )
+        return
+    }
+    // Default to 4:3 until Coil decodes intrinsic dimensions, then clamp to [0.75, 1.91]
+    // so portrait art/memes stay readable without taking over the whole viewport.
+    var aspectRatio by remember(url) { mutableStateOf(4f / 3f) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
+            .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(BitOSColors.surface, BitOSColors.surfaceElevated),
+                ),
+            )
+            .clickable(onClickLabel = "Open media", onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        coil.compose.AsyncImage(
+            model = url,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            onSuccess = { state ->
+                val d = state.result.drawable
+                if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                    val natural = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
+                    aspectRatio = natural.coerceIn(0.75f, 1.91f)
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@Composable
+private fun MediaCollageRow(
+    urls: List<String>,
+    aspectRatio: Float,
+    gap: androidx.compose.ui.unit.Dp,
+    overflowCount: Int = 0,
+    onTileClick: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(gap),
+    ) {
+        urls.forEachIndexed { index, url ->
+            val badge = if (overflowCount > 0 && index == urls.lastIndex) overflowCount else 0
+            MediaTile(
+                url = url,
+                modifier = Modifier.weight(1f).aspectRatio(aspectRatio),
+                overflowCount = badge,
+                onClick = { onTileClick(url) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaTile(
+    url: String,
+    modifier: Modifier = Modifier,
+    overflowCount: Int = 0,
+    onClick: () -> Unit,
+) {
+    val isVideo = isVideoMediaUrl(url)
+    Box(
+        modifier.clickable(onClickLabel = if (isVideo) "Play video" else "Open media", onClick = onClick),
+    ) {
+        if (isVideo) {
+            Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated), contentAlignment = Alignment.Center) {
+                Icon(
+                    AppIcons.Play,
+                    contentDescription = null,
+                    tint = BitOSColors.textSecondary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        } else {
+            RemoteBitmapImage(url = url, contentScale = ContentScale.Crop)
+        }
+        if (overflowCount > 0) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0x88000000)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "+$overflowCount",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
@@ -390,56 +503,103 @@ fun MediaLightbox(
     onDismiss: () -> Unit,
 ) {
     val media = remember(urls) { urls.distinct() }
-    var currentIndex by remember(media, initialUrl) {
-        mutableStateOf(media.indexOf(initialUrl).coerceAtLeast(0))
+    val initialPage = remember(media, initialUrl) {
+        media.indexOf(initialUrl).coerceAtLeast(0)
     }
-    val currentUrl = media.getOrElse(currentIndex) { initialUrl }
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { media.size })
+    val scope = rememberCoroutineScope()
     var scale by remember { mutableStateOf(1f) }
-    androidx.compose.runtime.LaunchedEffect(currentUrl) { scale = 1f }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    androidx.compose.runtime.LaunchedEffect(pagerState.currentPage) {
+        scale = 1f
+        offsetX = 0f
+        offsetY = 0f
+    }
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0A0F))
-            .pointerInput(currentUrl) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 5f)
-                    if (scale == 1f && zoom == 1f && pan.x > 72f && currentIndex > 0) {
-                        currentIndex -= 1
-                    } else if (scale == 1f && zoom == 1f && pan.x < -72f && currentIndex < media.lastIndex) {
-                        currentIndex += 1
-                    }
-                }
-            },
+            .background(Color(0xFF0A0A0F)),
         contentAlignment = Alignment.Center,
     ) {
-        RemoteBitmapImage(
-            url = currentUrl,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    transformOrigin = TransformOrigin.Center,
-                ),
-            contentScale = ContentScale.Fit,
-        )
+        HorizontalPager(
+            state = pagerState,
+            userScrollEnabled = scale == 1f,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            val pageUrl = media[page]
+            RemoteBitmapImage(
+                url = pageUrl,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(pageUrl) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                if (scale > 1f) {
+                                    scale = 1f
+                                    offsetX = 0f
+                                    offsetY = 0f
+                                } else {
+                                    scale = 2.5f
+                                }
+                            },
+                        )
+                    }
+                    .pointerInput(pageUrl) {
+                        awaitEachGesture {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val pressedCount = event.changes.count { it.pressed }
+                                if (pressedCount == 0) break
+                                // Let HorizontalPager handle 1-finger swipes when unzoomed.
+                                if (pressedCount > 1 || scale > 1f) {
+                                    val zoom = event.calculateZoom()
+                                    val pan = event.calculatePan()
+                                    val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                                    scale = nextScale
+                                    if (nextScale > 1f) {
+                                        offsetX += pan.x
+                                        offsetY += pan.y
+                                    } else {
+                                        offsetX = 0f
+                                        offsetY = 0f
+                                    }
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                    .graphicsLayer(
+                        scaleX = if (page == pagerState.currentPage) scale else 1f,
+                        scaleY = if (page == pagerState.currentPage) scale else 1f,
+                        translationX = if (page == pagerState.currentPage) offsetX else 0f,
+                        translationY = if (page == pagerState.currentPage) offsetY else 0f,
+                        transformOrigin = TransformOrigin.Center,
+                    ),
+                contentScale = ContentScale.Fit,
+            )
+        }
         if (media.size > 1) {
             IconButton(
-                onClick = { currentIndex -= 1 },
-                enabled = currentIndex > 0,
+                onClick = {
+                    scope.launch { pagerState.animateScrollToPage((pagerState.currentPage - 1).coerceAtLeast(0)) }
+                },
+                enabled = pagerState.currentPage > 0,
                 modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).size(48.dp),
             ) {
                 Icon(AppIcons.ChevronLeft, contentDescription = "Previous image", tint = Color.White)
             }
             IconButton(
-                onClick = { currentIndex += 1 },
-                enabled = currentIndex < media.lastIndex,
+                onClick = {
+                    scope.launch { pagerState.animateScrollToPage((pagerState.currentPage + 1).coerceAtMost(media.lastIndex)) }
+                },
+                enabled = pagerState.currentPage < media.lastIndex,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).size(48.dp),
             ) {
                 Icon(AppIcons.ChevronRight, contentDescription = "Next image", tint = Color.White)
             }
             Text(
-                text = "${currentIndex + 1} of ${media.size}",
+                text = "${pagerState.currentPage + 1} of ${media.size}",
                 color = Color.White,
                 style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
                 modifier = Modifier

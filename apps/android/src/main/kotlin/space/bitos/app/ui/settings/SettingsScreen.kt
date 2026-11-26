@@ -62,6 +62,7 @@ import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
 import space.bitos.core.identity.NostrKeyCodec
 import space.bitos.app.R
+import space.bitos.app.ui.theme.AppIcons
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -246,24 +247,24 @@ fun SettingsScreen(
 private data class SectionSpec(
     val key: String,
     val label: String,
-    @DrawableRes val iconRes: Int,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
     val tint: Color,
     val group: String,
 )
 
 private val sectionSpecs = listOf(
-    SectionSpec("account", "Account", R.drawable.solar_settings_account, Color(0xFF2F95F6), "HERO"),
-    SectionSpec("lightning", "Lightning & Zaps", R.drawable.solar_settings_lightning, Color(0xFFFF9500), "PREFERENCES"),
-    SectionSpec("privacy", "Privacy", R.drawable.solar_settings_privacy, Color(0xFF5856D6), "PREFERENCES"),
-    SectionSpec("notifications", "Notifications", R.drawable.solar_settings_notifications, Color(0xFFFF3B30), "PREFERENCES"),
-    SectionSpec("appearance", "Appearance", R.drawable.solar_settings_appearance, Color(0xFFFF2D92), "PREFERENCES"),
-    SectionSpec("algorithm", "Algorithm & Feed", R.drawable.solar_settings_algorithm, Color(0xFFBF5AF2), "PREFERENCES"),
-    SectionSpec("security", "Security", R.drawable.solar_settings_security, Color(0xFFFF9500), "CONTENT"),
-    SectionSpec("media", "Media", R.drawable.solar_settings_media, Color(0xFF34C759), "CONTENT"),
-    SectionSpec("language", "Language & Region", R.drawable.solar_settings_language, Color(0xFF5AC8FA), "CONTENT"),
-    SectionSpec("relays", "Relays", R.drawable.solar_settings_relays, Color(0xFF5AC8FA), "CONTENT"),
-    SectionSpec("help", "Help & FAQ", R.drawable.solar_settings_help, Color(0xFF32ADE6), "SUPPORT"),
-    SectionSpec("about", "About", R.drawable.solar_settings_about, Color(0xFF8E8E93), "SUPPORT"),
+    SectionSpec("account", "Account", AppIcons.User, Color(0xFF2F95F6), "HERO"),
+    SectionSpec("lightning", "Lightning & Zaps", AppIcons.Zap, Color(0xFFFF9500), "PREFERENCES"),
+    SectionSpec("privacy", "Privacy", AppIcons.Lock, Color(0xFF5856D6), "PREFERENCES"),
+    SectionSpec("notifications", "Notifications", AppIcons.Inbox, Color(0xFFFF3B30), "PREFERENCES"),
+    SectionSpec("appearance", "Appearance", AppIcons.Looks, Color(0xFFFF2D92), "PREFERENCES"),
+    SectionSpec("algorithm", "Algorithm & Feed", AppIcons.Algorithm, Color(0xFFBF5AF2), "PREFERENCES"),
+    SectionSpec("security", "Security", AppIcons.Shield, Color(0xFFFF9500), "CONTENT"),
+    SectionSpec("media", "Media", AppIcons.MediaSettings, Color(0xFF34C759), "CONTENT"),
+    SectionSpec("language", "Language & Region", AppIcons.Language, Color(0xFF5AC8FA), "CONTENT"),
+    SectionSpec("relays", "Relays", AppIcons.Relays, Color(0xFF5AC8FA), "CONTENT"),
+    SectionSpec("help", "Help & FAQ", AppIcons.Help, Color(0xFF32ADE6), "SUPPORT"),
+    SectionSpec("about", "About", AppIcons.Info, Color(0xFF8E8E93), "SUPPORT"),
 )
 
 // ── Shared building blocks ─────────────────────────────────────────────
@@ -298,7 +299,7 @@ private fun SectionRow(spec: SectionSpec, onClick: () -> Unit) {
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HexIconTile(iconRes = spec.iconRes, tint = spec.tint, size = 38)
+        HexIconTile(icon = spec.icon, tint = spec.tint, size = 38)
         Spacer(Modifier.width(12.dp))
         Text(
             spec.label,
@@ -312,7 +313,7 @@ private fun SectionRow(spec: SectionSpec, onClick: () -> Unit) {
 /** Hex tile matching the iOS `HexIcon` / legacy Flutter `HexIconTile`
  *  (12% tint background + 1.2dp ring inside the brand hexagon). */
 @Composable
-internal fun HexIconTile(@DrawableRes iconRes: Int, tint: Color, size: Int = 38) {
+internal fun HexIconTile(icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, size: Int = 38) {
     Box(
         Modifier
             .size(size.dp)
@@ -321,14 +322,14 @@ internal fun HexIconTile(@DrawableRes iconRes: Int, tint: Color, size: Int = 38)
             .border(1.2.dp, tint.copy(alpha = 0.35f), HexShape()),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(iconRes), contentDescription = null, tint = tint, modifier = Modifier.size((size * 0.48f).dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size((size * 0.48f).dp))
     }
 }
 
 @Composable
 private fun Chevron() {
     Icon(
-        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+        AppIcons.ChevronRight,
         contentDescription = null,
         tint = BitOSColors.textTertiary,
     )
@@ -812,7 +813,7 @@ private fun AccountDetail(
                     }
                     if (isActive) {
                         Icon(
-                            androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                            AppIcons.Zap,
                             contentDescription = "Active account",
                             tint = BitOSColors.primary,
                             modifier = Modifier.size(16.dp),
@@ -894,7 +895,7 @@ private fun AboutDetail(store: SettingsStore) {
             .padding(vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        HexIconTile(iconRes = space.bitos.app.R.drawable.solar_bolt_linear, tint = BitOSColors.primary, size = 56)
+        HexIconTile(icon = AppIcons.Zap, tint = BitOSColors.primary, size = 56)
         Spacer(Modifier.height(10.dp))
         Text(facts.APP_NAME, fontSize = 20.sp, fontWeight = FontWeight.W800, color = BitOSColors.textPrimary)
         Text(
@@ -1276,7 +1277,7 @@ private fun RelaysDetail(
                     enabled = addInput.isNotBlank(),
                 ) {
                     Icon(
-                        androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_add_circle_linear),
+                        AppIcons.Add,
                         contentDescription = null,
                         tint = BitOSColors.primary,
                         modifier = Modifier.size(16.dp),
@@ -1302,7 +1303,7 @@ private fun RelaysDetail(
                     )
                 }) {
                     Icon(
-                        androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                        AppIcons.Zap,
                         contentDescription = null,
                         tint = BitOSColors.primary,
                         modifier = Modifier.size(16.dp),
@@ -1355,7 +1356,7 @@ private fun RelayRow(
             }
             TextButton(onClick = onRemove) {
                 Icon(
-                    androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_trash_linear),
+                    AppIcons.Delete,
                     contentDescription = "Remove ${entry.url.host()}",
                     tint = BitOSColors.error,
                     modifier = Modifier.size(16.dp),
@@ -1431,7 +1432,7 @@ private fun HelpDetail(profileLookup: space.bitos.app.data.feed.ProfileLookupSto
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = { showDonate = true }) {
                 Icon(
-                    androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_bolt_linear),
+                    AppIcons.Zap,
                     contentDescription = null,
                     tint = BitOSColors.primary,
                     modifier = Modifier.size(16.dp),
@@ -1543,7 +1544,7 @@ private fun LinkRow(label: String, url: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_widget_linear),
+            AppIcons.AppsGrid,
             contentDescription = null,
             tint = BitOSColors.primary,
             modifier = Modifier.size(16.dp),

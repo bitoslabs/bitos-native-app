@@ -81,11 +81,29 @@ object MemeCommandCodec {
                 put("look", command.lookId)
             }
 
+            is MemeCommand.SetCrop -> {
+                val crop = command.crop
+                if (crop == null) {
+                    put("op", "crop-del")
+                } else {
+                    put("op", "crop")
+                    if (crop.rotationDeg != 0) put("rot", crop.rotationDeg)
+                    if (crop.flipH) put("flip", true)
+                    if (crop.zoom != 1f) put("zoom", crop.zoom)
+                    if (crop.panX != 0f) put("panx", crop.panX)
+                    if (crop.panY != 0f) put("pany", crop.panY)
+                }
+            }
+
             is MemeCommand.SetAdjust -> {
                 put("op", "adjust")
                 put("bri", command.adjust.brightness)
                 put("con", command.adjust.contrast)
                 put("sat", command.adjust.saturation)
+                if (command.adjust.lightness != 0f) put("lig", command.adjust.lightness)
+                if (command.adjust.warmth != 0f) put("warm", command.adjust.warmth)
+                if (command.adjust.tint != 0f) put("tint", command.adjust.tint)
+                if (command.adjust.fade != 0f) put("fade", command.adjust.fade)
             }
 
             is MemeCommand.AddSfxCue -> {
@@ -201,11 +219,27 @@ object MemeCommandCodec {
                 "look" -> obj["look"]?.jsonPrimitive?.content
                     ?.let(MemeCommand::SetLook)
 
+                "crop" -> MemeCommand.SetCrop(
+                    MemeCrop.clamp(
+                        rotationDeg = intOf(obj, "rot") ?: 0,
+                        flipH = obj["flip"]?.jsonPrimitive?.content == "true",
+                        zoom = floatOf(obj, "zoom") ?: 1f,
+                        panX = floatOf(obj, "panx") ?: 0f,
+                        panY = floatOf(obj, "pany") ?: 0f,
+                    ),
+                )
+
+                "crop-del" -> MemeCommand.SetCrop(null)
+
                 "adjust" -> MemeCommand.SetAdjust(
                     MemeAdjust(
                         brightness = floatOf(obj, "bri") ?: 1f,
                         contrast = floatOf(obj, "con") ?: 1f,
                         saturation = floatOf(obj, "sat") ?: 1f,
+                        lightness = floatOf(obj, "lig") ?: 0f,
+                        warmth = floatOf(obj, "warm") ?: 0f,
+                        tint = floatOf(obj, "tint") ?: 0f,
+                        fade = floatOf(obj, "fade") ?: 0f,
                     ),
                 )
 

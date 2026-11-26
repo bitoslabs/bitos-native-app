@@ -183,15 +183,17 @@ class NotePublisherTest {
 
     @Test
     fun signerRefusalNeverSends() = runBlocking {
-        val refusing = object : space.bitos.core.identity.IdentitySigner {
+        val refusing = object : space.bitos.core.identity.EventApprovalSigner {
             override fun signerKind() = space.bitos.core.identity.SignerKind.LOCAL_KEY
             override fun publicKeyHex() = "00".repeat(32)
-            override suspend fun sign(message32: ByteArray): String? = null
+            override suspend fun approveEvent(
+                request: space.bitos.core.identity.SignEventRequest,
+            ): space.bitos.core.identity.SignEventResult = space.bitos.core.identity.SignEventResult.Denied()
         }
         publisher.publish("no signature", refusing, listOf(relay))
         val refused = withTimeout(20_000) { publisher.state.first { it.result != null } }
         assertEquals(PublishResult.SIGNING_REFUSED, refused.result)
-        assertTrue(transport.sent.none { it.startsWith("""["EVENT",""" ) })
+        assertTrue(transport.sent.none { it.startsWith("""["EVENT""") })
     }
 
     /**

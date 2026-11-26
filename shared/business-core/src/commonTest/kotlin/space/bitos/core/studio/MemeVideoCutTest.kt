@@ -86,6 +86,26 @@ class MemeVideoCutTest {
     }
 
     @Test
+    fun replaceWindowRetainsTimingWhereItFitsAndClampsHonestly() {
+        // EUI-04 spec: "Replace retains project timing/settings only where
+        // that is unambiguous."
+        fun w(s: Long, e: Long, d: Long) = MemeVideoCutRules.replaceWindow(s, e, d)
+
+        // The old window fits the new media → kept verbatim.
+        assertEquals(Triple(2_000L, 9_000L, false), w(2_000, 9_000, 20_000))
+        // New media shorter than the window end → keep the in-point, clamp
+        // the out-point, and SAY so.
+        assertEquals(Triple(2_000L, 6_000L, true), w(2_000, 9_000, 6_000))
+        // In-point beyond the new media → the full new clip.
+        assertEquals(Triple(0L, 6_000L, true), w(8_000, 9_000, 6_000))
+        // Junk duration degrades defensively (callers probe first, so
+        // this only guards a broken probe from manufacturing a window).
+        assertEquals(Triple(0L, 1L, true), w(2_000, 9_000, 0))
+        // A longer source never stretches the window.
+        assertEquals(Triple(2_000L, 9_000L, false), w(2_000, 9_000, 90_000))
+    }
+
+    @Test
     fun sourceByteCapIsTheCrossPlatformImportBound() {
         // The studio import-media gate (Create hub, both platforms) and
         // Android's timeline source cap read THIS constant — pin it so a

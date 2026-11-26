@@ -95,8 +95,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
-import space.bitos.app.ui.theme.SolarCaptureIcon
-import space.bitos.app.ui.theme.SolarCaptureIconImage
 import space.bitos.core.model.Blossom
 
 /**
@@ -364,8 +362,8 @@ fun CameraScreen(
                             contentDescription = if (torchOn) "Torch on" else "Torch off",
                             onClick = { torchOn = !torchOn },
                         ) {
-                            SolarCaptureIconImage(
-                                icon = SolarCaptureIcon.Torch,
+                            androidx.compose.material3.Icon(
+                                imageVector = space.bitos.app.ui.theme.AppIcons.FlashOn,
                                 contentDescription = null,
                                 tint = if (torchOn) BitOSColors.warning else Color.White,
                                 modifier = Modifier.size(18.dp),
@@ -509,8 +507,8 @@ private fun TimerChip(mode: TimerMode, onCycle: (TimerMode) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        SolarCaptureIconImage(
-            icon = SolarCaptureIcon.Timer,
+        androidx.compose.material3.Icon(
+            imageVector = space.bitos.app.ui.theme.AppIcons.Timer,
             contentDescription = null,
             tint = if (mode != TimerMode.OFF) BitOSColors.primary else Color.White,
             modifier = Modifier.size(16.dp),
@@ -684,8 +682,8 @@ private fun CaptureControls(
                 .clickable(onClickLabel = "Import from library", onClick = onImport),
             contentAlignment = Alignment.Center,
         ) {
-            SolarCaptureIconImage(
-                icon = SolarCaptureIcon.Gallery,
+            androidx.compose.material3.Icon(
+                imageVector = space.bitos.app.ui.theme.AppIcons.Photo,
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(20.dp),
@@ -747,8 +745,8 @@ private fun CameraBottomActions(
             onClickLabel = "Flip lens",
             onClick = onFlip,
         ) {
-            SolarCaptureIconImage(
-                icon = SolarCaptureIcon.CameraRotate,
+            androidx.compose.material3.Icon(
+                imageVector = space.bitos.app.ui.theme.AppIcons.Cameraswitch,
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(17.dp),
@@ -760,16 +758,16 @@ private fun CameraBottomActions(
             onClick = onEditTakes,
             enabled = canEditTakes,
         ) {
-            SolarCaptureIconImage(
-                icon = SolarCaptureIcon.Pen,
+            androidx.compose.material3.Icon(
+                imageVector = space.bitos.app.ui.theme.AppIcons.Pen,
                 contentDescription = null,
                 tint = Color.White.copy(alpha = if (canEditTakes) 0.7f else 0.3f),
                 modifier = Modifier.size(17.dp),
             )
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            SolarCaptureIconImage(
-                icon = SolarCaptureIcon.ClockCircle,
+            androidx.compose.material3.Icon(
+                imageVector = space.bitos.app.ui.theme.AppIcons.Schedule,
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier.size(17.dp),
@@ -823,8 +821,8 @@ private fun PermissionDeclinedContent(
                 .background(BitOSColors.error.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            SolarCaptureIconImage(
-                icon = SolarCaptureIcon.Camera,
+            androidx.compose.material3.Icon(
+                imageVector = space.bitos.app.ui.theme.AppIcons.Camera,
                 contentDescription = null,
                 tint = BitOSColors.error,
                 modifier = Modifier.size(30.dp),

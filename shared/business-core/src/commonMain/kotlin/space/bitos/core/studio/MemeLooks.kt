@@ -1,5 +1,12 @@
 package space.bitos.core.studio
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
+
 /**
  * Meme "looks" — one-tap color grades applied to the SOURCE MEDIA, never
  * the captions (web `meme/look.ts` port, plan MST-043). Web renders one
@@ -29,21 +36,41 @@ data class MemeLook(
 }
 
 /**
- * Manual fine-tune over the look preset (prototype `create-edit` FX panel):
- * brightness/contrast/saturation multipliers, 1 = unchanged. Composes ON
- * TOP of a look preset (pixel: look first, then the adjust chain) into the
- * same 4×5 matrix the rasterizers already burn in — preview and export
- * stay single-source.
+ * Manual fine-tune over the look preset (EUI-02 reference taxonomy; v1
+ * prototype `create-edit` FX triple still bri/con/sat). Composes ON TOP of
+ * a look preset (pixel: look first, then the adjust chain) into the same
+ * 4×5 matrix the rasterizers already burn in — preview and export stay
+ * single-source.
+ *
+ * Only controls the one-matrix pipeline can render EXACTLY are modeled:
+ * Tone = exposure (the v1 brightness field — a pure scale that keeps both
+ * endpoints) · lightness (lerp to white/black, a distinct axis) ·
+ * contrast;
+ * Colour = saturation · warmth (R/B split) · tint (green↔magenta) · fade
+ * (black-point lift). Highlights/shadows/sharpness/grain/vignette need
+ * tone-curve or spatial rendering and stay OUT until a renderer supports
+ * them (the spec's "available only when the renderer supports it" rule —
+ * an honest absent control beats a lying slider).
  */
 data class MemeAdjust(
     val brightness: Float = 1f,
     val contrast: Float = 1f,
     val saturation: Float = 1f,
+    /** Toward-white (+) / toward-black (−) shift; 0 = unchanged. */
+    val lightness: Float = 0f,
+    /** Warm (+R/−B) ↔ cool (−R/+B) axis; 0 = unchanged. */
+    val warmth: Float = 0f,
+    /** Magenta (+) ↔ green (−) axis; 0 = unchanged. */
+    val tint: Float = 0f,
+    /** Black-point lift / matte; 0 = unchanged. */
+    val fade: Float = 0f,
 ) {
-    val isDefault: Boolean get() = brightness == 1f && contrast == 1f && saturation == 1f
+    val isDefault: Boolean
+        get() = brightness == 1f && contrast == 1f && saturation == 1f &&
+            lightness == 0f && warmth == 0f && tint == 0f && fade == 0f
 
     companion object {
-        /** Prototype slider bounds: bri/con 40–160 %, sat 0–200 %. */
+        /** Prototype slider bounds: bri/con/exp 40–160 %, sat 0–200 %. */
         const val MIN_BRIGHTNESS = 0.4f
         const val MAX_BRIGHTNESS = 1.6f
         const val MIN_CONTRAST = 0.4f
@@ -51,12 +78,158 @@ data class MemeAdjust(
         const val MIN_SATURATION = 0f
         const val MAX_SATURATION = 2f
 
-        fun clamp(brightness: Float, contrast: Float, saturation: Float): MemeAdjust =
-            MemeAdjust(
-                if (brightness.isNaN()) 1f else brightness.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS),
-                if (contrast.isNaN()) 1f else contrast.coerceIn(MIN_CONTRAST, MAX_CONTRAST),
-                if (saturation.isNaN()) 1f else saturation.coerceIn(MIN_SATURATION, MAX_SATURATION),
+        /** Signed axes (lightness/warmth/tint) and fade bounds. */
+        const val MIN_SIGNED = -1f
+        const val MAX_SIGNED = 1f
+        const val MIN_FADE = 0f
+        const val MAX_FADE = 1f
+
+        /** Channel offset at the signed-axis full scale (≈ 12.5 % of 255). */
+        internal const val AXIS_STEP = 32f
+
+        /** Fade at full: scale 0.75 with the black point lifted to 45. */
+        internal const val FADE_SCALE = 0.25f
+        internal const val FADE_LIFT = 45f
+
+        fun clamp(
+            brightness: Float,
+            contrast: Float,
+            saturation: Float,
+            lightness: Float = 0f,
+            warmth: Float = 0f,
+            tint: Float = 0f,
+            fade: Float = 0f,
+        ): MemeAdjust = MemeAdjust(
+            if (brightness.isNaN()) 1f else brightness.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS),
+            if (contrast.isNaN()) 1f else contrast.coerceIn(MIN_CONTRAST, MAX_CONTRAST),
+            if (saturation.isNaN()) 1f else saturation.coerceIn(MIN_SATURATION, MAX_SATURATION),
+            if (lightness.isNaN()) 0f else lightness.coerceIn(MIN_SIGNED, MAX_SIGNED),
+            if (warmth.isNaN()) 0f else warmth.coerceIn(MIN_SIGNED, MAX_SIGNED),
+            if (tint.isNaN()) 0f else tint.coerceIn(MIN_SIGNED, MAX_SIGNED),
+            if (fade.isNaN()) 0f else fade.coerceIn(MIN_FADE, MAX_FADE),
+        )
+
+        /**
+         * Lenient reader for the canonical all-keys adjust JSON
+         * ([BusinessCoreBridge.memeAdjustOf] shape): missing/junk keys stay
+         * neutral, values clamp, junk JSON degrades to all-neutral.
+         */
+        fun fromCanonical(json: String): MemeAdjust = try {
+            val obj = Json.parseToJsonElement(json).jsonObject
+            fun valueOf(key: String, default: Float): Float =
+                (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
+                    ?: default
+            clamp(
+                brightness = valueOf("bri", 1f),
+                contrast = valueOf("con", 1f),
+                saturation = valueOf("sat", 1f),
+                lightness = valueOf("lig", 0f),
+                warmth = valueOf("warm", 0f),
+                tint = valueOf("tint", 0f),
+                fade = valueOf("fade", 0f),
             )
+        } catch (_: Exception) {
+            MemeAdjust()
+        }
+    }
+}
+
+/**
+ * The Adjust-section catalogue both platforms render from (`MemeTools`
+ * pattern — labels, grouping, bounds and readouts live here, never
+ * hand-rolled per platform; DESIGN_SYSTEM §0). One entry per matrix axis;
+ * [EXPOSURE] reads the v1 brightness field (same pure-scale math).
+ */
+enum class MemeAdjustControl(
+    val section: Section,
+    val label: String,
+    /** Canonical JSON key in `MemeAdjust.fromCanonical`/`memeAdjustOf`. */
+    val wireKey: String,
+    /** Semantic icon token both platforms resolve (visual parity pass). */
+    val icon: String,
+    private val get: (MemeAdjust) -> Float,
+) {
+    EXPOSURE(Section.TONE, "Exposure", "bri", "exposure", { it.brightness }),
+    LIGHTNESS(Section.TONE, "Lightness", "lig", "lightness", { it.lightness }),
+    CONTRAST(Section.TONE, "Contrast", "con", "contrast", { it.contrast }),
+    SATURATION(Section.COLOUR, "Saturation", "sat", "saturation", { it.saturation }),
+    WARMTH(Section.COLOUR, "Warmth", "warm", "warmth", { it.warmth }),
+    TINT(Section.COLOUR, "Tint", "tint", "tint", { it.tint }),
+    FADE(Section.COLOUR, "Fade", "fade", "fade", { it.fade });
+
+    enum class Section(val label: String) { TONE("Tone"), COLOUR("Colour") }
+
+    /** Current value of this control in [a]. */
+    fun value(a: MemeAdjust): Float = get(a)
+
+    /** [a] with this control set to [v] (data-class copy, one per axis). */
+    fun with(a: MemeAdjust, v: Float): MemeAdjust = when (this) {
+        EXPOSURE -> a.copy(brightness = v)
+        LIGHTNESS -> a.copy(lightness = v)
+        CONTRAST -> a.copy(contrast = v)
+        SATURATION -> a.copy(saturation = v)
+        WARMTH -> a.copy(warmth = v)
+        TINT -> a.copy(tint = v)
+        FADE -> a.copy(fade = v)
+    }
+
+    /** Slider bounds — exactly the shared clamp bounds. */
+    val range: ClosedFloatingPointRange<Float>
+        get() = when (this) {
+            EXPOSURE -> MemeAdjust.MIN_BRIGHTNESS..MemeAdjust.MAX_BRIGHTNESS
+            LIGHTNESS, WARMTH, TINT -> MemeAdjust.MIN_SIGNED..MemeAdjust.MAX_SIGNED
+            CONTRAST -> MemeAdjust.MIN_CONTRAST..MemeAdjust.MAX_CONTRAST
+            SATURATION -> MemeAdjust.MIN_SATURATION..MemeAdjust.MAX_SATURATION
+            FADE -> MemeAdjust.MIN_FADE..MemeAdjust.MAX_FADE
+        }
+
+    /** The untouched value for this control. */
+    val neutral: Float
+        get() = if (this == EXPOSURE || this == CONTRAST || this == SATURATION) 1f else 0f
+
+    fun isNonDefault(a: MemeAdjust): Boolean = value(a) != neutral
+
+    /** Slider readout: "120%" for multipliers, "+30"/"-30" for signed axes. */
+    fun text(v: Float): String {
+        val pct = (v * 100).toInt()
+        return when {
+            neutral == 0f && pct > 0 -> "+$pct"
+            neutral == 0f -> "$pct"
+            else -> "$pct%"
+        }
+    }
+
+    companion object {
+        /**
+         * The JSON native UIs decode to render the Adjust section:
+         * `{"sections":[{"id","label"}],
+         *   "controls":[{"id","section","label","min","max","neutral",
+         *   "signed"}]}`. IDs are the enum names lowercased (stable tokens).
+         */
+        fun catalogJson(): String = buildJsonObject {
+            put("sections", buildJsonArray {
+                Section.entries.forEach { section ->
+                    add(buildJsonObject {
+                        put("id", section.name.lowercase())
+                        put("label", section.label)
+                    })
+                }
+            })
+            put("controls", buildJsonArray {
+                entries.forEach { control ->
+                    add(buildJsonObject {
+                        put("id", control.name.lowercase())
+                        put("section", control.section.name.lowercase())
+                        put("label", control.label)
+                        put("min", control.range.start)
+                        put("max", control.range.endInclusive)
+                        put("neutral", control.neutral)
+                        put("signed", control.neutral == 0f)
+                        put("icon", control.icon)
+                    })
+                }
+            })
+        }.toString()
     }
 }
 
@@ -130,20 +303,27 @@ object MemeLooks {
 
     /**
      * Look preset + manual adjust composed into ONE 4×5 matrix: the pixel
-     * takes the look chain first, then brightness → contrast → saturation
-     * (the prototype FX panel's slider order). Default adjust = the plain
-     * look matrix.
+     * takes the look chain first, then the v1 prototype order brightness →
+     * contrast → saturation extended with the EUI-02 axes — lightness
+     * (before contrast) and warmth → tint → fade (after saturation).
+     * Neutral fields contribute exact identity matrices, so v1 triples
+     * compose to the identical v1 matrix. Default adjust = the plain look
+     * matrix.
      */
     fun adjustedMatrixFor(lookId: String?, adjust: MemeAdjust?): FloatArray {
         val look = lookOf(lookId)
         if (adjust == null || adjust.isDefault) return matrix(look)
         var composed = matrix(look)
         listOf(
-            MemeLook.Filter(MemeLook.Op.BRIGHTNESS, adjust.brightness),
-            MemeLook.Filter(MemeLook.Op.CONTRAST, adjust.contrast),
-            MemeLook.Filter(MemeLook.Op.SATURATE, adjust.saturation),
-        ).forEach { filter ->
-            composed = multiply(opMatrix(filter), composed)
+            opMatrix(MemeLook.Filter(MemeLook.Op.BRIGHTNESS, adjust.brightness)),
+            lightnessMatrix(adjust.lightness),
+            opMatrix(MemeLook.Filter(MemeLook.Op.CONTRAST, adjust.contrast)),
+            opMatrix(MemeLook.Filter(MemeLook.Op.SATURATE, adjust.saturation)),
+            warmthMatrix(adjust.warmth),
+            tintMatrix(adjust.tint),
+            fadeMatrix(adjust.fade),
+        ).forEach { op ->
+            composed = multiply(op, composed)
         }
         return composed
     }
@@ -219,6 +399,33 @@ object MemeLooks {
         0f, 0f, scale, 0f, translate,
         0f, 0f, 0f, 1f, 0f,
     )
+
+    /** Toward-white (+k) lerp `v·(1−k)+255k`; toward-black (−k) `v·(1+k)`. */
+    private fun lightnessMatrix(k: Float): FloatArray =
+        if (k >= 0f) scaleTranslate(1f - k, 255f * k) else scaleTranslate(1f + k, 0f)
+
+    /** Warm (+k): R gains, B loses; cool (−k) mirrored. G untouched. */
+    private fun warmthMatrix(k: Float): FloatArray = floatArrayOf(
+        1f, 0f, 0f, 0f, MemeAdjust.AXIS_STEP * k,
+        0f, 1f, 0f, 0f, 0f,
+        0f, 0f, 1f, 0f, -MemeAdjust.AXIS_STEP * k,
+        0f, 0f, 0f, 1f, 0f,
+    )
+
+    /** Magenta (+k): G loses; green (−k): G gains. R/B untouched. */
+    private fun tintMatrix(k: Float): FloatArray = floatArrayOf(
+        1f, 0f, 0f, 0f, 0f,
+        0f, 1f, 0f, 0f, -MemeAdjust.AXIS_STEP * k,
+        0f, 0f, 1f, 0f, 0f,
+        0f, 0f, 0f, 1f, 0f,
+    )
+
+    /** Fade: black point lifts to [MemeAdjust.FADE_LIFT]·k, scale softens. */
+    private fun fadeMatrix(k: Float): FloatArray =
+        scaleTranslate(
+            1f - MemeAdjust.FADE_SCALE * k,
+            MemeAdjust.FADE_LIFT * k,
+        )
 
     /** 4×5 affine multiply: `a × b` (both row-major, 5th column = offset). */
     internal fun multiply(a: FloatArray, b: FloatArray): FloatArray {

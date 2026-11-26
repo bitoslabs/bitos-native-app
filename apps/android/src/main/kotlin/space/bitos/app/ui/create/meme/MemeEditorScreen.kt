@@ -31,6 +31,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -74,6 +75,14 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Contrast
+import androidx.compose.material.icons.rounded.DeviceThermostat
+import androidx.compose.material.icons.rounded.Exposure
+import androidx.compose.material.icons.rounded.Gradient
+import androidx.compose.material.icons.rounded.Opacity
+import androidx.compose.material.icons.rounded.Tonality
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -93,6 +102,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -148,8 +158,6 @@ import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarStudioIcon
-import space.bitos.app.ui.theme.SolarStudioIconImage
 import space.bitos.app.ui.components.BitosAdjustmentSlider
 import space.bitos.app.ui.components.BitosSlider
 import space.bitos.core.studio.MemeFontSlot
@@ -231,6 +239,10 @@ data class MemeSoundSeed(
     val isAudioOnly: Boolean = false,
     /** Expected 64-hex hash for [isAudioOnly] downloads (integrity gate). */
     val sha256: String? = null,
+    /** MEM-003b: local sound-library entry id — the picker's local rows
+     *  attach by id (bytes + sha verify, no network); the URL fields carry
+     *  the entry's values for provenance. */
+    val localSoundId: String? = null,
 )
 
 /**
@@ -260,6 +272,11 @@ fun MemeEditorScreen(
     remixSeed: MemeRemixSeed? = null,
     /** "Use this sound" handoff (Wave C): borrow THIS bitz's audio only. */
     soundSeed: MemeSoundSeed? = null,
+    /** MEM-003b "Pick sound from a video": the Create-hub sound picker
+     *  hands a picked library video here — the editor's existing
+     *  extraction path owns extraction, named progress and failure copy.
+     *  Consumed once; null on re-composition after acceptance. */
+    soundFromVideoUri: android.net.Uri? = null,
     onSlotsChanged: () -> Unit = {},
     /** MUX-06: hand the frozen design + rendered poster to mass production. */
     onMakeVariations: ((String, ByteArray) -> Unit)? = null,
@@ -426,8 +443,8 @@ fun MemeEditorScreen(
      * Fresh unique clip ids survive splits/removals (never reuse a wire id).
      * Declared before its callers among the local helpers below.
      */
-    fun maxClipCounter(): Int = videoClips.maxOfOrNull {
-        it.id.removePrefix("v").takeWhile(Char::isDigit).toIntOrNull() ?: 0
+    fun maxClipCounter(): Int = (videoClips.map { it.id } + clipArchive.keys).maxOfOrNull {
+        it.removePrefix("v").takeWhile(Char::isDigit).toIntOrNull() ?: 0
     } ?: 0
 
     // Clip-import progress (camera handoff / picker insert / blank-canvas
@@ -929,34 +946,55 @@ fun MemeEditorScreen(
     var soundtrackM4a by remember { mutableStateOf<ByteArray?>(null) }
     var soundtrackPcm by remember { mutableStateOf<Pair<FloatArray, Int>?>(null) }
     var extractingSound by remember { mutableStateOf(false) }
+
+    /** One shared extraction path (MEM-003b): the editor's Sound-tool
+     *  picker AND the Create-hub "Pick sound from a video" handoff run
+     *  exactly these steps — named progress, bounded decode, identical
+     *  failure copy. */
+    suspend fun extractSoundtrackFrom(uri: android.net.Uri) {
+        extractingSound = true
+        val extracted = withContext(Dispatchers.IO) { MemeVideoSound.extract(context, uri) }
+        if (extracted == null) {
+            extractingSound = false
+            exportStatus = "No readable audio track in that video"
+            return
+        }
+        val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
+        extractingSound = false
+        if (decoded == null) {
+            exportStatus = "That sound could not be decoded on this device"
+            return
+        }
+        soundtrackM4a = extracted.m4aBytes
+        soundtrackPcm = decoded
+        state.setSoundtrack(
+            space.bitos.core.studio.MemeSoundtrack(
+                sha256 = extracted.sha256Hex,
+                durationMs = extracted.durationMs,
+                label = "Original sound",
+            ),
+        )
+        exportStatus = null
+    }
+
     val soundtrackPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        extractingSound = true
-        scope.launch {
-            val extracted = withContext(Dispatchers.IO) { MemeVideoSound.extract(context, uri) }
-            if (extracted == null) {
-                extractingSound = false
-                exportStatus = "No readable audio track in that video"
-                return@launch
-            }
-            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, extracted.m4aBytes) }
-            extractingSound = false
-            if (decoded == null) {
-                exportStatus = "That sound could not be decoded on this device"
-                return@launch
-            }
-            soundtrackM4a = extracted.m4aBytes
-            soundtrackPcm = decoded
-            state.setSoundtrack(
-                space.bitos.core.studio.MemeSoundtrack(
-                    sha256 = extracted.sha256Hex,
-                    durationMs = extracted.durationMs,
-                    label = "Original sound",
-                ),
-            )
-            exportStatus = null
+        scope.launch { extractSoundtrackFrom(uri) }
+    }
+
+    // MEM-003b: the Create-hub sound picker's video handoff — consumed
+    // once (cleared right away so a recomposition never re-extracts).
+    var pendingSoundVideoUri by remember(soundFromVideoUri) {
+        mutableStateOf(soundFromVideoUri)
+    }
+    LaunchedEffect(pendingSoundVideoUri) {
+        val uri = pendingSoundVideoUri ?: return@LaunchedEffect
+        pendingSoundVideoUri = null
+        if (state.project.soundtrack == null && soundtrackM4a == null) {
+            state.switchMode(MemeMode.VIDEO)
+            extractSoundtrackFrom(uri)
         }
     }
 
@@ -1093,6 +1131,68 @@ fun MemeEditorScreen(
      * download, hash-verify, decode, attach with the URL pre-filled so
      * publish stamps it WITHOUT re-uploading (Wave D semantics).
      */
+    // EUI-05: sound rows — one preview at a time (key = row identity), the
+    // url downloading, and urls whose load failed (honest row states).
+    var previewingSoundKey by remember { mutableStateOf<String?>(null) }
+    var downloadingSoundUrl by remember { mutableStateOf<String?>(null) }
+    val failedSoundUrls = remember { mutableStateListOf<String>() }
+    val soundPreviewPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var soundPreviewTempFile: java.io.File? = null
+    fun stopSoundPreview() {
+        soundPreviewPlayer.value?.release()
+        soundPreviewPlayer.value = null
+        runCatching { soundPreviewTempFile?.delete() }
+        soundPreviewTempFile = null
+        previewingSoundKey = null
+    }
+    fun toggleSoundPreview(key: String, source: String, label: String) {
+        if (previewingSoundKey == key) {
+            stopSoundPreview()
+            return
+        }
+        stopSoundPreview()
+        val player = android.media.MediaPlayer()
+        var tempFile: java.io.File? = null
+        fun previewFailed() {
+            stopSoundPreview()
+            exportStatus = "Could not preview $label — check your connection"
+            // Key the row honestly (http sources only — local bytes never
+            // need a connection).
+            if (source.startsWith("http")) failedSoundUrls += source
+        }
+        runCatching {
+            if (source.startsWith("library:")) {
+                val bytes = soundLibrary.bytes(source.removePrefix("library:"))
+                if (bytes == null) {
+                    exportStatus = "That saved sound is missing its file"
+                    return
+                }
+                tempFile = java.io.File(context.cacheDir, "sound-preview-${System.nanoTime()}.m4a")
+                    .apply { writeBytes(bytes) }
+                player.setDataSource(tempFile!!.absolutePath)
+            } else {
+                player.setDataSource(source)
+            }
+            soundPreviewPlayer.value = player
+            player.setOnCompletionListener { stopSoundPreview() }
+            player.setOnErrorListener { _, _, _ ->
+                previewFailed()
+                true
+            }
+            player.prepareAsync()
+            player.setOnPreparedListener {
+                previewingSoundKey = key
+                it.start()
+            }
+        }.onFailure {
+            player.release()
+            previewFailed()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { stopSoundPreview() }
+    }
+
     fun attachSoundFromUrl(
         mediaUrl: String,
         expectedSha256: String,
@@ -1114,6 +1214,8 @@ fun MemeEditorScreen(
             exportStatus = "Remove the current soundtrack first"
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         seedingProgress = 0 to 1
         scope.launch {
             try {
@@ -1170,7 +1272,9 @@ fun MemeEditorScreen(
                 exportStatus = null
             } catch (error: IllegalStateException) {
                 exportStatus = "Sound source could not be loaded (${error.message})"
+                failedSoundUrls.add(mediaUrl)
             } finally {
+                downloadingSoundUrl = null
                 seedingProgress = null
             }
         }
@@ -1411,6 +1515,8 @@ fun MemeEditorScreen(
             exportStatus = "Remove the current soundtrack first"
             return
         }
+        failedSoundUrls.remove(mediaUrl)
+        downloadingSoundUrl = mediaUrl
         seedingProgress = 0 to 1
         scope.launch {
             try {
@@ -1468,7 +1574,9 @@ fun MemeEditorScreen(
                 exportStatus = null
             } catch (error: IllegalStateException) {
                 exportStatus = "Sound source could not be loaded (${error.message})"
+                failedSoundUrls.add(mediaUrl)
             } finally {
+                downloadingSoundUrl = null
                 seedingProgress = null
             }
         }
@@ -1597,6 +1705,48 @@ fun MemeEditorScreen(
         ) {
             return@LaunchedEffect
         }
+        // MEM-003b local library pick: bytes + sha verify + decode, no
+        // network (the picker's "My sound library" rows hand the entry id).
+        if (seed.localSoundId != null) {
+            val entry = libraryEntries.firstOrNull { it.id == seed.localSoundId }
+            val bytes = entry?.let { soundLibrary.bytes(it.id) }
+            if (entry == null || bytes == null) {
+                exportStatus = "That saved sound's audio is missing"
+                return@LaunchedEffect
+            }
+            extractingSound = true
+            val digest = withContext(Dispatchers.IO) {
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+            }
+            if (digest != entry.sha256) {
+                extractingSound = false
+                exportStatus = "Saved sound failed its hash check — nothing was loaded"
+                return@LaunchedEffect
+            }
+            val decoded = withContext(Dispatchers.IO) { MemeVideoSound.decodePcm(context, bytes) }
+            extractingSound = false
+            if (decoded == null) {
+                exportStatus = "That saved sound could not be decoded here"
+                return@LaunchedEffect
+            }
+            state.switchMode(MemeMode.VIDEO)
+            soundtrackM4a = bytes
+            soundtrackPcm = decoded
+            state.setSoundtrack(
+                space.bitos.core.studio.MemeSoundRules.normalize(
+                    space.bitos.core.studio.MemeSoundtrack(
+                        url = entry.url,
+                        sha256 = entry.sha256,
+                        durationMs = entry.durationMs,
+                        sourceNoteId = entry.sourceEventId.takeIf { it.isNotBlank() },
+                        sourceAuthorPubkey = entry.authorPubkey.takeIf { it.isNotBlank() },
+                        label = entry.label.takeIf { it.isNotBlank() } ?: "Original sound",
+                    ),
+                ),
+            )
+            return@LaunchedEffect
+        }
         val url = runCatching { java.net.URI(seed.mediaUrl).toURL() }.getOrNull()
         if (url == null || (url.protocol != "https" && url.host != "localhost" && url.host != "127.0.0.1")) {
             exportStatus = "Sound source URL is not loadable"
@@ -1710,7 +1860,6 @@ fun MemeEditorScreen(
     // Advanced sheet over compose mode (outline strength, fx, timing,
     // delete) — opened from the compose bar's More button.
     var showAdvancedText by remember { mutableStateOf(false) }
-    var showLooks by remember { mutableStateOf(false) }
     /** Classic meme generator (prototype "Meme" hot tool). */
     var showSfx by remember { mutableStateOf(false) }
     var showLayers by remember { mutableStateOf(false) }
@@ -1745,6 +1894,22 @@ fun MemeEditorScreen(
     var showPublish by remember { mutableStateOf(false) }
     /** Inline tool panel (prototype tool panels open under the chips). */
     var activePanel by remember { mutableStateOf<MemeEditorPanel?>(null) }
+
+    // EUI-02: the Look sheet's uncommitted slider draft previews on the
+    // stage; Apply commits it as ONE undoable SetAdjust, Cancel discards.
+    var adjustPreview by remember { mutableStateOf<space.bitos.core.studio.MemeAdjust?>(null) }
+    val effectiveAdjust = adjustPreview ?: state.project.adjust
+    LaunchedEffect(activePanel) {
+        if (activePanel != MemeEditorPanel.FX) adjustPreview = null
+    }
+    // EUI-02 §3: the Crop sheet's uncommitted draft previews on the stage;
+    // Apply commits ONE undoable SetCrop, Cancel discards.
+    var cropPreview by remember { mutableStateOf<space.bitos.core.studio.MemeCrop?>(null) }
+
+    val effectiveCrop = cropPreview ?: state.project.crop
+    LaunchedEffect(showCanvas) {
+        if (!showCanvas) cropPreview = null
+    }
 
     /** MUX-01: draft persistence is acknowledged, never assumed. */
     var draftSaveState by remember { mutableStateOf<DraftSaveState>(DraftSaveState.IDLE) }
@@ -2006,7 +2171,126 @@ fun MemeEditorScreen(
         }
     }
 
-    /** M3: pick a bounded source clip, hand it through the existing trim screen. */
+    /** EUI-06: timed-caption import — read, parse (shared rule), land. */
+    val captionFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            // BOUNDED read: an oversized file is rejected without ever
+            // being fully materialized.
+            val limit = 512 * 1024
+            val raw = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        val head = ByteArray(limit + 1)
+                        var filled = 0
+                        while (filled < head.size) {
+                            val read = stream.read(head, filled, head.size - filled)
+                            if (read < 0) break
+                            filled += read
+                        }
+                        when {
+                            filled > limit -> null
+                            else -> String(head, 0, filled, Charsets.UTF_8)
+                        }
+                    }
+                }.getOrNull()
+            }
+            if (raw == null) {
+                // null here = unreadable OR over the bound; say both honestly.
+                exportStatus = "Could not read that file, or it is over 512 KB — nothing was added"
+                return@launch
+            }
+            val parsed = space.bitos.core.studio.MemeCaptionImport.parse(raw)
+            parsed.error?.let {
+                exportStatus = "$it — nothing was added"
+                return@launch
+            }
+            val added = state.addCaptionCues(parsed.cues)
+            exportStatus = buildString {
+                append("Imported $added timed caption")
+                if (added != 1) append("s")
+                if (parsed.dropped > 0) append(" · ${parsed.dropped} unparseable cue")
+                if (parsed.dropped > 1) append("s")
+                if (parsed.dropped > 0) append(" skipped")
+                if (parsed.truncated) append(" · file held more (editor cap ${space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS})")
+            }
+        }
+    }
+
+    /** EUI-06: one editable caption at the playhead (2 s default window). */
+    fun addCaptionAtPlayhead() {
+        val at = videoPositionMs.coerceAtLeast(0L)
+        val added = state.addCaptionCues(
+            listOf(
+                space.bitos.core.studio.MemeCaptionImport.CaptionCue(
+                    startMs = at,
+                    endMs = at + 2_000L,
+                    text = "Caption",
+                ),
+            ),
+        )
+        exportStatus = if (added > 0) {
+            "Caption added at the playhead — type on the stage"
+        } else {
+            "Caption limit reached (${space.bitos.core.studio.MemeProjectContract.MAX_OVERLAYS})"
+        }
+    }
+
+    /** EUI-04: clip index awaiting a replacement pick (null = none). */
+    var pendingReplaceClipIndex by remember { mutableStateOf<Int?>(null) }
+    val replacePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        val targetIndex = pendingReplaceClipIndex
+        pendingReplaceClipIndex = null
+        if (uri == null || targetIndex == null) return@rememberLauncherForActivityResult
+        if (!videoClips.indices.contains(targetIndex)) return@rememberLauncherForActivityResult
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) { readAssetBytes(context, uri) }
+            if (picked == null) {
+                exportStatus = "Could not read this video. Try another file or grant Photos access."
+                return@launch
+            }
+            if (picked.size.toLong() > MemeVideoExport.MAX_SOURCE_BYTES) {
+                exportStatus = "This source video is larger than 256 MB. Trim it first, then try again."
+                return@launch
+            }
+            val probe = withContext(Dispatchers.IO) {
+                MemeVideoExport.probe(context.contentResolver, uri)
+            }
+            if (probe == null) {
+                exportStatus = "Not a readable video"
+                return@launch
+            }
+            val old = videoClips[targetIndex]
+            val (start, end, shortened) = space.bitos.core.studio.MemeVideoCutRules.replaceWindow(
+                old.startMs, old.endMs, probe.durationMs,
+            )
+            state.beginClipsEdit()
+            // A FRESH id: undo rebuilds sessions by id from the archive, so
+            // reusing the old id would resurrect the NEW media on undo.
+            // Overlays key on timeline TIME, not clip id — the swap is
+            // invisible to everything but the archive.
+            val replacement = old.copy(
+                id = if (old.id.startsWith("blank")) {
+                    "blank${System.nanoTime()}"
+                } else {
+                    "v${maxClipCounter() + 1}"
+                },
+                bytes = picked, probe = probe, startMs = start, endMs = end,
+            )
+            videoClips[targetIndex] = replacement
+            archiveClip(replacement)
+            syncWireClips()
+            exportStatus = if (shortened) {
+                "Clip ${targetIndex + 1} replaced — window shortened to fit the shorter clip"
+            } else {
+                "Clip ${targetIndex + 1} replaced — trim, volume and look kept"
+            }
+        }
+    }
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -2600,20 +2884,21 @@ fun MemeEditorScreen(
             ) {
                 Text(publishCopy.primaryAction, fontWeight = FontWeight.W600)
             }
-            // MSU-050: Export is no longer a peer of the primary. It is a
-            // labelled secondary that saves a rendered FILE (the copy says
-            // so), reachable here and from More; the explainer above states
-            // the difference the first time the creator publishes.
-            IconButton(
+            // MSU-050/EUI-01: Save a copy is a LABELLED secondary next to
+            // the one primary — the visible words separate device export
+            // from Nostr publish without relying on glyph recognition or
+            // the first-use explainer. Reachable here and from More.
+            TextButton(
                 onClick = { showExportSheet = true },
                 enabled = (activeAssetId != null || blankDesignActive ||
                     (gifFrames.isNotEmpty() || (blankGifActive && blankGifHasContent)) ||
                     (hasVideo && blankVideoHasContent)) && !exporting,
+                colors = ButtonDefaults.textButtonColors(contentColor = BitOSColors.textSecondary),
                 modifier = Modifier.semantics {
                     contentDescription = "${publishCopy.exportAction} — save a rendered file to this device"
                 },
             ) {
-                Icon(AppIcons.Download, contentDescription = null, tint = BitOSColors.textSecondary)
+                Text(publishCopy.exportAction)
             }
             IconButton(
                 onClick = { exportStatus = when (draftSaveState) {
@@ -2713,6 +2998,7 @@ fun MemeEditorScreen(
                 space.bitos.core.studio.MemeTools.ToolId.CLIPS,
                 space.bitos.core.studio.MemeTools.ToolId.SPLIT,
                 space.bitos.core.studio.MemeTools.ToolId.MUTE,
+                space.bitos.core.studio.MemeTools.ToolId.REPLACE,
                 -> hasVideo
                 space.bitos.core.studio.MemeTools.ToolId.DURATION -> gifMode
                 space.bitos.core.studio.MemeTools.ToolId.BATCH -> onMakeVariations != null
@@ -2766,6 +3052,17 @@ fun MemeEditorScreen(
                             volume = if (clip.volume == 0f) 1f else 0f,
                         )
                         syncWireClips()
+                    }
+                }
+                // EUI-04: replace keeps timing/settings where they fit; the
+                // pick result clamps through the shared window rule.
+                space.bitos.core.studio.MemeTools.ToolId.REPLACE -> {
+                    showMore = false
+                    if (videoClips.indices.contains(selectedClipIndex)) {
+                        pendingReplaceClipIndex = selectedClipIndex
+                        replacePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                        )
                     }
                 }
                 space.bitos.core.studio.MemeTools.ToolId.BATCH -> {
@@ -2848,7 +3145,9 @@ fun MemeEditorScreen(
                 Box(Modifier.fillMaxSize()) {
                 VideoStage(
                     clips = videoClips.toList(),
-                    project = state.project,
+                    // EUI-02: the stage previews the Look sheet's uncommitted
+                    // slider draft; export keeps reading the committed wire.
+                    project = state.project.copy(adjust = effectiveAdjust),
                     gifFrameAt = { id, atMs -> gifReels[id]?.frameAt(atMs) },
                     soundtrack = state.project.soundtrack,
                     soundtrackBytes = soundtrackM4a,
@@ -2918,12 +3217,21 @@ fun MemeEditorScreen(
                     production = productionCopy,
                 )
             } else if (videoMode) {
+                // MEM-003c: a sound-first session (soundtrack attached, no
+                // clip) gets its own guiding copy — "Add video" seeds the
+                // timeline, "Change sound" re-opens the sound sheet.
+                val soundFirst = state.project.soundtrack != null && !hasVideo
+                val soundFirstState = remember { StudioEmptyState.decodeSoundFirst() }
                 EmptyCanvasCta(
-                    state = emptyState,
+                    state = if (soundFirst) soundFirstState else emptyState,
                     onPick = ::launchPicker,
-                    onBlank = {
-                        activePanel = null
-                        showBlankCreate = true
+                    onBlank = if (soundFirst) {
+                        { activePanel = MemeEditorPanel.SOUND }
+                    } else {
+                        {
+                            activePanel = null
+                            showBlankCreate = true
+                        }
                     },
                     onTemplate = { id ->
                         state.restore(space.bitos.core.studio.MemeTemplates.apply(state.project, id))
@@ -3008,12 +3316,26 @@ fun MemeEditorScreen(
             } else if (gifMode) {
                 val frame = gifFrames[gifPreviewIndex.coerceIn(0, gifFrames.size - 1)]
                 val frameAspect = frame.width.toFloat() / frame.height
+                // EUI-02 §3: a cover crop re-frames the stage and swaps the
+                // media for its placed preview (the exact export draw).
+                val stagePlace = space.bitos.core.studio.MemeCanvas.placement(
+                    frame.width, frame.height, state.project.canvasRatio, effectiveCrop,
+                )
+                val placedFrame = if (stagePlace.cover) {
+                    val sig = stagePlace.let {
+                        "${it.frameWidth}x${it.frameHeight}|${it.drawX},${it.drawY}," +
+                            "${it.drawWidth}x${it.drawHeight}|${it.rotationDeg}|${it.flipH}"
+                    }
+                    remember(gifPreviewIndex, sig) { MemeRaster.placeMedia(frame, stagePlace, 1440) }
+                } else {
+                    null
+                }
                 val canvasTerms = state.project.canvasRatio
                     ?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
-                val stageAspect = if (canvasTerms != null) {
-                    canvasTerms.first.toFloat() / canvasTerms.second
-                } else {
-                    frameAspect
+                val stageAspect = when {
+                    stagePlace.cover -> stagePlace.frameWidth.toFloat() / stagePlace.frameHeight
+                    canvasTerms != null -> canvasTerms.first.toFloat() / canvasTerms.second
+                    else -> frameAspect
                 }
                 Box(
                     modifier = Modifier
@@ -3023,25 +3345,26 @@ fun MemeEditorScreen(
                         .onSizeChanged { stagePx = it },
                 ) {
                     androidx.compose.foundation.Image(
-                        bitmap = frame.asImageBitmap(),
+                        bitmap = (placedFrame ?: frame).asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.FillBounds,
-                        // WYSIWYG: the frame previews the same composed
-                        // look + adjust grade the encoder burns per frame.
-                        colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
-                            androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-                                androidx.compose.ui.graphics.ColorMatrix(
-                                    space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
-                                        state.project.lookId,
-                                        state.project.adjust,
+                            // WYSIWYG: the frame previews the same composed
+                            // look + adjust grade the encoder burns per frame
+                            // (incl. the Look sheet's uncommitted draft).
+                            colorFilter = if (state.project.lookId != null || effectiveAdjust != null) {
+                                androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                                    androidx.compose.ui.graphics.ColorMatrix(
+                                        space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
+                                            state.project.lookId,
+                                            effectiveAdjust,
+                                        ),
                                     ),
-                                ),
-                            )
-                        } else {
-                            null
-                        },
-                    )
+                                )
+                            } else {
+                                null
+                            },
+                        )
                     // Picked-GIF preview goes kinetic too (MST-077 stage
                     // honesty): overlays render at the CURRENT frame's
                     // loop time — the same transforms the exporter burns.
@@ -3090,12 +3413,35 @@ fun MemeEditorScreen(
                     }
                 }
             } else if (current != null || pinnedCanvasTerms != null) {
+                // EUI-02 §3 (image mode): cover crop preview via the placed
+                // bitmap — the same draw the raster export burns.
+                val cropPlace = current?.let {
+                    space.bitos.core.studio.MemeCanvas.placement(
+                        (it.aspect * 1000).toInt().coerceAtLeast(1), 1000,
+                        state.project.canvasRatio, effectiveCrop,
+                    )
+                }
+                val placedImage = if (cropPlace?.cover == true && current != null) {
+                    val sig = cropPlace.let {
+                        "${it.frameWidth}x${it.frameHeight}|${it.drawX},${it.drawY}," +
+                            "${it.drawWidth}x${it.drawHeight}|${it.rotationDeg}|${it.flipH}"
+                    }
+                    remember(current.uri, sig) {
+                        MemeRaster.decodeForExport(context.contentResolver, current.uri)
+                            ?.let { src -> MemeRaster.placeMedia(src, cropPlace, 1440) }
+                    }
+                } else {
+                    null
+                }
+                val cropStageAspect = cropPlace?.takeIf { it.cover }?.let {
+                    it.frameWidth.toFloat() / it.frameHeight
+                }
                 // Blank design: no pick, a pinned canvas — the stage keeps
                 // the full overlay/gesture surface over the background fill.
-                val stageAspect = if (pinnedCanvasTerms != null) {
-                    pinnedCanvasTerms.first.toFloat() / pinnedCanvasTerms.second
-                } else {
-                    current!!.aspect
+                val stageAspect = when {
+                    cropStageAspect != null -> cropStageAspect
+                    pinnedCanvasTerms != null -> pinnedCanvasTerms.first.toFloat() / pinnedCanvasTerms.second
+                    else -> current!!.aspect
                 }
                 Box(
                     modifier = Modifier
@@ -3104,20 +3450,30 @@ fun MemeEditorScreen(
                         .background(parseCanvasColor(state.project.canvasBg) ?: BitOSColors.surface)
                         .onSizeChanged { stagePx = it },
                 ) {
-                    current?.let { picked ->
+                    val placedImageBitmap = placedImage?.asImageBitmap()
+                    if (placedImageBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = placedImageBitmap,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds,
+                        )
+                    }
+                    if (placedImage == null) current?.let { picked ->
                         AsyncImage(
                             model = picked.uri,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.FillBounds,
                             // WYSIWYG: the stage shows the same composed look +
-                            // adjust grade the rasterizer burns (MST-043 + FX).
-                            colorFilter = if (state.project.lookId != null || state.project.adjust != null) {
+                            // adjust grade the rasterizer burns (MST-043 + FX,
+                            // incl. the Look sheet's uncommitted draft).
+                            colorFilter = if (state.project.lookId != null || effectiveAdjust != null) {
                                 androidx.compose.ui.graphics.ColorFilter.colorMatrix(
                                     androidx.compose.ui.graphics.ColorMatrix(
                                         space.bitos.core.studio.MemeLooks.adjustedMatrixFor(
                                             state.project.lookId,
-                                            state.project.adjust,
+                                            effectiveAdjust,
                                         ),
                                     ),
                                 )
@@ -3422,23 +3778,35 @@ fun MemeEditorScreen(
                 }
             } else {
             Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.Bottom,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 stageArea(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = BitOSSpacing.base)
-                        .height(
-                            when {
-                                gifMode -> 320.dp
-                                videoMode -> previewHeight
-                                else -> imagePreviewHeight
-                            },
-                        )
+                        .weight(1f)
+                        .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs)
                         .clip(RoundedCornerShape(16.dp)),
                 )
-                ModePillsRow(
+                val dockBorder = BitOSColors.border.copy(alpha = 0.45f)
+                androidx.compose.material3.Surface(
+                    color = BitOSColors.surfaceElevated.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .drawBehind {
+                                drawLine(
+                                    color = dockBorder,
+                                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                                    end = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                                    strokeWidth = 1.dp.toPx(),
+                                )
+                            }
+                            .padding(top = BitOSSpacing.xs),
+                    ) {
+                        ModePillsRow(
                     activeMode = state.project.mode,
                     canUndo = state.canUndo,
                     canRedo = state.canRedo,
@@ -3530,7 +3898,7 @@ fun MemeEditorScreen(
                     TimelineStrip(
                         clips = videoClips.toList(),
                         selectedClipIndex = selectedClipIndex,
-                        positionMs = videoPositionMs,
+                        positionMsProvider = { videoPositionMs },
                         totalMs = timelineDurationMs,
                         remainingMs = timelineRemainingMs,
                         profile = videoPublishProfile,
@@ -3602,7 +3970,9 @@ fun MemeEditorScreen(
                         },
                     )
                 }
-                Spacer(Modifier.height(BitOSSpacing.sm))
+                Spacer(Modifier.height(BitOSSpacing.xs))
+                }
+                }
             }
             }
             }
@@ -3736,6 +4106,15 @@ fun MemeEditorScreen(
                                     state.addMemeCaptions(top, bottom, slot)
                                     exportStatus = "Captions added — drag to fine-tune"
                                 },
+                                onImportTimed = {
+                                    captionFilePicker.launch(
+                                        arrayOf("application/x-subrip", "text/vtt", "text/plain"),
+                                    )
+                                },
+                                onAddAtPlayhead = {
+                                    addCaptionAtPlayhead()
+                                },
+                                hasPlayhead = videoMode && videoClips.isNotEmpty(),
                             )
                             MemeEditorPanel.STICKERS -> StickerSheetContent(
                                 recents = recentStickers.toList(),
@@ -3757,6 +4136,12 @@ fun MemeEditorScreen(
                                 extracting = extractingSound,
                                 library = libraryEntries,
                                 online = onlineSoundRows,
+                                currentSoundUrl = state.project.soundtrack?.url ?: "",
+                                downloadingSoundUrl = downloadingSoundUrl ?: "",
+                                failedSoundUrls = failedSoundUrls.toSet(),
+                                videoDurationMs = timelineDurationMs,
+                                previewingSoundKey = previewingSoundKey ?: "",
+                                onTogglePreview = ::toggleSoundPreview,
                                 query = soundQuery,
                                 onQueryChange = { soundQuery = it.take(80) },
                                 onOpenTrending = { showTrendingSounds = true },
@@ -3817,14 +4202,33 @@ fun MemeEditorScreen(
                                         }
                                     },
                                     adjust = state.project.adjust,
-                                    onAdjust = { state.setAdjust(it) },
+                                    previewAdjust = adjustPreview,
+                                    onPreviewAdjust = { adjustPreview = it },
+                                    onApplyAdjust = {
+                                        state.setAdjust(it)
+                                        adjustPreview = null
+                                    },
+                                    onCancelAdjust = { adjustPreview = null },
                                 )
                             } else {
                                 LooksSheetContent(
                                     active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
                                     onPick = { id -> state.setLook(id) },
                                     adjust = state.project.adjust,
-                                    onAdjust = { state.setAdjust(it) },
+                                    previewAdjust = adjustPreview,
+                                    onPreviewAdjust = { adjustPreview = it },
+                                    onApplyAdjust = {
+                                        state.setAdjust(it)
+                                        adjustPreview = null
+                                    },
+                                    onCancelAdjust = { adjustPreview = null },
+                                    swatchSource = remember(activeAssetId) {
+                                        activeAssetId?.let { id ->
+                                            imageAssetMap[id]?.first?.let { uri ->
+                                                MemeRaster.decodeScaled(context.contentResolver, uri, 144)
+                                            }
+                                        }
+                                    } ?: gifFrames.lastOrNull(),
                                 )
                             }
                         }
@@ -4130,53 +4534,6 @@ fun MemeEditorScreen(
         return
     }
 
-    if (showLooks) {
-        ModalBottomSheet(onDismissRequest = { showLooks = false }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = BitOSSpacing.base)
-                    .padding(bottom = BitOSSpacing.lg),
-                verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-            ) {
-                Text("Color look", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
-                if (videoMode && hasVideo) {
-                    // M5: the grade applies to the SELECTED clip; "none" clears
-                    // the override (the project grade shows through again). The
-                    // adjust sliders stay project-wide (prototype semantics).
-                    val clip = videoClips.getOrNull(selectedClipIndex) ?: videoClips.first()
-                    LooksSheetContent(
-                        active = clip.lookId ?: state.project.lookId
-                            ?: space.bitos.core.studio.MemeLooks.NONE,
-                        onPick = { id ->
-                            val index = videoClips.indexOf(clip)
-                            if (index >= 0) {
-                                state.beginClipsEdit()
-                                            videoClips[index] = clip.copy(
-                                                lookId = space.bitos.core.studio.MemeLooks.normalize(id),
-                                            )
-                                            syncWireClips()
-                                            exportStatus = "Look applies to vdo ${index + 1}"
-                            }
-                            showLooks = false
-                        },
-                        adjust = state.project.adjust,
-                        onAdjust = { state.setAdjust(it) },
-                    )
-                } else {
-                    LooksSheetContent(
-                        active = state.project.lookId ?: space.bitos.core.studio.MemeLooks.NONE,
-                        onPick = { id ->
-                            state.setLook(id)
-                            showLooks = false
-                        },
-                        adjust = state.project.adjust,
-                        onAdjust = { state.setAdjust(it) },
-                    )
-                }
-            }
-        }
-    }
 
     if (showSfx) {
         // Per-overlay sound windows: a selected overlay WITH a visibility
@@ -4423,10 +4780,36 @@ fun MemeEditorScreen(
                     },
                 )
             } else {
-            CanvasSheetContent(
+            CropSheetContent(
                 ratio = state.project.canvasRatio ?: space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
                 bg = state.project.canvasBg,
-                onPick = { ratio, bg -> state.setCanvas(ratio, bg) },
+                crop = state.project.crop,
+                previewCrop = cropPreview,
+                legacyPad = state.project.crop == null &&
+                    state.project.canvasRatio != null &&
+                    state.project.canvasRatio != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE,
+                mediaAspect = when {
+                    gifMode && gifFrames.isNotEmpty() ->
+                        gifFrames.first().width.toFloat() / gifFrames.first().height
+                    else -> imageAssetMap[activeAssetId]?.second ?: 1f
+                },
+                onPickRatio = { picked ->
+                    state.setCanvas(picked, state.project.canvasBg)
+                    // "Original" restores the uncropped frame (spec §3).
+                    if (picked == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) {
+                        state.setCrop(null)
+                        cropPreview = null
+                    }
+                },
+                onPickBg = {
+                    state.setCanvas(state.project.canvasRatio?.takeIf { r -> r != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, it)
+                },
+                onPreviewCrop = { cropPreview = it },
+                onApplyCrop = {
+                    state.setCrop(it)
+                    cropPreview = null
+                },
+                onCancelCrop = { cropPreview = null },
             )
             }
         }
@@ -4949,16 +5332,16 @@ private fun ModePillsRow(
         // pick affordance isn't buried in the tray.
         if (activeMode == MemeMode.VIDEO) {
             IconButton(onClick = onAddClip) {
-                SolarStudioIconImage(
-                    SolarStudioIcon.VideoCamera,
+                androidx.compose.material3.Icon(
+                    space.bitos.app.ui.theme.AppIcons.Video,
                     contentDescription = "Add clip",
                     tint = BitOSColors.textPrimary,
                 )
             }
         }
         IconButton(onClick = onAddImage) {
-            SolarStudioIconImage(
-                SolarStudioIcon.Gallery,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Photo,
                 contentDescription = when (activeMode) {
                     MemeMode.GIF -> "Add frames"
                     MemeMode.VIDEO -> "Add image layer"
@@ -4968,8 +5351,8 @@ private fun ModePillsRow(
             )
         }
         IconButton(onClick = onUndo, enabled = canUndo) {
-            SolarStudioIconImage(
-                SolarStudioIcon.UndoLeft,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Undo,
                 contentDescription = "Undo",
                 tint = if (canUndo) BitOSColors.textPrimary else BitOSColors.textTertiary,
             )
@@ -5221,6 +5604,76 @@ private fun VerticalSizeSlider(
 }
 
 /** Sound panel (prototype sound row): cue summary + jump to the studio. */
+/**
+ * EUI-05: one sound row — preview (one row at a time), title/creator/
+ * duration, and the shared availability state's action + hint. Preview
+ * stays available in EVERY state; Add is the only state-gated action.
+ */
+@Composable
+private fun SoundRowEui(
+    title: String,
+    meta: String,
+    added: Boolean,
+    downloading: Boolean,
+    loadFailed: Boolean,
+    previewing: Boolean,
+    onTogglePreview: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    val state = space.bitos.core.studio.MemeSoundAvailability.rowState(added, downloading, loadFailed)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = BitOSColors.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
+        ) {
+            IconButton(onClick = onTogglePreview) {
+                Icon(
+                    if (previewing) AppIcons.Pause else AppIcons.Play,
+                    contentDescription = if (previewing) "Stop previewing $title" else "Preview $title",
+                    tint = if (previewing) BitOSColors.primary else BitOSColors.textSecondary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.W600,
+                    maxLines = 1,
+                )
+                Text(
+                    if (state.hint != null) "$meta · ${state.hint}" else meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.hint != null) BitOSColors.warning else BitOSColors.textSecondary,
+                )
+            }
+            Text(
+                state.actionLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.W600,
+                color = when (state) {
+                    space.bitos.core.studio.MemeSoundAvailability.RowState.ADDED -> BitOSColors.textSecondary
+                    space.bitos.core.studio.MemeSoundAvailability.RowState.DOWNLOADING -> BitOSColors.textSecondary
+                    else -> BitOSColors.primary
+                },
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(
+                        enabled = state == space.bitos.core.studio.MemeSoundAvailability.RowState.AVAILABLE ||
+                            state == space.bitos.core.studio.MemeSoundAvailability.RowState.NEEDS_CONNECTION,
+                        onClickLabel = state.actionLabel,
+                    ) { onAdd() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun SoundPanelContent(
     cueCount: Int,
@@ -5232,6 +5685,19 @@ private fun SoundPanelContent(
     query: String = "",
     publishBusy: Boolean = false,
     publishMessage: String? = null,
+    /** EUI-05: the current soundtrack's url — its row reads Added. */
+    currentSoundUrl: String = "",
+    /** EUI-05: url actively downloading (row reads Downloading…). */
+    downloadingSoundUrl: String = "",
+    /** EUI-05: urls whose load failed (row explains the connection need). */
+    failedSoundUrls: Set<String> = emptySet(),
+    /** EUI-05: the video's output length, for the honest loop copy. */
+    videoDurationMs: Long = 0,
+    /** EUI-05: row key currently previewing (one row at a time). */
+    previewingSoundKey: String = "",
+    /** Preview toggle: [key] identifies the row; [source] is an https URL
+     *  or `library:<id>` for saved local bytes (the caller resolves). */
+    onTogglePreview: (key: String, source: String, label: String) -> Unit = { _, _, _ -> },
     onQueryChange: (String) -> Unit = {},
     onOpenTrending: () -> Unit = {},
     onOpenVideos: () -> Unit = {},
@@ -5339,8 +5805,13 @@ private fun SoundPanelContent(
                                 onCheckedChange = onSoundLoop,
                             )
                             Spacer(Modifier.weight(1f))
+                            // EUI-05: the shared rule states the REAL
+                            // duration relationship (nothing claimed while
+                            // the video length is unknown).
                             Text(
-                                if (soundtrack.loop) "repeats to the end" else "plays once",
+                                space.bitos.core.studio.MemeSoundAvailability.loopCopy(
+                                    soundtrack.durationMs, videoDurationMs, soundtrack.loop,
+                                ).ifBlank { if (soundtrack.loop) "repeats" else "plays once" },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = BitOSColors.textSecondary,
                             )
@@ -5465,41 +5936,16 @@ private fun SoundPanelContent(
                     color = BitOSColors.textSecondary,
                 )
                 onlineRows.forEach { row ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = BitOSColors.surface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = "Use ${row.label}") { onUseOnlineSound(row) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-                        ) {
-                            Text("♪", style = MaterialTheme.typography.titleSmall)
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    row.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.W600,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = BitOSColors.textSecondary,
-                                )
-                            }
-                            Text(
-                                "Use",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.W600,
-                                color = BitOSColors.primary,
-                            )
-                        }
-                    }
+                    SoundRowEui(
+                        title = row.label,
+                        meta = if (row.durationMs > 0) "${row.durationMs / 1000}s · ${row.license}" else row.license,
+                        added = row.url == currentSoundUrl,
+                        downloading = row.url == downloadingSoundUrl,
+                        loadFailed = row.url in failedSoundUrls,
+                        previewing = row.url == previewingSoundKey,
+                        onTogglePreview = { onTogglePreview(row.url, row.url, row.label) },
+                        onAdd = { onUseOnlineSound(row) },
+                    )
                 }
             }
 
@@ -5513,41 +5959,18 @@ private fun SoundPanelContent(
                     color = BitOSColors.textSecondary,
                 )
                 libraryRows.forEach { entry ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = BitOSColors.surface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = "Use ${entry.label}") { onPickLibrarySound(entry) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.sm),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
-                        ) {
-                            Text("♪", style = MaterialTheme.typography.titleSmall)
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    entry.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.W600,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    "${entry.durationMs / 1000}s · saved for offline use",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = BitOSColors.textSecondary,
-                                )
-                            }
-                            Text(
-                                "Attach",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.W600,
-                                color = BitOSColors.primary,
-                            )
-                        }
-                    }
+                    SoundRowEui(
+                        title = entry.label,
+                        meta = "${entry.durationMs / 1000}s · saved for offline use",
+                        added = entry.url == currentSoundUrl && entry.url.isNotEmpty(),
+                        downloading = entry.url == downloadingSoundUrl,
+                        loadFailed = false, // local bytes never need a connection
+                        previewing = entry.url.ifEmpty { entry.id } == previewingSoundKey,
+                        onTogglePreview = {
+                            onTogglePreview(entry.url.ifEmpty { entry.id }, "library:${entry.id}", entry.label)
+                        },
+                        onAdd = { onPickLibrarySound(entry) },
+                    )
                 }
             }
             if (needle.isNotEmpty() && onlineRows.isEmpty() && libraryRows.isEmpty()) {
@@ -5579,216 +6002,8 @@ private fun SoundPanelContent(
     }
 }
 
-/** One clip segment in the compact timeline. */
-@Composable
-private fun TimelineClipSegment(
-    index: Int,
-    widthPx: Float,
-    outSec: Int,
-    speed: Float,
-    muted: Boolean,
-    selected: Boolean,
-    label: String = "vdo ${index + 1}",
-    onSelect: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .padding(start = if (index == 0) 0.dp else 1.dp, end = 1.dp)
-            .width(with(androidx.compose.ui.platform.LocalDensity.current) { widthPx.toDp() })
-            .height(40.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (selected) BitOSColors.primary.copy(alpha = 0.85f)
-                else BitOSColors.surfaceElevated,
-            )
-            .border(
-                1.5.dp,
-                if (selected) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.45f),
-                RoundedCornerShape(6.dp),
-            )
-            .clickable { onSelect() },
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            color = androidx.compose.ui.graphics.Color.White,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            if (muted) {
-                Text("🔇", fontSize = 9.sp)
-            }
-            Text(
-                "${outSec}s · ${"%.2g".format(java.util.Locale.US, speed)}×",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                fontWeight = FontWeight.W600,
-                color = androidx.compose.ui.graphics.Color.White,
-            )
-        }
-    }
-}
+// TimelineStrip, TimelineClipSegment, and ClipToolButton live in MemeStudioTimeline.kt.
 
-/** Compact clip timeline (prototype edTimeline): ruler, proportional
- *  segments, playhead and the Split/Delete/Mute/Speed/Layer tool row. */
-@Composable
-private fun TimelineStrip(
-    clips: List<SessionClip>,
-    selectedClipIndex: Int,
-    positionMs: Long,
-    totalMs: Long,
-    remainingMs: Long,
-    profile: space.bitos.core.studio.MemeVideoCutRules.PublishProfile,
-    onProfile: (space.bitos.core.studio.MemeVideoCutRules.PublishProfile) -> Unit,
-    onSelectClip: (Int) -> Unit,
-    onSplit: () -> Unit,
-    onDelete: () -> Unit,
-    onMute: () -> Unit,
-    onSpeed: () -> Unit,
-    onLayer: () -> Unit,
-    transport: VideoTransport,
-    onSetCover: (Long) -> Unit,
-) {
-    val safeTotal = maxOf(1L, totalMs)
-    var draggingScrubber by remember { mutableStateOf(false) }
-    var pendingScrubMs by remember { mutableStateOf(0f) }
-    fun mmss(ms: Long): String =
-        String.format("%02d:%02d", (ms / 1000) / 60, (ms / 1000) % 60)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.base),
-        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = transport.playPause) {
-                Icon(if (transport.isPlaying()) AppIcons.Pause else AppIcons.Play, contentDescription = "Play or pause")
-            }
-            BitosSlider(
-                value = if (draggingScrubber) pendingScrubMs
-                    else positionMs.toFloat().coerceIn(0f, safeTotal.toFloat()),
-                onValueChange = {
-                    draggingScrubber = true
-                    pendingScrubMs = it
-                },
-                onValueChangeFinished = {
-                    transport.seekTo(pendingScrubMs.toLong())
-                    draggingScrubber = false
-                },
-                valueRange = 0f..safeTotal.toFloat(),
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${mmss(positionMs.coerceAtMost(safeTotal))} / ${mmss(safeTotal)}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = BitOSColors.primary,
-                fontWeight = FontWeight.W600,
-            )
-            TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
-        }
-        Text(
-            "Timeline · clip ${selectedClipIndex + 1} of ${clips.size} · ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(remainingMs)} left",
-            style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textSecondary,
-        )
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
-        ) {
-            rowItems(space.bitos.core.studio.MemeVideoCutRules.PublishProfile.entries.toList()) { option ->
-                TextButton(onClick = { onProfile(option) }) {
-                    Text(if (option == profile) "✓ ${option.label}" else option.label)
-                }
-            }
-        }
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(BitOSColors.surfaceElevated.copy(alpha = 0.55f))
-                .pointerInput(safeTotal) {
-                    detectTapGestures { tap ->
-                        val fraction = (tap.x / size.width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-                        transport.seekTo((fraction * safeTotal).toLong())
-                    }
-                },
-        ) {
-            val trackWidth = constraints.maxWidth.toFloat()
-            Row(Modifier.fillMaxHeight()) {
-                clips.forEachIndexed { index, clip ->
-                    key(clip.id) {
-                        TimelineClipSegment(
-                            index = index,
-                            widthPx = trackWidth * clipOutputMsOf(clip) / safeTotal,
-                            outSec = ((clipOutputMsOf(clip) + 999) / 1000).toInt(),
-                            speed = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed),
-                            muted = clip.volume == 0f,
-                            selected = index == selectedClipIndex,
-                            label = if (clip.id.startsWith("blank")) "canvas" else "vdo ${index + 1}",
-                            onSelect = { onSelectClip(index) },
-                        )
-                    }
-                }
-            }
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) {
-                        (trackWidth * (positionMs.coerceIn(0L, safeTotal).toFloat() / safeTotal) - 1f).toDp()
-                    })
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .background(BitOSColors.primary),
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround,
-        ) {
-            ClipToolButton(AppIcons.Scissors, "Split", onSplit)
-            ClipToolButton(AppIcons.Delete, "Delete", onDelete)
-            ClipToolButton(AppIcons.Mute, "Mute", onMute)
-            ClipToolButton(AppIcons.Speed, "Speed", onSpeed)
-            ClipToolButton(AppIcons.Layer, "Layer", onLayer)
-        }
-    }
-}
-
-/** Output window ms for one clip at the project rate (display math only). */
-private fun clipOutputMsOf(clip: SessionClip): Long =
-    ((maxOf(0L, clip.endMs - clip.startMs)) /
-        space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)).toLong()
-
-/** Icon-over-caption clip tool / per-mode bar button. */
-@Composable
-private fun ClipToolButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .semantics { contentDescription = label },
-    ) {
-        Icon(icon, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(16.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
-    }
-}
-
-/** Canvas settings (image/GIF): ratio preset + background color (shared
- *  [space.bitos.core.studio.MemeCanvas] rules; the media letterboxes). */
 /**
  * Blank-video creation/re-style sheet (plan §3.2/§3.3, MST-071/073):
  * ratio · background · duration → the synthesized solid canvas clip. On
@@ -5925,11 +6140,21 @@ private fun BlankCanvasSheetContent(
 }
 
 @Composable
-private fun CanvasSheetContent(
+private fun CropSheetContent(
     ratio: String,
     bg: String?,
-    onPick: (ratio: String?, bg: String?) -> Unit,
+    crop: space.bitos.core.studio.MemeCrop?,
+    previewCrop: space.bitos.core.studio.MemeCrop?,
+    legacyPad: Boolean,
+    /** Visual parity: "Original" chip shows the media's own shape. */
+    mediaAspect: Float = 1f,
+    onPickRatio: (String) -> Unit,
+    onPickBg: (String?) -> Unit,
+    onPreviewCrop: (space.bitos.core.studio.MemeCrop) -> Unit,
+    onApplyCrop: (space.bitos.core.studio.MemeCrop) -> Unit,
+    onCancelCrop: () -> Unit,
 ) {
+    val draft = previewCrop ?: crop ?: space.bitos.core.studio.MemeCrop()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -5937,26 +6162,117 @@ private fun CanvasSheetContent(
             .padding(bottom = BitOSSpacing.lg),
         verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
     ) {
-        Text("Canvas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
-        Text("Size", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
-        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+        Text("Crop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.W700)
+        Text(
+            space.bitos.core.studio.StudioOnboarding.CROP_HINT,
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textSecondary,
+        )
+        if (legacyPad) {
+            // The spec's padding disclosure: this project letterboxes today;
+            // touching the crop switches it to crop-to-fill.
+            Text(
+                "This project pads the media to fit the canvas. Any crop change below switches it to crop-to-fill.",
+                style = MaterialTheme.typography.labelSmall,
+                color = BitOSColors.textTertiary,
+            )
+        }
+        Text("Aspect ratio", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
             space.bitos.core.studio.MemeCanvas.RATIOS.forEach { (id, label) ->
-                val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Source" else id
+                val short = if (id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE) "Original" else id
+                // Visual parity: each chip carries the ratio's SHAPE, not
+                // just its name (spec §3 "label and shape").
+                val terms = space.bitos.core.studio.MemeCanvas.ratioTerms(id)
+                val shapeAspect = when {
+                    id == space.bitos.core.studio.MemeCanvas.RATIO_SOURCE -> mediaAspect
+                    terms != null -> terms.first.toFloat() / terms.second
+                    else -> 1f
+                }.coerceIn(0.4f, 2.5f)
+                val selectedRatio = ratio == id
                 Surface(
-                    shape = RoundedCornerShape(50),
-                    color = if (ratio == id) BitOSColors.primary else BitOSColors.surfaceElevated,
-                    modifier = Modifier.clickable(onClickLabel = label) { onPick(id, bg) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (selectedRatio) BitOSColors.primary else BitOSColors.surfaceElevated,
+                    modifier = Modifier.clickable(onClickLabel = label) { onPickRatio(id) },
                 ) {
-                    Text(
-                        short,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.W600,
-                        color = if (ratio == id) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .height(14.dp)
+                                .aspectRatio(shapeAspect)
+                                .clip(RoundedCornerShape(2.dp))
+                                .border(
+                                    1.5.dp,
+                                    if (selectedRatio) androidx.compose.ui.graphics.Color.Black else BitOSColors.textSecondary,
+                                    RoundedCornerShape(2.dp),
+                                ),
+                        )
+                        Text(
+                            short,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.W600,
+                            color = if (selectedRatio) androidx.compose.ui.graphics.Color.Black else BitOSColors.textPrimary,
+                        )
+                    }
                 }
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(rotationDeg = (draft.rotationDeg + 270) % 360))
+            }) { Text("Rotate left") }
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(rotationDeg = (draft.rotationDeg + 90) % 360))
+            }) { Text("Rotate right") }
+            TextButton(onClick = {
+                onPreviewCrop(draft.copy(flipH = !draft.flipH))
+            }) { Text("Flip") }
+        }
+        // Accessible pan/zoom — the spec requires the crop be operable
+        // without pinch gestures; these sliders preview live on the stage.
+        BitosAdjustmentSlider(
+            label = "Zoom",
+            value = draft.zoom,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_ZOOM..space.bitos.core.studio.MemeCrop.MAX_ZOOM,
+            valueText = "${(draft.zoom * 100).toInt()}%",
+            onValueChange = { onPreviewCrop(draft.copy(zoom = it)) },
+            step = 0.05f,
+        )
+        BitosAdjustmentSlider(
+            label = "Position X",
+            value = draft.panX,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_PAN..space.bitos.core.studio.MemeCrop.MAX_PAN,
+            valueText = "${(draft.panX * 100).toInt()}",
+            onValueChange = { onPreviewCrop(draft.copy(panX = it)) },
+            step = 0.05f,
+        )
+        BitosAdjustmentSlider(
+            label = "Position Y",
+            value = draft.panY,
+            valueRange = space.bitos.core.studio.MemeCrop.MIN_PAN..space.bitos.core.studio.MemeCrop.MAX_PAN,
+            valueText = "${(draft.panY * 100).toInt()}",
+            onValueChange = { onPreviewCrop(draft.copy(panY = it)) },
+            step = 0.05f,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm, Alignment.End),
+        ) {
+            TextButton(onClick = onCancelCrop, enabled = previewCrop != null) { Text("Cancel") }
+            Button(onClick = { onApplyCrop(previewCrop ?: return@Button) }, enabled = previewCrop != null) {
+                Text("Apply")
+            }
+        }
+        HorizontalDivider(
+            color = BitOSColors.border,
+            modifier = Modifier.padding(vertical = BitOSSpacing.xs),
+        )
         Text("Background", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W600)
         Row(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
@@ -5975,14 +6291,9 @@ private fun CanvasSheetContent(
                                 if (selected) BitOSColors.primary else BitOSColors.border,
                                 androidx.compose.foundation.shape.CircleShape,
                             )
-                            .clickable(onClickLabel = "Background $hex") { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex) },
+                            .clickable(onClickLabel = "Background $hex") { onPickBg(hex) },
                     )
                 }
-            if (bg != null) {
-                TextButton(onClick = { onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, null) }) {
-                    Text("Clear", color = BitOSColors.textSecondary)
-                }
-            }
         }
         var hex by remember { mutableStateOf(bg ?: "") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
@@ -5992,7 +6303,7 @@ private fun CanvasSheetContent(
                     hex = value.take(7)
                     // Apply as typed when it completes a valid #rrggbb.
                     if (space.bitos.core.studio.MemeCanvas.isValidBackground(hex)) {
-                        onPick(ratio.takeIf { it != space.bitos.core.studio.MemeCanvas.RATIO_SOURCE }, hex)
+                        onPickBg(hex)
                     }
                 },
                 placeholder = "#rrggbb custom",
@@ -6008,9 +6319,9 @@ private fun CanvasSheetContent(
             )
         }
         Text(
-            "The media letterboxes onto the canvas; captions and layers keep their positions.",
+            "Pads letterboxed projects — a crop fills the frame instead.",
             style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textSecondary,
+            color = BitOSColors.textTertiary,
         )
     }
 }
@@ -6650,6 +6961,7 @@ private fun toolIcon(
     space.bitos.core.studio.MemeTools.ToolId.EDIT -> AppIcons.Pen
     space.bitos.core.studio.MemeTools.ToolId.TIME_WINDOW -> AppIcons.Schedule
     space.bitos.core.studio.MemeTools.ToolId.DUPLICATE -> AppIcons.Copy
+    space.bitos.core.studio.MemeTools.ToolId.REPLACE -> AppIcons.Refresh
     space.bitos.core.studio.MemeTools.ToolId.FORWARD -> AppIcons.FlipToFront
     space.bitos.core.studio.MemeTools.ToolId.BACKWARD -> AppIcons.FlipToBack
     space.bitos.core.studio.MemeTools.ToolId.SPLIT -> AppIcons.CallSplit
@@ -9152,21 +9464,75 @@ private fun PostPreflightRow(done: Boolean, label: String, meta: String) {
     }
 }
 
-/** Color-grade picker (MST-043): the 8 web presets, media-only, undoable. */
+/** Visual parity: the shared control `icon` token → the platform glyph. */
+private fun adjustControlIcon(token: String): androidx.compose.ui.graphics.vector.ImageVector =
+    when (token) {
+        "exposure" -> Icons.Rounded.Exposure
+        "lightness" -> Icons.Rounded.WbSunny
+        "contrast" -> Icons.Rounded.Contrast
+        "saturation" -> Icons.Rounded.Tonality
+        "warmth" -> Icons.Rounded.DeviceThermostat
+        "tint" -> Icons.Rounded.Opacity
+        "fade" -> Icons.Rounded.Gradient
+        else -> Icons.Rounded.Tonality
+    }
+
+/** EUI-02 Look sheet: the 8 shared grade presets (immediate, one undoable
+ * step per tap) plus the reference editor's Adjust structure — Tone |
+ * Colour tabs, control chips, ONE labelled slider for the selected
+ * control, reset current/all, and a Cancel/Apply draft transaction: slider
+ * drags preview on the stage uncommitted, Apply lands them as ONE
+ * undoable SetAdjust, Cancel restores the entry values.
+ *
+ * Tone = Exposure · Lightness · Contrast; Colour = Saturation · Warmth ·
+ * Tint · Fade — exactly the axes the shared one-matrix pipeline burns
+ * identically in preview and export. Details (sharpness/grain/vignette)
+ * needs spatial rendering and stays out until a renderer supports it
+ * (spec: an honest absent control beats a lying slider).
+ */
+
+
 @Composable
 private fun LooksSheetContent(
     active: String,
     onPick: (String) -> Unit,
-    adjust: space.bitos.core.studio.MemeAdjust? = null,
-    onAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit = {},
+    adjust: space.bitos.core.studio.MemeAdjust?,
+    previewAdjust: space.bitos.core.studio.MemeAdjust?,
+    onPreviewAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
+    onApplyAdjust: (space.bitos.core.studio.MemeAdjust) -> Unit,
+    onCancelAdjust: () -> Unit,
+    /** Visual parity: the current media frame — grade previews render it
+     *  through each preset (the reference editor's filter thumbnails);
+     *  null degrades to the text pills. */
+    swatchSource: android.graphics.Bitmap? = null,
 ) {
+    val entry = adjust ?: space.bitos.core.studio.MemeAdjust()
+    // The uncommitted draft (null = nothing to apply or cancel yet).
+    val draft = previewAdjust
+    val effective = draft ?: entry
+    var section by remember {
+        mutableStateOf(space.bitos.core.studio.MemeAdjustControl.Section.TONE)
+    }
+    var control by remember {
+        mutableStateOf(space.bitos.core.studio.MemeAdjustControl.EXPOSURE)
+    }
+    var confirmResetAll by remember { mutableStateOf(false) }
     // No outer padding/title here — the presenting sheet provides both.
     Column(verticalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
         Text(
-            "Applies to the media only — captions stay crisp. Undo works.",
+            "Applies to the media only — captions stay crisp.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
         )
+        // Visual parity: grade previews render the CURRENT media through
+        // each preset — never unrelated stock imagery (spec §2 rule).
+        val swatches = swatchSource?.let { src ->
+            remember(src.generationId) {
+                space.bitos.core.studio.MemeLooks.ALL.associate { look ->
+                    look.id to MemeRaster.lookSwatch(src, look.id, 96)
+                }
+            }
+        }
         space.bitos.core.studio.MemeLooks.ALL.chunked(4).forEach { rowLooks ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.xs),
@@ -9174,27 +9540,64 @@ private fun LooksSheetContent(
             ) {
                 rowLooks.forEach { look ->
                     val selected = look.id == active
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(onClickLabel = look.label) { onPick(look.id) },
-                    ) {
+                    val swatch = swatches?.get(look.id)
+                    if (swatch != null) {
                         Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
-                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .border(
+                                    if (selected) 2.dp else 1.dp,
+                                    if (selected) BitOSColors.primary else BitOSColors.border,
+                                    RoundedCornerShape(10.dp),
+                                )
+                                .clickable(onClickLabel = look.label) { onPick(look.id) },
                         ) {
+                            androidx.compose.foundation.Image(
+                                swatch.asImageBitmap(),
+                                contentDescription = "Look ${look.label}",
+                                modifier = Modifier.matchParentSize(),
+                                contentScale = ContentScale.Crop,
+                            )
                             Text(
                                 look.label,
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.W700,
-                                color = if (selected) {
-                                    androidx.compose.ui.graphics.Color.Black
-                                } else {
-                                    BitOSColors.textPrimary
-                                },
+                                color = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(3.dp)
+                                    .background(
+                                        androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                                        RoundedCornerShape(4.dp),
+                                    )
+                                    .padding(horizontal = 4.dp),
                             )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) BitOSColors.primary else BitOSColors.surfaceElevated,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClickLabel = look.label) { onPick(look.id) },
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = BitOSSpacing.sm),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    look.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.W700,
+                                    color = if (selected) {
+                                        androidx.compose.ui.graphics.Color.Black
+                                    } else {
+                                        BitOSColors.textPrimary
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -9202,70 +9605,116 @@ private fun LooksSheetContent(
                 repeat(4 - rowLooks.size) { Spacer(Modifier.weight(1f)) }
             }
         }
-        // ── Adjust (prototype `create-edit` FX sliders): manual fine-tune
-        // composed over the preset into the same burn-in matrix.
+        // ── Adjust: section tabs → control chips → one labelled slider ──
         HorizontalDivider(
             color = BitOSColors.border,
             modifier = Modifier.padding(vertical = BitOSSpacing.sm),
         )
         Text("Adjust", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.W700)
         Text(
-            "Fine-tune over the look — burns into the export like the preset.",
+            "Fine-tune over the look — Apply burns it into the export like the preset.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
-            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.sm),
+            modifier = Modifier.padding(top = 2.dp, bottom = BitOSSpacing.xs),
         )
-        val current = adjust ?: space.bitos.core.studio.MemeAdjust()
-        AdjustSliderRow(
-            label = "Brightness",
-            value = current.brightness,
-            range = space.bitos.core.studio.MemeAdjust.MIN_BRIGHTNESS..
-                space.bitos.core.studio.MemeAdjust.MAX_BRIGHTNESS,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(value, current.contrast, current.saturation))
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm)) {
+            space.bitos.core.studio.MemeAdjustControl.Section.entries.forEach { tab ->
+                FilterChip(
+                    selected = section == tab,
+                    onClick = {
+                        section = tab
+                        control = space.bitos.core.studio.MemeAdjustControl.entries
+                            .first { it.section == tab }
+                    },
+                    label = { Text(tab.label) },
+                )
+            }
         }
-        AdjustSliderRow(
-            label = "Contrast",
-            value = current.contrast,
-            range = space.bitos.core.studio.MemeAdjust.MIN_CONTRAST..
-                space.bitos.core.studio.MemeAdjust.MAX_CONTRAST,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, value, current.saturation))
+        val controls = space.bitos.core.studio.MemeAdjustControl.entries
+            .filter { it.section == section }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
+        ) {
+            controls.forEach { candidate ->
+                // A non-default control keeps its dot — colour alone is never
+                // the only signal of a changed setting (EUI-01 spec rule).
+                val changed = candidate.isNonDefault(effective)
+                FilterChip(
+                    selected = control == candidate,
+                    onClick = { control = candidate },
+                    leadingIcon = {
+                        Icon(
+                            adjustControlIcon(candidate.icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    },
+                    label = {
+                        Text(if (changed) "${candidate.label} •" else candidate.label)
+                    },
+                )
+            }
         }
-        AdjustSliderRow(
-            label = "Saturation",
-            value = current.saturation,
-            range = space.bitos.core.studio.MemeAdjust.MIN_SATURATION..
-                space.bitos.core.studio.MemeAdjust.MAX_SATURATION,
-        ) { value ->
-            onAdjust(space.bitos.core.studio.MemeAdjust(current.brightness, current.contrast, value))
+        BitosAdjustmentSlider(
+            label = control.label,
+            value = control.value(effective),
+            valueRange = control.range,
+            valueText = control.text(control.value(effective)),
+            onValueChange = { v -> onPreviewAdjust(control.with(effective, v)) },
+            step = 0.05f,
+            modifier = Modifier.padding(vertical = BitOSSpacing.xs),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs)) {
+            if (control.isNonDefault(effective)) {
+                TextButton(onClick = {
+                    onPreviewAdjust(control.with(effective, control.neutral))
+                }) { Text("Reset ${control.label}", color = BitOSColors.primary) }
+            }
+            val nonDefaultCount =
+                space.bitos.core.studio.MemeAdjustControl.entries.count { it.isNonDefault(effective) }
+            if (nonDefaultCount > 0) {
+                TextButton(onClick = {
+                    // Resetting ONE value is a tap; discarding several
+                    // non-default ones names the cost first (spec rule).
+                    if (nonDefaultCount > 1) confirmResetAll = true else onPreviewAdjust(space.bitos.core.studio.MemeAdjust())
+                }) { Text("Reset all", color = BitOSColors.primary) }
+            }
         }
-        if (!current.isDefault) {
+        // Draft transaction: Cancel restores the entry values; Apply
+        // commits the whole slider burst as one undoable command.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm, Alignment.End),
+        ) {
             TextButton(
-                onClick = { onAdjust(space.bitos.core.studio.MemeAdjust()) },
-                modifier = Modifier.padding(top = BitOSSpacing.xs),
-            ) { Text("Reset adjust", color = BitOSColors.primary) }
+                onClick = onCancelAdjust,
+                enabled = draft != null,
+            ) { Text("Cancel") }
+            Button(
+                onClick = {
+                    draft?.let(onApplyAdjust)
+                },
+                enabled = draft != null && draft != entry,
+            ) { Text("Apply") }
         }
     }
-}
-
-/** One labeled adjust slider with the % readout (prototype FX shape). */
-@Composable
-private fun AdjustSliderRow(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-) {
-    BitosAdjustmentSlider(
-        label = label,
-        value = value,
-        valueRange = range,
-        valueText = "${(value * 100).toInt()}%",
-        onValueChange = onValueChange,
-        step = 0.01f,
-        modifier = Modifier.padding(vertical = BitOSSpacing.xs),
-    )
+    if (confirmResetAll) {
+        AlertDialog(
+            onDismissRequest = { confirmResetAll = false },
+            title = { Text("Reset all adjustments?") },
+            text = { Text("This discards every non-default adjustment. Undo brings them back.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmResetAll = false
+                    onPreviewAdjust(space.bitos.core.studio.MemeAdjust())
+                }) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmResetAll = false }) { Text("Keep") }
+            },
+        )
+    }
 }
 
 /**
@@ -9281,6 +9730,12 @@ private fun MemeCaptionSheetContent(
     templatePublishMessage: String? = null,
     onPublishTemplate: () -> Unit = {},
     onAdd: (top: String, bottom: String, slot: MemeFontSlot) -> Unit,
+    /** EUI-06: timed captions — import an .srt/.vtt file. */
+    onImportTimed: () -> Unit = {},
+    /** EUI-06: one caption at the playhead, ready to type. */
+    onAddAtPlayhead: () -> Unit = {},
+    /** True when a playhead exists (video mode). */
+    hasPlayhead: Boolean = false,
 ) {
     var top by remember { mutableStateOf("") }
     var bottom by remember { mutableStateOf("") }
@@ -9296,6 +9751,20 @@ private fun MemeCaptionSheetContent(
             "Classic top/bottom captions. Drag on the stage to fine-tune.",
             style = MaterialTheme.typography.labelSmall,
             color = BitOSColors.textSecondary,
+        )
+        // ── EUI-06 timed captions: import + at-playhead ────────────────
+        OutlinedButton(onClick = onImportTimed, modifier = Modifier.fillMaxWidth()) {
+            Text("Import timed captions (.srt / .vtt)…")
+        }
+        if (hasPlayhead) {
+            OutlinedButton(onClick = onAddAtPlayhead, modifier = Modifier.fillMaxWidth()) {
+                Text("Add caption at playhead")
+            }
+        }
+        Text(
+            "Imported captions keep their file timing; select one on the stage to retime it.",
+            style = MaterialTheme.typography.labelSmall,
+            color = BitOSColors.textTertiary,
         )
         space.bitos.app.ui.components.BitosTextField(
             value = top,
@@ -9871,8 +10340,8 @@ private fun VideoSourceTray(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    space.bitos.app.ui.theme.SolarFeedIconImage(
-                        space.bitos.app.ui.theme.SolarFeedIcon.Film,
+                    androidx.compose.material3.Icon(
+                        space.bitos.app.ui.theme.AppIcons.Gif,
                         contentDescription = null,
                         tint = if (index == selectedClipIndex) BitOSColors.primary else BitOSColors.textSecondary,
                         modifier = Modifier.size(18.dp),
@@ -10310,7 +10779,7 @@ private fun TimelineWorkspace(
             SuiteToolChip(label = "Add", icon = AppIcons.Add, enabled = true, onClick = onOpenLayerInsert)
             SuiteToolChip(
                 label = "SFX ≤${space.bitos.core.studio.SfxSynth.MAX_CUES}",
-                solarIcon = space.bitos.app.ui.theme.SolarStudioIcon.Soundwave,
+                solarIcon = space.bitos.app.ui.theme.AppIcons.Soundwave,
                 enabled = true,
                 onClick = onOpenSfx,
             )
@@ -10701,7 +11170,7 @@ private fun suiteClock(ms: Long): String {
 private fun SuiteToolChip(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    solarIcon: space.bitos.app.ui.theme.SolarStudioIcon? = null,
+    solarIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     enabled: Boolean,
     onClick: () -> Unit = {},
 ) {
@@ -10722,7 +11191,7 @@ private fun SuiteToolChip(
             if (icon != null) {
                 Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
             } else if (solarIcon != null) {
-                space.bitos.app.ui.theme.SolarStudioIconImage(
+                androidx.compose.material3.Icon(
                     solarIcon,
                     contentDescription = null,
                     tint = tint,
@@ -10805,8 +11274,8 @@ private fun LayersSheetContent(
                             tint = BitOSColors.textTertiary,
                             modifier = Modifier.padding(10.dp).fillMaxSize(),
                         )
-                        layer.kind == MemeOverlayKind.STICKER -> SolarStudioIconImage(
-                            SolarStudioIcon.Sticker,
+                        layer.kind == MemeOverlayKind.STICKER -> androidx.compose.material3.Icon(
+                            space.bitos.app.ui.theme.AppIcons.StickerEmoji,
                             contentDescription = null,
                             tint = BitOSColors.textTertiary,
                             modifier = Modifier.padding(10.dp).fillMaxSize(),
@@ -11148,7 +11617,7 @@ private fun PenControlsRow(
             }
         }
         IconButton(onClick = onUndoStroke, enabled = canUndoStroke, modifier = Modifier.semantics { contentDescription = "Undo stroke" }) {
-            SolarStudioIconImage(SolarStudioIcon.UndoLeft, contentDescription = null, tint = BitOSColors.textPrimary)
+            androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Undo, contentDescription = null, tint = BitOSColors.textPrimary)
         }
         IconButton(onClick = onClear, modifier = Modifier.semantics { contentDescription = "Clear drawing" }) {
             Icon(AppIcons.Delete, contentDescription = null, tint = BitOSColors.textSecondary)

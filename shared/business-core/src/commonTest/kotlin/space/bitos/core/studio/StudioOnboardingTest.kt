@@ -120,6 +120,12 @@ class StudioOnboardingTest {
         assertTrue(explainer.contains("Nostr"), explainer)
         assertTrue(explainer.contains("device"), explainer)
         assertTrue(explainer.length <= 100, "the explainer is one line, not a paragraph")
+        // EUI-01: the explainer names the secondary action by its real label,
+        // so it can never point at a control the header no longer shows.
+        assertTrue(explainer.contains(onboarding.EXPORT_ACTION), explainer)
+        // The coach's final step teaches the same pair with the same name.
+        val nextStep = onboarding.COACH_STEPS.last { it.id == "next" }
+        assertTrue(nextStep.body.contains(onboarding.EXPORT_ACTION), nextStep.body)
         // Exactly one primary verb; export is the secondary.
         assertEquals("Next", onboarding.PRIMARY_ACTION)
         assertEquals("Save a copy", onboarding.EXPORT_ACTION)

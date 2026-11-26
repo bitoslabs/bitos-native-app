@@ -2,6 +2,48 @@
 
 ## Progress log
 
+- 2026-09-17 — MEM-003a-c + MEM-005a-c implemented (docs/native/
+  create-hub-sound-remix-plan.md): the Create hub's stale "Soon" rows are
+  replaced by source-first entries. Shared core: `RemixSourceTargets`
+  bounded NIP-19/21 + BitOS/snort/primal/iris/nostrapp URL parser with
+  named rejections (fixture `contracts/meme/remix-source-targets.json`),
+  `RemixPreflight` (id-mismatch guard, media eligibility, license ask,
+  attribution preview, by-id lookup filter) and the
+  `remixSourceTargetParse`/`remixSourcePreflight`/
+  `remixSourceLookupRequest`/`memeSoundFirstEmptyState` bridge seams —
+  all common-tested. Both platforms: `SoundSourcePicker` (shared sounds,
+  trending link into the existing surface, local library by entry id,
+  pick-sound-from-a-video handing the editor's existing extraction path,
+  one-preview-at-a-time) and `RemixSourcePicker` (paste + QR-from-photo
+  scan, verified by-id relay lookup with named timeout/retry/cancel,
+  account-scoped recent Bitz, preflight card with ask-required warning,
+  cycle pre-flight, credited-post fallback through the seeded composer);
+  `MemeSoundSeed` gained `localSoundId`, the editor opens sound-first
+  sessions with the shared "Your sound is ready. Add a video to begin."
+  empty state; the Bitz-card remix seed builder deduped into
+  `MemeRemixHandoff`/`RemixRulesHelper`. Flags
+  `studio_sound_source_picker`/`studio_remix_source_picker` ship dark in
+  release (on in debug/internal). Failure matrix pinned in
+  `contracts/meme/remix-source-failure-matrix.json`; EDT-013 device
+  a11y/relay-recovery audit and live-camera QR remain open.
+- 2026-09-17 — SBC-008 delivered + ID-006a-d/ID-007a-b implemented behind
+  dark flags (docs/native/identity-nip46-nip55-plan.md; ADR 0001). Typed
+  event-approval signer contract (`SignEventRequest`/`SignEventResult`/
+  `SignedEventValidator`) replaces `sign(message32)` at the feature
+  boundary; registry schema v2 adds signer kind + public NIP-46/NIP-55
+  metadata with v1 migration and READ_ONLY degradation; NIP-46 pure
+  protocol + correlation reducer in shared core with spec fixtures;
+  dedicated relay-lane sessions on both platforms (Android OkHttp
+  transports, iOS URLSessionWebSocketTask actor) with fixture-bunker
+  adapter tests; NIP-55 pinned-package intent client with pure result
+  contracts; every publish/upload path (notes, profile/social, Blossom
+  auth, zaps) routes through the validated contract; setup flows confirm
+  the signer-returned npub before saving; awaiting-signer banner (Open
+  signer / Cancel wait — drafts preserved); lifecycle cleanup wipes
+  transport secrets on account removal. Kill-switches
+  `identity_nip46_enabled`/`identity_nip55_enabled` default off; QR camera
+  scanning, Content-Resolver pre-auth (ID-007c), NIP-44 DM ops (ID-007d)
+  and the ID-009 threat-review gate remain open.
 - 2026-08-27 — Foundation slice: NIP-01 codec + ID verification, bounded
   decode, feed normalization/aggregation, relay pools and five-tab UI on
   both apps; verified read-only feed.

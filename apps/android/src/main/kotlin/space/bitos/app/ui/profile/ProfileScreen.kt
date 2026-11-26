@@ -708,7 +708,7 @@ fun ProfileScreen(
                     Text("You", style = MaterialTheme.typography.headlineMedium)
                     androidx.compose.material3.IconButton(onClick = { showSettings = true }) {
                         androidx.compose.material3.Icon(
-                            androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_settings_linear),
+                            AppIcons.Settings,
                             contentDescription = "Settings",
                             tint = BitOSColors.textSecondary,
                         )

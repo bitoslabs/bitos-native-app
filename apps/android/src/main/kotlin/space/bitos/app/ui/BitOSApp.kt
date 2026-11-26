@@ -72,12 +72,12 @@ import space.bitos.app.ui.theme.BitOSTheme
  * INSIDE Activity as a chip (Activity | Chats · unread). Discover stays
  * reachable from the Home header search and the More hub; Settings pushes
  * from You. */
-private enum class TopLevelDestination(val label: String, @DrawableRes val iconRes: Int) {
-    HOME("Home", R.drawable.solar_nav_home),
-    BITZ("Bitz", R.drawable.solar_nav_bitz),
-    DISCOVER("Discover", R.drawable.solar_nav_discover),
-    ACTIVITY("Activity", R.drawable.solar_nav_activity),
-    YOU("You", R.drawable.solar_nav_you),
+private enum class TopLevelDestination(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    HOME("Home", AppIcons.Home),
+    BITZ("Bitz", AppIcons.Bitz),
+    DISCOVER("Discover", AppIcons.Discover),
+    ACTIVITY("Activity", AppIcons.Inbox),
+    YOU("You", AppIcons.User),
 }
 
 @androidx.compose.material3.ExperimentalMaterial3Api
@@ -291,6 +291,7 @@ fun BitOSApp(
         ) {
         Scaffold(
             containerColor = BitOSColors.background,
+            snackbarHost = { space.bitos.app.ui.components.SignerWaitBanner(identityViewModel) },
             bottomBar = {
                 // APP-008: the composer is a full page (legacy CreateView
                 // parity) — the tab bar never renders under it. The Create
@@ -366,7 +367,7 @@ fun BitOSApp(
                                         }
                                     }
                                 }) {
-                                    Icon(painterResource(item.iconRes), contentDescription = item.label)
+                                    Icon(item.icon, contentDescription = item.label)
                                 }
                             },
                             label = { Text(item.label) },
@@ -470,9 +471,17 @@ fun BitOSApp(
                 } else if (showCreateHub) {
                     // T4: the capture pipeline (record → trim → publish and
                     // library import) is reachable from the Bitz header and
-                    // the Home app-bar camera icon.
+                    // the Home app-bar camera icon. MEM-003/MEM-005: the
+                    // hub's sound/remix source pickers route through the
+                    // shell's trending surface, seeded composer and the
+                    // shared cycle pre-flight.
+                    val identityForHub by identityViewModel.state.collectAsStateWithLifecycle()
                     space.bitos.app.ui.create.CreateScreen(
                         mediaPublishViewModel = mediaPublishViewModel,
+                        accountPubkey = identityForHub.account?.pubkeyHex,
+                        remixLineageCycles = homeViewModel::remixLineageCycles,
+                        onOpenTrendingSounds = { showCreateHub = false; showTrendingSounds = true },
+                        onOpenRemixComposer = { openSeededComposer(it) },
                         onClose = { showCreateHub = false },
                     )
                 } else if (memeRemixSeed != null) {

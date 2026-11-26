@@ -9,6 +9,79 @@ package space.bitos.core.studio
  * the background. VIDEO mode keeps the source frame in V1 (a re-frame is
  * a re-encode, not a crop) — the sheets say so instead of pretending.
  */
+// ── Crop treatment (EUI-02 reference spec §3) ───────────────────────
+
+/**
+ * One non-destructive crop treatment: ratio rides `canvasRatio` (the
+ * existing key), and [MemeCrop] carries the direct-manipulation axes.
+ * ALL-DEFAULT = untouched media (and a pinned ratio with no crop keeps
+ * the v1 letterbox treatment — old projects never silently re-frame).
+ * Rotation is CLOCKWISE degrees; flip mirrors left-right in the OUTPUT
+ * frame; pan is normalized (−1 = left/top edge aligned, +1 = right/
+ * bottom) with slack only where zoom overflows the frame.
+ */
+data class MemeCrop(
+    val rotationDeg: Int = 0,
+    val flipH: Boolean = false,
+    val zoom: Float = 1f,
+    val panX: Float = 0f,
+    val panY: Float = 0f,
+) {
+    val isDefault: Boolean get() = this == MemeCrop()
+
+    companion object {
+        const val MIN_ZOOM = 1f
+        const val MAX_ZOOM = 3f
+        const val MIN_PAN = -1f
+        const val MAX_PAN = 1f
+
+        /** Junk degrades to the nearest quarter turn. */
+        private fun nearestQuarter(deg: Int): Int {
+            val r = ((deg % 360) + 360) % 360
+            return when {
+                r in 45 until 135 -> 90
+                r in 135 until 225 -> 180
+                r in 225 until 315 -> 270
+                else -> 0
+            }
+        }
+
+        fun clamp(
+            rotationDeg: Int,
+            flipH: Boolean,
+            zoom: Float,
+            panX: Float,
+            panY: Float,
+        ): MemeCrop = MemeCrop(
+            nearestQuarter(rotationDeg),
+            flipH,
+            if (zoom.isNaN()) 1f else zoom.coerceIn(MIN_ZOOM, MAX_ZOOM),
+            if (panX.isNaN()) 0f else panX.coerceIn(MIN_PAN, MAX_PAN),
+            if (panY.isNaN()) 0f else panY.coerceIn(MIN_PAN, MAX_PAN),
+        )
+    }
+}
+
+/**
+ * Where the media goes inside the output frame — the ONE placement the
+ * stage previews and every raster/GIF burn draws. `cover = false` is
+ * the v1 letterbox treatment (media contained, centered); renderers
+ * keep their existing code path for it.
+ */
+data class Placement(
+    val frameWidth: Int,
+    val frameHeight: Int,
+    /** Post-rotation media size × zoom, in frame px. */
+    val drawWidth: Float,
+    val drawHeight: Float,
+    /** Top-left of the rotated media rect in frame px. */
+    val drawX: Float,
+    val drawY: Float,
+    val rotationDeg: Int,
+    val flipH: Boolean,
+    val cover: Boolean,
+)
+
 object MemeCanvas {
 
     /** `source` = the media's own aspect (default; wire stays implicit). */
@@ -19,6 +92,7 @@ object MemeCanvas {
         RATIO_SOURCE to "Source",
         "1:1" to "Square 1:1",
         "4:5" to "Portrait 4:5",
+        "3:4" to "Portrait 3:4",
         "9:16" to "Story 9:16",
         "16:9" to "Wide 16:9",
     )
@@ -106,5 +180,92 @@ object MemeCanvas {
         val w = (rw * scale).toInt().coerceAtLeast(1)
         val h = (rh * scale).toInt().coerceAtLeast(1)
         return w to h
+    }
+
+    /**
+     * The placement for a source frame under a ratio + crop — the ONE
+     * geometry the stage previews and every raster/GIF burn draws.
+     *
+     * Tri-state: [MemeCrop] null = legacy letterbox when a ratio is pinned
+     * (v1 projects never silently re-frame), untouched media otherwise;
+     * non-null = the COVER treatment (even untouched — picking a ratio in
+     * the crop sheet means "crop to fill"): the frame takes the ratio at
+     * the rotated source's window scale, the media draws at zoom× its
+     * rotated size centered plus the clamped pan, and everything outside
+     * the frame crops away.
+     */
+    fun placement(
+        mediaWidth: Int,
+        mediaHeight: Int,
+        ratioId: String?,
+        crop: MemeCrop?,
+    ): Placement {
+        val rotation = crop?.rotationDeg ?: 0
+        val rotated = when (rotation) {
+            90, 270 -> mediaHeight to mediaWidth
+            else -> mediaWidth to mediaHeight
+        }
+        val hasRatio = ratioId != null && isValidRatio(ratioId) && ratioId != RATIO_SOURCE
+        if (crop == null) {
+            if (!hasRatio) {
+                return Placement(
+                    frameWidth = mediaWidth,
+                    frameHeight = mediaHeight,
+                    drawWidth = mediaWidth.toFloat(),
+                    drawHeight = mediaHeight.toFloat(),
+                    drawX = 0f,
+                    drawY = 0f,
+                    rotationDeg = 0,
+                    flipH = false,
+                    cover = false,
+                )
+            }
+            // v1 letterbox: media scaled to fit the pinned canvas, centered.
+            val (fw, fh) = fitInRatio(mediaWidth, mediaHeight, ratioId!!)
+            val scale = minOf(
+                fw.toFloat() / mediaWidth,
+                fh.toFloat() / mediaHeight,
+            )
+            val drawW = mediaWidth * scale
+            val drawH = mediaHeight * scale
+            return Placement(
+                frameWidth = fw,
+                frameHeight = fh,
+                drawWidth = drawW,
+                drawHeight = drawH,
+                drawX = (fw - drawW) / 2f,
+                drawY = (fh - drawH) / 2f,
+                rotationDeg = 0,
+                flipH = false,
+                cover = false,
+            )
+        }
+        val terms = if (hasRatio) ratioTerms(ratioId!!) else null
+        val (rw, rh) = terms ?: rotated
+        // The frame is the ratio window INSIDE the rotated media (no
+        // upscaling — the visible window stays at source resolution).
+        val windowScale = minOf(
+            rotated.first.toFloat() / rw,
+            rotated.second.toFloat() / rh,
+        )
+        val frameW = (rw * windowScale).toInt().coerceAtLeast(1)
+        val frameH = (rh * windowScale).toInt().coerceAtLeast(1)
+        val drawW = rotated.first * crop.zoom
+        val drawH = rotated.second * crop.zoom
+        val baseX = (frameW - drawW) / 2f
+        val baseY = (frameH - drawH) / 2f
+        val slackX = maxOf(0f, -baseX)
+        val slackY = maxOf(0f, -baseY)
+        return Placement(
+            frameWidth = frameW,
+            frameHeight = frameH,
+            drawWidth = drawW,
+            drawHeight = drawH,
+            drawX = baseX + crop.panX * slackX,
+            drawY = baseY + crop.panY * slackY,
+            rotationDeg = rotation,
+            flipH = crop.flipH,
+            cover = true,
+        )
     }
 }

@@ -268,6 +268,23 @@ protocol BusinessCoreClient: Sendable {
     ) -> String
     /// MSU-031 guiding empty-state copy for a mode (`image|gif|video`).
     func memeEmptyState(mode: String) -> String
+    /// MEM-003c sound-first empty-state copy (VIDEO mode, soundtrack
+    /// attached, no clip) — same shape as [memeEmptyState].
+    func memeSoundFirstEmptyState() -> String
+    /// MEM-003a remix paste-field parser: `{"id","relays"}` on success,
+    /// else `{"error","message"}` (stable token + shared display copy).
+    func remixSourceTargetParse(_ raw: String) -> String
+    /// MEM-005a/c preflight classification of one VERIFIED fetched source:
+    /// `{"idMatches","mediaUrl","mediaKind","license","askRequired",
+    ///   "attribution","memeTag"}` — mediaUrl "" = no loadable media
+    /// (credited-post fallback, never a blank studio remix).
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String
+    /// MEM-005a by-id lookup REQ (kinds 1/20/21/22, limit 1); "" on a
+    /// malformed id.
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String
     /// MSU-040 notice host: post a notice, get the next host state JSON.
     func memeNoticePost(
         stateJson: String, severity: String, message: String,
@@ -349,10 +366,44 @@ protocol BusinessCoreClient: Sendable {
     func memeLooks() -> String
     /// Composed 4×5 matrix (20 floats) + `"blur"` px for a look id.
     func memeLookMatrix(_ lookId: String?) -> String
-    /// Look + manual adjust (prototype FX sliders) composed into one
-    /// 4×5 matrix; defaults (1/1/1) reduce to the plain look matrix.
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    /// Look + manual adjust (EUI-02 Tone/Colour axes) composed into one
+    /// 4×5 matrix. [adjustJson] is the `memeAdjustOf` canonical object —
+    /// lenient keys, clamped values; all-neutral reduces to the plain look
+    /// matrix.
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String
+    /// The project's normalized adjust as canonical all-keys JSON (never
+    /// throws; junk → all neutral), so the UI never parses wire fields.
+    func memeAdjustOf(_ projectJson: String) -> String
+    /// The Adjust-section catalogue (sections, labels, bounds, neutrals,
+    /// signed flags) the Look UIs render from — shared with Android.
+    func memeAdjustControls() -> String
+    /// The project's canonical crop JSON ("" = absent / legacy letterbox).
+    func memeCropOf(_ projectJson: String) -> String
+    /// The shared ratio catalogue for the crop sheets.
+    func memeCanvasRatios() -> String
+    /// EUI-04 replacement window `{"start","end","shortened"}` from the
+    /// shared rule — replace flows keep timing identically on both apps.
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String
+    /// EUI-05 sound-row labels + loop-copy fragments (one shared source).
+    func memeSoundRowCopy() -> String
+    /// EUI-05 resolved row-state token (available|needs_connection|
+    /// downloading|added) from the shared precedence.
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String
+    /// EUI-06 timed-caption import through the shared parser —
+    /// `{"cues":[{"start","end","text"}],"dropped","truncated","error"?}`.
+    func memeCaptionImport(_ raw: String) -> String
+    /// EUI-06 caption layout contract (rows, style, cap) — no re-inlined
+    /// constants in Swift.
+    func memeCaptionLayout() -> String
+    /// EUI-05 loop line for the current durations ("" = unknown length).
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String
+    /// Shared studio guidance copy keyed by surface (`{"crop": …}`).
+    func memeStudioHints() -> String
+    /// The shared crop placement (frame + media rect + rot/flip + cover);
+    /// [cropOverrideJson] previews an uncommitted draft through the same
+    /// math (canonical crop JSON, "" = read the project).
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
     ) -> String
 
     // APP-019 video cut policy: long clips are CUT with a message, never
@@ -839,6 +890,33 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeEmptyState(mode: mode)
     }
 
+    func memeSoundFirstEmptyState() -> String {
+        bridge.memeSoundFirstEmptyState()
+    }
+
+    func remixSourceTargetParse(_ raw: String) -> String {
+        bridge.remixSourceTargetParse(raw: raw)
+    }
+
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String {
+        bridge.remixSourcePreflight(
+            eventId: eventId,
+            pubkey: pubkey,
+            kind: Int64(kind),
+            createdAt: createdAt,
+            content: content,
+            tagsJson: tagsJson,
+            creatorLabel: creatorLabel
+        )
+    }
+
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String {
+        bridge.remixSourceLookupRequest(subscriptionId: subscriptionId, eventId: eventId)
+    }
+
     func memeNoticePost(
         stateJson: String, severity: String, message: String,
         actionId: String?, actionLabel: String?, timeoutMs: Int
@@ -901,11 +979,50 @@ final class FrameworkBusinessCoreClient: BusinessCoreClient, @unchecked Sendable
         bridge.memeLookMatrix(lookId: lookId)
     }
 
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String {
+        bridge.memeAdjustMatrix(lookId: lookId, adjustJson: adjustJson)
+    }
+    func memeAdjustOf(_ projectJson: String) -> String {
+        bridge.memeAdjustOf(projectJson: projectJson)
+    }
+    func memeAdjustControls() -> String {
+        bridge.memeAdjustControls()
+    }
+    func memeCropOf(_ projectJson: String) -> String {
+        bridge.memeCropOf(projectJson: projectJson)
+    }
+    func memeCanvasRatios() -> String {
+        bridge.memeCanvasRatios()
+    }
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
+        bridge.memeReplaceWindow(oldStartMs: oldStartMs, oldEndMs: oldEndMs, newDurationMs: newDurationMs)
+    }
+    func memeSoundRowCopy() -> String {
+        bridge.memeSoundRowCopy()
+    }
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
+        bridge.memeSoundRowState(added: added, downloading: downloading, loadFailed: loadFailed)
+    }
+    func memeCaptionImport(_ raw: String) -> String {
+        bridge.memeCaptionImport(raw: raw)
+    }
+    func memeCaptionLayout() -> String {
+        bridge.memeCaptionLayout()
+    }
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
+        bridge.memeSoundLoopCopy(trackMs: trackMs, videoMs: videoMs, loop: loop)
+    }
+    func memeStudioHints() -> String {
+        bridge.memeStudioHints()
+    }
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
     ) -> String {
-        bridge.memeAdjustMatrix(
-            lookId: lookId, brightness: brightness, contrast: contrast, saturation: saturation
+        bridge.memeCropPlacement(
+            projectJson: projectJson,
+            sourceWidth: Int32(sourceWidth),
+            sourceHeight: Int32(sourceHeight),
+            cropOverrideJson: cropOverrideJson
         )
     }
 
@@ -1389,6 +1506,24 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeEmptyState(mode: String) -> String {
         FrameworkBusinessCoreClient().memeEmptyState(mode: mode)
     }
+    func memeSoundFirstEmptyState() -> String {
+        FrameworkBusinessCoreClient().memeSoundFirstEmptyState()
+    }
+    func remixSourceTargetParse(_ raw: String) -> String {
+        FrameworkBusinessCoreClient().remixSourceTargetParse(raw)
+    }
+    func remixSourcePreflight(
+        eventId: String, pubkey: String, kind: Int, createdAt: Int64,
+        content: String, tagsJson: String, creatorLabel: String
+    ) -> String {
+        FrameworkBusinessCoreClient().remixSourcePreflight(
+            eventId: eventId, pubkey: pubkey, kind: kind, createdAt: createdAt,
+            content: content, tagsJson: tagsJson, creatorLabel: creatorLabel
+        )
+    }
+    func remixSourceLookupRequest(subscriptionId: String, eventId: String) -> String {
+        FrameworkBusinessCoreClient().remixSourceLookupRequest(subscriptionId: subscriptionId, eventId: eventId)
+    }
     func memeNoticePost(
         stateJson: String, severity: String, message: String,
         actionId: String?, actionLabel: String?, timeoutMs: Int
@@ -1437,11 +1572,48 @@ struct FixtureBusinessCoreClient: BusinessCoreClient {
     func memeLookMatrix(_ lookId: String?) -> String {
         FrameworkBusinessCoreClient().memeLookMatrix(lookId)
     }
-    func memeAdjustMatrix(
-        _ lookId: String?, brightness: Float, contrast: Float, saturation: Float
+    func memeAdjustMatrix(_ lookId: String?, adjustJson: String) -> String {
+        FrameworkBusinessCoreClient().memeAdjustMatrix(lookId, adjustJson: adjustJson)
+    }
+    func memeAdjustOf(_ projectJson: String) -> String {
+        FrameworkBusinessCoreClient().memeAdjustOf(projectJson)
+    }
+    func memeAdjustControls() -> String {
+        FrameworkBusinessCoreClient().memeAdjustControls()
+    }
+    func memeCropOf(_ projectJson: String) -> String {
+        FrameworkBusinessCoreClient().memeCropOf(projectJson)
+    }
+    func memeCanvasRatios() -> String {
+        FrameworkBusinessCoreClient().memeCanvasRatios()
+    }
+    func memeReplaceWindow(_ oldStartMs: Int64, _ oldEndMs: Int64, _ newDurationMs: Int64) -> String {
+        FrameworkBusinessCoreClient().memeReplaceWindow(oldStartMs, oldEndMs, newDurationMs)
+    }
+    func memeSoundRowCopy() -> String {
+        FrameworkBusinessCoreClient().memeSoundRowCopy()
+    }
+    func memeSoundRowState(_ added: Bool, _ downloading: Bool, _ loadFailed: Bool) -> String {
+        FrameworkBusinessCoreClient().memeSoundRowState(added, downloading, loadFailed)
+    }
+    func memeCaptionImport(_ raw: String) -> String {
+        FrameworkBusinessCoreClient().memeCaptionImport(raw)
+    }
+    func memeCaptionLayout() -> String {
+        FrameworkBusinessCoreClient().memeCaptionLayout()
+    }
+    func memeSoundLoopCopy(_ trackMs: Int64, _ videoMs: Int64, _ loop: Bool) -> String {
+        FrameworkBusinessCoreClient().memeSoundLoopCopy(trackMs, videoMs, loop)
+    }
+    func memeStudioHints() -> String {
+        FrameworkBusinessCoreClient().memeStudioHints()
+    }
+    func memeCropPlacement(
+        _ projectJson: String, sourceWidth: Int, sourceHeight: Int, cropOverrideJson: String
     ) -> String {
-        FrameworkBusinessCoreClient().memeAdjustMatrix(
-            lookId, brightness: brightness, contrast: contrast, saturation: saturation
+        FrameworkBusinessCoreClient().memeCropPlacement(
+            projectJson, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+            cropOverrideJson: cropOverrideJson
         )
     }
     func memeVideoCutFor(durationMs: Int64) -> String {

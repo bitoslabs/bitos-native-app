@@ -1,4 +1,4 @@
-.PHONY: doctor check native-test build-ios ios-build android-test build-android-apk android-apk service-test infra-check format-check clean-cache clean
+.PHONY: doctor check native-test build-ios ios-build ios-install install-ios android-test build-android-apk android-apk android-install install-android service-test infra-check format-check clean-cache clean
 
 doctor:
 	./scripts/doctor.sh
@@ -14,6 +14,11 @@ build-ios:
 
 ios-build: build-ios
 
+ios-install:
+	./scripts/ios-install.sh
+
+install-ios: ios-install
+
 android-test:
 	./scripts/android-test.sh
 
@@ -21,6 +26,11 @@ build-android-apk:
 	./scripts/android-apk.sh
 
 android-apk: build-android-apk
+
+android-install:
+	./scripts/android-install.sh
+
+install-android: android-install
 
 service-test:
 	npm run test:services

@@ -58,6 +58,23 @@ object MemeRaster {
         imageFor: ((String) -> Bitmap?)? = null,
     ): Bitmap {
         val (mediaWidth, mediaHeight) = MemeExportRules.outputSize(source.width, source.height)
+        // EUI-02 §3: the crop treatment re-frames the output; legacy
+        // projects (no crop) keep the letterbox path below.
+        val place = space.bitos.core.studio.MemeCanvas.placement(
+            source.width, source.height, project.canvasRatio, project.crop,
+        )
+        if (place.cover) {
+            val width = (place.frameWidth - place.frameWidth % 2).coerceAtLeast(2)
+            val height = (place.frameHeight - place.frameHeight % 2).coerceAtLeast(2)
+            val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(out)
+            drawPlacedMedia(canvas, source, place, basePaint(project))
+            drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
+            MemeExportRules.exportPlan(project, width, height).forEach { item ->
+                drawItem(canvas, item, imageFor)
+            }
+            return out
+        }
         val canvasTerms = project.canvasRatio?.let { space.bitos.core.studio.MemeCanvas.ratioTerms(it) }
         var width = mediaWidth
         var height = mediaHeight
@@ -121,6 +138,82 @@ object MemeRaster {
         return out
     }
 
+    /**
+     * EUI-02 §3: the ONE crop draw for stills, GIF frames and stage
+     * previews — rotate clockwise, mirror in output space, scale to the
+     * placement rect, clip to the canvas. Same math on iOS.
+     */
+    fun drawPlacedMedia(canvas: Canvas, source: Bitmap, place: space.bitos.core.studio.Placement, paint: Paint) {
+        canvas.save()
+        canvas.clipRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat())
+        if (place.flipH) {
+            // Mirror in OUTPUT space (about the frame's vertical center).
+            canvas.scale(-1f, 1f, canvas.width / 2f, canvas.height / 2f)
+        }
+        val cx = place.drawX + place.drawWidth / 2f
+        val cy = place.drawY + place.drawHeight / 2f
+        if (place.rotationDeg != 0) {
+            canvas.rotate(place.rotationDeg.toFloat(), cx, cy)
+        }
+        // The placement rect is POST-rotation; about the same center the
+        // source draws into the PRE-rotation rect.
+        val quarter = place.rotationDeg == 90 || place.rotationDeg == 270
+        val preW = if (quarter) place.drawHeight else place.drawWidth
+        val preH = if (quarter) place.drawWidth else place.drawHeight
+        canvas.drawBitmap(
+            source, null,
+            RectF(cx - preW / 2f, cy - preH / 2f, cx + preW / 2f, cy + preH / 2f),
+            paint,
+        )
+        canvas.restore()
+    }
+
+    /** Downsampled placed-media bitmap for stage previews (WYSIWYG by
+     *  construction — the same draw the exports burn). */
+    fun placeMedia(source: Bitmap, place: space.bitos.core.studio.Placement, maxEdge: Int): Bitmap {
+        val long = maxOf(place.frameWidth, place.frameHeight).coerceAtLeast(1)
+        val k = minOf(1f, maxEdge.toFloat() / long)
+        val out = Bitmap.createBitmap(
+            (place.frameWidth * k).toInt().coerceAtLeast(2),
+            (place.frameHeight * k).toInt().coerceAtLeast(2),
+            Bitmap.Config.ARGB_8888,
+        )
+        val canvas = Canvas(out)
+        canvas.scale(k, k)
+        drawPlacedMedia(canvas, source, place, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        return out
+    }
+
+    /** Small decode for UI swatches (inSampleSize toward [maxEdge]). */
+    fun decodeScaled(resolver: android.content.ContentResolver, uri: android.net.Uri, maxEdge: Int): Bitmap? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Visual parity: one grade swatch — the source center-cropped square
+     * through the look's matrix (no adjust), the reference editor's
+     * filter-thumbnail treatment. Cheap: callers cache per source.
+     */
+    fun lookSwatch(source: Bitmap, lookId: String, sizePx: Int): Bitmap {
+        val crop = android.media.ThumbnailUtils.extractThumbnail(source, sizePx, sizePx)
+        val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(
+                android.graphics.ColorMatrix(space.bitos.core.studio.MemeLooks.matrixFor(lookId)),
+            )
+        }
+        canvas.drawBitmap(crop, null, RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat()), paint)
+        return out
+    }
+
     /** Canvas background fill from the wire hex (invalid/absent = transparent). */
     private fun fillBackground(canvas: Canvas, project: MemeProject) {
         project.canvasBg?.let { hex ->
@@ -166,7 +259,14 @@ object MemeRaster {
     ): ByteArray {
         val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
-        canvas.drawBitmap(frame, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
+        val place = space.bitos.core.studio.MemeCanvas.placement(
+            frame.width, frame.height, project.canvasRatio, project.crop,
+        )
+        if (place.cover) {
+            drawPlacedMedia(canvas, frame, place, basePaint(project))
+        } else {
+            canvas.drawBitmap(frame, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), basePaint(project))
+        }
         drawStrokes(canvas, MemeExportRules.drawingPlan(project, width, height))
         // Timed plan (MST-077): visibility windows + per-moment fx — the
         // same math the video exporter burns, so GIFs go kinetic too.

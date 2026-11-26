@@ -51,12 +51,14 @@ interface IdentitySigner {
 
 /**
  * Deterministic signer for tests and fixtures (SBC-008). Never used for
- * production accounts; the test key is public by construction.
+ * production accounts; the test key is public by construction. Implements
+ * the typed [EventApprovalSigner] port (SBC-008a) with zero aux entropy;
+ * [sign] remains for low-level fixtures.
  */
 class DeterministicTestSigner(
     secretHex: String,
     private val hasher: EventHasher = Sha256EventHasher,
-) : IdentitySigner {
+) : EventApprovalSigner {
 
     private val secret: ByteArray = run {
         require(secretHex.length == 64) { "secret must be hex64" }
@@ -72,8 +74,32 @@ class DeterministicTestSigner(
     override fun publicKeyHex(): String =
         SchnorrSigning.publicKey(secret, hasher)!!.toHexString()
 
-    override suspend fun sign(message32: ByteArray): String? =
+    override suspend fun approveEvent(request: SignEventRequest): SignEventResult {
+        SignEventRequest.validate(request)?.let { return SignEventResult.Invalid(it) }
+        if (request.accountPubkeyHex != publicKeyHex()) return SignEventResult.Rejected("wrong_pubkey")
+        val signature = SchnorrSigning.sign(request.eventIdHex(hasher).hexToBytes32(), secret, ByteArray(32), hasher)
+            ?: return SignEventResult.Unavailable("signing_failed")
+        return SignEventResult.Signed(
+            SignedEvent(
+                idHex = request.eventIdHex(hasher),
+                pubkeyHex = publicKeyHex(),
+                createdAtSeconds = request.createdAtSeconds,
+                kind = request.kind,
+                tags = request.tags,
+                content = request.content,
+                signatureHex = signature.toHexString(),
+            ),
+        )
+    }
+
+    /** Low-level deterministic BIP-340 signature (legacy fixture path). */
+    suspend fun sign(message32: ByteArray): String? =
         SchnorrSigning.sign(message32, secret, ByteArray(32), hasher)?.let(::bytesToHex)
+
+    private fun String.hexToBytes32(): ByteArray =
+        ByteArray(32) { index -> substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+
+    private fun ByteArray.toHexString(): String = bytesToHex(this)
 
     private fun bytesToHex(bytes: ByteArray): String {
         val digits = "0123456789abcdef"

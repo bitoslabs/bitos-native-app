@@ -35,8 +35,29 @@ struct CreateView: View {
     @State private var massFlow: MassBatchFlow?
     /// Hub batch-queue bar (scr-home): recomputed when a session closes.
     @State private var batchSummary: MassBatchSummary?
+    // ── MEM-003/MEM-005 Create-hub source pickers ────────────────────
+    // One typed one-shot handoff each; cleared on editor close/cancel so
+    // nothing survives as a phantom seed.
+    @State private var showSoundPicker = false
+    @State private var showRemixPicker = false
+    @State private var remixSeed: MemeRemixSeed?
+    /// MEM-003b "Pick sound from a video": the picked video's bytes handed
+    /// to the editor's existing extraction path.
+    @State private var soundFromVideo: Data?
+    /// MEM-005a credited-post fallback: the seeded composer cover.
+    @State private var showRemixComposer = false
+    @State private var composerSeedTags: [[String]] = []
+    /// The picker's trending entry opens the EXISTING trending surface.
+    @State private var showTrendingFromPicker = false
+    /// MEM-005a stores: verified by-id lookup + account-scoped recent
+    /// Bitz (built once from the injected environment, never a second
+    /// composition root; both are cancelled by the picker itself).
+    @State private var remixLookupStore: RemixSourceLookupStore?
+    @State private var recentBitzStore: RecentBitzStore?
+    private let soundLibrary = SharedSoundLibraryStore()
     private let slotStore = MemeProjectStore()
     @Environment(AppEnvironment.self) private var environment
+    @Environment(IdentityStore.self) private var identityStore
 
     private var slots: [MemeProjectStore.SlotEntryUi] {
         _ = slotsRevision // recompute on revision bump (delete/editor close)
@@ -48,7 +69,7 @@ struct CreateView: View {
     }
 
     private struct QuickAction: Identifiable {
-        let id = UUID()
+        let id: String
         let symbol: String
         let title: LocalizedStringKey
         let description: LocalizedStringKey
@@ -56,14 +77,41 @@ struct CreateView: View {
         var enabled = false
     }
 
-    private let quickActions: [QuickAction] = [
-        QuickAction(symbol: AppIcons.camera, title: "Record Bitz", description: "Record a portrait clip with segment control", enabled: true),
-        QuickAction(symbol: AppIcons.photo, title: "Import media", description: "Pick a video and polish it in the studio editor", enabled: true),
-        // M1 wave 1: the image editing core is live (export/publish next).
-        QuickAction(symbol: AppIcons.emoji, title: "Quick MEM", description: "Caption, look and stickers in seconds", enabled: true),
-        QuickAction(symbol: AppIcons.musicNote, title: "Use a sound", description: "Start a project from a licensed sound"),
-        QuickAction(symbol: AppIcons.sparkles, title: "Remix", description: "Build on a template with attribution"),
-    ]
+    /// MEM-003c/MEM-005b kill switches (plan §rollout): on in internal
+    /// (DEBUG) builds, off in release until rollout. A false flag hides
+    /// the corresponding NEW hub entry only.
+    private enum StudioFeatureFlags {
+        static let soundSourcePicker: Bool = {
+            #if DEBUG
+            return true
+            #else
+            return false
+            #endif
+        }()
+        static let remixSourcePicker: Bool = {
+            #if DEBUG
+            return true
+            #else
+            return false
+            #endif
+        }()
+    }
+
+    private var quickActions: [QuickAction] {
+        var rows: [QuickAction] = [
+            QuickAction(id: "camera", symbol: AppIcons.camera, title: "Record Bitz", description: "Record a portrait clip with segment control", enabled: true),
+            QuickAction(id: "import", symbol: AppIcons.photo, title: "Import media", description: "Pick a video and polish it in the studio editor", enabled: true),
+            // M1 wave 1: the image editing core is live (export/publish next).
+            QuickAction(id: "meme", symbol: AppIcons.emoji, title: "Quick MEM", description: "Caption, look and stickers in seconds", enabled: true),
+        ]
+        if StudioFeatureFlags.soundSourcePicker {
+            rows.append(QuickAction(id: "sound", symbol: AppIcons.musicNote, title: "Start with a sound", description: "Add your video after you choose a sound.", enabled: true))
+        }
+        if StudioFeatureFlags.remixSourcePicker {
+            rows.append(QuickAction(id: "remix", symbol: AppIcons.sparkles, title: "Remix a Bitz", description: "Start from a Bitz; the original creator is credited automatically.", enabled: true))
+        }
+        return rows
+    }
 
     var body: some View {
         NavigationStack {
@@ -89,6 +137,10 @@ struct CreateView: View {
                 let store = SharedSoundStore(pool: environment.relayPool)
                 store.start()
                 sharedSoundStore = store
+            }
+            if remixLookupStore == nil {
+                remixLookupStore = RemixSourceLookupStore(pool: environment.relayPool)
+                recentBitzStore = RecentBitzStore(pool: environment.relayPool)
             }
         }
     }
@@ -147,7 +199,7 @@ struct CreateView: View {
                 onCancel: { showCamera = false }
             )
         }
-        .fullScreenCover(isPresented: $showMeme, onDismiss: { memeSeed = nil; memeSeeds = nil; soundSeed = nil }) {
+        .fullScreenCover(isPresented: $showMeme, onDismiss: { memeSeed = nil; memeSeeds = nil; soundSeed = nil; remixSeed = nil; soundFromVideo = nil }) {
             MemeEditorView(
                 slotStore: slotStore,
                 resumeSlot: resumeSlotId.flatMap { slotStore.loadSlot($0) },
@@ -156,7 +208,9 @@ struct CreateView: View {
                 sharedContent: sharedSeed?.content,
                 videoSeed: memeSeed,
                 videoSeeds: memeSeeds,
+                remixSeed: remixSeed,
                 soundSeed: soundSeed,
+                soundFromVideo: soundFromVideo,
                 onSlotsChanged: {
                     slotsRevision += 1
                     templateSeed = nil
@@ -220,7 +274,7 @@ struct CreateView: View {
             }
         }
         // Named, non-destructive rejections (ux-ui-flows §3): the hub
-        // stays untouched; the user learns exactly what to do next.
+        // stays untouched; the user learns exactly to do next.
         .alert(
             "Couldn't open that video",
             isPresented: Binding(
@@ -232,6 +286,151 @@ struct CreateView: View {
         } message: {
             Text(importError ?? "")
         }
+        // ── MEM-003b: "Start with a sound" source picker ───────────────
+        .fullScreenCover(isPresented: $showSoundPicker) {
+            SoundSourcePickerView(
+                sharedRows: sharedSoundStore?.rows ?? [],
+                trendingRows: trendingRows,
+                libraryEntries: soundLibrary.entries,
+                libraryBytes: { soundLibrary.bytes(id: $0) },
+                onUseShared: { row in
+                    soundSeed = MemeSoundSeed(
+                        eventId: row.eventId,
+                        authorPubkey: row.authorPubkey,
+                        label: row.label,
+                        mediaUrl: row.url,
+                        isAudioOnly: true,
+                        sha256: row.sha256
+                    )
+                    showSoundPicker = false
+                    showMeme = true
+                },
+                onUseTrending: { row in
+                    soundSeed = MemeSoundSeed(
+                        eventId: row.sourceEventId ?? "",
+                        authorPubkey: "",
+                        label: "Trending",
+                        mediaUrl: row.url,
+                        isAudioOnly: true,
+                        sha256: row.sha256
+                    )
+                    showSoundPicker = false
+                    showMeme = true
+                },
+                onUseLibrary: { entry in
+                    soundSeed = MemeSoundSeed(
+                        eventId: entry.sourceEventId,
+                        authorPubkey: entry.authorPubkey,
+                        label: entry.label,
+                        mediaUrl: entry.url,
+                        isAudioOnly: false,
+                        sha256: entry.sha256,
+                        localSoundId: entry.id
+                    )
+                    showSoundPicker = false
+                    showMeme = true
+                },
+                onPickFromVideo: { data in
+                    showSoundPicker = false
+                    soundFromVideo = data
+                    showMeme = true
+                },
+                onOpenTrending: {
+                    showSoundPicker = false
+                    showTrendingFromPicker = true
+                },
+                onClose: { showSoundPicker = false }
+            )
+            .environment(environment)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+        // The picker's trending entry opens the EXISTING surface (one
+        // ranking implementation) and hands its rows back the same way.
+        .fullScreenCover(isPresented: $showTrendingFromPicker) {
+            TrendingSoundsView(
+                notes: environment.feedStore.notes,
+                onClose: { showTrendingFromPicker = false },
+                onUseSound: { row in
+                    showTrendingFromPicker = false
+                    soundSeed = MemeSoundSeed(
+                        eventId: row.sourceEventId ?? "",
+                        authorPubkey: "",
+                        label: "Trending",
+                        mediaUrl: row.url,
+                        isAudioOnly: true,
+                        sha256: row.sha256
+                    )
+                    showMeme = true
+                }
+            )
+            .environment(environment)
+            .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+        // ── MEM-005a: "Remix a Bitz" source picker ─────────────────────
+        .fullScreenCover(isPresented: $showRemixPicker) {
+            if let remixLookupStore, let recentBitzStore {
+                RemixSourcePickerView(
+                    lookup: remixLookupStore,
+                    recent: recentBitzStore,
+                    accountPubkey: identityStore.account?.pubkeyHex,
+                    writeRelays: DefaultRelays.writeUrls.map(\.rawValue),
+                    remixLineageCycles: { note in
+                        await environment.feedStore.remixLineageCycles(note: note)
+                    },
+                    onOpenRemix: { seed in
+                        showRemixPicker = false
+                        remixSeed = seed
+                        showMeme = true
+                    },
+                    onOpenCreditedPost: { tags in
+                        showRemixPicker = false
+                        composerSeedTags = tags
+                        showRemixComposer = true
+                    },
+                    onClose: { showRemixPicker = false }
+                )
+                .environment(environment)
+                .preferredColorScheme(BitOSTheme.preferredScheme)
+            }
+        }
+        // MEM-005a credited-post fallback: the seeded note composer (the
+        // tags retain attribution; the result never claims a studio remix).
+        .fullScreenCover(isPresented: $showRemixComposer) {
+            ComposerScreen(
+                onClose: { showRemixComposer = false },
+                baseTagsJson: Self.tagsJson(composerSeedTags)
+            )
+            .preferredColorScheme(BitOSTheme.preferredScheme)
+        }
+    }
+
+    /// The SAME deterministic trending ranking the trending surface
+    /// renders (shared `MemeSoundTrending.rank` over the live window).
+    private var trendingRows: [MemeSoundTrending.Row] {
+        let now = Int64(Date.now.timeIntervalSince1970 * 1000)
+        let usages = environment.feedStore.notes.compactMap { note -> MemeSoundTrending.Usage? in
+            guard let sound = note.soundUrl else { return nil }
+            return MemeSoundTrending.Usage(
+                eventId: note.id,
+                createdAtMs: note.createdAt,
+                url: sound,
+                sha256: note.soundSha256 ?? "",
+                sourceEventId: note.soundSourceEventId,
+                authorPubkey: note.soundAuthorPubkey
+            )
+        }
+        return Array(MemeSoundTrending.shared.rank(usages: usages, nowMs: now, maxRows: MemeSoundTrending.shared.MAX_ROWS))
+    }
+
+    /// [[String]] → JSON for the composer's `baseTagsJson` seam.
+    private static func tagsJson(_ tags: [[String]]) -> String {
+        let rows = tags.map { tag in
+            "[" + tag.map { value in
+                "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+            }.joined(separator: ",") + "]"
+        }
+        return "[" + rows.joined(separator: ",") + "]"
     }
 
 
@@ -409,7 +608,7 @@ struct CreateView: View {
 
     private var quickActionsSection: some View {
                 Section {
-                    ForEach(Array(quickActions.enumerated()), id: \.element.id) { index, action in
+                    ForEach(quickActions) { action in
                         HStack(spacing: BitOSTheme.Spacing.md) {
                             AppIcons.image(for: action.symbol)
                                 .font(.system(size: 18, weight: .medium))
@@ -438,9 +637,15 @@ struct CreateView: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             guard action.enabled else { return }
-                            if index == 0 { showCamera = true }
-                            if index == 1 { showImportPicker = true }
-                            if index == 2 { showMeme = true }
+                            switch action.id {
+                            case "camera": showCamera = true
+                            case "import": showImportPicker = true
+                            case "meme": showMeme = true
+                            // MEM-003c/MEM-005b: source-first entries.
+                            case "sound": showSoundPicker = true
+                            case "remix": showRemixPicker = true
+                            default: break
+                            }
                         }
                     }
                 }

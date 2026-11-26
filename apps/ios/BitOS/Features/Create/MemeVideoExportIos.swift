@@ -158,15 +158,10 @@ enum MemeVideoExportIos {
         let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
         guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
         let source = UIImage(cgImage: cgImage)
-        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        let adjustJson = client.memeAdjustOf(projectJson)
         let media = MemeRaster.applyLook(
             source,
-            matrixJson: client.memeAdjustMatrix(
-                effectiveLookId,
-                brightness: adjust.bri,
-                contrast: adjust.con,
-                saturation: adjust.sat
-            )
+            matrixJson: client.memeAdjustMatrix(effectiveLookId, adjustJson: adjustJson)
         ) ?? source
         guard let planData = client.memeExportPlan(
             projectJson,
@@ -264,15 +259,10 @@ enum MemeVideoExportIos {
     static func gradeClip(
         url: URL,
         lookId: String,
-        adjust: (bri: Float, con: Float, sat: Float)? = nil,
+        adjustJson: String,
         client: any BusinessCoreClient
     ) async -> URL? {
-        let matrixJson = client.memeAdjustMatrix(
-            lookId,
-            brightness: adjust?.bri ?? 1,
-            contrast: adjust?.con ?? 1,
-            saturation: adjust?.sat ?? 1
-        )
+        let matrixJson = client.memeAdjustMatrix(lookId, adjustJson: adjustJson)
         guard let data = matrixJson.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = (root["matrix"] as? [NSNumber]), rows.count == 20 else { return nil }
@@ -330,7 +320,7 @@ enum MemeVideoExportIos {
         _ clips: [MemeEditorStore.EditorClip],
         rate: Float,
         projectLookId: String? = nil,
-        projectAdjust: (bri: Float, con: Float, sat: Float)? = nil,
+        projectAdjustJson: String = "{}",
         client: (any BusinessCoreClient)? = nil
     ) async throws -> URL {
         guard !clips.isEmpty else {
@@ -354,12 +344,12 @@ enum MemeVideoExportIos {
             // Per-clip grade: own look, else the project look — plus the
             // project adjust composed over it (export-exact).
             let effectiveLook = clip.lookId ?? projectLookId
-            let hasAdjust = projectAdjust.map { $0.bri != 1 || $0.con != 1 || $0.sat != 1 } ?? false
+            let hasAdjust = !MemeEditorStore.MemeAdjustUi.decode(projectAdjustJson).isDefault
             if (effectiveLook != nil || hasAdjust), let client,
                let graded = await gradeClip(
                    url: clip.url,
                    lookId: effectiveLook ?? "none",
-                   adjust: projectAdjust,
+                   adjustJson: projectAdjustJson,
                    client: client
                ) {
                 gradedTemps.append(graded)
@@ -1164,13 +1154,18 @@ struct VideoStageIos: View {
 
     /// Native video filtering; SwiftUI captions remain above the graded media.
     private func applyGrade(to item: AVPlayerItem) {
-        let adjust = MemeEditorStore.adjustTriple(ofProject: projectJson)
+        // EUI-02: the stage grades with the Look panel's EFFECTIVE adjust —
+        // the uncommitted draft while it drafts, the committed wire after —
+        // the same values `gradedImage` paints. Export never reads this.
+        let adjustJson = store.effectiveAdjust.canonicalJson
         let projectLook = MemeEditorStore.lookId(ofProject: projectJson)
         var end = 0.0
         let grades: [(Double, MemeVideoExportIos.MatrixFilter)] = clips.compactMap { clip in
             end += Double(max(0, clip.endMs - clip.startMs)) / (1000 * Double(max(0.01, rate)))
-            let json = client.memeAdjustMatrix(clip.lookId ?? projectLook ?? "none",
-                brightness: adjust.bri, contrast: adjust.con, saturation: adjust.sat)
+            let json = client.memeAdjustMatrix(
+                clip.lookId ?? projectLook ?? "none",
+                adjustJson: adjustJson
+            )
             guard let data = json.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let rows = root["matrix"] as? [NSNumber], rows.count == 20 else { return nil }
@@ -1383,6 +1378,16 @@ struct VideoStageIos: View {
             // AVPlayerItem accepts a replacement videoComposition while it is
             // playing, but a paused frame otherwise stays cached. Seeking to
             // that same frame forces the newly selected Look to render now.
+            applyGrade(to: item)
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                if wasPlaying { player.play() }
+            }
+        }
+        .onChange(of: store.effectiveAdjust) { _, _ in
+            // EUI-02: slider drags preview live, before anything commits.
+            guard let player, let item = player.currentItem else { return }
+            let time = player.currentTime()
+            let wasPlaying = player.timeControlStatus == .playing
             applyGrade(to: item)
             player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
                 if wasPlaying { player.play() }

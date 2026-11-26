@@ -68,8 +68,6 @@ import space.bitos.app.ui.components.PowOutcome
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSRadius
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.model.Stories
 import space.bitos.core.publish.ComposerRules
 import space.bitos.core.publish.NoteComposer
@@ -534,8 +532,8 @@ fun StoryComposerSheet(
                                 if (uploading) {
                                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                                 } else {
-                                    SolarFeedIconImage(
-                                        icon = SolarFeedIcon.Gallery,
+                                    androidx.compose.material3.Icon(
+                                        imageVector = space.bitos.app.ui.theme.AppIcons.Photo,
                                         contentDescription = null,
                                         tint = BitOSColors.textSecondary,
                                     )
@@ -603,20 +601,20 @@ fun StoryComposerSheet(
                 horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StoryActionIcon(SolarFeedIcon.Gallery, "Add image", enabled = !full && !uploading && !hasVideo, active = images.isNotEmpty()) {
+                StoryActionIcon(space.bitos.app.ui.theme.AppIcons.Photo, "Add image", enabled = !full && !uploading && !hasVideo, active = images.isNotEmpty()) {
                     galleryPicker.launch("image/*")
                 }
-                StoryActionIcon(SolarFeedIcon.VideoCamera, "Add video", enabled = !uploading, active = hasVideo) {
+                StoryActionIcon(space.bitos.app.ui.theme.AppIcons.Video, "Add video", enabled = !uploading, active = hasVideo) {
                     videoPicker.launch(
                         androidx.activity.result.PickVisualMediaRequest(
                             androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.VideoOnly,
                         ),
                     )
                 }
-                StoryActionIcon(SolarFeedIcon.Film, "Add GIF", enabled = !full && !hasVideo) { showGif = true }
-                StoryActionIcon(SolarFeedIcon.Emoji, "Insert emoji") { showEmoji = true }
+                StoryActionIcon(space.bitos.app.ui.theme.AppIcons.Gif, "Add GIF", enabled = !full && !hasVideo) { showGif = true }
+                StoryActionIcon(space.bitos.app.ui.theme.AppIcons.StickerEmoji, "Insert emoji") { showEmoji = true }
                 StoryActionIcon(
-                    SolarFeedIcon.ShieldCheck, "Proof of Work",
+                    space.bitos.app.ui.theme.AppIcons.ShieldCheck, "Proof of Work",
                     active = showPow || powOutcome != null,
                     badge = powOutcome?.targetDifficulty?.toString(),
                 ) { showPow = !showPow }
@@ -735,7 +733,7 @@ fun StoryComposerSheet(
 /** One quick-action icon button (active tint marks a toggled tool). */
 @Composable
 private fun StoryActionIcon(
-    icon: SolarFeedIcon,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     enabled: Boolean = true,
     active: Boolean = false,
@@ -757,7 +755,7 @@ private fun StoryActionIcon(
         if (active) {
             Box(Modifier.size(36.dp).background(BitOSColors.primary.copy(alpha = 0.15f), CircleShape))
         }
-        SolarFeedIconImage(icon = icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+        androidx.compose.material3.Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
         if (badge != null) {
             Surface(
                 shape = RoundedCornerShape(8.dp),

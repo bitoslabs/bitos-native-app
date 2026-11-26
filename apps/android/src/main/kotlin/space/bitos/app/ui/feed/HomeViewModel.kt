@@ -534,7 +534,19 @@ class HomeViewModel(
             targetEventId = targetEventId,
         ) ?: return null
         currentZapRequestId = unsigned.idHex
-        val signature = signer.sign(unsigned.messageBytes()) ?: return null
+        // Typed event-approval contract (ID-006c): remote signers pass the
+        // same validated gate before the zap request is built.
+        val approval = signer.approveEvent(
+            space.bitos.core.identity.SignEventRequest(
+                requestId = "zap-${unsigned.idHex.take(16)}",
+                accountPubkeyHex = unsigned.pubkeyHex,
+                createdAtSeconds = unsigned.createdAtSeconds,
+                kind = unsigned.kind,
+                tags = unsigned.tags,
+                content = unsigned.content,
+            ),
+        )
+        val signature = (approval as? space.bitos.core.identity.SignEventResult.Signed)?.event?.signatureHex ?: return null
         // LUD-06: the `nostr` param is the BARE signed event object, never
         // a relay `["EVENT",…]` frame (APP-014 fix — servers reject frames).
         return if (payRequest.allowsNostr) composer.signedEventJson(unsigned, signature) else null

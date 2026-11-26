@@ -553,18 +553,18 @@ private fun ReplyBar(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Gallery, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
-            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Film, "Add GIF", enabled = canAdd, onClick = onGif)
-            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.LinkCircle, "Add media URL", enabled = canAdd, onClick = onUrl)
+            OptionButton(space.bitos.app.ui.theme.AppIcons.Photo, "Attach from gallery", enabled = canAdd, onClick = onPickGallery)
+            OptionButton(space.bitos.app.ui.theme.AppIcons.Gif, "Add GIF", enabled = canAdd, onClick = onGif)
+            OptionButton(space.bitos.app.ui.theme.AppIcons.Link, "Add media URL", enabled = canAdd, onClick = onUrl)
             OptionButton(
-                space.bitos.app.ui.theme.SolarFeedIcon.ShieldCheck,
+                space.bitos.app.ui.theme.AppIcons.ShieldCheck,
                 "Proof of work",
                 text = powLabel,
                 active = powActive,
                 onClick = onPow,
             )
-            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Hashtag, "Insert hashtag", onClick = onHashtag)
-            OptionButton(space.bitos.app.ui.theme.SolarFeedIcon.Emoji, "Insert emoji", onClick = onEmoji)
+            OptionButton(space.bitos.app.ui.theme.AppIcons.Hash, "Insert hashtag", onClick = onHashtag)
+            OptionButton(space.bitos.app.ui.theme.AppIcons.StickerEmoji, "Insert emoji", onClick = onEmoji)
         }
         powPanel()
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -615,8 +615,8 @@ private fun ReplyBar(
                     )
                 } else {
                     // Solar "plain" (paper plane) — legacy send parity.
-                    space.bitos.app.ui.theme.SolarFeedIconImage(
-                        space.bitos.app.ui.theme.SolarFeedIcon.Send,
+                    androidx.compose.material3.Icon(
+                        space.bitos.app.ui.theme.AppIcons.Send,
                         contentDescription = null,
                         tint = if (canSendReply) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.4f),
                         modifier = Modifier.size(18.dp),
@@ -635,7 +635,7 @@ private fun ReplyBar(
  */
 @Composable
 private fun OptionButton(
-    icon: space.bitos.app.ui.theme.SolarFeedIcon,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     text: String? = null,
     enabled: Boolean = true,
@@ -664,7 +664,7 @@ private fun OptionButton(
             .clickable(interactionSource = interactionSource, enabled = enabled, onClickLabel = label) { onClick() },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            space.bitos.app.ui.theme.SolarFeedIconImage(
+            androidx.compose.material3.Icon(
                 icon,
                 contentDescription = null,
                 tint = tint,
@@ -818,33 +818,33 @@ private fun RootCard(
             // Legacy _ThreadActionRow parity: Solar icon + bold count.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CommentAction(
-                    icon = if (isLiked) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
+                    icon = if (isLiked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                     label = "${tally?.reactions ?: 0}",
                     tint = if (isLiked) BitOSColors.like else BitOSColors.textSecondary,
                     onClick = onLike,
                 )
                 CommentAction(
-                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Comment,
+                    icon = space.bitos.app.ui.theme.AppIcons.Comment,
                     label = "$replyCount",
                     tint = BitOSColors.reply,
                     onClick = {},
                 )
                 val zapSats = ((tally?.zapMillisats ?: 0L) / 1000L)
                 CommentAction(
-                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Zap,
+                    icon = space.bitos.app.ui.theme.AppIcons.Zap,
                     label = listOfNotNull("${tally?.zaps ?: 0}", if (zapSats > 0) space.bitos.core.model.ZapFormat.sats(zapSats) else null)
                         .joinToString(" · "),
                     tint = BitOSColors.zap,
                     onClick = onZap,
                 )
                 CommentAction(
-                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Repost,
+                    icon = space.bitos.app.ui.theme.AppIcons.Repost,
                     label = "${tally?.reposts ?: 0}",
                     tint = BitOSColors.repost,
                     onClick = onRepost,
                 )
                 CommentAction(
-                    icon = if (isBookmarked) space.bitos.app.ui.theme.SolarFeedIcon.BookmarkFilled else space.bitos.app.ui.theme.SolarFeedIcon.Bookmark,
+                    icon = if (isBookmarked) space.bitos.app.ui.theme.AppIcons.Bookmark else space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
                     label = "",
                     tint = if (isBookmarked) BitOSColors.bookmark else BitOSColors.textSecondary,
                     onClick = onBookmark,
@@ -879,7 +879,7 @@ private fun RootCard(
  */
 @Composable
 private fun CommentAction(
-    icon: space.bitos.app.ui.theme.SolarFeedIcon,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     tint: Color,
     onClick: () -> Unit,
@@ -892,7 +892,7 @@ private fun CommentAction(
             .clickable(onClickLabel = "Comment action") { onClick() }
             .padding(horizontal = 6.dp, vertical = 4.dp),
     ) {
-        space.bitos.app.ui.theme.SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
         if (label.isNotEmpty() || trailing != null) {
             Spacer(Modifier.width(3.dp))
             Text(
@@ -1010,7 +1010,7 @@ private fun ReplyRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val likeCount = tally?.reactions ?: 0
                 CommentAction(
-                    icon = if (isLiked) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
+                    icon = if (isLiked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                     label = if (isLiked) "Unlike" else "Like",
                     trailing = if (likeCount > 0) "$likeCount" else null,
                     tint = if (isLiked) BitOSColors.like else BitOSColors.textSecondary,
@@ -1018,7 +1018,7 @@ private fun ReplyRow(
                 )
                 val sats = (tally?.zapMillisats ?: 0L) / 1000
                 CommentAction(
-                    icon = space.bitos.app.ui.theme.SolarFeedIcon.Zap,
+                    icon = space.bitos.app.ui.theme.AppIcons.Zap,
                     label = "Zap",
                     trailing = if (sats > 0) space.bitos.core.model.ZapFormat.sats(sats) else null,
                     tint = BitOSColors.zap,
@@ -1026,7 +1026,7 @@ private fun ReplyRow(
                 )
                 if (canReply) {
                     CommentAction(
-                        icon = space.bitos.app.ui.theme.SolarFeedIcon.Comment,
+                        icon = space.bitos.app.ui.theme.AppIcons.Comment,
                         label = "Reply",
                         tint = BitOSColors.textSecondary,
                         onClick = onReplyTo,

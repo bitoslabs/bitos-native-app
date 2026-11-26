@@ -11,7 +11,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import space.bitos.app.data.relay.RelayPool
-import space.bitos.core.identity.IdentitySigner
+import space.bitos.core.identity.EventApprovalSigner
+import space.bitos.core.identity.SignEventRequest
+import space.bitos.core.identity.SignEventResult
 import space.bitos.core.model.RelayUrl
 import space.bitos.core.publish.NoteComposer
 import space.bitos.core.publish.RelayOk
@@ -75,7 +77,7 @@ class NotePublisher(
      */
     fun publishWith(
         content: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         scope.launch {
@@ -87,7 +89,7 @@ class NotePublisher(
         }
     }
 
-    fun publish(content: String, signer: IdentitySigner, writeRelays: List<RelayUrl>) {
+    fun publish(content: String, signer: EventApprovalSigner, writeRelays: List<RelayUrl>) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
         scope.launch {
             val note = composer.composeTextNote(signer.publicKeyHex(), content)
@@ -106,7 +108,7 @@ class NotePublisher(
     fun publishNoteWith(
         content: String,
         tags: List<List<String>>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -131,7 +133,7 @@ class NotePublisher(
     fun publishReactionWithTags(
         emoji: String,
         tags: List<List<String>>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -160,7 +162,7 @@ class NotePublisher(
         background: String?,
         altText: String?,
         sensitive: Boolean,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
         videoUrl: String? = null,
         videoMime: String? = null,
@@ -201,7 +203,7 @@ class NotePublisher(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
         videoUrl: String? = null,
         videoMime: String? = null,
@@ -232,7 +234,7 @@ class NotePublisher(
     fun publishCommentWith(
         content: String,
         tags: List<List<String>>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -261,7 +263,7 @@ class NotePublisher(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -290,7 +292,7 @@ class NotePublisher(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -319,7 +321,7 @@ class NotePublisher(
         nonce: Long,
         targetDifficulty: Int,
         createdAtSeconds: Long,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         scope.launch {
@@ -344,7 +346,7 @@ class NotePublisher(
     fun publishReactionWith(
         targetEventId: String,
         targetPubkey: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -370,7 +372,7 @@ class NotePublisher(
         content: String,
         targetEventId: String,
         targetPubkey: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -394,7 +396,7 @@ class NotePublisher(
      */
     fun publishFollowList(
         follows: List<String>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -419,7 +421,7 @@ class NotePublisher(
      */
     fun publishRelayList(
         relayListJson: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -445,7 +447,7 @@ class NotePublisher(
      */
     fun publishBlockList(
         blocked: List<String>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -467,7 +469,7 @@ class NotePublisher(
     fun publishRepostWith(
         targetEventId: String,
         targetPubkey: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -488,7 +490,7 @@ class NotePublisher(
     /** Kind-30003 bookmark-list publish (NIP-51, addressable head). */
     fun publishBookmarkList(
         eventIds: List<String>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -513,7 +515,7 @@ class NotePublisher(
     fun publishMediaNote(
         caption: String,
         media: space.bitos.core.model.UploadedMedia,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
         altText: String = "",
         contentWarningReason: String? = null,
@@ -547,7 +549,7 @@ class NotePublisher(
         contentWarningReason: String?,
         portrait: Boolean,
         media: space.bitos.core.model.UploadedMedia,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
         powBits: Int = 0,
@@ -590,7 +592,7 @@ class NotePublisher(
         overlays: List<space.bitos.core.studio.MemeOverlay>,
         priceSats: Long = 0L,
         category: String = "meme",
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -626,7 +628,7 @@ class NotePublisher(
         attribution: String? = null,
         description: String? = null,
         topics: List<String> = emptyList(),
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -714,7 +716,7 @@ class NotePublisher(
         altText: String,
         contentWarningReason: String?,
         media: space.bitos.core.model.UploadedMedia,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
         extraTags: List<List<String>> = emptyList(),
         powBits: Int = 0,
@@ -781,7 +783,7 @@ class NotePublisher(
         lud16: String,
         banner: String = "",
         website: String = "",
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -808,7 +810,7 @@ class NotePublisher(
         targetEventId: String?,
         targetPubkey: String,
         reason: String,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -830,7 +832,7 @@ class NotePublisher(
     fun publishPollVote(
         targetEventId: String,
         optionIndex: Int,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -852,7 +854,7 @@ class NotePublisher(
     fun publishDeletion(
         targetEventIds: List<String>,
         reason: String = "Deleted from BitOS",
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -873,7 +875,7 @@ class NotePublisher(
     /** NIP-51 interest set publish (kind 30015 d=interest — followed hashtags). */
     fun publishInterestSet(
         hashtags: List<String>,
-        signerProvider: suspend () -> IdentitySigner?,
+        signerProvider: suspend () -> EventApprovalSigner?,
         writeRelays: List<RelayUrl>,
     ) {
         if (mutableState.value.result != null || mutableState.value.inFlightId != null) return
@@ -893,11 +895,24 @@ class NotePublisher(
 
     private suspend fun publishUnsigned(
         note: space.bitos.core.publish.UnsignedNote,
-        signer: IdentitySigner,
+        signer: EventApprovalSigner,
         writeRelays: List<RelayUrl>,
         onStage: ((MemeNoteStage, String) -> Unit)? = null,
     ) {
-        val signature = signer.sign(note.messageBytes())
+        // Typed event-approval contract (SBC-008a/ID-006c): local key,
+        // NIP-46 bunker and NIP-55 signer app all pass the same gate, and
+        // only a validated signed event ever reaches the relay fan-out.
+        val approval = signer.approveEvent(
+            SignEventRequest(
+                requestId = publishRequestId(),
+                accountPubkeyHex = note.pubkeyHex,
+                createdAtSeconds = note.createdAtSeconds,
+                kind = note.kind,
+                tags = note.tags,
+                content = note.content,
+            ),
+        )
+        val signature = (approval as? SignEventResult.Signed)?.event?.signatureHex
             ?: run {
                 mutableState.value = PublishUiState(result = PublishResult.SIGNING_REFUSED)
                 return
@@ -969,6 +984,12 @@ class NotePublisher(
     fun dismiss() {
         collectJob?.cancel()
         mutableState.value = PublishUiState()
+    }
+
+    /** Bounded correlation id for one publish-signing request. */
+    private fun publishRequestId(): String {
+        val digits = "0123456789abcdef"
+        return buildString(16) { repeat(16) { append(digits[kotlin.random.Random.nextInt(16)]) } }
     }
 
 }

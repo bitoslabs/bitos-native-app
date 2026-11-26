@@ -49,7 +49,17 @@ object MemeGifExport {
         val plan = GifExportPlan.plan(timings)
 
         val source = frames.first()
-        val original = GifExportPlan.SizeLadder.canvasFor(source.width, source.height, 0) ?: return null
+        // EUI-02 §3: a cover crop re-frames the ladder origin to the crop
+        // frame; legacy projects ladder from the source frame as before.
+        val place = space.bitos.core.studio.MemeCanvas.placement(
+            source.width, source.height, project.canvasRatio, project.crop,
+        )
+        val original = if (place.cover) {
+            ((place.frameWidth - place.frameWidth % 2).coerceAtLeast(2)) to
+                ((place.frameHeight - place.frameHeight % 2).coerceAtLeast(2))
+        } else {
+            GifExportPlan.SizeLadder.canvasFor(source.width, source.height, 0) ?: return null
+        }
         var step = 0
         while (true) {
             val canvas = GifExportPlan.SizeLadder.canvasFor(original.first, original.second, step)

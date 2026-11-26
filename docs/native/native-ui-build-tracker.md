@@ -507,6 +507,290 @@ V2 suite).
     this tracker carries W0–W7. Plan flipped to **COMPLETE** (W4 MSU-042/043
     documented as the only deferrals). Verified: structure check green.
 
+- [ ] **Editor UX reference-spec slices — `EUI-01..07`
+  (`docs/product/mobile-video-image-editor-reference-spec.md`, started
+  2026-09-18).** Small native slices against the existing one-shell/timeline
+  plans; no parallel editor.
+  - [x] **EUI-01 — SHELL/CHROME ALIGNMENT (2026-09-18, COMPLETE).** Truthful
+    draft state was already shipped (MUX-01 — `DraftSaveState` driven only by
+    the awaited slot write; close-with-failed-save offers Retry, never a
+    silent exit). This slice closed the rest: IOS `modePillsRow` gained the
+    on-screen **Redo** beside Undo (was keyboard-only — an MSU-013 parity
+    gap; Android's `ModePillsRow` already had the pair; new `AppIcons.redo`
+    SF Symbol token, no Solar redo asset bundled). BOTH platforms: the header
+    secondary is a **labelled** "Save a copy" text button (was icon-only;
+    spec: controls carry visible labels where space permits, so device export
+    and Nostr publish are distinguishable without glyph recognition).
+    SHARED `StudioOnboarding.PUBLISH_EXPLAINER` + coach "next" step now name
+    the secondary by its real label ("Publish posts to Nostr. Save a copy
+    creates a file on this device." — was "Export saves a file…", a control
+    the header no longer shows); iOS/Android decode fallbacks aligned;
+    `StudioOnboardingTest` now asserts the explainer and coach line contain
+    `EXPORT_ACTION`. TOOL ROUTING AUDIT: both platforms render the bar from
+    `MemeTools.primaryFor(mode)` and the More sheet from
+    `advancedFor(mode)` + `selectionFor(kind)` only — the one-tier-per-id and
+    mode-validity invariants are enforced by `MemeToolsTest`, so More cannot
+    repeat a primary tool or list a mode-invalid entry by construction.
+    Verified: shared `testAndroidHostTest` green; Android meme/studio unit
+    tests green (1 pre-existing unrelated `SearchRepositoryTest` failure on
+    clean tree too); iOS full-app Swift 6 strict-concurrency type-check
+    exit 0.
+  - [x] **EUI-02 — LOOK SHEET CONSOLIDATION + ACCESSIBLE ADJUSTMENTS
+    (2026-09-18, COMPLETE for the matrix-expressible taxonomy).** SHARED
+    `MemeAdjust` grew from the v1 bri/con/sat triple to the reference
+    editor's Tone/Colour axes the ONE 4×5 matrix pipeline renders exactly:
+    **Lightness** (lerp to white/black — a distinct axis from exposure) ·
+    **Warmth** (R/B split, ±32-step at full) · **Tint** (green↔magenta) ·
+    **Fade** (black-point lift to 45 + 0.75 scale at full); exposure IS the
+    v1 brightness field (same pure-scale math — no duplicate knob). New
+    axes compose after look → brightness → contrast → saturation in one
+    fixed order; neutral fields contribute exact identity matrices, so v1
+    triples compose to the identical v1 matrix (exports unchanged). Wire +
+    `SetAdjust` command carry `lig/warm/tint/fade` as additive keys
+    (neutral fields never serialize — v1 wires byte-identical, old wires
+    decode neutral); `MemeRules.apply` clamps all 7 (signed axes ±1, fade
+    0–1). NEW BRIDGE SEAMS: `memeAdjustOf(projectJson)` — canonical
+    all-keys adjust JSON so the native UI never parses wire fields or
+    reimplements clamps; `memeAdjustMatrix(lookId, adjustJson)` — the
+    matrix seam now takes that canonical object (lenient keys, clamped)
+    instead of the bri/con/sat floats; `memeAdjustMatrixFor(projectJson)`.
+    `MemeAdjustTest` extended (+5 cases: reference pixels per axis, clamps,
+    additive wire round-trip incl. v1-wire compat, command round-trip,
+    seam composition). Details (sharpness/grain/vignette) + vibrance +
+    highlights/shadows stay OUT — they need tone-curve/spatial rendering
+    the shared matrix can't do (spec's "available only when the renderer
+    supports it" rule; QA scenario 4's vignette waits on renderer work).
+    ANDROID `LooksSheetContent`: Tone | Colour tabs, control chips (• marks
+    non-default — colour is never the only changed-signal), ONE labelled
+    slider (`BitosAdjustmentSlider` keeps its ± nudge buttons for
+    non-dragging access), Reset current + Reset all (AlertDialog when it
+    discards >1 non-default), and a **Cancel/Apply draft transaction**: the
+    slider draft lives in a screen-level `adjustPreview` that the stage +
+    `VideoStage` project render live; Apply commits ONE coalesced
+    `SetAdjust`, Cancel drops it; switching panels discards the draft.
+    Grade pills stay immediate (one tap = one undoable `SetLook`).
+    IOS mirror in `FxPanelContent` (the live Look panel): same tabs/chips/
+    slider/reset/Cancel-Apply via a store-level `gradePreview` +
+    `effectiveAdjust` feeding `gradedImage`; store state is now one
+    `MemeAdjustUi` struct decoded from `memeAdjustOf` (the hand-rolled
+    `adjustTriple` wire parsing is deleted); the UNREACHABLE `LooksSheet`
+    (its `showLooks` was never set true) is deleted; all export paths
+    (`captureCoverJpeg`, `MemeRaster.renderPngData`, GIF export,
+    `gradeClip`/`composeClips`, `applyGrade`) migrated to the canonical
+    adjustJson seam — per-clip look + project adjust still compose
+    identically. Accessibility: sliders expose labels + value text +
+    adjustable actions; chips carry text labels. CODE-REVIEW ROUND: the
+    Tone/Colour taxonomy itself now lives in SHARED `MemeAdjustControl`
+    (+ `Section`, labels, slider bounds = the clamp bounds, neutral
+    values, "+30"/"120%" readouts, `catalogJson()`) behind the
+    `memeAdjustControls()` seam — neither platform hand-rolls it
+    (DESIGN_SYSTEM §0); Android renders the shared enum directly, iOS
+    decodes the catalog (field→keyPath mapping stays platform-side).
+    The iOS VIDEO stage now previews the draft too (`applyGrade` reads
+    `store.effectiveAdjust` + an extra onChange trigger) — preview and
+    export share one matrix. Both platforms' unreachable `showLooks`
+    sheets are deleted (one carried a draft-leak path). The unused
+    `memeAdjustMatrixFor` seam was removed; the bridge builds its matrix
+    envelope once. KNOWN DEFERRALS: grade presets commit immediately
+    (one tap = one undoable SetLook) rather than joining the Cancel/Apply
+    draft — extending the draft to cover grade taps is follow-up work;
+    the spec's vignette QA scenario waits on spatial renderer support;
+    i18n keying of the new strings follows the editor's existing
+    hardcoded-copy pattern (project-wide i18n is a separate epic).
+    Verified: shared
+    `testAndroidHostTest` green (831+ incl. 5 new adjust cases); Android
+    meme/studio tests green; iOS full-app Swift 6 strict-concurrency
+    type-check exit 0.
+  - [ ] EUI-03 — Crop sheet (greenfield: ratio + rotate + flip +
+    position/scale with accessible fields; video keeps canvas-level framing).
+  - [x] **EUI-03 — CROP SHEET (2026-09-18, COMPLETE for image + GIF; VIDEO
+    re-frame honestly deferred).** SHARED: `MemeCrop` (rotation CW 0/90/
+    180/270 · flipH mirrored in output space · zoom 1–3 · pan ±1 with slack
+    only where zoom overflows) rides the project wire as an additive root
+    `crop` object (`rot/flip/zoom/panx/pany`, junk clamped to the nearest
+    quarter turn); `MemeCanvas.placement()` is the ONE geometry — tri-state
+    (crop null = v1 letterbox for pinned-ratio projects, untouched media
+    otherwise; crop present even untouched = cover crop-to-fill, the frame
+    being the ratio window INSIDE the rotated media so the visible window
+    stays at source resolution); `RATIOS` gained 3:4; `SetCrop` command
+    (undoable, gesture-coalesced later-wins, explicit null clears back to
+    letterbox); `MemeCropTest` 9 cases (identity, center-crop goldens,
+    rotation frame swap, zoom/pan slack, clamps, wire tri-state round-trip,
+    command coalescing, legacy treatment, bridge seams `memeCropOf` +
+    `memeCropPlacement(project, w, h, cropOverride)` — the override lets
+    sheets preview UNCOMMITTED drafts through the shared math).
+    Tool `CANVAS` relabelled **Crop** and removed from VIDEO's advanced set
+    (the v1 honesty line holds: a video re-frame is a re-encode — deferred,
+    stated in the catalogue instead of a lying control). ANDROID: the crop
+    sheet (ex-Canvas) = Original/1:1/4:5/3:4/9:16/16:9 chips + rotate L/R +
+    Flip + Zoom/Position X/Y sliders (`BitosAdjustmentSlider` nudges — the
+    spec's no-pinch operation path) + the padding disclosure for legacy
+    letterbox projects + Cancel/Apply draft (`cropPreview` on the screen;
+    stage previews uncommitted); `MemeRaster.drawPlacedMedia`/
+    `placeMedia` are the ONE crop draw — stills (`render`), GIF frames
+    (`renderFrameRgba`), and stage previews (downsampled `remember`-cached
+    bitmap) share it, so preview IS the export by construction; the GIF
+    size ladder re-frames to the crop frame when cover. Background swatches
+    stay (letterbox/blank use). IOS mirror: `MemeCropUi`/`PlacementUi`
+    decoded from the seams (no wire parsing in the view), `MemeRaster.
+    placeMedia` (CGContext; negated angle — CGContext is CCW-positive),
+    `renderPngData` pre-places the graded media before the export plan, the
+    GIF exporter pre-places frames before the ladder, the stage swaps in
+    the placed preview + frame aspect (grade burns first, then crop — the
+    export order), CanvasSheet rewritten to the same crop sheet with the
+    Cancel/Apply draft via `store.cropPreview`/`effectiveCrop`. TOOL
+    routing: crop gated to image/GIF on both platforms' `toolEnabled`.
+    CODE-REVIEW ROUND: the ratio chips + crop hint now ride shared seams
+    (`memeCanvasRatios()`, `memeStudioHints()`) — no per-platform taxonomy
+    or copy; **Original** now also CLEARS the crop (`SetCrop(null)` — the
+    spec's "returning to Original restores the uncropped frame"); the
+    Android custom-hex background field lost in the rewrite is restored;
+    redundant platform tool gates removed (the shared catalogue is the
+    gate); a lost swatch-row brace (caught by the suite, fixed) and an
+    orphaned KDoc cleaned up. KNOWN LIMITS: video re-frame (spec QA
+    scenario 1's rotate+crop export) waits on verified video-encoder
+    transforms on both platforms — the catalogue/sheet say so instead of
+    pretending; stage pinch/drag manipulation lands after device QA of the
+    slider path (sliders are the a11y-complete operation path today); the
+    hint shows every open (first-time-only coach flag is device-QA polish);
+    ratio chips are text-only (shape glyphs + "Original 4:5"-style naming
+    are polish); ratio/background taps stay immediate-commit (one tap = one
+    undoable step) so Cancel covers the slider draft only.
+    Verified: shared
+    `testAndroidHostTest` green (MemeCropTest 9 + all prior); Android
+    meme/studio tests green; iOS full-app Swift 6 strict-concurrency
+    type-check exit 0.
+  - [x] **EUI-04 — TIMELINE SELECTION/ACTIONS: REPLACE (2026-09-18,
+    COMPLETE).** SHARED: `MemeVideoCutRules.replaceWindow(oldStart,
+    oldEnd, newDuration)` — retains the trim window where it fits, clamps
+    the out-point (then in-point) to shorter media, degrades to the full
+    new clip; returns `(start, end, shortened)` so the UI can say WHY
+    timing changed (common-tested). `MemeTools.REPLACE` joined the CLIP
+    selection actions in spec order (… Duplicate, **Replace**, Delete) —
+    rendered automatically by the catalogue-driven surfaces (selection
+    row + More) on both platforms; bridge seam `memeReplaceWindow`.
+    ANDROID: dedicated replace picker (NOT the trim screen — that flow
+    sets a fresh window; replace must retain timing); replaces the
+    selected clip's bytes+probe with the shared window applied, volume/
+    look/speed kept; a FRESH clip id (blank prefix preserved) — undo
+    rebuilds sessions by id from the clip archive, so id reuse would
+    resurrect the NEW media on undo; honest notices ("trim, volume and
+    look kept" / "window shortened to fit the shorter clip"); clip
+    segments gained selection+duration semantics ("Clip 2, selected,
+    4 seconds"). IOS mirror: `store.replaceClip(at:)` (same fresh-id rule
+    through `clipArchive`, same shared window via the seam, same notices),
+    photosPicker + captured target index (selection can move while the
+    picker opens), Replace button in the timeline strip action row,
+    `AppIcons` catalog glyph, gate joined the trim tier. EUI-04's
+    remaining gate items were already shipped by MSU/M5: split/trim/
+    speed/mute/reorder/delete unambiguous, Back-to-editor retains
+    selection (screen state) and playhead; clip a11y now states
+    "Clip N of M, X seconds" on iOS (Android: per-segment selected +
+    seconds; the strip header already says "clip N of M").
+    CODE-REVIEW ROUND (caught a real delivery failure): the first iOS
+    application script aborted mid-batch, leaving `replaceClip` dead
+    (catalogue rendered Replace with no handler) while the tracker claimed
+    completion — the review's audit surfaced it; the full iOS wiring
+    (onTool case, photosPicker + captured target, strip Replace button,
+    `AppIcons` glyph) is now present and verified. Also fixed from the
+    review: a seam failure now degrades to the FULL new clip (not a
+    silently kept over-long window), fresh ids count the clip ARCHIVE on
+    both platforms (delete-highest → replace → multi-undo could resurrect
+    wrong media), and two orphaned KDocs restored to their functions.
+    Verified: shared `testAndroidHostTest` green (replaceWindow 6-case);
+    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
+  - [x] **EUI-05 — SOUND BROWSER HONEST AVAILABILITY STATES (2026-09-18,
+    COMPLETE for the editor Sound panel).** SHARED `MemeSoundAvailability`
+    (+ `MemeSoundAvailabilityTest` 3 cases): the row-state machine —
+    Added only when the row IS the current soundtrack (precedence Added >
+    Downloading > NeedsConnection > Available), Downloading never
+    represented as attached, a failed load explains its connection need
+    ("Needs a connection to load") while **Add** stays one tap away; and
+    the honest loop copy (nothing claimed while the video length is
+    unknown; "Covers the whole video" when it does; "Track 6 s < video
+    12 s — repeats to fill / plays once, then silence" naming both
+    durations). Seams: `memeSoundRowCopy` (labels), `memeSoundRowState`
+    (resolved token), `memeSoundLoopCopy`. ANDROID: the Sound panel's
+    online + library rows render through one `SoundRowEui` — per-row
+    preview (▶/⏸, single-row MediaPlayer controller; `library:<id>`
+    plays the saved local bytes, https streams; a new preview stops the
+    prior one; errors say "check your connection" and key the row), state
+    action chip (Add / Downloading… / Added, hint line under the meta),
+    Add disabled unless Available/NeedsConnection (preview available in
+    EVERY state); both url-attach paths set downloading/failed keys and
+    clear them on completion; the loop toggle's caption now states the
+    real relationship. IOS mirror: store preview controller (AVAudioPlayer
+    for library bytes via a small delegate box, AVPlayer streaming, end-
+    observer cleanup), the same states on the store
+    (`previewingSoundKey`/`downloadingSoundUrl`/`failedSoundUrls` with
+    @Observable auto-notify), both attach paths wired, panel rows through
+    `soundRowEui` with labels decoded from the seams
+    (`MemeSoundAvailabilityUi`), loop caption via the seam. KNOWN LIMITS:
+    proactive connectivity sensing (rows explain AFTER a failed load, not
+    from a live network monitor — a connectivity epic exists elsewhere);
+    the trending screen's own rows keep their shipped preview treatment.
+    CODE-REVIEW ROUND: the iOS STREAM preview no longer fakes a playing
+    state — the row reads "previewing" only once the AVPlayerItem is
+    `readyToPlay` (KVO on status; `.failed` stops, notices, and keys the
+    row into the failed set); the status observer is invalidated with the
+    preview; Android's ASYNC preview failures now key the row too (http
+    sources only) and the library-preview temp file is deleted on every
+    exit path; the dead loop-fragment seam keys and the dead row param
+    are removed. Verified: shared `testAndroidHostTest` green
+    (availability 3 cases); Android meme/studio tests green; iOS Swift 6
+    type-check exit 0.
+  - [x] **EUI-06 — TIMED-CAPTION WORKFLOW: IMPORT + AT-PLAYHEAD (2026-09-20,
+    COMPLETE for manual + import; speech generation honestly deferred).**
+    SHARED `MemeCaptionImport` (+ 6-case test): one bounded, tolerant,
+    DETERMINISTIC SRT/WebVTT parser (CRLF/BOM tolerant; SRT comma + VTT
+    dot decimals; index lines, `WEBVTT`/`NOTE` blocks skipped; junk cues
+    DROPPED-WITH-COUNT, never silently eaten; text clamps to the wire
+    bound; the overlay cap truncates loudly; an unparseable file reports
+    an error instead of empty success) and the caption placement rule
+    (centered bottom safe area 0.86; overlapping cues stagger a
+    deterministic row to 0.74; heavy-outline style preset). Import runs
+    through the shared seam on iOS (`memeCaptionImport(raw)` →
+    cues/dropped/truncated/error JSON) — same bytes, same cues, so export
+    timing cannot drift between apps. ANDROID: `addCaptionCues` lands the
+    cues as caption-styled TIMED text overlays in ONE undo step (the
+    addMemeCaptions composite pattern); the Captions panel gains "Import
+    timed captions (.srt/.vtt)…" (document picker; 512 KB read bound;
+    honest notices — imported count, skipped-cue count, cap truncation,
+    or "nothing was added" on error) and "Add caption at playhead"
+    (video mode; 2 s default window, selected for typing). IOS mirror:
+    `store.addCaptionCues(fromFile:)` (one history step) +
+    `addCaptionAtPlayhead`; panel buttons + `fileImporter` with
+    security-scoped read + the same honest notices; the modifier body
+    lives in a helper so the view chain type-checks. CODE-REVIEW ROUND:
+    iOS placement/style/cap now decode from a new `memeCaptionLayout()`
+    seam (the "shared placement" claim only held by copy-paste before);
+    `addCaptionAtPlayhead` builds its single-cue SRT with DISTINCT
+    timestamps (the string-replacement first cut could collapse the
+    window at a 2 s playhead and then blame "Caption limit reached" — a
+    lying notice caught in review); BOTH platforms read caption files
+    through a BOUNDED read (oversize rejected without materializing);
+    orphaned KDocs re-attached; the parser's dead condition removed.
+    Selecting an
+    imported caption uses the EXISTING timing tools (TIME_WINDOW action,
+    timeline overlay lanes already render caption spans); style editing
+    via the existing Text sheet. DEFERRALS (honest): speech-to-text
+    generation is NOT offered anywhere — no transcription engine exists
+    in this codebase (the spec's "where available"); caption STYLE
+    presets (as a named preset row) build on the existing Text sheet
+    knobs — a dedicated style section is polish after device QA.
+    Verified: shared `testAndroidHostTest` green (6 caption cases);
+    Android meme/studio tests green; iOS Swift 6 type-check exit 0.
+  - [◐] EUI-07 — Device QA pass (overlaps MUX-10 runbook). RUNBOOK READY
+    2026-09-20 (`docs/native/eui-07-device-validation.md`): the reference
+    spec's seven non-negotiable scenarios mapped to concrete steps with
+    their honest deferrals marked (video crop, speech captions, vignette),
+    a per-slice B-matrix for EUI-01..06, an a11y matrix for the new
+    surfaces (screen-reader phrasings pinned, large-text/RTL expectations,
+    truthfulness rows marked blocker), and the product QA checklist gained
+    an S9 smoke section pointing at it. EXECUTION PENDING PHYSICAL
+    DEVICES (owner: device-holding operator); source-level gates for all
+    six slices were green at commit time.
+
 - [x] `#/create-edit` layout correction (2026-09-05, BOTH platforms): source inspection against `docs/ui/prototype/js/ui-bitz.js` found that the parity implementation had changed the prototype's 46 px circular quick tools into wide pills and added a second video source strip above the compact timeline. Quick tools are circular again with native 52 dp/pt accessible targets; the basic video editor now has one timeline, while clip/layer insertion remains available in the expanded Timeline workspace. iOS picker presentation moved to the editor root and the Clips sheet now opens the video picker, preserving add-clip after the duplicate strip was removed. Post details adopts the prototype's flat caption/tag fields and 20 px side rhythm, enforces the displayed 300-character caption cap, and removes internal wave-status copy from the product UI. Android uses a distinct draft-save glyph so it is not confused with Export. Verified: Android `:apps:android:compileDebugKotlin` green; full-app iOS Swift 6 strict-concurrency type-check green; structure check green. Physical-device visual comparison remains required.
 
 - [x] Camera capture + preview + trim + media publish (W0, CAP/PUB epics)
@@ -622,6 +906,70 @@ V2 suite).
 
 Append newest-first. Format: date — what shipped (IDs), what was found/
 fixed, what's next.
+
+- 2026-09-18 — **Visual parity pass** (reference-spec polish, no behavior
+  changes): grade previews render the CURRENT media through each preset as
+  image thumbnails (Android `MemeRaster.lookSwatch` + iOS `buildSwatches`
+  through the shared look matrix — text pills remain the fallback where no
+  frame exists, e.g. the video per-clip picker); adjust control chips gain
+  the reference editor's icons via new shared `icon` tokens on
+  `MemeAdjustControl` (catalog `memeAdjustControls()` extended; platform
+  maps: Material Exposure/WbSunny/Contrast/Tonality/DeviceThermostat/
+  Opacity/Gradient ↔ SF plusminus.circle/sun.max/circle.lefthalf.filled/
+  paintpalette/thermometer.medium/drop/gradient.on.rectangle); ratio chips
+  carry each ratio's SHAPE with Original showing the media's own aspect
+  (spec §3 "label and shape"); the Android selected-clip outline
+  strengthened to 2 dp (iOS already 2 pt). Verified: shared + Android
+  meme/studio tests green; iOS Swift 6 type-check exit 0. Deferred: filter
+  CATEGORY tabs need a wider preset catalog (8 presets don't group); chip
+  shape glyphs for the reference's 4:3 (not a BitOS ratio).
+- 2026-09-18 — **Look sheet EUI-02** (spec
+  `mobile-video-image-editor-reference-spec.md`): the shared adjust grew
+  from the v1 brightness/contrast/saturation triple to the reference
+  Tone/Colour axes the one 4×5 matrix renders exactly (lightness, warmth,
+  tint, fade — brightness doubles as Exposure; highlights/shadows/
+  sharpness/grain/vignette stay out until a renderer can burn them
+  honestly). Both platforms' Look surfaces became Tone|Colour tabs →
+  control chips → ONE labelled slider with Reset current/all and a
+  Cancel/Apply draft that previews uncommitted on the stage and commits as
+  ONE undoable SetAdjust. Wire/command keys `lig/warm/tint/fade` are
+  additive (v1 wires byte-identical); new canonical seams
+  `memeAdjustOf`/`memeAdjustMatrix(lookId, adjustJson)` replaced the iOS
+  hand-rolled triple parsing (`adjustTriple` deleted; unreachable
+  `LooksSheet` deleted). Found en route: —. Next: EUI-03 crop sheet.
+- 2026-09-18 — **Editor shell/chrome alignment EUI-01** (spec
+  `mobile-video-image-editor-reference-spec.md`): iOS gained the on-screen
+  Redo beside Undo (MSU-013 parity gap — it was keyboard-only while Android
+  shipped the pair); both platforms' header secondary became a labelled
+  "Save a copy" text button instead of an icon; the shared first-use
+  explainer and coach step now say "Save a copy" (they referenced "Export",
+  a label the header no longer shows), with the iOS/Android fallbacks
+  aligned and the shared test asserting explainer/coach name the real
+  `EXPORT_ACTION`. Tool-routing audit: bar/More render straight from
+  `MemeTools.primaryFor/advancedFor/selectionFor`, so no-repeat and
+  mode-validity hold by construction (`MemeToolsTest`). Found en route:
+  `SearchRepositoryTest.searchesNormalVerifiedRelayEventsWithoutCreatingARequest`
+  fails on a clean tree (pre-existing, feed/search domain, unrelated).
+  Next: EUI-02 (Look taxonomy needs shared matrix work), EUI-03 crop sheet.
+
+- 2026-09-17 — **Create-hub sound/remix source pickers** (MEM-003a-c,
+  MEM-005a-c, plan `create-hub-sound-remix-plan.md`): the two stale
+  "Soon" rows became source-first entries — **Start with a sound**
+  (picker: shared sounds · trending link into the existing surface ·
+  local library by entry id · pick-sound-from-a-video into the editor's
+  existing extraction; one preview at a time with play/pause labels) and
+  **Remix a Bitz** (paste + QR-from-photo scan through the shared
+  bounded parser, verified by-id relay lookup with a named timeout card,
+  account-scoped recent Bitz, preflight card with license ask +
+  attribution preview, cycle refusal, credited-post fallback through the
+  seeded composer). Sound-first editor empty state ("Your sound is
+  ready. Add a video to begin." + Change sound → sound sheet) on both
+  platforms; Bitz-card remix seed building deduped into one handoff
+  mapper per platform (`MemeRemixHandoff` / `RemixRulesHelper`). Flags
+  `studio_sound_source_picker`/`studio_remix_source_picker`
+  (release-off, debug-on). Open: EDT-013 device a11y/relay-recovery
+  audit, live-camera QR scan (photo-decode shipped), on-device QA of the
+  failure matrix (`contracts/meme/remix-source-failure-matrix.json`).
 
 - 2026-09-10 — **Browse video sounds (kind 21/22) in the Sound
   sheet** (left uncommitted for owner review): the "vdo sound" browse

@@ -66,8 +66,6 @@ import space.bitos.app.ui.components.shortPubkey
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
 import space.bitos.core.model.ProfileMetadata
 
@@ -283,7 +281,7 @@ fun AuthorProfileContent(
                         ) {
                             if (lud16 != null) {
                                 InfoChip(
-                                    icon = { SolarFeedIconImage(SolarFeedIcon.Zap, contentDescription = null, tint = BitOSColors.zap, modifier = Modifier.size(13.dp)) },
+                                    icon = { androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Zap, contentDescription = null, tint = BitOSColors.zap, modifier = Modifier.size(13.dp)) },
                                     text = lud16,
                                     tint = BitOSColors.zap,
                                     onClick = {
@@ -798,8 +796,8 @@ internal fun ProfileCardActions(
                 .clickable(onClickLabel = if (isLiked) "Unlike" else "Like") { onLike() }
                 .padding(vertical = 2.dp),
         ) {
-            space.bitos.app.ui.theme.SolarFeedIconImage(
-                if (isLiked) space.bitos.app.ui.theme.SolarFeedIcon.HeartFilled else space.bitos.app.ui.theme.SolarFeedIcon.Heart,
+            androidx.compose.material3.Icon(
+                if (isLiked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                 contentDescription = null,
                 tint = if (isLiked) BitOSColors.like else BitOSColors.textSecondary,
                 modifier = Modifier.size(14.dp),
@@ -817,8 +815,8 @@ internal fun ProfileCardActions(
                 .clickable(onClickLabel = "Repost") { onRepost() }
                 .padding(vertical = 2.dp),
         ) {
-            space.bitos.app.ui.theme.SolarFeedIconImage(
-                space.bitos.app.ui.theme.SolarFeedIcon.Repost,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Repost,
                 contentDescription = null,
                 tint = BitOSColors.repost,
                 modifier = Modifier.size(14.dp),
@@ -836,8 +834,8 @@ internal fun ProfileCardActions(
                 .clickable(onClickLabel = "Zap") { onZap() }
                 .padding(vertical = 2.dp),
         ) {
-            space.bitos.app.ui.theme.SolarFeedIconImage(
-                space.bitos.app.ui.theme.SolarFeedIcon.Zap,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Zap,
                 contentDescription = null,
                 tint = BitOSColors.zap,
                 modifier = Modifier.size(14.dp),

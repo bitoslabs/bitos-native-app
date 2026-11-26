@@ -66,8 +66,8 @@ object MemeTools {
         // ── Advanced (More overflow) ────────────────────────────────────
         /** Classic top/bottom meme captions (the "Meme generator" sheet). */
         CAPTIONS("Captions", "captions"),
-        /** Canvas ratio + background. */
-        CANVAS("Canvas", "canvas"),
+        /** Crop treatment (ratio + rotate/flip + pan/zoom) + background. */
+        CANVAS("Crop", "canvas"),
         /** Image / GIF layers. */
         LAYERS("Layers", "layers"),
         /** Freehand pen. */
@@ -101,6 +101,9 @@ object MemeTools {
         TIME_WINDOW("Timing", "time"),
         /** Clone the selection. */
         DUPLICATE("Duplicate", "duplicate"),
+        /** Swap the selected clip's media, keeping timing/settings where
+         *  they still fit (EUI-04 reference spec §1). */
+        REPLACE("Replace", "replace"),
         /** Bring forward in the layer stack. */
         FORWARD("Forward", "forward"),
         /** Send backward in the layer stack. */
@@ -148,7 +151,9 @@ object MemeTools {
     /** Advanced tools by mode (More overflow). */
     private val advancedModes: Map<ToolId, Set<MemeMode>> = mapOf(
         ToolId.CAPTIONS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
-        ToolId.CANVAS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
+        // VIDEO keeps its source frame in this release (a re-frame is a
+        // re-encode) — the crop tool is image/GIF only, stated honestly.
+        ToolId.CANVAS to setOf(MemeMode.IMAGE, MemeMode.GIF),
         ToolId.LAYERS to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
         ToolId.DRAW to setOf(MemeMode.IMAGE, MemeMode.GIF, MemeMode.VIDEO),
         ToolId.TRIM to setOf(MemeMode.VIDEO),
@@ -180,7 +185,8 @@ object MemeTools {
         ),
         SelectionKind.CLIP to listOf(
             ToolId.OPEN_TIMELINE, ToolId.TRIM, ToolId.SPLIT, ToolId.SPEED,
-            ToolId.VOLUME, ToolId.MUTE, ToolId.DUPLICATE, ToolId.DELETE,
+            ToolId.VOLUME, ToolId.MUTE, ToolId.DUPLICATE, ToolId.REPLACE,
+            ToolId.DELETE,
         ),
         SelectionKind.GIF_FRAME to listOf(
             ToolId.HOLD, ToolId.MOVE_LEFT, ToolId.MOVE_RIGHT, ToolId.DELETE,

@@ -6,7 +6,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import space.bitos.core.identity.IdentitySigner
+import space.bitos.core.identity.EventApprovalSigner
 import space.bitos.core.model.UploadedMedia
 import space.bitos.core.nostr.Sha256EventHasher
 import space.bitos.core.studio.MemeUploadRouting
@@ -78,7 +78,7 @@ class MemeVideoUploader(
     suspend fun upload(
         bytes: ByteArray,
         mimeType: String,
-        signer: IdentitySigner,
+        signer: EventApprovalSigner,
         blossomServerUrl: String,
         onStage: ((UploadStage) -> Unit)? = null,
         onProgress: ((bytesWritten: Long, totalBytes: Long) -> Unit)? = null,

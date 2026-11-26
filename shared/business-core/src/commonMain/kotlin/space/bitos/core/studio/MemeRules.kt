@@ -52,6 +52,8 @@ sealed interface MemeCommand {
 
     /** Manual fine-tune over the look (prototype FX sliders); default clears. */
     data class SetAdjust(val adjust: MemeAdjust) : MemeCommand
+    /** EUI-02 spec §3 crop treatment; null clears (untouched media). */
+    data class SetCrop(val crop: MemeCrop?) : MemeCommand
 
     /** Synth SFX cue at media time (MST-041); cap 16, junk ids no-op. */
     data class AddSfxCue(val cue: MemeSfxCue) : MemeCommand
@@ -295,8 +297,21 @@ object MemeRules {
                 command.adjust.brightness,
                 command.adjust.contrast,
                 command.adjust.saturation,
+                command.adjust.lightness,
+                command.adjust.warmth,
+                command.adjust.tint,
+                command.adjust.fade,
             )
             project.copy(adjust = if (clamped.isDefault) null else clamped)
+        }
+
+        is MemeCommand.SetCrop -> {
+            // Null explicitly returns to the legacy letterbox treatment; a
+            // (possibly untouched) value means the cover treatment.
+            val crop = command.crop?.let {
+                MemeCrop.clamp(it.rotationDeg, it.flipH, it.zoom, it.panX, it.panY)
+            }
+            project.copy(crop = crop)
         }
     }
 
@@ -331,6 +346,9 @@ object MemeRules {
         }
         // Adjust sliders fire continuously — one drag, one undo step. The
         // command carries the full triple, so the later state wins as-is.
+        if (earlier is MemeCommand.SetCrop && later is MemeCommand.SetCrop) {
+            return later
+        }
         if (earlier is MemeCommand.SetAdjust && later is MemeCommand.SetAdjust) {
             return later
         }

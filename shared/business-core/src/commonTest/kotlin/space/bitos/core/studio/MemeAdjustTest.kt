@@ -165,29 +165,196 @@ class MemeAdjustTest {
         assertNull(MemeRules.coalesce(first, MemeCommand.SetLook("vhs")))
     }
 
+    // ── EUI-02: the reference-editor Tone/Colour taxonomy ───────────────
+
     @Test
-    fun bridgeSeamComposesTheSameMatrix() {
-        val viaSeam = space.bitos.core.bridge.BusinessCoreBridge().memeAdjustMatrix(
-            lookId = "vhs",
-            brightness = 1.2f,
-            contrast = 1f,
-            saturation = 1f,
+    fun extendedControlsComposeReferencePixels() {
+        // Exposure IS the v1 brightness field: a pure scale (black stays
+        // black) — 100 → 150.
+        val exposure = MemeLooks.adjustedMatrixFor(null, MemeAdjust(brightness = 1.5f))
+        assertEquals(150, MemeLooks.applyToPixel(exposure, 100, 100, 100)[0])
+
+        // Lightness lerps toward white for + and black for −: a distinct
+        // axis from exposure (which preserves both endpoints).
+        val lighter = MemeLooks.adjustedMatrixFor(null, MemeAdjust(lightness = 1f))
+        assertEquals(255, MemeLooks.applyToPixel(lighter, 100, 100, 100)[0])
+        val darker = MemeLooks.adjustedMatrixFor(null, MemeAdjust(lightness = -1f))
+        assertEquals(0, MemeLooks.applyToPixel(darker, 100, 100, 100)[0])
+        val halfLight = MemeLooks.adjustedMatrixFor(null, MemeAdjust(lightness = 0.5f))
+        assertEquals(177, MemeLooks.applyToPixel(halfLight, 100, 100, 100)[0]) // 100·0.5 + 127.5
+
+        // Warmth shifts R/B apart around the pixel value (64-step at full).
+        val warm = MemeLooks.adjustedMatrixFor(null, MemeAdjust(warmth = 1f))
+        assertEquals(160, MemeLooks.applyToPixel(warm, 128, 128, 128)[0])
+        assertEquals(128, MemeLooks.applyToPixel(warm, 128, 128, 128)[1])
+        assertEquals(96, MemeLooks.applyToPixel(warm, 128, 128, 128)[2])
+        val cool = MemeLooks.adjustedMatrixFor(null, MemeAdjust(warmth = -1f))
+        assertEquals(96, MemeLooks.applyToPixel(cool, 128, 128, 128)[0])
+        assertEquals(160, MemeLooks.applyToPixel(cool, 128, 128, 128)[2])
+
+        // Tint is the green↔magenta axis: + removes green.
+        val magenta = MemeLooks.adjustedMatrixFor(null, MemeAdjust(tint = 1f))
+        assertEquals(96, MemeLooks.applyToPixel(magenta, 128, 128, 128)[1])
+        val green = MemeLooks.adjustedMatrixFor(null, MemeAdjust(tint = -1f))
+        assertEquals(160, MemeLooks.applyToPixel(green, 128, 128, 128)[1])
+
+        // Fade lifts the black point and softens white (0.75 scale + 45).
+        val faded = MemeLooks.adjustedMatrixFor(null, MemeAdjust(fade = 1f))
+        assertEquals(45, MemeLooks.applyToPixel(faded, 0, 0, 0)[0])
+        assertEquals(236, MemeLooks.applyToPixel(faded, 255, 255, 255)[0])
+    }
+
+    @Test
+    fun extendedClampBoundsAndDefaults() {
+        val clamped = MemeAdjust.clamp(
+            brightness = 9f, contrast = -3f, saturation = 5f,
+            lightness = 7f, warmth = -9f, tint = Float.NaN, fade = 4f,
         )
-        assertTrue(viaSeam.contains("\"matrix\":["))
-        assertTrue(viaSeam.contains("\"blur\":0"))
-        // The matrix body equals the shared composition (parse 20 floats).
-        val matrixPart = viaSeam.substringAfter("\"matrix\":[").substringBefore("]")
-        val floats = matrixPart.split(",").map { it.toFloat() }
-        assertEquals(20, floats.size)
+        assertEquals(
+            MemeAdjust(
+                brightness = 1.6f, contrast = 0.4f, saturation = 2f,
+                lightness = 1f, warmth = -1f, tint = 0f, fade = 1f,
+            ),
+            clamped,
+            "multipliers cap at the prototype bounds, signed axes at ±1, NaN degrades to neutral",
+        )
+
+        assertTrue(!MemeAdjust(lightness = 0.01f).isDefault)
+        assertTrue(!MemeAdjust(warmth = -0.01f).isDefault)
+        assertTrue(!MemeAdjust(tint = 0.01f).isDefault)
+        assertTrue(!MemeAdjust(fade = 0.01f).isDefault)
+        assertTrue(MemeAdjust(lightness = 0f, warmth = 0f, tint = 0f, fade = 0f).isDefault)
+    }
+
+    @Test
+    fun extendedFieldsRideTheWireAdditively() {
+        val full = MemeAdjust(
+            brightness = 1.2f, contrast = 0.9f, saturation = 1.4f,
+            lightness = 0.2f, warmth = -0.3f, tint = 0.4f, fade = 0.5f,
+        )
+        val decoded = MemeProjectContract.decode(
+            MemeProjectContract.encode(MemeProject(mode = MemeMode.IMAGE, adjust = full)),
+        )!!
+        assertEquals(full, decoded.adjust)
+
+        // A v1 wire written before the extension decodes with neutral new
+        // fields — drafts and remixes survive the upgrade.
+        val legacy = MemeProjectContract.decode(
+            """{"v":1,"mode":"image","adjust":{"bri":1.2,"con":0.9,"sat":1.4}}""",
+        )!!
+        assertEquals(MemeAdjust(1.2f, 0.9f, 1.4f), legacy.adjust)
+
+        // All-neutral never serializes, exactly like the v1 triple.
         assertTrue(
-            floats.toFloatArray().contentEquals(
-                MemeLooks.adjustedMatrixFor("vhs", MemeAdjust(brightness = 1.2f)),
+            "adjust" !in MemeProjectContract.encode(
+                MemeProject(mode = MemeMode.IMAGE, adjust = MemeAdjust(fade = 0f)),
             ),
         )
-        // Defaults reduce to the plain look envelope.
-        assertEquals(
-            space.bitos.core.bridge.BusinessCoreBridge().memeLookMatrix("vhs"),
-            space.bitos.core.bridge.BusinessCoreBridge().memeAdjustMatrix("vhs", 1f, 1f, 1f),
+    }
+
+    @Test
+    fun extendedCommandRoundTripsAndOldCommandsStillDecode() {
+        val full = MemeCommand.SetAdjust(
+            MemeAdjust(brightness = 1.2f, lightness = 0.2f, warmth = -0.3f, tint = 0.4f, fade = 0.5f),
         )
+        val decoded = MemeCommandCodec.decode(MemeCommandCodec.encode(full)) as MemeCommand.SetAdjust
+        assertEquals(full.adjust, decoded.adjust)
+
+        // A v1 command (triple only) still decodes; new fields stay neutral.
+        val legacy = MemeCommandCodec.decode("""{"op":"adjust","bri":1.4,"con":0.8}""") as MemeCommand.SetAdjust
+        assertEquals(MemeAdjust(1.4f, 0.8f), legacy.adjust)
+
+        // An extended-only value is visible on its own (the row is kept)…
+        val warmthOnly = MemeRules.apply(
+            MemeProject(mode = MemeMode.IMAGE),
+            MemeCommand.SetAdjust(MemeAdjust(warmth = 0.5f)),
+        )
+        assertEquals(MemeAdjust(warmth = 0.5f), warmthOnly.adjust)
+        // …and returning a field to neutral clears the row.
+        val cleared = MemeRules.apply(
+            MemeProject(mode = MemeMode.IMAGE, adjust = MemeAdjust(fade = 0.5f)),
+            MemeCommand.SetAdjust(MemeAdjust(fade = 0f)),
+        )
+        assertNull(cleared.adjust)
+    }
+
+    @Test
+    fun projectSeamsExposeCanonicalAdjustAndComposedMatrix() {
+        val bridge = space.bitos.core.bridge.BusinessCoreBridge()
+        val project = MemeProjectContract.encode(
+            MemeProject(
+                mode = MemeMode.IMAGE,
+                lookId = "vhs",
+                adjust = MemeAdjust(brightness = 1.2f, warmth = 0.5f),
+            ),
+        )
+        // Canonical adjust JSON: every key present, defaults filled, so the
+        // native side never parses wire fields or clamps values itself.
+        val canonical = bridge.memeAdjustOf(project)
+        assertTrue(canonical.contains("\"bri\":1.2"), canonical)
+        assertTrue(canonical.contains("\"warm\":0.5"), canonical)
+        assertTrue(canonical.contains("\"sat\":1.0"), canonical)
+        assertTrue(canonical.contains("\"fade\":0.0"), canonical)
+        // The matrix seam equals the shared composition for those values.
+        val envelope = bridge.memeAdjustMatrix("vhs", bridge.memeAdjustOf(project))
+        val floats = envelope.substringAfter("\"matrix\":[").substringBefore("]")
+            .split(",").map { it.toFloat() }
+        assertTrue(
+            floats.toFloatArray().contentEquals(
+                MemeLooks.adjustedMatrixFor("vhs", MemeAdjust(brightness = 1.2f, warmth = 0.5f)),
+            ),
+        )
+
+        // The live-preview seam takes the canonical adjust JSON directly
+        // (lenient keys, clamped values) and composes identically.
+        val viaCanonical = bridge.memeAdjustMatrix("vhs", """{"bri":1.5,"junk":"x"}""")
+        val canonicalFloats = viaCanonical.substringAfter("\"matrix\":[").substringBefore("]")
+            .split(",").map { it.toFloat() }
+        assertTrue(
+            canonicalFloats.toFloatArray().contentEquals(
+                MemeLooks.adjustedMatrixFor("vhs", MemeAdjust(brightness = 1.5f)),
+            ),
+        )
+        // Junk JSON degrades to the neutral adjust = plain look matrix.
+        assertEquals(
+            bridge.memeLookMatrix("vhs"),
+            bridge.memeAdjustMatrix("vhs", "not json"),
+        )
+    }
+
+    @Test
+    fun controlCatalogCoversEveryAxisOnceAndMatchesTheClamp() {
+        // Each axis maps to exactly one control; with()/value() round-trip.
+        MemeAdjustControl.entries.forEach { control ->
+            assertEquals(0.5f, control.value(control.with(MemeAdjust(), 0.5f)), control.name)
+            assertEquals(control.neutral, control.value(MemeAdjust()), control.name)
+        }
+        // A probe with one perturbed axis flags exactly its control.
+        val probe = MemeAdjust(brightness = 1.3f, lightness = 0.2f)
+        assertEquals(
+            listOf(MemeAdjustControl.EXPOSURE, MemeAdjustControl.LIGHTNESS),
+            MemeAdjustControl.entries.filter { it.isNonDefault(probe) },
+        )
+        // Slider bounds agree with the clamp for every axis.
+        MemeAdjustControl.entries.forEach { control ->
+            val clamped = MemeAdjust.fromCanonical(
+                """{"${control.wireKey}":1e9}""",
+            )
+            assertEquals(
+                control.text(control.range.endInclusive),
+                control.text(control.value(clamped)),
+                control.name,
+            )
+        }
+        // Signed axes read "+30"/"−30"-style; multipliers read "120%".
+        assertEquals("+30", MemeAdjustControl.WARMTH.text(0.3f))
+        assertEquals("-30", MemeAdjustControl.WARMTH.text(-0.3f))
+        assertEquals("120%", MemeAdjustControl.EXPOSURE.text(1.2f))
+        // The seam JSON carries the same set the enum declares.
+        val catalog = space.bitos.core.bridge.BusinessCoreBridge().memeAdjustControls()
+        MemeAdjustControl.entries.forEach { control ->
+            assertTrue(catalog.contains("\"${control.name.lowercase()}\""), catalog)
+        }
+        assertTrue(catalog.contains("\"sections\""), catalog)
     }
 }

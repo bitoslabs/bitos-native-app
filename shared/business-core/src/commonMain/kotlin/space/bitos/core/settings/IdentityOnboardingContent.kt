@@ -71,6 +71,29 @@ object IdentityOnboardingContent {
     const val NIP46_COMING_SOON = "NIP-46 remote signers arrive in a future build — rejection returns here, nothing is lost."
     const val NIP55_COMING_SOON = "NIP-55 system signing arrives in a future build."
 
+    // ── Remote signer setup (ID-006b/ID-007a) ──────────────────────────
+    const val NIP46_SETUP_TITLE = "Connect a remote signer"
+    const val NIP46_SETUP_BODY =
+        "Paste your bunker connection link (bunker://…). BitOS never sees your secret key — the signer approves every action."
+    const val NIP46_PAIRING_TAB = "Show a pairing code"
+    const val NIP46_PAIRING_BODY =
+        "Can't paste? Show this QR in your signer app (Alby, a bunker, a hardware device) and approve there."
+    const val NIP46_FIELD_LABEL = "Bunker link"
+    const val NIP46_CONNECT_LABEL = "Connect"
+    const val NIP46_CONFIRM_TITLE = "Confirm your identity"
+    const val NIP46_CONFIRM_BODY =
+        "This is the public identity your signer returned. Check that it matches the account you expect."
+    const val NIP46_AWAITING_TITLE = "Waiting for your signer"
+    const val NIP46_AWAITING_BODY =
+        "Approve the action in your signer app. Nothing is sent until it signs; cancelling keeps your draft."
+    const val NIP46_DENIED_NOTICE = "The signer refused this action. Nothing was sent — your draft is safe."
+    const val NIP55_SETUP_TITLE = "Use an Android signer app"
+    const val NIP55_SETUP_BODY =
+        "Pick the signer app that holds your key (e.g. Amber). It approves every action — BitOS never receives the key."
+    const val NIP55_AWAITING_TITLE = "Waiting for the signer app"
+    const val NIP55_OPEN_SIGNER_LABEL = "Open signer"
+    const val CANCEL_WAIT_LABEL = "Cancel wait"
+
     val METHODS = listOf(
         IdentityMethodOption(
             id = "create",
