@@ -7144,6 +7144,28 @@ struct OverlayUiView: View {
     }
 }
 
+private final class ClosureBindingBox<Value>: ObservableObject {
+    private let getter: () -> Value
+    private let setter: (Value) -> Void
+
+    init(get: @escaping () -> Value, set: @escaping (Value) -> Void) {
+        getter = get
+        setter = set
+    }
+
+    var value: Value {
+        get { getter() }
+        set { setter(newValue) }
+    }
+}
+
+private extension Binding {
+    @MainActor
+    init(closureGet get: @escaping () -> Value, set: @escaping (Value) -> Void) {
+        self = ObservedObject(wrappedValue: ClosureBindingBox(get: get, set: set)).projectedValue.value
+    }
+}
+
 /// IG-style compose field on the canvas: a focused multiline field styled
 /// with the overlay's exact font/color — typing IS the live preview.
 private struct EditingStageTextView: View {
@@ -7156,7 +7178,10 @@ private struct EditingStageTextView: View {
     var body: some View {
         TextField(
             "Type…",
-            text: Binding(get: { text }, set: onText),
+            text: Binding(
+                closureGet: { text },
+                set: { value in MainActor.assumeIsolated { onText(value) } }
+            ),
             axis: .vertical
         )
         .font(Font(font))
