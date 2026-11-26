@@ -12,28 +12,108 @@
   "note1": "note14242424242424242424242424242424242424242424242424ggszd9z6v",
   "nevent1": "nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv",
   "cases": [
-    { "name": "nostr note entity", "input": "nostr:note14242424242424242424242424242424242424242424242424ggszd9z6v", "expect": "ok" },
-    { "name": "bare note entity with surrounding whitespace", "input": "  note14242424242424242424242424242424242424242424242424ggszd9z6v ", "expect": "ok" },
-    { "name": "nostr nevent entity", "input": "nostr:nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv", "expect": "ok" },
-    { "name": "bitos web share link with nevent carrier", "input": "https://bitos.app/note/nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv", "expect": "ok" },
-    { "name": "bitos web share link with hex carrier", "input": "https://bitos.app/note/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11", "expect": "ok" },
-    { "name": "snort viewer link with hex carrier", "input": "https://snort.social/e/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11", "expect": "ok" },
-    { "name": "snort viewer link with query", "input": "https://snort.social/e/note14242424242424242424242424242424242424242424242424ggszd9z6v?via=trending", "expect": "ok" },
-    { "name": "primal viewer link", "input": "https://primal.net/e/nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv", "expect": "ok" },
-    { "name": "iris root-entity link", "input": "https://iris.to/note14242424242424242424242424242424242424242424242424ggszd9z6v", "expect": "ok" },
-    { "name": "nostrapp fragment link", "input": "https://nostrapp.link/#nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv", "expect": "ok" },
-    { "name": "nostrapp fragment link with nostr prefix", "input": "https://nostrapp.link/#nostr:note14242424242424242424242424242424242424242424242424ggszd9z6v", "expect": "ok" },
+    {
+      "name": "nostr note entity",
+      "input": "nostr:note14242424242424242424242424242424242424242424242424ggszd9z6v",
+      "expect": "ok"
+    },
+    {
+      "name": "bare note entity with surrounding whitespace",
+      "input": "  note14242424242424242424242424242424242424242424242424ggszd9z6v ",
+      "expect": "ok"
+    },
+    {
+      "name": "nostr nevent entity",
+      "input": "nostr:nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv",
+      "expect": "ok"
+    },
+    {
+      "name": "bitos web share link with nevent carrier",
+      "input": "https://bitos.app/note/nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv",
+      "expect": "ok"
+    },
+    {
+      "name": "bitos web share link with hex carrier",
+      "input": "https://bitos.app/note/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "expect": "ok"
+    },
+    {
+      "name": "snort viewer link with hex carrier",
+      "input": "https://snort.social/e/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "expect": "ok"
+    },
+    {
+      "name": "snort viewer link with query",
+      "input": "https://snort.social/e/note14242424242424242424242424242424242424242424242424ggszd9z6v?via=trending",
+      "expect": "ok"
+    },
+    {
+      "name": "primal viewer link",
+      "input": "https://primal.net/e/nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv",
+      "expect": "ok"
+    },
+    {
+      "name": "iris root-entity link",
+      "input": "https://iris.to/note14242424242424242424242424242424242424242424242424ggszd9z6v",
+      "expect": "ok"
+    },
+    {
+      "name": "nostrapp fragment link",
+      "input": "https://nostrapp.link/#nevent1qqs24242424242424242424242424242424242424242424242425ygpyzamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwajyqs4waehxw309aex2mrp0yhxy6t5daejuctswqppgamnwvaz7tmjv4kxz7fwv3sk6atn9e5k7wwqnrv",
+      "expect": "ok"
+    },
+    {
+      "name": "nostrapp fragment link with nostr prefix",
+      "input": "https://nostrapp.link/#nostr:note14242424242424242424242424242424242424242424242424ggszd9z6v",
+      "expect": "ok"
+    },
     { "name": "blank paste", "input": "   ", "expect": "EMPTY" },
-    { "name": "oversized paste", "input": "nostr:note1" , "oversize": true, "expect": "OVERSIZED" },
-    { "name": "insecure scheme", "input": "http://snort.social/e/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11", "expect": "NOT_HTTPS" },
-    { "name": "unknown host with entity path", "input": "https://evil.example/e/note14242424242424242424242424242424242424242424242424ggszd9z6v", "expect": "UNSUPPORTED_HOST" },
-    { "name": "known host wrong shape", "input": "https://snort.social/p/note14242424242424242424242424242424242424242424242424ggszd9z6v", "expect": "UNSUPPORTED_HOST" },
-    { "name": "profile entity", "input": "nostr:npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9", "expect": "PROFILE_TARGET" },
-    { "name": "nprofile url", "input": "https://primal.net/p/npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9", "expect": "UNSUPPORTED_HOST" },
-    { "name": "address entity", "input": "nostr:naddr1qqxzurlz9wfhx2vgu3tw9hqmg6c9yhxc7ljdttn9uaz6jhx2u0pn5mlnkamhtkv6rxc6r38yd9n2", "expect": "ADDRESS_TARGET" },
-    { "name": "corrupted checksum", "input": "nostr:note14242424242424242424242424242424242424242424242424ggszd9z6q", "expect": "MALFORMED_ENTITY" },
-    { "name": "corrupted checksum in url", "input": "https://bitos.app/note/note14242424242424242424242424242424242424242424242424ggszd9z6q", "expect": "MALFORMED_ENTITY" },
-    { "name": "bare hex rejected", "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11", "expect": "NOT_AN_EVENT" },
+    { "name": "oversized paste", "input": "nostr:note1", "oversize": true, "expect": "OVERSIZED" },
+    {
+      "name": "insecure scheme",
+      "input": "http://snort.social/e/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "expect": "NOT_HTTPS"
+    },
+    {
+      "name": "unknown host with entity path",
+      "input": "https://evil.example/e/note14242424242424242424242424242424242424242424242424ggszd9z6v",
+      "expect": "UNSUPPORTED_HOST"
+    },
+    {
+      "name": "known host wrong shape",
+      "input": "https://snort.social/p/note14242424242424242424242424242424242424242424242424ggszd9z6v",
+      "expect": "UNSUPPORTED_HOST"
+    },
+    {
+      "name": "profile entity",
+      "input": "nostr:npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9",
+      "expect": "PROFILE_TARGET"
+    },
+    {
+      "name": "nprofile url",
+      "input": "https://primal.net/p/npub1sn0wdenkukak0d9dfczzeacvhkrgz92ak56egt7vdgzn8pv2wfqqhrjdv9",
+      "expect": "UNSUPPORTED_HOST"
+    },
+    {
+      "name": "address entity",
+      "input": "nostr:naddr1qqxzurlz9wfhx2vgu3tw9hqmg6c9yhxc7ljdttn9uaz6jhx2u0pn5mlnkamhtkv6rxc6r38yd9n2",
+      "expect": "ADDRESS_TARGET"
+    },
+    {
+      "name": "corrupted checksum",
+      "input": "nostr:note14242424242424242424242424242424242424242424242424ggszd9z6q",
+      "expect": "MALFORMED_ENTITY"
+    },
+    {
+      "name": "corrupted checksum in url",
+      "input": "https://bitos.app/note/note14242424242424242424242424242424242424242424242424ggszd9z6q",
+      "expect": "MALFORMED_ENTITY"
+    },
+    {
+      "name": "bare hex rejected",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "expect": "NOT_AN_EVENT"
+    },
     { "name": "arbitrary text", "input": "check out this bitz lol", "expect": "NOT_AN_EVENT" },
     { "name": "empty", "input": "", "expect": "EMPTY" }
   ]
