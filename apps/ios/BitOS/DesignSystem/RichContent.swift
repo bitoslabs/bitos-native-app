@@ -492,32 +492,26 @@ struct MediaLightbox: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             BitOSTheme.background.ignoresSafeArea()
-            RemoteImageView(url: currentUrl)
-                .id(currentUrl)
-                .scaleEffect(scale)
-                .gesture(
-                    MagnificationGesture()
-                        .onChanged { scale = min(5, max(1, lastScale * $0)) }
-                        .onEnded { _ in lastScale = scale }
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        scale = scale > 1 ? 1 : 2.5
-                        lastScale = scale
-                    }
-                }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 24)
-                        .onEnded { value in
-                            guard abs(value.translation.width) > abs(value.translation.height),
-                                  scale == 1 else { return }
-                            if value.translation.width < 0, currentIndex < urls.count - 1 {
-                                currentIndex += 1
-                            } else if value.translation.width > 0, currentIndex > 0 {
-                                currentIndex -= 1
+            TabView(selection: $currentIndex) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                    RemoteImageView(url: url)
+                        .id(url)
+                        .scaleEffect(currentIndex == index ? scale : 1)
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { scale = min(5, max(1, lastScale * $0)) }
+                                .onEnded { _ in lastScale = scale }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                scale = scale > 1 ? 1 : 2.5
+                                lastScale = scale
                             }
                         }
-                )
+                        .tag(index)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
             if urls.count > 1 {
                 lightboxNavigation
             }
@@ -540,7 +534,7 @@ struct MediaLightbox: View {
     @ViewBuilder
     private var lightboxNavigation: some View {
         HStack {
-            Button { currentIndex -= 1 } label: {
+            Button { withAnimation { currentIndex = max(0, currentIndex - 1) } } label: {
                 Image(systemName: "chevron.left")
                     .frame(width: 44, height: 44)
                     .background(Circle().fill(.black.opacity(0.5)))
@@ -548,7 +542,7 @@ struct MediaLightbox: View {
             .disabled(currentIndex == 0)
             .accessibilityLabel("Previous image")
             Spacer()
-            Button { currentIndex += 1 } label: {
+            Button { withAnimation { currentIndex = min(urls.count - 1, currentIndex + 1) } } label: {
                 Image(systemName: "chevron.right")
                     .frame(width: 44, height: 44)
                     .background(Circle().fill(.black.opacity(0.5)))
