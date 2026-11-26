@@ -81,8 +81,9 @@ class MemeCaptionImportTest {
         // at the overlay cap and SAYS so via `truncated`.
         val long = buildString {
             repeat(80) { index ->
+                val sec = index.toString().padStart(2, '0')
                 append(index).append('\n')
-                append("00:00:%02d,000 --> 00:00:%02d,900\n".format(index, index))
+                append("00:00:$sec,000 --> 00:00:$sec,900\n")
                 append("Cue $index ").append("x".repeat(400)).append("\n\n")
             }
         }
