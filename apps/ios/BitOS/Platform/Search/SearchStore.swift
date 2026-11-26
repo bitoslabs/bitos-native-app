@@ -45,7 +45,8 @@ final class SearchStore {
         self.bridge = bridge
         window = client.makeFeedWindow(maxItems: 100)
 
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             await pool.start()
             let stream = await pool.verifiedFrames(client: client)
             watchTask = FrameIngest.pump(

@@ -68,7 +68,7 @@ struct MemeVideoUploader: Sendable {
         bytes: Data,
         mimeType: String,
         identity: IdentityStore,
-        onStage: ((BlossomUploader.UploadStage) -> Void)? = nil,
+        onStage: (@MainActor @Sendable (BlossomUploader.UploadStage) -> Void)? = nil,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         // Dual-leg fraction: each leg's inner progress is REAL socket

@@ -567,7 +567,7 @@ private struct CircleControl: View {
     init(
         accessibilityLabel: String,
         action: @escaping () -> Void,
-        @ViewBuilder icon: () -> some View
+        @ViewBuilder icon: @escaping () -> some View
     ) {
         self.accessibilityLabel = accessibilityLabel
         self.action = action

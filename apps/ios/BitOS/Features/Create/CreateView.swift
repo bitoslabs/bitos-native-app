@@ -1042,6 +1042,7 @@ private func massSummary(of docJson: String) -> MassBatchSummary? {
 /// [MassBatchFiles] (kill/relaunch loses nothing, EDT-002); previews and
 /// the publish queue run sequentially and persist around each per-event
 /// step (crash-safe advance — duplicate retries never duplicate signs).
+@MainActor
 @Observable
 private final class MassBatchFlow {
     enum Phase { case pick, setup, review, publish }

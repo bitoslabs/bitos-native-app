@@ -33,11 +33,11 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         identity: IdentityStore,
         serverUrl: String,
         nowSeconds: Int64 = Int64(Date.now.timeIntervalSince1970),
-        onStage: ((UploadStage) -> Void)? = nil,
+        onStage: (@MainActor @Sendable (UploadStage) -> Void)? = nil,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (url: String, hash: String, mime: String, size: Int) {
         guard !bytes.isEmpty, bytes.count <= 64 * 1024 * 1024 else { throw UploadFailure(message: "file out of bounds") }
-        onStage?(.hashing)
+        await onStage?(.hashing)
         let localHash = sha256Hex(bytes)
         let account = await identity.account
         guard let account else { throw UploadFailure(message: "signing refused") }
@@ -77,7 +77,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
         ) else { throw UploadFailure(message: "auth header rejected") }
 
         // 2. Authenticated PUT /upload (BUD-02: 201 new, 200 already stored).
-        onStage?(.uploading)
+        await onStage?(.uploading)
         var authed = URLRequest(url: URL(string: endpoint)!)
         authed.httpMethod = "PUT"
         authed.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -90,7 +90,7 @@ struct BlossomUploader: @unchecked Sendable { // bridge is stateless; see Framew
             let reason = String(data: data, encoding: .utf8).map { String($0.prefix(160)) } ?? ""
             throw UploadFailure(message: "upload failed: \(code)\(reason.isEmpty ? "" : " \(reason)")")
         }
-        onStage?(.verifying)
+        await onStage?(.verifying)
         return try verified(from: String(data: data, encoding: .utf8), localHash: localHash, mime: mimeType, size: bytes.count)
     }
 

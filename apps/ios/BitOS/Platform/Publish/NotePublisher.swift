@@ -86,9 +86,9 @@ final class NotePublisher {
         attempts: Int64
     ) async -> (nonce: Int64, idHex: String)? {
         guard let account = identity.account else { return nil }
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let raw = await Task.detached(priority: .userInitiated) {
-            bridge.mineTextNotePow(
+            bridge.bridge.mineTextNotePow(
                 content: content,
                 pubkeyHex: account.pubkeyHex,
                 createdAtSeconds: createdAt,
@@ -199,9 +199,9 @@ final class NotePublisher {
         tagsJson: String
     ) async -> (nonce: Int64, idHex: String)? {
         guard let account = identity.account else { return nil }
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let raw = await Task.detached(priority: .userInitiated) {
-            bridge.mineTextNotePowWithTags(
+            bridge.bridge.mineTextNotePowWithTags(
                 content: content,
                 pubkeyHex: account.pubkeyHex,
                 createdAtSeconds: createdAt,
@@ -261,9 +261,9 @@ final class NotePublisher {
         tagsJson: String
     ) async -> (nonce: Int64, idHex: String)? {
         guard let account = identity.account else { return nil }
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let raw = await Task.detached(priority: .userInitiated) {
-            bridge.mineCommentPowWithTags(
+            bridge.bridge.mineCommentPowWithTags(
                 content: content,
                 pubkeyHex: account.pubkeyHex,
                 createdAtSeconds: createdAt,
@@ -435,9 +435,9 @@ final class NotePublisher {
         videoPoster: String? = nil
     ) async -> (nonce: Int64, idHex: String)? {
         guard let account = identity.account else { return nil }
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let raw = await Task.detached(priority: .userInitiated) {
-            bridge.mineStoryPow(
+            bridge.bridge.mineStoryPow(
                 pubkeyHex: account.pubkeyHex, text: text, imageUrls: imageUrls,
                 background: background, altText: altText, sensitive: sensitive,
                 dTag: dTag, createdAtSeconds: createdAt,
@@ -817,11 +817,11 @@ final class NotePublisher {
         let cap: Int64 = 5_000_000
         var startNonce: Int64 = 0
         var attempted: Int64 = 0
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let includeClient = includeClientTag
         while attempted < cap {
-            let raw = await Task.detached(priority: .userInitiated) {
-                bridge.mineMemePicturePow(
+            let raw = await Task.detached(priority: .userInitiated) { [startNonce] in
+                bridge.bridge.mineMemePicturePow(
                     authorPubkey: authorPubkey, caption: caption, altText: altText,
                     contentWarningReason: contentWarningReason,
                     url: url, sha256Hex: hash, mimeType: "image/png",
@@ -1154,11 +1154,11 @@ final class NotePublisher {
         let cap: Int64 = 5_000_000
         var startNonce: Int64 = 0
         var attempted: Int64 = 0
-        let bridge = self.bridge
+        let bridge = StatelessBridge(bridge: self.bridge)
         let includeClient = includeClientTag
         while attempted < cap {
-            let raw = await Task.detached(priority: .userInitiated) {
-                bridge.mineMemeVideoPow(
+            let raw = await Task.detached(priority: .userInitiated) { [startNonce] in
+                bridge.bridge.mineMemeVideoPow(
                     authorPubkey: authorPubkey, caption: caption, altText: altText,
                     contentWarningReason: contentWarningReason, portrait: portrait,
                     url: url, sha256Hex: hash, mimeType: "video/mp4",
