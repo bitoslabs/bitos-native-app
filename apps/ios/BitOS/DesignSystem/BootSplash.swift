@@ -316,20 +316,29 @@ private struct StatusPill: View {
     let text: String
     let colorScheme: ColorScheme
 
+    private var textColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.45) : Color.black.opacity(0.45)
+    }
+
+    private var fillColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.045)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.07)
+    }
+
     var body: some View {
         Text(text)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.45) : Color.black.opacity(0.45))
+            .foregroundStyle(textColor)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
                 Capsule()
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.045))
+                    .fill(fillColor)
                     .overlay(
-                        Capsule().strokeBorder(
-                            colorScheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.07),
-                            lineWidth: 1
-                        )
+                        Capsule().strokeBorder(borderColor, lineWidth: 1)
                     )
             )
     }

@@ -44,6 +44,7 @@ final class AppEnvironment {
         self.relayPool = relayPool
         self.businessCore = businessCore
         self.feedStore = FeedStore(pool: relayPool, client: businessCore, eventStore: eventStore, interaction: interaction)
+        self.sentZaps = SentZapsStore()
         self.identityStore = IdentityStore()
         let privacyPrefs = PrivacyPrefsStore()
         self.privacyPrefs = privacyPrefs

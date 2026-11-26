@@ -426,7 +426,7 @@ enum MemeVideoExportIos {
         preset: ExportPreset = .auto,
         gifReels: [String: GifLayerReel] = [:],
         soundtrackPcm: [Float]? = nil,
-        onProgress: ((Double) -> Void)? = nil
+        onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> Exported {
         // MST-036: the shared encoder plan drives the output canvas (the
         // overlay envelope + layer transform + render size all live on it).
@@ -694,11 +694,12 @@ enum MemeVideoExportIos {
         // (KVO-observable Float 0…1), weighted to the first 80% of the
         // render; the transcode below covers the rest and cannot report
         // a trustworthy total, so it reports its bounds only.
-        let burnSession = export
+        struct SendableExportSession: @unchecked Sendable { let session: AVAssetExportSession }
+        let burnSession = SendableExportSession(session: export)
         let burnPoller = onProgress.map { report in
             Task<Void, Never> {
                 while !Task.isCancelled {
-                    report(min(0.8, Double(burnSession.progress) * 0.8))
+                    report(min(0.8, Double(burnSession.session.progress) * 0.8))
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
             }
