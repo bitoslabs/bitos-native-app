@@ -18,6 +18,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import space.bitos.app.ui.theme.AppIcons
 import androidx.compose.ui.unit.dp
 import space.bitos.app.R
 
@@ -59,9 +60,7 @@ fun AnimatedLikeIcon(
         modifier = modifier.semantics { contentDescription = label },
     ) {
         Icon(
-            painter = painterResource(
-                if (liked) R.drawable.solar_heart_bold else R.drawable.solar_heart_linear
-            ),
+            imageVector = if (liked) AppIcons.Heart else AppIcons.HeartOutline,
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(iconSize).scale(scale.value),

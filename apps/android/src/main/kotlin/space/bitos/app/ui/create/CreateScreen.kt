@@ -117,8 +117,8 @@ private fun quickActions(
         CreateAction(
             id = "import",
             icon = { modifier ->
-                space.bitos.app.ui.theme.SolarFeedIconImage(
-                    space.bitos.app.ui.theme.SolarFeedIcon.Gallery,
+                androidx.compose.material3.Icon(
+                    space.bitos.app.ui.theme.AppIcons.Photo,
                     contentDescription = null,
                     tint = BitOSColors.primary,
                     modifier = modifier,
@@ -135,8 +135,8 @@ private fun quickActions(
             CreateAction(
                 id = "sound",
                 icon = { modifier ->
-                    space.bitos.app.ui.theme.SolarStudioIconImage(
-                        space.bitos.app.ui.theme.SolarStudioIcon.MusicNote,
+                    androidx.compose.material3.Icon(
+                        space.bitos.app.ui.theme.AppIcons.MusicNote,
                         contentDescription = null,
                         tint = BitOSColors.primary,
                         modifier = modifier,
@@ -154,8 +154,8 @@ private fun quickActions(
             CreateAction(
                 id = "remix",
                 icon = { modifier ->
-                    space.bitos.app.ui.theme.SolarStudioIconImage(
-                        space.bitos.app.ui.theme.SolarStudioIcon.MagicWand,
+                    androidx.compose.material3.Icon(
+                        space.bitos.app.ui.theme.AppIcons.Remix,
                         contentDescription = null,
                         tint = BitOSColors.primary,
                         modifier = modifier,
@@ -172,15 +172,15 @@ private fun quickActions(
 
 /** "Start something new" tiles (mockup app-15 scr-home): Bitz · Meme · Batch. */
 private data class StartTile(
-    val icon: space.bitos.app.ui.theme.SolarStudioIcon,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
     val title: String,
     val subtitle: String,
 )
 
 private val startTiles = listOf(
-    StartTile(space.bitos.app.ui.theme.SolarStudioIcon.VideoCamera, "Bitz", "camera"),
-    StartTile(space.bitos.app.ui.theme.SolarStudioIcon.Gallery, "Meme", "quick edit"),
-    StartTile(space.bitos.app.ui.theme.SolarStudioIcon.Settings, "Batch", "mass produce"),
+    StartTile(space.bitos.app.ui.theme.AppIcons.Video, "Bitz", "camera"),
+    StartTile(space.bitos.app.ui.theme.AppIcons.Photo, "Meme", "quick edit"),
+    StartTile(space.bitos.app.ui.theme.AppIcons.Settings, "Batch", "mass produce"),
 )
 
 /** scr-home template cover gradients (honeycomb.css `grad-*`) — the same
@@ -610,7 +610,7 @@ fun CreateScreen(
                             .padding(BitOSSpacing.base),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        space.bitos.app.ui.theme.SolarStudioIconImage(
+                        androidx.compose.material3.Icon(
                             tile.icon,
                             contentDescription = null,
                             tint = BitOSColors.primary,
@@ -714,8 +714,8 @@ fun CreateScreen(
                                             .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(50))
                                             .padding(horizontal = 5.dp, vertical = 1.dp),
                                     ) {
-                                        space.bitos.app.ui.theme.SolarStudioIconImage(
-                                            space.bitos.app.ui.theme.SolarStudioIcon.Bolt,
+                                        androidx.compose.material3.Icon(
+                                            space.bitos.app.ui.theme.AppIcons.Zap,
                                             contentDescription = null,
                                             tint = Color(0xFFFFB000),
                                             modifier = Modifier.size(9.dp),
@@ -841,8 +841,8 @@ fun CreateScreen(
                                 .background(BitOSColors.primary.copy(alpha = 0.16f)),
                             contentAlignment = Alignment.Center,
                         ) {
-                            space.bitos.app.ui.theme.SolarStudioIconImage(
-                                space.bitos.app.ui.theme.SolarStudioIcon.Settings,
+                            androidx.compose.material3.Icon(
+                                space.bitos.app.ui.theme.AppIcons.Settings,
                                 contentDescription = null,
                                 tint = BitOSColors.primary,
                                 modifier = Modifier.size(15.dp),
@@ -2113,8 +2113,8 @@ private fun MassReview(batch: MassBatchUi, mediaPublishViewModel: space.bitos.ap
                                     color = BitOSColors.warning,
                                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                                 ) {
-                                    space.bitos.app.ui.theme.SolarStudioIconImage(
-                                        space.bitos.app.ui.theme.SolarStudioIcon.DangerTriangle,
+                                    androidx.compose.material3.Icon(
+                                        space.bitos.app.ui.theme.AppIcons.ReportSpam,
                                         contentDescription = "Warning",
                                         tint = Color.Black,
                                         modifier = Modifier.padding(4.dp).size(10.dp),

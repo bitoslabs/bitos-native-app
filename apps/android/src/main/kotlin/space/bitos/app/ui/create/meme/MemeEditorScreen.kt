@@ -157,8 +157,6 @@ import kotlinx.coroutines.withContext
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarStudioIcon
-import space.bitos.app.ui.theme.SolarStudioIconImage
 import space.bitos.app.ui.components.BitosAdjustmentSlider
 import space.bitos.app.ui.components.BitosSlider
 import space.bitos.core.studio.MemeFontSlot
@@ -5319,16 +5317,16 @@ private fun ModePillsRow(
         // pick affordance isn't buried in the tray.
         if (activeMode == MemeMode.VIDEO) {
             IconButton(onClick = onAddClip) {
-                SolarStudioIconImage(
-                    SolarStudioIcon.VideoCamera,
+                androidx.compose.material3.Icon(
+                    space.bitos.app.ui.theme.AppIcons.Video,
                     contentDescription = "Add clip",
                     tint = BitOSColors.textPrimary,
                 )
             }
         }
         IconButton(onClick = onAddImage) {
-            SolarStudioIconImage(
-                SolarStudioIcon.Gallery,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Photo,
                 contentDescription = when (activeMode) {
                     MemeMode.GIF -> "Add frames"
                     MemeMode.VIDEO -> "Add image layer"
@@ -5338,8 +5336,8 @@ private fun ModePillsRow(
             )
         }
         IconButton(onClick = onUndo, enabled = canUndo) {
-            SolarStudioIconImage(
-                SolarStudioIcon.UndoLeft,
+            androidx.compose.material3.Icon(
+                space.bitos.app.ui.theme.AppIcons.Undo,
                 contentDescription = "Undo",
                 tint = if (canUndo) BitOSColors.textPrimary else BitOSColors.textTertiary,
             )
@@ -10537,8 +10535,8 @@ private fun VideoSourceTray(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    space.bitos.app.ui.theme.SolarFeedIconImage(
-                        space.bitos.app.ui.theme.SolarFeedIcon.Film,
+                    androidx.compose.material3.Icon(
+                        space.bitos.app.ui.theme.AppIcons.Gif,
                         contentDescription = null,
                         tint = if (index == selectedClipIndex) BitOSColors.primary else BitOSColors.textSecondary,
                         modifier = Modifier.size(18.dp),
@@ -10976,7 +10974,7 @@ private fun TimelineWorkspace(
             SuiteToolChip(label = "Add", icon = AppIcons.Add, enabled = true, onClick = onOpenLayerInsert)
             SuiteToolChip(
                 label = "SFX ≤${space.bitos.core.studio.SfxSynth.MAX_CUES}",
-                solarIcon = space.bitos.app.ui.theme.SolarStudioIcon.Soundwave,
+                solarIcon = space.bitos.app.ui.theme.AppIcons.Soundwave,
                 enabled = true,
                 onClick = onOpenSfx,
             )
@@ -11367,7 +11365,7 @@ private fun suiteClock(ms: Long): String {
 private fun SuiteToolChip(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    solarIcon: space.bitos.app.ui.theme.SolarStudioIcon? = null,
+    solarIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     enabled: Boolean,
     onClick: () -> Unit = {},
 ) {
@@ -11388,7 +11386,7 @@ private fun SuiteToolChip(
             if (icon != null) {
                 Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
             } else if (solarIcon != null) {
-                space.bitos.app.ui.theme.SolarStudioIconImage(
+                androidx.compose.material3.Icon(
                     solarIcon,
                     contentDescription = null,
                     tint = tint,
@@ -11471,8 +11469,8 @@ private fun LayersSheetContent(
                             tint = BitOSColors.textTertiary,
                             modifier = Modifier.padding(10.dp).fillMaxSize(),
                         )
-                        layer.kind == MemeOverlayKind.STICKER -> SolarStudioIconImage(
-                            SolarStudioIcon.Sticker,
+                        layer.kind == MemeOverlayKind.STICKER -> androidx.compose.material3.Icon(
+                            space.bitos.app.ui.theme.AppIcons.StickerEmoji,
                             contentDescription = null,
                             tint = BitOSColors.textTertiary,
                             modifier = Modifier.padding(10.dp).fillMaxSize(),
@@ -11814,7 +11812,7 @@ private fun PenControlsRow(
             }
         }
         IconButton(onClick = onUndoStroke, enabled = canUndoStroke, modifier = Modifier.semantics { contentDescription = "Undo stroke" }) {
-            SolarStudioIconImage(SolarStudioIcon.UndoLeft, contentDescription = null, tint = BitOSColors.textPrimary)
+            androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Undo, contentDescription = null, tint = BitOSColors.textPrimary)
         }
         IconButton(onClick = onClear, modifier = Modifier.semantics { contentDescription = "Clear drawing" }) {
             Icon(AppIcons.Delete, contentDescription = null, tint = BitOSColors.textSecondary)

@@ -822,16 +822,16 @@ private fun ComposerToolbar(
         ) {
             // Web Composer order (Solar Linear icon language): photo · video ·
             // URL · GIF · poll · PoW · sensitive · hashtag · emoji. Tokens
-            // come from `SolarFeedIcon` so the reply bar paints the same set.
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.Gallery, "Attach image", enabled = canAddImage, active = mediaCount > 0, badge = mediaCount.takeIf { it > 0 }?.toString(), onClick = onPickImage)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.VideoCamera, "Attach video", enabled = canAddImage, onClick = onPickVideo)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.LinkCircle, "Add image URL", enabled = canAddImage, onClick = onAddUrl)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.Film, "Add GIF", enabled = canAddImage, onClick = onGif)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.Chart, "Create poll", onClick = onPoll)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.ShieldCheck, "Proof of Work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.EyeClosed, "Content Warning", active = contentWarningOn, onClick = onToggleCw)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.Hashtag, "Insert hashtag", onClick = onHashtag)
-            ToolbarButton(space.bitos.app.ui.theme.SolarFeedIcon.Emoji, "Insert emoji", onClick = onEmoji)
+            // come from `androidx.compose.ui.graphics.vector.ImageVector` so the reply bar paints the same set.
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Photo, "Attach image", enabled = canAddImage, active = mediaCount > 0, badge = mediaCount.takeIf { it > 0 }?.toString(), onClick = onPickImage)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Video, "Attach video", enabled = canAddImage, onClick = onPickVideo)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Link, "Add image URL", enabled = canAddImage, onClick = onAddUrl)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Gif, "Add GIF", enabled = canAddImage, onClick = onGif)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Poll, "Create poll", onClick = onPoll)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.ShieldCheck, "Proof of Work", enabled = powAvailable, active = powActive, badge = powBadge, onClick = onPow)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.VisibilityOff, "Content Warning", active = contentWarningOn, onClick = onToggleCw)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.Hash, "Insert hashtag", onClick = onHashtag)
+            ToolbarButton(space.bitos.app.ui.theme.AppIcons.StickerEmoji, "Insert emoji", onClick = onEmoji)
             Spacer(Modifier.width(BitOSSpacing.sm))
             CharCounter(counter)
         }
@@ -840,7 +840,7 @@ private fun ComposerToolbar(
 
 @Composable
 private fun ToolbarButton(
-    icon: space.bitos.app.ui.theme.SolarFeedIcon,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     enabled: Boolean = true,
     active: Boolean = false,
@@ -870,7 +870,7 @@ private fun ToolbarButton(
                 .semantics { contentDescription = label },
             contentAlignment = Alignment.Center,
         ) {
-            space.bitos.app.ui.theme.SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+            androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
             if (badge != null) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),

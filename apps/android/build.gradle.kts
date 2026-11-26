@@ -26,12 +26,12 @@ require(releaseSigningValues.none { it != null } || releaseSigningValues.all { i
 
 android {
     namespace = "space.bitos.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "space.bitos.app"
         minSdk = 29
-        targetSdk = 36
+        targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
 

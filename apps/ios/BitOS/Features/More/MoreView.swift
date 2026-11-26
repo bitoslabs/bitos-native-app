@@ -376,7 +376,7 @@ private struct AccountSwitcherSheet: View {
             Button {
                 onAddAccount()
             } label: {
-                Label("+ Add account", image: "SolarUserLinear")
+                Label("+ Add account", systemImage: AppIcons.user)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(BitOSTheme.accent)
             }
@@ -384,7 +384,7 @@ private struct AccountSwitcherSheet: View {
             Button {
                 onManage()
             } label: {
-                Label("Manage accounts (You tab)", image: "SolarSettingsLinear")
+                Label("Manage accounts (You tab)", systemImage: AppIcons.settings)
                     .font(.system(size: 13))
                     .foregroundStyle(BitOSTheme.textSecondary)
             }

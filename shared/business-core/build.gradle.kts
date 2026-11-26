@@ -9,7 +9,7 @@ plugins {
 kotlin {
     android {
         namespace = "space.bitos.core"
-        compileSdk = 36
+        compileSdk = 37
         minSdk = 29
         withHostTest {}
     }

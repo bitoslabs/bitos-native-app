@@ -127,8 +127,6 @@ import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.designsystem.AppSkeletonTile
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.app.ui.components.formatTimeAgo
 import space.bitos.app.ui.components.shortPubkey
 import space.bitos.core.feed.BitzExplore
@@ -1771,8 +1769,8 @@ private fun BitzSensitiveGlassGate(onReveal: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        SolarFeedIconImage(
-            icon = SolarFeedIcon.EyeClosed,
+        androidx.compose.material3.Icon(
+            imageVector = space.bitos.app.ui.theme.AppIcons.VisibilityOff,
             contentDescription = null,
             tint = BitOSColors.textSecondary,
             modifier = Modifier.size(44.dp),
@@ -1903,7 +1901,7 @@ private fun BitzCaption(
         Spacer(Modifier.height(BitOSSpacing.sm))
         note.repostedBy?.let { _ ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(13.dp))
+                androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(13.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Reposted", style = MaterialTheme.typography.labelSmall, color = BitOSColors.repost)
             }
@@ -1987,23 +1985,23 @@ private fun BitzActionRail(
             BitzRailButton(AppIcons.AppsGrid, "Chain", Color.White) { onChain(note) }
         }
         BitzRailButton(
-            icon = if (isLiked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
+            icon = if (isLiked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
             label = if (likeCount > 0) space.bitos.core.feed.BitzFormat.count(likeCount.toLong()) else if (isLiked) "Unlike" else "Like",
             tint = if (isLiked) BitOSColors.like else Color.White,
         ) { onLike(note) }
         BitzRailButton(
-            SolarFeedIcon.Comment,
+            space.bitos.app.ui.theme.AppIcons.Comment,
             if (commentCount > 0) space.bitos.core.feed.BitzFormat.count(commentCount.toLong()) else "Comments",
             Color.White,
         ) { onComment(note) }
         BitzRailButton(
-            SolarFeedIcon.Repost,
+            space.bitos.app.ui.theme.AppIcons.Repost,
             (tally?.reposts ?: 0).takeIf { it > 0 }?.let { space.bitos.core.feed.BitzFormat.count(it.toLong()) } ?: "Repost",
             Color.White,
         ) { onRepost(note) }
-        BitzRailButton(SolarFeedIcon.Zap, zapSats ?: "Zap", BitOSColors.zap) { onZap(note) }
+        BitzRailButton(space.bitos.app.ui.theme.AppIcons.Zap, zapSats ?: "Zap", BitOSColors.zap) { onZap(note) }
         BitzRailButton(
-            icon = if (isBookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+            icon = if (isBookmarked) space.bitos.app.ui.theme.AppIcons.Bookmark else space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
             label = if (isBookmarked) "Saved" else "Save",
             tint = if (isBookmarked) BitOSColors.bookmark else Color.White,
         ) { onBookmark(note.id) }
@@ -2038,7 +2036,7 @@ private fun BitzMoreMenu(
     onSaveToggle: () -> Unit,
 ) {
     var showSheet by remember { mutableStateOf(false) }
-    BitzRailIconButton(SolarFeedIcon.More, "More options", Color.White) { showSheet = true }
+    BitzRailIconButton(space.bitos.app.ui.theme.AppIcons.More, "More options", Color.White) { showSheet = true }
     if (showSheet) {
         space.bitos.app.ui.components.AppBottomSheetMenu(
             onDismissRequest = { showSheet = false },
@@ -2085,38 +2083,22 @@ private fun BitzMoreMenu(
 
 /** Icon-only ⋯ trigger (legacy rail: no label under the more button). */
 @Composable
-private fun BitzRailIconButton(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
+private fun BitzRailIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp).semantics { contentDescription = label }) {
-        SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
     }
 }
 
 @Composable
-private fun BitzRailButton(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
+private fun BitzRailButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.semantics { contentDescription = label },
     ) {
         IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-            SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+            androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
-    }
-}
-
-@Composable
-private fun BitzRailButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.semantics { contentDescription = label },
-    ) {
-        Surface(
-            shape = CircleShape,
-            color = Color(0x33000000),
-            modifier = Modifier.clickable(onClickLabel = label) { onClick() },
-        ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.padding(10.dp).size(24.dp))
-        }
     }
 }
 

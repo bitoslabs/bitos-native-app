@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -30,13 +31,20 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExitToApp
+import androidx.compose.material.icons.rounded.FlashOff
+import androidx.compose.material.icons.rounded.FlashOn
 import androidx.compose.material.icons.rounded.FlipToBack
 import androidx.compose.material.icons.rounded.FlipToFront
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.OpenWith
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Gif
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Crop
@@ -44,6 +52,7 @@ import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Loop
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PermMedia
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material.icons.rounded.Subtitles
@@ -71,15 +80,21 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.RotateLeft
 import androidx.compose.material.icons.rounded.RotateRight
+import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Save
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -152,8 +167,10 @@ object AppIcons {
     val User = Icons.Rounded.Person             // Solar: user
     val QrCode = Icons.Rounded.QrCode2          // Solar: qrCode
     val Home = Icons.Rounded.Home
+    val Bitz = Icons.Rounded.SmartDisplay
     val Discover = Icons.Rounded.Search
     val Create = Icons.Rounded.Add
+    val Settings = Icons.Rounded.Settings
 
     // Home feed tabs (legacy Flutter parity: sparkles / users).
     val Sparkles = Icons.Rounded.AutoAwesome
@@ -162,6 +179,21 @@ object AppIcons {
     val Chat = Icons.Rounded.ChatBubble
     val Globe = Icons.Rounded.Public            // Solar: global
     val Logout = Icons.Rounded.ExitToApp
+
+    // ── Capture & Settings ───────────────────────────────────────────
+    val FlashOn = Icons.Rounded.FlashOn
+    val FlashOff = Icons.Rounded.FlashOff
+    val Cameraswitch = Icons.Rounded.Cameraswitch
+    val Soundwave = Icons.Rounded.GraphicEq
+    val ShieldCheck = Icons.Rounded.VerifiedUser
+    val Shield = Icons.Rounded.Security
+    val Info = Icons.Rounded.Info
+    val Help = Icons.Rounded.HelpOutline
+    val Language = Icons.Rounded.Language
+    val Relays = Icons.Rounded.Router
+    val Algorithm = Icons.Rounded.RocketLaunch
+    val MediaSettings = Icons.Rounded.PermMedia
+    val Key = Icons.Rounded.Key
 
     // ── Discover (prototype `#/discover` parity) ────────────────────
     val Flame = Icons.Rounded.LocalFireDepartment // trending-hot hashtag

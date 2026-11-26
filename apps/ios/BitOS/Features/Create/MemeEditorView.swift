@@ -8964,7 +8964,7 @@ private struct FxPanelContent: View {
         case "saturation": return "paintpalette"
         case "warmth": return "thermometer.medium"
         case "tint": return "drop"
-        case "fade": return "gradient.on.rectangle"
+        case "fade": return "circle.dotted"
         default: return "circle"
         }
     }

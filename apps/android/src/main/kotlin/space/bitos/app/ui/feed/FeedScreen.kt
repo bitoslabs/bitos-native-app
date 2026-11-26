@@ -98,8 +98,6 @@ import space.bitos.core.feed.BitzTimelinePolicy
 import space.bitos.core.model.ProfileMetadata
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 import space.bitos.core.feed.FeedNote
 
 /**
@@ -927,7 +925,7 @@ private fun CaptionOverlay(
         Spacer(Modifier.height(BitOSSpacing.sm))
         note.repostedBy?.let { _ ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(13.dp))
+                androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(13.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(
                     "Reposted",
@@ -981,27 +979,27 @@ private fun VideoActionRail(
     ) {
         // User decision 2026-08-29: [like · comment · repost · zap · bookmark].
         RailButton(
-            icon = if (isLiked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
+            icon = if (isLiked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
             label = if (isLiked) "Unlike" else "Like",
             tint = if (isLiked) BitOSColors.like else Color.White,
         ) { onLike(note) }
         RailButton(
-            icon = SolarFeedIcon.Comment,
+            icon = space.bitos.app.ui.theme.AppIcons.Comment,
             label = "Replies",
             tint = Color.White,
         ) { onComment(note) }
         RailButton(
-            icon = SolarFeedIcon.Repost,
+            icon = space.bitos.app.ui.theme.AppIcons.Repost,
             label = "Repost",
             tint = Color.White,
         ) { onRepost(note) }
         RailButton(
-            icon = SolarFeedIcon.Zap,
+            icon = space.bitos.app.ui.theme.AppIcons.Zap,
             label = "Zap",
             tint = BitOSColors.zap,
         ) { onZap(note) }
         RailButton(
-            icon = if (isBookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+            icon = if (isBookmarked) space.bitos.app.ui.theme.AppIcons.Bookmark else space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
             label = if (isBookmarked) "Remove bookmark" else "Bookmark",
             tint = if (isBookmarked) BitOSColors.bookmark else Color.White,
         ) { onBookmark(note.id) }
@@ -1058,7 +1056,7 @@ private fun MoreMenuButton(
         onClick = { showSheet = true },
         modifier = Modifier.size(36.dp).semantics { contentDescription = "More options" },
     ) {
-        SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
+        androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(20.dp))
     }
     if (showSheet) {
         // Web PostCard menu parity: attachment actions when media rides along.
@@ -1163,34 +1161,13 @@ private fun FollowChip(isFollowing: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun RailButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.semantics { contentDescription = label },
-    ) {
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = Color(0x33000000),
-            modifier = Modifier.clickable(onClickLabel = label) { onClick() },
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.padding(10.dp).size(24.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun RailButton(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
+private fun RailButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.semantics { contentDescription = label },
     ) {
         IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-            SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+            androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
     }
@@ -1238,7 +1215,7 @@ private fun TextNotePage(
             Spacer(Modifier.height(BitOSSpacing.base))
             note.repostedBy?.let { _ ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    SolarFeedIconImage(SolarFeedIcon.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(14.dp))
+                    androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.Repost, contentDescription = null, tint = BitOSColors.repost, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Reposted", style = MaterialTheme.typography.labelMedium, color = BitOSColors.repost)
                 }
@@ -1258,27 +1235,27 @@ private fun TextNotePage(
             horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.lg),
         ) {
             RailButton(
-                icon = SolarFeedIcon.Comment,
+                icon = space.bitos.app.ui.theme.AppIcons.Comment,
                 label = "Replies",
                 tint = BitOSColors.textSecondary,
             ) { onComment(note) }
             RailButton(
-                icon = SolarFeedIcon.Repost,
+                icon = space.bitos.app.ui.theme.AppIcons.Repost,
                 label = "Repost",
                 tint = BitOSColors.textSecondary,
             ) { onRepost(note) }
             RailButton(
-                icon = SolarFeedIcon.Zap,
+                icon = space.bitos.app.ui.theme.AppIcons.Zap,
                 label = "Zap",
                 tint = BitOSColors.zap,
             ) { onZap(note) }
             RailButton(
-                icon = if (note.id in actions.liked) SolarFeedIcon.HeartFilled else SolarFeedIcon.Heart,
+                icon = if (note.id in actions.liked) space.bitos.app.ui.theme.AppIcons.Heart else space.bitos.app.ui.theme.AppIcons.HeartOutline,
                 label = if (note.id in actions.liked) "Unlike" else "Like",
                 tint = if (note.id in actions.liked) BitOSColors.like else BitOSColors.textSecondary,
             ) { onLike(note) }
             RailButton(
-                icon = if (note.id in bookmarkedIds || note.id in actions.bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+                icon = if (note.id in bookmarkedIds || note.id in actions.bookmarked) space.bitos.app.ui.theme.AppIcons.Bookmark else space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
                 label = if (note.id in bookmarkedIds || note.id in actions.bookmarked) "Remove bookmark" else "Bookmark",
                 tint = if (note.id in bookmarkedIds || note.id in actions.bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary,
             ) { onBookmark(note.id) }
@@ -1563,7 +1540,7 @@ private fun FeedHeader(
             // Solar widget-linear opens the account hub.
             IconButton(onClick = onOpenHub) {
                 Icon(
-                    painter = androidx.compose.ui.res.painterResource(space.bitos.app.R.drawable.solar_widget_linear),
+                    imageVector = AppIcons.AppsGrid,
                     contentDescription = "Open hub",
                     tint = BitOSColors.textSecondary,
                 )

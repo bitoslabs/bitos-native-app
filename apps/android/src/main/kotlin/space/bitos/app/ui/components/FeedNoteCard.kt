@@ -47,8 +47,6 @@ import space.bitos.core.model.ProfileMetadata
 import space.bitos.app.ui.theme.AppIcons
 import space.bitos.app.ui.theme.BitOSColors
 import space.bitos.app.ui.theme.BitOSSpacing
-import space.bitos.app.ui.theme.SolarFeedIcon
-import space.bitos.app.ui.theme.SolarFeedIconImage
 
 /**
  * APP-005 body clamp (web PostCard parity): bodies collapse beyond 8 lines,
@@ -190,8 +188,8 @@ fun FeedNoteCard(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (note.repostedBy != null) {
-                        SolarFeedIconImage(
-                            SolarFeedIcon.Repost,
+                        androidx.compose.material3.Icon(
+                            space.bitos.app.ui.theme.AppIcons.Repost,
                             contentDescription = null,
                             tint = BitOSColors.repost,
                             modifier = Modifier.size(10.dp),
@@ -281,15 +279,15 @@ fun FeedNoteCard(
                 iconSize = 18.dp,
                 onClick = onLike,
             )
-            NoteCardAction(SolarFeedIcon.Comment, "Replies", BitOSColors.reply, onComment)
-            NoteCardAction(SolarFeedIcon.Repost, "Repost", BitOSColors.repost, onRepost)
+            NoteCardAction(space.bitos.app.ui.theme.AppIcons.Comment, "Replies", BitOSColors.reply, onComment)
+            NoteCardAction(space.bitos.app.ui.theme.AppIcons.Repost, "Repost", BitOSColors.repost, onRepost)
             // Advisory bitz:zaps off — the author asked clients to hide
             // the zap action on this note.
             if (!note.zapsDisabled) {
-                NoteCardAction(SolarFeedIcon.Zap, "Zap", BitOSColors.zap, onZap)
+                NoteCardAction(space.bitos.app.ui.theme.AppIcons.Zap, "Zap", BitOSColors.zap, onZap)
             }
             NoteCardAction(
-                if (bookmarked) SolarFeedIcon.BookmarkFilled else SolarFeedIcon.Bookmark,
+                if (bookmarked) space.bitos.app.ui.theme.AppIcons.Bookmark else space.bitos.app.ui.theme.AppIcons.BookmarkOutline,
                 if (bookmarked) "Remove bookmark" else "Bookmark",
                 if (bookmarked) BitOSColors.bookmark else BitOSColors.textSecondary,
                 onBookmark,
@@ -401,14 +399,7 @@ fun PollOptions(
 @Composable
 fun NoteCardAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
     androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.semantics { contentDescription = label }) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-    }
-}
-
-@Composable
-fun NoteCardAction(icon: SolarFeedIcon, label: String, tint: Color, onClick: () -> Unit) {
-    androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.semantics { contentDescription = label }) {
-        SolarFeedIconImage(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -458,7 +449,7 @@ fun NoteMoreMenuButton(
     ) {
         // Same chrome as NoteCardAction (18dp icon in a default IconButton)
         // so the ⋯ anchor reads as one of the card's action buttons.
-        SolarFeedIconImage(SolarFeedIcon.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(18.dp))
+        androidx.compose.material3.Icon(space.bitos.app.ui.theme.AppIcons.More, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(18.dp))
     }
     if (showSheet) {
         // Web PostCard menu parity: attachment actions when media rides along.

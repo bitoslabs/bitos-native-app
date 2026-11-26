@@ -1168,7 +1168,7 @@ private struct RelaysSection: View {
                             )
                         }
                     } label: {
-                        Label("Publish relay list (NIP-65)", image: "SolarBoltLinear")
+                        Label("Publish relay list (NIP-65)", systemImage: AppIcons.zap)
                     }
                     PublishStatusLine(publisher: environment.notePublisher)
                 }
@@ -1318,7 +1318,7 @@ private struct HelpSection: View {
                     Button {
                         showDonate = true
                     } label: {
-                        Label("Donate sats", image: "SolarBoltLinear")
+                        Label("Donate sats", systemImage: AppIcons.zap)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(BitOSTheme.accent)
                     }
