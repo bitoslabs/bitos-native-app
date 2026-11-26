@@ -31,6 +31,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -3777,23 +3778,35 @@ fun MemeEditorScreen(
                 }
             } else {
             Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.Bottom,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 stageArea(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = BitOSSpacing.base)
-                        .height(
-                            when {
-                                gifMode -> 320.dp
-                                videoMode -> previewHeight
-                                else -> imagePreviewHeight
-                            },
-                        )
+                        .weight(1f)
+                        .padding(horizontal = BitOSSpacing.base, vertical = BitOSSpacing.xs)
                         .clip(RoundedCornerShape(16.dp)),
                 )
-                ModePillsRow(
+                val dockBorder = BitOSColors.border.copy(alpha = 0.45f)
+                androidx.compose.material3.Surface(
+                    color = BitOSColors.surfaceElevated.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .drawBehind {
+                                drawLine(
+                                    color = dockBorder,
+                                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                                    end = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                                    strokeWidth = 1.dp.toPx(),
+                                )
+                            }
+                            .padding(top = BitOSSpacing.xs),
+                    ) {
+                        ModePillsRow(
                     activeMode = state.project.mode,
                     canUndo = state.canUndo,
                     canRedo = state.canRedo,
@@ -3885,7 +3898,7 @@ fun MemeEditorScreen(
                     TimelineStrip(
                         clips = videoClips.toList(),
                         selectedClipIndex = selectedClipIndex,
-                        positionMs = videoPositionMs,
+                        positionMsProvider = { videoPositionMs },
                         totalMs = timelineDurationMs,
                         remainingMs = timelineRemainingMs,
                         profile = videoPublishProfile,
@@ -3957,7 +3970,9 @@ fun MemeEditorScreen(
                         },
                     )
                 }
-                Spacer(Modifier.height(BitOSSpacing.sm))
+                Spacer(Modifier.height(BitOSSpacing.xs))
+                }
+                }
             }
             }
             }
@@ -5987,217 +6002,7 @@ private fun SoundPanelContent(
     }
 }
 
-/** One clip segment in the compact timeline. */
-@Composable
-private fun TimelineClipSegment(
-    index: Int,
-    widthPx: Float,
-    outSec: Int,
-    speed: Float,
-    muted: Boolean,
-    selected: Boolean,
-    label: String = "vdo ${index + 1}",
-    onSelect: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .padding(start = if (index == 0) 0.dp else 1.dp, end = 1.dp)
-            .width(with(androidx.compose.ui.platform.LocalDensity.current) { widthPx.toDp() })
-            .height(40.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (selected) BitOSColors.primary.copy(alpha = 0.85f)
-                else BitOSColors.surfaceElevated,
-            )
-            .border(
-                if (selected) 2.dp else 1.dp,
-                if (selected) BitOSColors.primary else BitOSColors.textTertiary.copy(alpha = 0.45f),
-                RoundedCornerShape(6.dp),
-            )
-            .clickable { onSelect() }
-            .semantics {
-                contentDescription = "Clip ${index + 1}" +
-                    (if (selected) ", selected" else "") + ", $outSec seconds"
-            },
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            color = androidx.compose.ui.graphics.Color.White,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            if (muted) {
-                Text("🔇", fontSize = 9.sp)
-            }
-            Text(
-                "${outSec}s · ${"%.2g".format(java.util.Locale.US, speed)}×",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                fontWeight = FontWeight.W600,
-                color = androidx.compose.ui.graphics.Color.White,
-            )
-        }
-    }
-}
-
-/** Compact clip timeline (prototype edTimeline): ruler, proportional
- *  segments, playhead and the Split/Delete/Mute/Speed/Layer tool row. */
-@Composable
-private fun TimelineStrip(
-    clips: List<SessionClip>,
-    selectedClipIndex: Int,
-    positionMs: Long,
-    totalMs: Long,
-    remainingMs: Long,
-    profile: space.bitos.core.studio.MemeVideoCutRules.PublishProfile,
-    onProfile: (space.bitos.core.studio.MemeVideoCutRules.PublishProfile) -> Unit,
-    onSelectClip: (Int) -> Unit,
-    onSplit: () -> Unit,
-    onDelete: () -> Unit,
-    onMute: () -> Unit,
-    onSpeed: () -> Unit,
-    onLayer: () -> Unit,
-    transport: VideoTransport,
-    onSetCover: (Long) -> Unit,
-) {
-    val safeTotal = maxOf(1L, totalMs)
-    var draggingScrubber by remember { mutableStateOf(false) }
-    var pendingScrubMs by remember { mutableStateOf(0f) }
-    fun mmss(ms: Long): String =
-        String.format("%02d:%02d", (ms / 1000) / 60, (ms / 1000) % 60)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = BitOSSpacing.base),
-        verticalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = transport.playPause) {
-                Icon(if (transport.isPlaying()) AppIcons.Pause else AppIcons.Play, contentDescription = "Play or pause")
-            }
-            BitosSlider(
-                value = if (draggingScrubber) pendingScrubMs
-                    else positionMs.toFloat().coerceIn(0f, safeTotal.toFloat()),
-                onValueChange = {
-                    draggingScrubber = true
-                    pendingScrubMs = it
-                },
-                onValueChangeFinished = {
-                    transport.seekTo(pendingScrubMs.toLong())
-                    draggingScrubber = false
-                },
-                valueRange = 0f..safeTotal.toFloat(),
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${mmss(positionMs.coerceAtMost(safeTotal))} / ${mmss(safeTotal)}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = BitOSColors.primary,
-                fontWeight = FontWeight.W600,
-            )
-            TextButton(onClick = { onSetCover(positionMs) }) { Text("Cover") }
-        }
-        Text(
-            "Timeline · clip ${selectedClipIndex + 1} of ${clips.size} · ${space.bitos.core.studio.MemeVideoCutRules.durationLabel(remainingMs)} left",
-            style = MaterialTheme.typography.labelSmall,
-            color = BitOSColors.textSecondary,
-        )
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(BitOSSpacing.xs),
-        ) {
-            rowItems(space.bitos.core.studio.MemeVideoCutRules.PublishProfile.entries.toList()) { option ->
-                TextButton(onClick = { onProfile(option) }) {
-                    Text(if (option == profile) "✓ ${option.label}" else option.label)
-                }
-            }
-        }
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(BitOSColors.surfaceElevated.copy(alpha = 0.55f))
-                .pointerInput(safeTotal) {
-                    detectTapGestures { tap ->
-                        val fraction = (tap.x / size.width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-                        transport.seekTo((fraction * safeTotal).toLong())
-                    }
-                },
-        ) {
-            val trackWidth = constraints.maxWidth.toFloat()
-            Row(Modifier.fillMaxHeight()) {
-                clips.forEachIndexed { index, clip ->
-                    key(clip.id) {
-                        TimelineClipSegment(
-                            index = index,
-                            widthPx = trackWidth * clipOutputMsOf(clip) / safeTotal,
-                            outSec = ((clipOutputMsOf(clip) + 999) / 1000).toInt(),
-                            speed = space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed),
-                            muted = clip.volume == 0f,
-                            selected = index == selectedClipIndex,
-                            label = if (clip.id.startsWith("blank")) "canvas" else "vdo ${index + 1}",
-                            onSelect = { onSelectClip(index) },
-                        )
-                    }
-                }
-            }
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) {
-                        (trackWidth * (positionMs.coerceIn(0L, safeTotal).toFloat() / safeTotal) - 1f).toDp()
-                    })
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .background(BitOSColors.primary),
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround,
-        ) {
-            ClipToolButton(AppIcons.Scissors, "Split", onSplit)
-            ClipToolButton(AppIcons.Delete, "Delete", onDelete)
-            ClipToolButton(AppIcons.Mute, "Mute", onMute)
-            ClipToolButton(AppIcons.Speed, "Speed", onSpeed)
-            ClipToolButton(AppIcons.Layer, "Layer", onLayer)
-        }
-    }
-}
-
-/** Output window ms for one clip at the project rate (display math only). */
-private fun clipOutputMsOf(clip: SessionClip): Long =
-    ((maxOf(0L, clip.endMs - clip.startMs)) /
-        space.bitos.core.studio.MemeProjectContract.clampSpeed(clip.speed)).toLong()
-
-/** Icon-over-caption clip tool / per-mode bar button. */
-@Composable
-private fun ClipToolButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .semantics { contentDescription = label },
-    ) {
-        Icon(icon, contentDescription = null, tint = BitOSColors.textSecondary, modifier = Modifier.size(16.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = BitOSColors.textSecondary, fontWeight = FontWeight.W600)
-    }
-}
+// TimelineStrip, TimelineClipSegment, and ClipToolButton live in MemeStudioTimeline.kt.
 
 /**
  * Blank-video creation/re-style sheet (plan §3.2/§3.3, MST-071/073):

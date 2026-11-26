@@ -3843,8 +3843,9 @@ struct MemeEditorView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .task(id: "notice-clock") {
-            while !Task.isCancelled {
+        .task(id: store.notices.current?.id) {
+            guard store.notices.current != nil else { return }
+            while !Task.isCancelled && store.notices.current != nil {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 store.notices.tick(deltaMs: 100)
             }
@@ -4774,27 +4775,31 @@ struct MemeEditorView: View {
                 }
             } else {
             GeometryReader { available in
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: BitOSTheme.Spacing.sm) {
-                    stageCard(height: max(180, available.size.height - (store.isVideoMode ? 240 : 190)))
-                    modePillsRow
-                    // MSU-010: the FIVE creator tools (shared catalogue) +
-                    // More. Replaces the shipped pair of overlapping bars
-                    // (quickTools' 7 chips AND perModeBar's 6).
-                    editorToolBar
-                    if drawMode { penControlsRow }
-                    // The prototype timeline is already the compact clip
-                    // strip. Video source insertion lives in Timeline so the
-                    // basic editor does not show a duplicate strip.
-                    if !store.isVideoMode { tray }
-                    if store.isVideoMode && !store.clips.isEmpty {
-                        timelineSection
+                VStack(spacing: 0) {
+                    stageCard(height: max(180, available.size.height - (store.isVideoMode ? 260 : 200)))
+                        .padding(.horizontal, BitOSTheme.Spacing.base)
+                        .padding(.top, BitOSTheme.Spacing.xs)
+                        .padding(.bottom, BitOSTheme.Spacing.sm)
+                    Spacer(minLength: 0)
+                    VStack(spacing: BitOSTheme.Spacing.xs) {
+                        modePillsRow
+                        if !store.isVideoMode { tray }
+                        if store.isVideoMode && !store.clips.isEmpty {
+                            timelineSection
+                        }
+                        if drawMode { penControlsRow }
+                        editorToolBar
+                    }
+                    .padding(.horizontal, BitOSTheme.Spacing.base)
+                    .padding(.top, BitOSTheme.Spacing.sm)
+                    .padding(.bottom, BitOSTheme.Spacing.xs)
+                    .background(BitOSTheme.surfaceElevated.opacity(0.55))
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(BitOSTheme.border.opacity(0.6))
+                            .frame(height: 0.5)
                     }
                 }
-                .padding(.horizontal, BitOSTheme.Spacing.base)
-                .padding(.top, BitOSTheme.Spacing.xs)
-                .padding(.bottom, BitOSTheme.Spacing.sm)
-            }
             }
             statusLine
             }
@@ -4871,6 +4876,8 @@ struct MemeEditorView: View {
             } label: {
                 AppIcons.image(for: AppIcons.close)
                     .foregroundStyle(BitOSTheme.textPrimary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Close editor")
             Text("Editor")
@@ -4903,6 +4910,8 @@ struct MemeEditorView: View {
                             )
                     }
                 }
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
             }
             .disabled(slotStore == nil)
             .accessibilityLabel("Save draft")
@@ -4947,7 +4956,7 @@ struct MemeEditorView: View {
                 Button {
                     showGifStickerPicker = true
                 } label: {
-                    Image(systemName: "sparkles")
+                    AppIcons.image(for: AppIcons.sparkles)
                         .foregroundStyle(BitOSTheme.textPrimary)
                 }
                 .accessibilityLabel("Add GIF sticker layer")
@@ -6228,7 +6237,8 @@ struct MemeEditorView: View {
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     HStack(spacing: 3) {
                                         if clip.volume == 0 {
-                                            Text("🔇").font(.system(size: 9))
+                                            Image(systemName: "speaker.slash.fill")
+                                                .font(.system(size: 8))
                                         }
                                         Text("\(Int((store.clipOutputMs(clip) + 999) / 1000))s")
                                             .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -6258,13 +6268,27 @@ struct MemeEditorView: View {
                             )
                         }
                     }
-                    Rectangle()
-                        .fill(BitOSTheme.accent)
-                        .frame(width: 2, height: 46)
-                        .offset(x: geo.size.width * CGFloat(positionMs) / CGFloat(totalMs))
-                        .allowsHitTesting(false)
-                        .accessibilityLabel("Playhead")
+                    VStack(spacing: 0) {
+                        Circle()
+                            .fill(BitOSTheme.accent)
+                            .frame(width: 8, height: 8)
+                        Rectangle()
+                            .fill(BitOSTheme.accent)
+                            .frame(width: 2.5, height: 40)
+                    }
+                    .offset(x: max(0, geo.size.width * CGFloat(positionMs) / CGFloat(totalMs) - 4))
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Playhead")
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { value in
+                            let fraction = max(0, min(1, value.location.x / max(1, geo.size.width)))
+                            let targetSec = Double(totalMs) / 1000.0 * Double(fraction)
+                            videoTransport.seekToSeconds(targetSec)
+                        }
+                )
             }
             .frame(height: 46)
             if store.rate != 1 {
@@ -6274,7 +6298,7 @@ struct MemeEditorView: View {
             }
             HStack {
                 Spacer()
-                ClipTool(icon: "film", label: "Split") {
+                ClipTool(icon: AppIcons.split, label: "Split") {
                     if store.splitClip(atTimelineMs: positionMs) {
                         store.setNotice("Clip split at the playhead")
                     } else {
@@ -6297,7 +6321,7 @@ struct MemeEditorView: View {
                     isPickingReplaceClip = true
                 }
                 Spacer()
-                ClipTool(icon: "mic.slash", label: "Mute") {
+                ClipTool(icon: "speaker.slash", label: "Mute") {
                     guard store.clips.indices.contains(store.selectedClipIndex) else { return }
                     let current = store.clips[store.selectedClipIndex].volume
                     store.setClipVolume(
