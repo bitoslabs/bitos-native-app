@@ -24,8 +24,9 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * Adapter-contract test for local Discover search: it filters normal verified
- * relay events and never creates a dedicated NIP-50 search subscription.
+ * Adapter-contract test for Discover search: it broadcasts the split
+ * base + NIP-50 search REQ pair and filters verified relay events through
+ * [space.bitos.core.feed.SearchResults.matches].
  */
 class SearchRepositoryTest {
 
@@ -48,10 +49,12 @@ class SearchRepositoryTest {
     }
 
     @Test
-    fun searchesNormalVerifiedRelayEventsWithoutCreatingARequest(): Unit = runBlocking {
+    fun broadcastsSplitSearchRequestsAndFiltersVerifiedEvents(): Unit = runBlocking {
         repository.search("gm")
         delay(500) // shared debounce
-        assertTrue(transport.sent.isEmpty())
+        assertTrue(transport.sent.size == 2)
+        assertTrue(transport.sent[0].contains(""""#t":["gm"]"""))
+        assertTrue(transport.sent[1].contains(""""search":"gm""""))
 
         transport.emit(VALID_TEXT_NOTE_MESSAGE)
         val state = withTimeout(20_000) { repository.state.first { it.results.isNotEmpty() } }
