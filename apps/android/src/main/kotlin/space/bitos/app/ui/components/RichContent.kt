@@ -162,45 +162,47 @@ fun RichText(
     )
 }
 
-/** Media tiles (≤9): images render inline; bare video links get a
- *  play-glyph tile that opens a fullscreen player. */
+/** Media tiles (≤9): Facebook-style adaptive collage for 1–5+ items;
+ *  bare video links get a play-glyph tile that opens a fullscreen player. */
 @Composable
 fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String) -> Unit) {
     val media = remember(urls) { urls.take(9) }
     if (media.isEmpty()) return
-    var playUrl by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        media.chunked(3).forEach { rowUrls ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                rowUrls.forEach { url ->
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClickLabel = if (isVideoMediaUrl(url)) "Play video" else "Open media") {
-                                if (isVideoMediaUrl(url)) playUrl = url else onOpen(url)
-                            },
-                    ) {
-                        if (isVideoMediaUrl(url)) {
-                            // Bare video link: gradient tile + play glyph.
-                            Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated), contentAlignment = Alignment.Center) {
-                                Icon(
-                                    AppIcons.Play,
-                                    contentDescription = null,
-                                    tint = BitOSColors.textSecondary,
-                                    modifier = Modifier.size(32.dp),
-                                )
-                            }
-                        } else {
-                            RemoteBitmapImage(url = url)
-                        }
-                    }
-                }
-                repeat(3 - rowUrls.size) { Box(Modifier.weight(1f)) }
+    var playUrl by remember { mutableStateOf<String?>(null) }
+    val onTileClick: (String) -> Unit = { url ->
+        if (isVideoMediaUrl(url)) playUrl = url else onOpen(url)
+    }
+    val gap = 3.dp
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp)),
+        verticalArrangement = Arrangement.spacedBy(gap),
+    ) {
+        when (media.size) {
+            1 -> SingleMediaTile(url = media[0], onClick = { onTileClick(media[0]) })
+            2 -> MediaCollageRow(urls = media, aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+            3 -> {
+                MediaTile(
+                    url = media[0],
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f),
+                    onClick = { onTileClick(media[0]) },
+                )
+                MediaCollageRow(urls = media.subList(1, 3), aspectRatio = 4f / 3f, gap = gap, onTileClick = onTileClick)
+            }
+            4 -> {
+                MediaCollageRow(urls = media.subList(0, 2), aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+                MediaCollageRow(urls = media.subList(2, 4), aspectRatio = 1f, gap = gap, onTileClick = onTileClick)
+            }
+            else -> {
+                MediaCollageRow(urls = media.subList(0, 2), aspectRatio = 4f / 3f, gap = gap, onTileClick = onTileClick)
+                MediaCollageRow(
+                    urls = media.subList(2, 5),
+                    aspectRatio = 1f,
+                    gap = gap,
+                    overflowCount = (media.size - 5).coerceAtLeast(0),
+                    onTileClick = onTileClick,
+                )
             }
         }
     }
@@ -210,6 +212,110 @@ fun MediaRow(urls: List<String>, modifier: Modifier = Modifier, onOpen: (String)
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         ) {
             FullscreenVideoPlayer(url = url, onDismiss = { playUrl = null })
+        }
+    }
+}
+
+@Composable
+private fun SingleMediaTile(url: String, onClick: () -> Unit) {
+    if (isVideoMediaUrl(url)) {
+        MediaTile(
+            url = url,
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            onClick = onClick,
+        )
+        return
+    }
+    // Default to 4:3 until Coil decodes intrinsic dimensions, then clamp to [0.75, 1.91]
+    // so portrait art/memes stay readable without taking over the whole viewport.
+    var aspectRatio by remember(url) { mutableStateOf(4f / 3f) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
+            .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(BitOSColors.surface, BitOSColors.surfaceElevated),
+                ),
+            )
+            .clickable(onClickLabel = "Open media", onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        coil.compose.AsyncImage(
+            model = url,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            onSuccess = { state ->
+                val d = state.result.drawable
+                if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                    val natural = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
+                    aspectRatio = natural.coerceIn(0.75f, 1.91f)
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@Composable
+private fun MediaCollageRow(
+    urls: List<String>,
+    aspectRatio: Float,
+    gap: androidx.compose.ui.unit.Dp,
+    overflowCount: Int = 0,
+    onTileClick: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(gap),
+    ) {
+        urls.forEachIndexed { index, url ->
+            val badge = if (overflowCount > 0 && index == urls.lastIndex) overflowCount else 0
+            MediaTile(
+                url = url,
+                modifier = Modifier.weight(1f).aspectRatio(aspectRatio),
+                overflowCount = badge,
+                onClick = { onTileClick(url) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaTile(
+    url: String,
+    modifier: Modifier = Modifier,
+    overflowCount: Int = 0,
+    onClick: () -> Unit,
+) {
+    val isVideo = isVideoMediaUrl(url)
+    Box(
+        modifier.clickable(onClickLabel = if (isVideo) "Play video" else "Open media", onClick = onClick),
+    ) {
+        if (isVideo) {
+            Box(Modifier.fillMaxSize().background(BitOSColors.surfaceElevated), contentAlignment = Alignment.Center) {
+                Icon(
+                    AppIcons.Play,
+                    contentDescription = null,
+                    tint = BitOSColors.textSecondary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        } else {
+            RemoteBitmapImage(url = url, contentScale = ContentScale.Crop)
+        }
+        if (overflowCount > 0) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0x88000000)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "+$overflowCount",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }

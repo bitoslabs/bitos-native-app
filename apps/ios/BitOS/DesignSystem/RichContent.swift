@@ -171,6 +171,8 @@ struct GifFramePlayer: UIViewRepresentable {
 
 struct RemoteImageView: View {
     let url: String
+    var contentMode: ContentMode = .fit
+    var onAspectRatio: ((CGFloat) -> Void)? = nil
     @State private var image: UIImage?
     /// Animated GIF payloads: decoded frames + summed delay. Empty while
     /// static, so the `image` path keeps rendering everything else.
@@ -181,11 +183,15 @@ struct RemoteImageView: View {
         GeometryReader { geo in
             Group {
                 if gifFrames.count > 1 {
-                    GifFramePlayer(frames: gifFrames, duration: gifDuration, contentMode: .scaleAspectFit)
+                    GifFramePlayer(
+                        frames: gifFrames,
+                        duration: gifDuration,
+                        contentMode: contentMode == .fill ? .scaleAspectFill : .scaleAspectFit
+                    )
                 } else if let image {
                     Image(uiImage: image)
                         .resizable()
-                        .scaledToFit()
+                        .aspectRatio(contentMode: contentMode)
                 } else {
                     LinearGradient(
                         colors: [BitOSTheme.surface, BitOSTheme.surfaceElevated],
@@ -208,6 +214,10 @@ struct RemoteImageView: View {
             gifFrames = decoded.frames
             gifDuration = decoded.duration
             image = decoded.staticImage
+            let loadedSize = decoded.staticImage?.size ?? decoded.frames.first?.size
+            if let size = loadedSize, size.height > 0 {
+                onAspectRatio?(size.width / size.height)
+            }
         }
     }
 }
@@ -255,45 +265,121 @@ struct MediaGrid: View {
         }
     }
 
-    private let columns = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]
+    private static let gridGap: CGFloat = 3
 
     @State private var playUrl: String?
 
     var body: some View {
         if !mediaUrls.isEmpty {
-            LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(mediaUrls, id: \.self) { url in
-                    Button {
-                        if Self.isVideo(url) {
-                            playUrl = url
-                        } else {
-                            onOpen(url)
-                        }
-                    } label: {
-                        Group {
-                            if Self.isVideo(url) {
-                                ZStack {
-                                    Rectangle().fill(BitOSTheme.surfaceElevated)
-                                    AppIcons.image(for: AppIcons.play)
-                                        .font(.title2)
-                                        .foregroundStyle(BitOSTheme.textSecondary)
-                                }
-                            } else {
-                                RemoteImageView(url: url)
-                            }
-                        }
-                        .frame(height: 104)
-                        .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.sm, style: .continuous))
+            VStack(spacing: Self.gridGap) {
+                switch mediaUrls.count {
+                case 1:
+                    SingleMediaTile(url: mediaUrls[0], isVideo: Self.isVideo(mediaUrls[0])) {
+                        handleTap(mediaUrls[0])
                     }
-                    .accessibilityLabel(Self.isVideo(url) ? "Play video" : "Open media")
+                case 2:
+                    collageRow(urls: mediaUrls, aspectRatio: 1)
+                case 3:
+                    collageTile(url: mediaUrls[0], aspectRatio: 16.0 / 10.0)
+                    collageRow(urls: Array(mediaUrls[1..<3]), aspectRatio: 4.0 / 3.0)
+                case 4:
+                    collageRow(urls: Array(mediaUrls[0..<2]), aspectRatio: 1)
+                    collageRow(urls: Array(mediaUrls[2..<4]), aspectRatio: 1)
+                default:
+                    collageRow(urls: Array(mediaUrls[0..<2]), aspectRatio: 4.0 / 3.0)
+                    collageRow(
+                        urls: Array(mediaUrls[2..<5]),
+                        aspectRatio: 1,
+                        overflowCount: max(0, mediaUrls.count - 5)
+                    )
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: BitOSTheme.Radius.md, style: .continuous))
             .fullScreenCover(item: Binding(
                 get: { playUrl.map { MediaPlayTarget(url: $0) } },
                 set: { playUrl = $0?.url }
             )) { target in
                 BareVideoPlayerScreen(url: target.url, onDismiss: { playUrl = nil })
             }
+        }
+    }
+
+    private func handleTap(_ url: String) {
+        if Self.isVideo(url) {
+            playUrl = url
+        } else {
+            onOpen(url)
+        }
+    }
+
+    private func collageRow(urls: [String], aspectRatio: CGFloat, overflowCount: Int = 0) -> some View {
+        HStack(spacing: Self.gridGap) {
+            ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                let badge = (overflowCount > 0 && index == urls.count - 1) ? overflowCount : 0
+                collageTile(url: url, aspectRatio: aspectRatio, overflowCount: badge)
+            }
+        }
+    }
+
+    private func collageTile(url: String, aspectRatio: CGFloat, overflowCount: Int = 0) -> some View {
+        let isVideo = Self.isVideo(url)
+        return Button {
+            handleTap(url)
+        } label: {
+            Color.clear
+                .aspectRatio(aspectRatio, contentMode: .fit)
+                .overlay {
+                    ZStack {
+                        if isVideo {
+                            Rectangle().fill(BitOSTheme.surfaceElevated)
+                            AppIcons.image(for: AppIcons.play)
+                                .font(.title2)
+                                .foregroundStyle(BitOSTheme.textSecondary)
+                        } else {
+                            RemoteImageView(url: url, contentMode: .fill)
+                        }
+                        if overflowCount > 0 {
+                            Color.black.opacity(0.55)
+                            Text("+\(overflowCount)")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                }
+                .clipped()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isVideo ? "Play video" : "Open media")
+    }
+
+    private struct SingleMediaTile: View {
+        let url: String
+        let isVideo: Bool
+        let onTap: () -> Void
+        @State private var aspectRatio: CGFloat = 4.0 / 3.0
+
+        var body: some View {
+            Button(action: onTap) {
+                Color.clear
+                    .aspectRatio(isVideo ? 16.0 / 9.0 : aspectRatio, contentMode: .fit)
+                    .overlay {
+                        if isVideo {
+                            ZStack {
+                                Rectangle().fill(BitOSTheme.surfaceElevated)
+                                AppIcons.image(for: AppIcons.play)
+                                    .font(.title2)
+                                    .foregroundStyle(BitOSTheme.textSecondary)
+                            }
+                        } else {
+                            RemoteImageView(url: url, contentMode: .fit) { natural in
+                                aspectRatio = min(max(natural, 0.75), 1.91)
+                            }
+                        }
+                    }
+                    .clipped()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isVideo ? "Play video" : "Open media")
         }
     }
 
