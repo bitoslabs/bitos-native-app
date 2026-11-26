@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Adaptive launcher icon background (legacy app flutter_launcher_icons parity). -->
-    <color name="ic_launcher_background">#0A0A0F</color>
+    <!-- Adaptive launcher icon background (light surface for BitOS bee mark). -->
+    <color name="ic_launcher_background">#FFFFFF</color>
     <!-- Splash backgrounds (legacy flutter_native_splash parity: F4F7FB / 0A0A0F).
          Themed with the shell (light tokens shipped): day floor #F4F7FB under the
          black wordmark, night floor (values-night) #0A0A0F under the white one. -->
