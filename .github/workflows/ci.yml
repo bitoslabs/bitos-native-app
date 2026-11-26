@@ -65,6 +65,23 @@ jobs:
       - run: sudo xcode-select --switch /Applications/Xcode_26.4.app
       - run: ./gradlew :shared:business-core:iosSimulatorArm64Test
       - run: >-
+          ./gradlew
+          :shared:business-core:linkReleaseFrameworkIosArm64
+          :shared:business-core:linkReleaseFrameworkIosSimulatorArm64
+          :shared:business-core:linkReleaseFrameworkIosX64
+      - run: |
+          rm -rf build/universal-sim build/BusinessCore.xcframework
+          mkdir -p build/universal-sim
+          cp -R shared/business-core/build/bin/iosSimulatorArm64/releaseFramework/BusinessCore.framework build/universal-sim/
+          lipo -create \
+            shared/business-core/build/bin/iosSimulatorArm64/releaseFramework/BusinessCore.framework/BusinessCore \
+            shared/business-core/build/bin/iosX64/releaseFramework/BusinessCore.framework/BusinessCore \
+            -output build/universal-sim/BusinessCore.framework/BusinessCore
+          xcodebuild -create-xcframework \
+            -framework shared/business-core/build/bin/iosArm64/releaseFramework/BusinessCore.framework \
+            -framework build/universal-sim/BusinessCore.framework \
+            -output build/BusinessCore.xcframework
+      - run: >-
           xcodebuild
           -project apps/ios/BitOS.xcodeproj
           -scheme BitOS
